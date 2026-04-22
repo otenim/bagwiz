@@ -4,12 +4,14 @@
   <name>bagcli</name>
   <version>0.1.0</version>
   <description>Fast CLI for analyzing, processing, and extracting data from ROS 2 rosbags.</description>
-  <maintainer email="mineto.tsukada@gmail.com">Mineto Tsukada</maintainer>
+  <maintainer email="mineto.tsukada@tier4.jp">Mineto Tsukada</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <depend>mcap_vendor</depend>
   <depend>rcutils</depend>
+  <depend>yaml_cpp_vendor</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 
