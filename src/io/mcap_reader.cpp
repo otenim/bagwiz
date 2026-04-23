@@ -92,9 +92,15 @@ public:
       }
       out.topic = &topics_[idx_it->second];
       out.timestamp_ns = static_cast<int64_t>(mv.message.logTime);
-      out.payload = std::span<const std::byte>(
-        reinterpret_cast<const std::byte *>(mv.message.data),
-        static_cast<std::size_t>(mv.message.dataSize));
+      // Copy the payload into a stable member buffer BEFORE advancing the
+      // iterator. mcap::LinearMessageView::Iterator may release the
+      // current chunk when incremented, invalidating mv.message.data. The
+      // RawMessage contract says the span is valid until the next next()
+      // call, which matches: we overwrite payload_buf_ on each call.
+      const auto * src = reinterpret_cast<const std::byte *>(mv.message.data);
+      const auto size = static_cast<std::size_t>(mv.message.dataSize);
+      payload_buf_.assign(src, src + size);
+      out.payload = std::span<const std::byte>(payload_buf_.data(), payload_buf_.size());
       ++iter;
       return true;
     }
@@ -186,6 +192,9 @@ private:
   bool iteration_started_ = false;
   std::unique_ptr<mcap::LinearMessageView> view_;
   std::optional<mcap::LinearMessageView::Iterator> it_;
+  // Stable backing store for the payload returned by next(). Lives as
+  // long as the reader; each next() overwrites it.
+  std::vector<std::byte> payload_buf_;
 };
 
 // ---------------------------------------------------------------------------

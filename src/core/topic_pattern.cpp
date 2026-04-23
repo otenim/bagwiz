@@ -14,80 +14,24 @@
 namespace bagwiz::core
 {
 
-namespace
-{
-
-bool contains_wildcard(std::string_view pattern)
-{
-  return pattern.find('*') != std::string_view::npos;
-}
-
-// Translate the user-supplied glob into an ECMAScript regex fragment. Only
-// '*' is a metacharacter (any char except '/'); every other regex-special
-// character is escaped so literal topic names with dots, plus signs, etc.
-// behave as written.
-std::string glob_to_regex(std::string_view pattern)
-{
-  std::string out;
-  out.reserve(pattern.size() * 2);
-  for (const char c : pattern) {
-    switch (c) {
-      case '*':
-        out += "[^/]*";
-        break;
-      case '.':
-      case '\\':
-      case '+':
-      case '?':
-      case '(':
-      case ')':
-      case '[':
-      case ']':
-      case '{':
-      case '}':
-      case '|':
-      case '^':
-      case '$':
-        out += '\\';
-        out += c;
-        break;
-      default:
-        out += c;
-    }
-  }
-  return out;
-}
-
-std::string build_regex(std::string_view pattern)
-{
-  const bool anchor_start = !pattern.empty() && pattern.front() == '/';
-  const bool anchor_end = contains_wildcard(pattern);
-  std::string re;
-  if (anchor_start) {
-    re += '^';
-  }
-  re += glob_to_regex(pattern);
-  if (anchor_end) {
-    re += '$';
-  }
-  return re;
-}
-
-}  // namespace
-
 TopicPattern::TopicPattern(std::string_view pattern)
-: match_all_(pattern.empty()),
-  regex_source_(match_all_ ? std::string{} : build_regex(pattern)),
-  regex_(regex_source_)
+: mode_(pattern.empty() ? Mode::kAll : (pattern.front() == '/' ? Mode::kPrefix : Mode::kSubstring)),
+  match_all_(mode_ == Mode::kAll),
+  pattern_(pattern)
 {
 }
 
 bool TopicPattern::matches(const std::string & topic) const
 {
-  if (match_all_) {
-    return true;
+  switch (mode_) {
+    case Mode::kAll:
+      return true;
+    case Mode::kPrefix:
+      return topic.size() >= pattern_.size() && topic.compare(0, pattern_.size(), pattern_) == 0;
+    case Mode::kSubstring:
+      return topic.find(pattern_) != std::string::npos;
   }
-  return std::regex_search(topic, regex_);
+  return false;
 }
 
 }  // namespace bagwiz::core

@@ -29,6 +29,7 @@ TEST(TopicPattern, AbsolutePrefixMatch)
   EXPECT_TRUE(p.matches("/sensing"));
   EXPECT_TRUE(p.matches("/sensing/lidar/front/points"));
   EXPECT_FALSE(p.matches("/perception/object"));
+  // A substring that is not at the start must not match.
   EXPECT_FALSE(p.matches("/foo/sensing"));
 }
 
@@ -41,45 +42,22 @@ TEST(TopicPattern, RelativeSubstringMatch)
   EXPECT_FALSE(p.matches("/perception/object"));
 }
 
-TEST(TopicPattern, SingleSegmentWildcard)
+TEST(TopicPattern, AsteriskIsLiteral)
 {
+  // '*' is no longer a wildcard; it only matches itself.
   TopicPattern p("/*/nebula_packets");
-  EXPECT_TRUE(p.matches("/sensing/nebula_packets"));
-  EXPECT_TRUE(p.matches("/foo/nebula_packets"));
-  // '*' does not cross segment boundaries, so multi-segment topics are
-  // rejected.
-  EXPECT_FALSE(p.matches("/sensing/lidar/nebula_packets"));
-  // Extra trailing segments are rejected because the pattern is
-  // anchored at both ends when a wildcard is present.
-  EXPECT_FALSE(p.matches("/sensing/nebula_packets/extra"));
+  EXPECT_FALSE(p.matches("/sensing/nebula_packets"));
+  EXPECT_FALSE(p.matches("/foo/nebula_packets"));
+  EXPECT_TRUE(p.matches("/*/nebula_packets"));
 }
 
-TEST(TopicPattern, RelativeWildcardIsSuffixAnchored)
+TEST(TopicPattern, RegexMetacharactersAreLiteral)
 {
-  // No leading '/' -> start is unanchored (substring), but the presence of
-  // '*' anchors the end.
-  TopicPattern p("lidar/*/points");
-  EXPECT_TRUE(p.matches("lidar/front/points"));
-  EXPECT_TRUE(p.matches("/sensing/lidar/front/points"));
-  EXPECT_FALSE(p.matches("lidar/front/points/extra"));
-  EXPECT_FALSE(p.matches("/sensing/lidar/front/points/extra"));
-}
-
-TEST(TopicPattern, RegexMetacharactersAreEscaped)
-{
+  // '.' and other regex metacharacters are treated as literal characters
+  // because the matcher is a plain string compare.
   TopicPattern p("/tf.static");
   EXPECT_TRUE(p.matches("/tf.static"));
-  // The '.' is a literal, not a regex metacharacter.
   EXPECT_FALSE(p.matches("/tfXstatic"));
-}
-
-TEST(TopicPattern, DoubleWildcardStillSegmentScoped)
-{
-  // Two adjacent '*' characters collapse into a single segment wildcard; this
-  // test pins down that there is no implicit "match across slashes" escape.
-  TopicPattern p("/**/points");
-  EXPECT_TRUE(p.matches("/front/points"));
-  EXPECT_FALSE(p.matches("/sensing/lidar/points"));
 }
 
 }  // namespace
