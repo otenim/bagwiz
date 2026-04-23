@@ -9,23 +9,14 @@
 #include "bagwiz/core/message_formatter.hpp"
 
 #include "bagwiz/core/introspection_loader.hpp"
+#include "bagwiz/core/message_deserializer.hpp"
 
-#include <rosidl_runtime_cpp/message_initialization.hpp>
 #include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 
-#include <rcutils/allocator.h>
-#include <rmw/rmw.h>
-#include <rmw/serialized_message.h>
-#include <rosidl_runtime_c/message_type_support_struct.h>
-
-#include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <new>
-#include <stdexcept>
+#include <exception>
 #include <string>
 
 namespace bagwiz::core
@@ -323,95 +314,6 @@ private:
   const FormatOptions & opts_;
 };
 
-// --- RMW deserialize + lifecycle -----------------------------------------
-
-// RAII wrapper for an aligned buffer big enough to hold one default-
-// constructed instance of the type described by `members`. The buffer is
-// init_function'd on construction and fini_function'd on destruction.
-class MessageBuffer
-{
-public:
-  explicit MessageBuffer(const ts_types::MessageMembers & members) : members_(&members)
-  {
-    void * p = nullptr;
-    // posix_memalign requires size to be non-zero and >= alignment. Use
-    // max_align_t which covers std::string/vector alignment on Linux.
-    const std::size_t size = members.size_of_ == 0 ? 1 : members.size_of_;
-    if (::posix_memalign(&p, alignof(std::max_align_t), size) != 0 || p == nullptr) {
-      throw std::bad_alloc();
-    }
-    buffer_ = p;
-    members.init_function(buffer_, rosidl_runtime_cpp::MessageInitialization::ALL);
-    initialized_ = true;
-  }
-
-  ~MessageBuffer()
-  {
-    if (initialized_ && members_ != nullptr && buffer_ != nullptr) {
-      members_->fini_function(buffer_);
-    }
-    std::free(buffer_);
-  }
-
-  MessageBuffer(const MessageBuffer &) = delete;
-  MessageBuffer & operator=(const MessageBuffer &) = delete;
-
-  void * data() { return buffer_; }
-  const void * data() const { return buffer_; }
-
-private:
-  const ts_types::MessageMembers * members_;
-  void * buffer_ = nullptr;
-  bool initialized_ = false;
-};
-
-std::string hex_preview(std::span<const std::byte> payload, std::size_t max_bytes = 16)
-{
-  const std::size_t n = std::min(payload.size(), max_bytes);
-  std::string out;
-  out.reserve(n * 3 + 16);
-  for (std::size_t i = 0; i < n; ++i) {
-    char buf[4];
-    std::snprintf(buf, sizeof(buf), "%02x ", static_cast<unsigned>(payload[i]));
-    out += buf;
-  }
-  if (payload.size() > n) {
-    out += "...";
-  }
-  return out;
-}
-
-// Copy the bag payload into a freshly-initialized rmw_serialized_message_t
-// and hand it off to rmw_deserialize. The copy is intentional: keeps
-// ownership of the buffer inside rmw/rcutils so we never have to reason
-// about whether the implementation mutates or frees the input span.
-void rmw_decode(
-  std::span<const std::byte> payload, const rosidl_message_type_support_t & ts, void * out)
-{
-  rcutils_allocator_t alloc = rcutils_get_default_allocator();
-  rmw_serialized_message_t serialized = rmw_get_zero_initialized_serialized_message();
-  const rmw_ret_t init_ret = rmw_serialized_message_init(&serialized, payload.size(), &alloc);
-  if (init_ret != RMW_RET_OK) {
-    throw std::runtime_error("rmw_serialized_message_init failed");
-  }
-  std::memcpy(serialized.buffer, payload.data(), payload.size());
-  serialized.buffer_length = payload.size();
-
-  const rmw_ret_t rc = rmw_deserialize(&serialized, &ts, out);
-  std::string err;
-  if (rc != RMW_RET_OK) {
-    const rcutils_error_state_t * s = rcutils_get_error_state();
-    err = "rmw_deserialize failed (size=" + std::to_string(payload.size()) +
-          ", first bytes: " + hex_preview(payload) + "): ";
-    err += s != nullptr ? s->message : "(no error message)";
-    rcutils_reset_error();
-  }
-  rmw_serialized_message_fini(&serialized);
-  if (!err.empty()) {
-    throw std::runtime_error(err);
-  }
-}
-
 }  // namespace
 
 FormatResult format_message(
@@ -424,15 +326,9 @@ FormatResult format_message(
     return result;
   }
   try {
-    MessageBuffer buffer(*introspection.members);
-    // Pass the introspection typesupport handle directly. Both cyclonedds
-    // and fastrtps's rmw_deserialize paths accept it without going through
-    // the rosidl_typesupport_cpp wrapper (which on Humble is not linked
-    // against the per-package RMW-specific libraries and therefore cannot
-    // dispatch).
-    rmw_decode(cdr_payload, *introspection.typesupport, buffer.data());
+    DeserializedMessage decoded(introspection, cdr_payload);
     Emitter emitter(result.text, options);
-    emitter.emit_members(*introspection.members, buffer.data(), "", 0);
+    emitter.emit_members(decoded.members(), decoded.data(), "", 0);
   } catch (const std::exception & e) {
     result.text.clear();
     result.error = e.what();

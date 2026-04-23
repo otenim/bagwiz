@@ -63,6 +63,7 @@ FetchContent_MakeAvailable(cli11 fmt)
 add_library(bagwiz_core
   src/core/introspection_loader.cpp
   src/core/logging.cpp
+  src/core/message_deserializer.cpp
   src/core/message_formatter.cpp
   src/core/terminal_input.cpp
   src/core/topic_pattern.cpp
@@ -99,6 +100,7 @@ add_executable(bagwiz
   src/main.cpp
   src/commands/ls.cpp
   src/commands/seek.cpp
+  src/commands/traj.cpp
 )
 target_link_libraries(bagwiz PRIVATE bagwiz_core CLI11::CLI11 fmt::fmt)
 
@@ -137,6 +139,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_topic_pattern_test test/core/topic_pattern_test.cpp)
   target_link_libraries(bagwiz_topic_pattern_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_trajectory_test test/core/trajectory_test.cpp)
+  target_link_libraries(bagwiz_trajectory_test bagwiz_core)
 
   ament_add_gtest(bagwiz_mcap_reader_test test/io/mcap_reader_test.cpp)
   target_link_libraries(bagwiz_mcap_reader_test bagwiz_core)
