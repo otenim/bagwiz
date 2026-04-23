@@ -82,7 +82,7 @@ const SupportedType * lookup_supported(std::string_view type_name)
 // to the "unsupported type" error so users can always see what's
 // allowed.
 constexpr const char * kSupportedTypesHelp =
-  "Supported topic types:\n"
+  "Supported message types:\n"
   "  Stamped scalar (timestamp from header.stamp):\n"
   "    - geometry_msgs/msg/PoseStamped\n"
   "    - geometry_msgs/msg/PoseWithCovarianceStamped\n"
