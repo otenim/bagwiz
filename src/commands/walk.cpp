@@ -37,10 +37,10 @@ namespace bagwiz::commands
 namespace
 {
 
-constexpr const char * kLogger = "bagwiz.cmd.seek";
+constexpr const char * kLogger = "bagwiz.cmd.walk";
 
 // Cached owning copy of a single bag message. RawMessage's span is
-// invalidated by the next BagReader::next() call, so seek must take a
+// invalidated by the next BagReader::next() call, so walk must take a
 // copy to allow backward navigation.
 struct OwnedMessage
 {
@@ -95,7 +95,7 @@ std::vector<std::string_view> split_lines(const std::string & s)
 
 }  // namespace
 
-// `bagwiz seek <input> <topic>` walks the messages of a single topic one
+// `bagwiz walk <input> <topic>` walks the messages of a single topic one
 // at a time and renders each payload as YAML, mirroring what `ros2 topic
 // echo` produces. Decoding relies on the rosidl introspection typesupport
 // library for the topic's message type; if that library is not installed
@@ -114,10 +114,10 @@ std::vector<std::string_view> split_lines(const std::string & s)
 //   q / Ctrl-C    : quit
 // Messages are cached lazily so `prev` stays O(1) for anything already
 // seen and `G` is the only key that can trigger a full-remaining scan.
-class SeekCommand : public Command
+class WalkCommand : public Command
 {
 public:
-  std::string_view name() const override { return "seek"; }
+  std::string_view name() const override { return "walk"; }
   std::string_view description() const override
   {
     return "Walk messages of a topic as decoded YAML";
@@ -134,7 +134,7 @@ public:
   int run() override
   {
     if (!::isatty(STDIN_FILENO) || !::isatty(STDOUT_FILENO)) {
-      BAGWIZ_LOG_ERROR(kLogger, "seek requires an interactive terminal (stdin+stdout must be TTY)");
+      BAGWIZ_LOG_ERROR(kLogger, "walk requires an interactive terminal (stdin+stdout must be TTY)");
       return 1;
     }
 
@@ -356,6 +356,6 @@ private:
   std::string topic_;
 };
 
-BAGWIZ_REGISTER_COMMAND(SeekCommand)
+BAGWIZ_REGISTER_COMMAND(WalkCommand)
 
 }  // namespace bagwiz::commands
