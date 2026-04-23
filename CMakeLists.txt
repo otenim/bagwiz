@@ -29,9 +29,9 @@ find_package(rmw_implementation REQUIRED)
 find_package(rosidl_runtime_c REQUIRED)
 find_package(rosidl_runtime_cpp REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
-# `traj export --on` re-expresses poses in a target frame using TF read
-# from the bag. tf2 provides BufferCore + math helpers, tf2_msgs /
-# geometry_msgs give us the generated C++ struct layouts we
+# The `traj export --in/--of` and `tf walk` commands read TF from the
+# bag and evaluate transforms. tf2 provides BufferCore + math helpers;
+# tf2_msgs / geometry_msgs give us the generated C++ struct layouts we
 # reinterpret_cast the deserialized payload to.
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -112,6 +112,7 @@ add_executable(bagwiz
   src/commands/ls.cpp
   src/commands/walk.cpp
   src/commands/traj.cpp
+  src/commands/tf.cpp
 )
 target_link_libraries(bagwiz PRIVATE bagwiz_core CLI11::CLI11 fmt::fmt)
 
