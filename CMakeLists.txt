@@ -67,6 +67,7 @@ add_library(bagwiz_core
   src/core/message_formatter.cpp
   src/core/terminal_input.cpp
   src/core/topic_pattern.cpp
+  src/core/trajectory.cpp
   src/commands/registry.cpp
   src/io/bag_factory.cpp
   src/io/mcap_reader.cpp
