@@ -29,6 +29,13 @@ find_package(rmw_implementation REQUIRED)
 find_package(rosidl_runtime_c REQUIRED)
 find_package(rosidl_runtime_cpp REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
+# `traj export --on` re-expresses poses in a target frame using TF read
+# from the bag. tf2 provides BufferCore + math helpers, tf2_msgs /
+# geometry_msgs give us the generated C++ struct layouts we
+# reinterpret_cast the deserialized payload to.
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_msgs REQUIRED)
 
 # CLI11 and fmt are not available as rosdep keys on all supported distros, so
 # fetch them at configure time. Both are small, header-light libraries.
@@ -90,6 +97,9 @@ ament_target_dependencies(bagwiz_core PUBLIC
   rosidl_runtime_c
   rosidl_runtime_cpp
   rosidl_typesupport_introspection_cpp
+  geometry_msgs
+  tf2
+  tf2_msgs
 )
 target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIBS})
 
@@ -124,6 +134,9 @@ ament_export_dependencies(
   rosidl_runtime_c
   rosidl_runtime_cpp
   rosidl_typesupport_introspection_cpp
+  geometry_msgs
+  tf2
+  tf2_msgs
 )
 
 if(BUILD_TESTING)

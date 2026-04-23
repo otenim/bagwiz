@@ -13,6 +13,7 @@
 #include <optional>
 #include <ostream>
 #include <span>
+#include <string>
 
 namespace rosidl_typesupport_introspection_cpp
 {
@@ -37,15 +38,23 @@ struct TrajectoryPose
   double qw = 0.0;
 };
 
-// Outcome of a pose extraction. `used_header_stamp` is true when the
-// timestamp came from the message's `header.stamp`; false when the
-// message had no header and the caller-supplied fallback was used. The
-// CLI uses this to emit a one-shot warning for unstamped types so users
-// know the timestamps in the TUM file come from bag log time rather than
-// from the sensor clock.
+// Outcome of a pose extraction.
+//   * `used_header_stamp` is true when the timestamp came from the
+//     message's `header.stamp`; false when the message had no header
+//     and the caller-supplied fallback was used. The CLI uses this to
+//     emit a one-shot warning for unstamped types so users know the
+//     timestamps in the TUM file come from bag log time rather than
+//     from the sensor clock.
+//   * `frame_id` is the reference (fixed) frame the pose is expressed
+//     in (from `header.frame_id`). Empty for unstamped types.
+//   * `child_frame_id` is the tracked frame -- the moving thing the
+//     pose describes. Only Odometry and TransformStamped carry a
+//     top-level `child_frame_id`; it is empty for the other shapes.
 struct PoseExtraction
 {
   TrajectoryPose pose;
+  std::string frame_id;
+  std::string child_frame_id;
   bool used_header_stamp = false;
 };
 

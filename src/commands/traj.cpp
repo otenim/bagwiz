@@ -14,9 +14,19 @@
 #include "bagwiz/core/trajectory.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
+
 #include <fmt/core.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Transform.h>
+#include <tf2/LinearMath/Vector3.h>
+#include <tf2/buffer_core.h>
+#include <tf2/exceptions.h>
+#include <tf2/time.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -24,6 +34,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace bagwiz::commands
@@ -34,6 +45,8 @@ namespace
 
 constexpr const char * kLogger = "bagwiz.cmd.traj";
 constexpr const char * kFormatTum = "tum";
+constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
+constexpr std::string_view kTfStaticSuffix = "tf_static";
 
 // Declarative list of ROS 2 message types `traj export` accepts. Every
 // entry is scalar (one message == one sample); extract_pose works the
@@ -58,6 +71,34 @@ bool is_supported(std::string_view type_name)
   return false;
 }
 
+bool is_unstamped_type(std::string_view type_name)
+{
+  return type_name == "geometry_msgs/msg/Pose" || type_name == "geometry_msgs/msg/Transform";
+}
+
+// Only Odometry and TransformStamped carry a top-level child_frame_id
+// that names the moving frame. `--of` (tracked frame) requires one of
+// these so the "retarget to a different rigid body" composition is well
+// defined.
+bool type_has_child_frame(std::string_view type_name)
+{
+  return type_name == "nav_msgs/msg/Odometry" || type_name == "geometry_msgs/msg/TransformStamped";
+}
+
+// /tf_static and any topic whose name terminates in "tf_static" use the
+// transient_local durability and carry one-shot, time-independent
+// transforms. Everything else carrying TFMessage is treated as dynamic
+// and stored in the time-indexed history.
+bool is_static_tf_topic(std::string_view topic_name)
+{
+  if (topic_name.size() < kTfStaticSuffix.size()) {
+    return false;
+  }
+  return topic_name.compare(
+           topic_name.size() - kTfStaticSuffix.size(), kTfStaticSuffix.size(), kTfStaticSuffix) ==
+         0;
+}
+
 // Human-readable block appended to the `traj export --help` output and
 // to the "unsupported type" error so users can always see what's
 // allowed.
@@ -70,7 +111,109 @@ constexpr const char * kSupportedTypesHelp =
   "    - nav_msgs/msg/Odometry\n"
   "  Unstamped (timestamp from bag log time):\n"
   "    - geometry_msgs/msg/Pose\n"
-  "    - geometry_msgs/msg/Transform";
+  "    - geometry_msgs/msg/Transform\n"
+  "\n"
+  "Frame selection\n"
+  "  --in <frame>  Reference (fixed) frame the output is expressed in.\n"
+  "                Defaults to the topic's header.frame_id.\n"
+  "  --of <frame>  Tracked (moving) frame whose pose each sample\n"
+  "                represents. Defaults to the topic's child_frame_id\n"
+  "                (Odometry, TransformStamped); `--of` is rejected for\n"
+  "                types that do not carry child_frame_id.\n"
+  "  Either flag pulls TF from the bag (any tf2_msgs/msg/TFMessage\n"
+  "  topic; names ending in `tf_static` are treated as static). Fails\n"
+  "  fast if the bag has no TF or a lookup is out of range.";
+
+struct TfTopic
+{
+  std::string name;
+  bool is_static;
+};
+
+std::vector<TfTopic> collect_tf_topics(const io::BagReader & reader)
+{
+  std::vector<TfTopic> topics;
+  for (const auto & t : reader.topics()) {
+    if (t.type == kTfMessageType) {
+      topics.push_back({t.name, is_static_tf_topic(t.name)});
+    }
+  }
+  return topics;
+}
+
+// Read every TFMessage from `tf_topics` through a fresh BagReader pass
+// and feed each contained TransformStamped into `buffer`. Dynamic and
+// static transforms are routed via the `is_static` flag so tf2's lookup
+// semantics (interpolated history vs. time-independent) match the
+// source topic.
+void load_tf_buffer(
+  const std::filesystem::path & bag_path, const std::vector<TfTopic> & tf_topics,
+  tf2::BufferCore & buffer)
+{
+  auto tf_reader = io::open_read(bag_path);
+  io::ReadFilter filter;
+  for (const auto & t : tf_topics) {
+    filter.topics.push_back(t.name);
+  }
+  tf_reader->set_filter(filter);
+
+  std::unordered_map<std::string, bool> is_static_by_topic;
+  for (const auto & t : tf_topics) {
+    is_static_by_topic[t.name] = t.is_static;
+  }
+
+  const core::IntrospectionLoad introspection = core::load_introspection(kTfMessageType);
+  if (!introspection.ok()) {
+    throw std::runtime_error(
+      "Could not load introspection for tf2_msgs/msg/TFMessage: " + introspection.error);
+  }
+
+  io::RawMessage raw;
+  while (tf_reader->next(raw)) {
+    const core::DeserializedMessage msg(introspection, raw.payload);
+    const auto * tf_msg = static_cast<const tf2_msgs::msg::TFMessage *>(msg.data());
+    const bool is_static = is_static_by_topic.at(raw.topic->name);
+    for (const auto & t : tf_msg->transforms) {
+      buffer.setTransform(t, "bagwiz", is_static);
+    }
+  }
+}
+
+// Pack a TrajectoryPose into a tf2::Transform and back, so the two
+// composition directions below share the same conversion code path.
+tf2::Transform to_tf2(const core::TrajectoryPose & p)
+{
+  tf2::Transform t;
+  t.setOrigin(tf2::Vector3(p.tx, p.ty, p.tz));
+  t.setRotation(tf2::Quaternion(p.qx, p.qy, p.qz, p.qw));
+  return t;
+}
+
+void from_tf2(const tf2::Transform & t, core::TrajectoryPose & p)
+{
+  const auto o = t.getOrigin();
+  const auto r = t.getRotation();
+  p.tx = o.x();
+  p.ty = o.y();
+  p.tz = o.z();
+  p.qx = r.x();
+  p.qy = r.y();
+  p.qz = r.z();
+  p.qw = r.w();
+}
+
+tf2::Transform to_tf2(const geometry_msgs::msg::TransformStamped & ts)
+{
+  tf2::Transform t;
+  t.setOrigin(
+    tf2::Vector3(
+      ts.transform.translation.x, ts.transform.translation.y, ts.transform.translation.z));
+  t.setRotation(
+    tf2::Quaternion(
+      ts.transform.rotation.x, ts.transform.rotation.y, ts.transform.rotation.z,
+      ts.transform.rotation.w));
+  return t;
+}
 
 }  // namespace
 
@@ -85,6 +228,9 @@ constexpr const char * kSupportedTypesHelp =
 //             Supported types: PoseStamped, PoseWithCovarianceStamped,
 //             TransformStamped, Odometry (header.stamp timestamps) and
 //             Pose, Transform (bag log time timestamps, one-shot warning).
+//             `--in <frame>` picks the output reference frame;
+//             `--of <frame>` picks the tracked body. Either pulls TF
+//             from the bag.
 class TrajCommand : public Command
 {
 public:
@@ -95,7 +241,6 @@ public:
   {
     app.require_subcommand(1);
     configure_export(app);
-    // New subcommands go here: configure_convert(app), configure_align(app), ...
   }
 
   int run() override
@@ -104,8 +249,6 @@ public:
       case Subcommand::kExport:
         return run_export();
       case Subcommand::kNone:
-        // Unreachable: require_subcommand(1) forces a selection and main
-        // only calls run() after a successful parse. Kept for safety.
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
     }
@@ -122,6 +265,8 @@ private:
     std::string topic;
     std::filesystem::path output_path;
     std::string format;
+    std::string in_frame;
+    std::string of_frame;
   } export_args_;
 
   void configure_export(CLI::App & app)
@@ -135,6 +280,14 @@ private:
     sub->add_option("-f,--format", export_args_.format, "Output format")
       ->default_val(kFormatTum)
       ->check(CLI::IsMember({kFormatTum}));
+    sub->add_option(
+      "--in", export_args_.in_frame,
+      "Reference (fixed) frame the output trajectory is expressed in. "
+      "Defaults to the topic's header.frame_id. Requires TF in the bag when non-default.");
+    sub->add_option(
+      "--of", export_args_.of_frame,
+      "Tracked (moving) frame whose pose each sample represents. Defaults to the topic's "
+      "child_frame_id. Requires a type with child_frame_id (Odometry, TransformStamped).");
     sub->footer(kSupportedTypesHelp);
     sub->callback([this]() { selected_ = Subcommand::kExport; });
   }
@@ -170,6 +323,46 @@ private:
         kLogger, "Topic '%s' has type '%s', which is not supported by `traj export`.\n%s",
         args.topic.c_str(), type_name.c_str(), kSupportedTypesHelp);
       return 1;
+    }
+
+    const bool in_set = !args.in_frame.empty();
+    const bool of_set = !args.of_frame.empty();
+    const bool use_tf = in_set || of_set;
+
+    if (use_tf && is_unstamped_type(type_name)) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "--in / --of cannot be used with unstamped type '%s' (no header.frame_id to start "
+        "from).",
+        type_name.c_str());
+      return 1;
+    }
+    if (of_set && !type_has_child_frame(type_name)) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "--of requires a type with child_frame_id (nav_msgs/msg/Odometry or "
+        "geometry_msgs/msg/TransformStamped); got '%s'.",
+        type_name.c_str());
+      return 1;
+    }
+
+    // Optional TF buffer populated only when --in or --of is given.
+    tf2::BufferCore tf_buffer;
+    if (use_tf) {
+      const auto tf_topics = collect_tf_topics(*reader);
+      if (tf_topics.empty()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "--in / --of specified but the bag has no tf2_msgs/msg/TFMessage topic; TF is "
+          "required to change the reference or tracked frame.");
+        return 1;
+      }
+      try {
+        load_tf_buffer(args.input_path, tf_topics, tf_buffer);
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(kLogger, "Failed to load TF from the bag: %s", e.what());
+        return 1;
+      }
     }
 
     io::ReadFilter filter;
@@ -216,7 +409,46 @@ private:
             type_name.c_str());
           warned_bag_log_time = true;
         }
-        poses.push_back(extraction->pose);
+
+        // Compose: start with message_pose (= T_source_tracked), retarget
+        // tracked -> --of on the right, then shift the coordinate system
+        // source -> --in on the left. Skipping either half is a no-op when
+        // the requested frame already matches.
+        tf2::Transform P = to_tf2(extraction->pose);
+        const tf2::TimePoint tp(std::chrono::nanoseconds(extraction->pose.timestamp_ns));
+
+        if (of_set && args.of_frame != extraction->child_frame_id) {
+          try {
+            const auto tf =
+              tf_buffer.lookupTransform(extraction->child_frame_id, args.of_frame, tp);
+            P = P * to_tf2(tf);
+          } catch (const tf2::TransformException & e) {
+            BAGWIZ_LOG_ERROR(
+              kLogger,
+              "TF lookup failed at message #%ld (--of: target='%s' source='%s' t=%ld ns): %s",
+              decoded, extraction->child_frame_id.c_str(), args.of_frame.c_str(),
+              extraction->pose.timestamp_ns, e.what());
+            return 1;
+          }
+        }
+
+        if (in_set && args.in_frame != extraction->frame_id) {
+          try {
+            const auto tf = tf_buffer.lookupTransform(args.in_frame, extraction->frame_id, tp);
+            P = to_tf2(tf) * P;
+          } catch (const tf2::TransformException & e) {
+            BAGWIZ_LOG_ERROR(
+              kLogger,
+              "TF lookup failed at message #%ld (--in: target='%s' source='%s' t=%ld ns): %s",
+              decoded, args.in_frame.c_str(), extraction->frame_id.c_str(),
+              extraction->pose.timestamp_ns, e.what());
+            return 1;
+          }
+        }
+
+        core::TrajectoryPose out_pose = extraction->pose;
+        from_tf2(P, out_pose);
+        poses.push_back(out_pose);
       } catch (const std::exception & e) {
         BAGWIZ_LOG_ERROR(kLogger, "decode error on message #%ld: %s", decoded, e.what());
         return 1;
