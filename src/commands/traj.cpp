@@ -83,12 +83,12 @@ const SupportedType * lookup_supported(std::string_view type_name)
 // allowed.
 constexpr const char * kSupportedTypesHelp =
   "Supported message types:\n"
-  "  Stamped scalar (timestamp from header.stamp):\n"
+  "  Stamped (timestamp from header.stamp):\n"
   "    - geometry_msgs/msg/PoseStamped\n"
   "    - geometry_msgs/msg/PoseWithCovarianceStamped\n"
   "    - geometry_msgs/msg/TransformStamped\n"
   "    - nav_msgs/msg/Odometry\n"
-  "  Unstamped scalar (timestamp from bag log time):\n"
+  "  Unstamped (timestamp from bag log time):\n"
   "    - geometry_msgs/msg/Pose\n"
   "    - geometry_msgs/msg/Transform\n"
   "  Multi-sample (requires --base-frame):\n"
@@ -163,7 +163,7 @@ private:
       "--base-frame", export_args_.base_frame,
       "Frame identifier. Required for multi-sample types: filters by child_frame_id on "
       "tf2_msgs/msg/TFMessage, validates header.frame_id on nav_msgs/msg/Path. "
-      "Ignored for single-sample (scalar) types.");
+      "Ignored for Stamped / Unstamped types.");
     sub->footer(kSupportedTypesHelp);
     sub->callback([this]() { selected_ = Subcommand::kExport; });
   }
