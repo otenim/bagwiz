@@ -18,6 +18,17 @@ find_package(mcap_vendor REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(SQLite3 REQUIRED)
+# Used by the seek command to decode bag payloads. Deserialization is
+# delegated to the active RMW (via rmw_deserialize), so we need the rmw
+# dispatcher at runtime. The per-package typesupport libraries
+# (lib<pkg>__rosidl_typesupport_cpp.so and the _introspection_ variant)
+# are loaded at runtime via dlopen; we only need their headers + the
+# dispatch struct definitions at build time.
+find_package(rmw REQUIRED)
+find_package(rmw_implementation REQUIRED)
+find_package(rosidl_runtime_c REQUIRED)
+find_package(rosidl_runtime_cpp REQUIRED)
+find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 
 # CLI11 and fmt are not available as rosdep keys on all supported distros, so
 # fetch them at configure time. Both are small, header-light libraries.
@@ -50,7 +61,10 @@ FetchContent_MakeAvailable(cli11 fmt)
 # static registrars pull into the final binary.
 # ---------------------------------------------------------------------------
 add_library(bagwiz_core
+  src/core/introspection_loader.cpp
   src/core/logging.cpp
+  src/core/message_formatter.cpp
+  src/core/terminal_input.cpp
   src/core/topic_pattern.cpp
   src/commands/registry.cpp
   src/io/bag_factory.cpp
@@ -65,8 +79,17 @@ target_include_directories(bagwiz_core
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
-ament_target_dependencies(bagwiz_core PUBLIC rcutils mcap_vendor yaml_cpp_vendor)
-target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3)
+ament_target_dependencies(bagwiz_core PUBLIC
+  rcutils
+  mcap_vendor
+  yaml_cpp_vendor
+  rmw
+  rmw_implementation
+  rosidl_runtime_c
+  rosidl_runtime_cpp
+  rosidl_typesupport_introspection_cpp
+)
+target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIBS})
 
 # ---------------------------------------------------------------------------
 # bagwiz: CLI executable. Installs to bin/ so users run it directly after
@@ -74,8 +97,8 @@ target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3)
 # ---------------------------------------------------------------------------
 add_executable(bagwiz
   src/main.cpp
-  src/commands/comp.cpp
   src/commands/ls.cpp
+  src/commands/seek.cpp
 )
 target_link_libraries(bagwiz PRIVATE bagwiz_core CLI11::CLI11 fmt::fmt)
 
@@ -88,13 +111,29 @@ install(TARGETS bagwiz_core
 install(DIRECTORY include/ DESTINATION include)
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(rcutils mcap_vendor yaml_cpp_vendor SQLite3)
+ament_export_dependencies(
+  rcutils
+  mcap_vendor
+  yaml_cpp_vendor
+  SQLite3
+  rmw
+  rmw_implementation
+  rosidl_runtime_c
+  rosidl_runtime_cpp
+  rosidl_typesupport_introspection_cpp
+)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
   ament_add_gtest(bagwiz_smoke_test test/smoke_test.cpp)
   target_link_libraries(bagwiz_smoke_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_message_formatter_test test/core/message_formatter_test.cpp)
+  target_link_libraries(bagwiz_message_formatter_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_terminal_input_test test/core/terminal_input_test.cpp)
+  target_link_libraries(bagwiz_terminal_input_test bagwiz_core)
 
   ament_add_gtest(bagwiz_topic_pattern_test test/core/topic_pattern_test.cpp)
   target_link_libraries(bagwiz_topic_pattern_test bagwiz_core)
