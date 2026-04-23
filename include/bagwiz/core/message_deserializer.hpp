@@ -50,10 +50,7 @@ public:
   DeserializedMessage & operator=(DeserializedMessage &&) = delete;
 
   const void * data() const { return buffer_; }
-  const rosidl_typesupport_introspection_cpp::MessageMembers & members() const
-  {
-    return *members_;
-  }
+  const rosidl_typesupport_introspection_cpp::MessageMembers & members() const { return *members_; }
 
 private:
   const rosidl_typesupport_introspection_cpp::MessageMembers * members_ = nullptr;

@@ -16,6 +16,7 @@
 
 #include <fmt/core.h>
 
+#include <array>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -34,18 +35,56 @@ namespace
 constexpr const char * kLogger = "bagwiz.cmd.traj";
 constexpr const char * kFormatTum = "tum";
 
+// Declarative catalogue of the ROS 2 message types `traj` accepts in
+// v1. Every entry is a scalar (one message == one sample); array-shaped
+// types (TFMessage, Path, PoseArray) are tracked for v2 and explicitly
+// rejected below until that work lands.
+struct SupportedType
+{
+  std::string_view name;
+  bool has_header_stamp;  // false => fall back to bag log time
+};
+
+constexpr std::array<SupportedType, 6> kSupportedTypes = {{
+  {"geometry_msgs/msg/PoseStamped", true},
+  {"geometry_msgs/msg/PoseWithCovarianceStamped", true},
+  {"geometry_msgs/msg/TransformStamped", true},
+  {"nav_msgs/msg/Odometry", true},
+  {"geometry_msgs/msg/Pose", false},
+  {"geometry_msgs/msg/Transform", false},
+}};
+
+const SupportedType * lookup_supported(std::string_view type_name)
+{
+  for (const auto & t : kSupportedTypes) {
+    if (t.name == type_name) {
+      return &t;
+    }
+  }
+  return nullptr;
+}
+
+// Human-readable block appended to help output and to the "unsupported
+// type" error so users can always see what's allowed.
+constexpr const char * kSupportedTypesHelp =
+  "Supported topic types:\n"
+  "  Stamped (header.stamp used as TUM timestamp):\n"
+  "    - geometry_msgs/msg/PoseStamped\n"
+  "    - geometry_msgs/msg/PoseWithCovarianceStamped\n"
+  "    - geometry_msgs/msg/TransformStamped\n"
+  "    - nav_msgs/msg/Odometry\n"
+  "  Unstamped (bag log time used as TUM timestamp):\n"
+  "    - geometry_msgs/msg/Pose\n"
+  "    - geometry_msgs/msg/Transform";
+
 }  // namespace
 
-// `bagwiz traj <input> <topic> <output> [-f tum]` extracts the pose
-// trajectory of one topic and writes it to disk in a trajectory exchange
-// format. Only TUM is implemented today; the `-f` flag is plumbed so more
-// formats (KITTI, bag2, ...) can be added without changing the CLI shape.
-//
-// Supported input types are anything for which core::extract_pose can
-// find a (header, pose|transform) pair via introspection —
-// PoseStamped / PoseWithCovarianceStamped / Odometry / TransformStamped
-// and close cousins. Array-shaped types like tf2_msgs/msg/TFMessage are
-// rejected with a clear error (they would need a frame-pair selector).
+// `bagwiz traj <input> <topic> <output> [-f tum] [--frame-id <id>]`
+// extracts a topic's pose trajectory and writes it to disk. v1 accepts
+// only the scalar types listed in kSupportedTypes; multi-sample types
+// (TFMessage, Path, PoseArray) are tracked for a future PR and rejected
+// with a clear error today. `--frame-id` is reserved for that follow-up
+// and silently ignored when specified on v1 types.
 class TrajCommand : public Command
 {
 public:
@@ -65,6 +104,11 @@ public:
     app.add_option("-f,--format", format_, "Output format")
       ->default_val(kFormatTum)
       ->check(CLI::IsMember({kFormatTum}));
+    app.add_option(
+      "--frame-id", frame_id_,
+      "Frame identifier. Reserved for multi-sample types (TFMessage, Path); "
+      "ignored for the single-sample types supported today.");
+    app.footer(kSupportedTypesHelp);
   }
 
   int run() override
@@ -91,6 +135,14 @@ public:
     }
     const std::string type_name = topic_info->type;
 
+    const SupportedType * spec = lookup_supported(type_name);
+    if (spec == nullptr) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "Topic '%s' has type '%s', which is not supported by `traj`.\n%s", topic_.c_str(),
+        type_name.c_str(), kSupportedTypesHelp);
+      return 1;
+    }
+
     io::ReadFilter filter;
     filter.topics.push_back(topic_);
     reader->set_filter(filter);
@@ -107,8 +159,7 @@ public:
 
     std::vector<core::TrajectoryPose> poses;
     std::int64_t decoded = 0;
-    std::int64_t skipped = 0;
-    bool shape_logged = false;
+    bool warned_bag_log_time = false;
 
     io::RawMessage raw;
     while (true) {
@@ -123,46 +174,53 @@ public:
       ++decoded;
       try {
         const core::DeserializedMessage msg(introspection, raw.payload);
-        const auto pose = core::extract_pose(msg.members(), msg.data());
-        if (pose) {
-          poses.push_back(*pose);
-        } else {
-          ++skipped;
-          if (!shape_logged) {
-            BAGWIZ_LOG_ERROR(
-              kLogger,
-              "Topic '%s' of type '%s' does not expose a (header, pose|transform) pair that can "
-              "be turned into a trajectory sample.",
-              topic_.c_str(), type_name.c_str());
-            shape_logged = true;
-          }
+        const auto extraction = core::extract_pose(msg.members(), msg.data(), raw.timestamp_ns);
+        if (!extraction) {
+          // Should not be reachable for whitelisted types (the shape
+          // check inside extract_pose matches by field names) but keep
+          // the fast-fail in case a non-std variant of a supported name
+          // slips through.
+          BAGWIZ_LOG_ERROR(
+            kLogger, "Failed to extract pose from message #%ld of type '%s' (unexpected schema).",
+            decoded, type_name.c_str());
+          return 1;
         }
+        if (!extraction->used_header_stamp && !warned_bag_log_time) {
+          BAGWIZ_LOG_WARN(
+            kLogger,
+            "Type '%s' has no header; using bag log time (recorder receive time) for TUM "
+            "timestamps.",
+            type_name.c_str());
+          warned_bag_log_time = true;
+        }
+        poses.push_back(extraction->pose);
       } catch (const std::exception & e) {
         BAGWIZ_LOG_ERROR(kLogger, "decode error on message #%ld: %s", decoded, e.what());
         return 1;
       }
     }
 
+    if (!frame_id_.empty()) {
+      // v1 silently ignores --frame-id; leave a debug-level trace so
+      // anyone debugging knows it was received but unused.
+      BAGWIZ_LOG_DEBUG(
+        kLogger, "--frame-id='%s' ignored for scalar type '%s'", frame_id_.c_str(),
+        type_name.c_str());
+    }
+
     if (poses.empty()) {
-      if (skipped > 0) {
-        return 1;  // shape error was already logged
-      }
       BAGWIZ_LOG_WARN(
         kLogger, "No messages found on topic '%s'; writing an empty trajectory.", topic_.c_str());
     }
 
     if (format_ != kFormatTum) {
-      // Shouldn't be reachable (CLI::IsMember filter above), but be
-      // defensive in case the check is ever relaxed without extending
-      // this switch.
       BAGWIZ_LOG_ERROR(kLogger, "Unsupported format '%s'", format_.c_str());
       return 1;
     }
 
     std::ofstream out(output_path_, std::ios::out | std::ios::trunc);
     if (!out) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "Failed to open output path %s for writing", output_path_.c_str());
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open output path %s for writing", output_path_.c_str());
       return 1;
     }
     core::write_tum(out, poses);
@@ -179,6 +237,7 @@ private:
   std::string topic_;
   std::filesystem::path output_path_;
   std::string format_;
+  std::string frame_id_;
 };
 
 BAGWIZ_REGISTER_COMMAND(TrajCommand)

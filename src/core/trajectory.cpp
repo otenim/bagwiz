@@ -154,19 +154,30 @@ bool read_header_stamp_ns(
 
 }  // namespace
 
-std::optional<TrajectoryPose> extract_pose(
-  const ts_types::MessageMembers & members, const void * base)
+std::optional<PoseExtraction> extract_pose(
+  const ts_types::MessageMembers & members, const void * base, std::int64_t fallback_timestamp_ns)
 {
-  TrajectoryPose out{};
-  if (!read_header_stamp_ns(members, base, out.timestamp_ns)) {
-    return std::nullopt;
+  PoseExtraction out;
+  if (read_header_stamp_ns(members, base, out.pose.timestamp_ns)) {
+    out.used_header_stamp = true;
+  } else {
+    out.pose.timestamp_ns = fallback_timestamp_ns;
+    out.used_header_stamp = false;
   }
 
   // TransformStamped-shaped: transform.{translation, rotation}
   if (const auto * trans = find_member(members, "transform"); is_scalar_message(trans)) {
     const void * t_base = byte_ptr(base) + trans->offset_;
     if (fill_translation_rotation(
-          *submembers(trans), t_base, "translation", "rotation", out)) {
+          *submembers(trans), t_base, "translation", "rotation", out.pose)) {
+      return out;
+    }
+  }
+
+  // Bare Transform (no header): translation + rotation at the top level.
+  if (
+    find_member(members, "translation") != nullptr && find_member(members, "rotation") != nullptr) {
+    if (fill_translation_rotation(members, base, "translation", "rotation", out.pose)) {
       return out;
     }
   }
@@ -180,11 +191,19 @@ std::optional<TrajectoryPose> extract_pose(
     if (const auto * inner = find_member(pose_mem, "pose"); is_scalar_message(inner)) {
       const void * inner_base = byte_ptr(pose_base) + inner->offset_;
       if (fill_translation_rotation(
-            *submembers(inner), inner_base, "position", "orientation", out)) {
+            *submembers(inner), inner_base, "position", "orientation", out.pose)) {
         return out;
       }
     }
-    if (fill_translation_rotation(pose_mem, pose_base, "position", "orientation", out)) {
+    if (fill_translation_rotation(pose_mem, pose_base, "position", "orientation", out.pose)) {
+      return out;
+    }
+  }
+
+  // Bare Pose (no header): position + orientation at the top level.
+  if (
+    find_member(members, "position") != nullptr && find_member(members, "orientation") != nullptr) {
+    if (fill_translation_rotation(members, base, "position", "orientation", out.pose)) {
       return out;
     }
   }

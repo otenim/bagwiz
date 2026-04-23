@@ -24,8 +24,7 @@ TEST(WriteTum, EmitsExpectedLineLayout)
 {
   std::vector<TrajectoryPose> poses;
   // 1.5 s, identity rotation at (1, 2, 3).
-  poses.push_back(
-    {1'500'000'000LL, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0});
+  poses.push_back({1'500'000'000LL, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0});
   // 2.75 s, a quarter turn about Z at (0, 0, 0).
   poses.push_back(
     {2'750'000'000LL, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7071067811865475, 0.7071067811865475});
@@ -38,14 +37,16 @@ TEST(WriteTum, EmitsExpectedLineLayout)
 
   // Nanosecond-precision timestamp + 7 whitespace-separated values per line.
   EXPECT_NE(
-    text.find("1.500000000 1.000000000 2.000000000 3.000000000 0.000000000 0.000000000 "
-              "0.000000000 1.000000000\n"),
+    text.find(
+      "1.500000000 1.000000000 2.000000000 3.000000000 0.000000000 0.000000000 "
+      "0.000000000 1.000000000\n"),
     std::string::npos)
     << "got:\n"
     << text;
   EXPECT_NE(
-    text.find("2.750000000 0.000000000 0.000000000 0.000000000 0.000000000 0.000000000 "
-              "0.707106781 0.707106781\n"),
+    text.find(
+      "2.750000000 0.000000000 0.000000000 0.000000000 0.000000000 0.000000000 "
+      "0.707106781 0.707106781\n"),
     std::string::npos)
     << "got:\n"
     << text;

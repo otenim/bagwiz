@@ -10,12 +10,13 @@
 
 #include "bagwiz/core/introspection_loader.hpp"
 
+#include <rosidl_runtime_cpp/message_initialization.hpp>
+#include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
+
 #include <rcutils/allocator.h>
 #include <rmw/rmw.h>
 #include <rmw/serialized_message.h>
 #include <rosidl_runtime_c/message_type_support_struct.h>
-#include <rosidl_runtime_cpp/message_initialization.hpp>
-#include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 
 #include <algorithm>
 #include <cstdio>

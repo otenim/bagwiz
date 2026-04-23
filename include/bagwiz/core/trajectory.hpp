@@ -37,22 +37,41 @@ struct TrajectoryPose
   double qw = 0.0;
 };
 
+// Outcome of a pose extraction. `used_header_stamp` is true when the
+// timestamp came from the message's `header.stamp`; false when the
+// message had no header and the caller-supplied fallback was used. The
+// CLI uses this to emit a one-shot warning for unstamped types so users
+// know the timestamps in the TUM file come from bag log time rather than
+// from the sensor clock.
+struct PoseExtraction
+{
+  TrajectoryPose pose;
+  bool used_header_stamp = false;
+};
+
 // Extract a pose sample from a deserialized ROS 2 message by introspection.
 //
 // Supported shapes (no template specialization required):
-//   * `header.stamp` + `pose.position` + `pose.orientation`
-//     (geometry_msgs/msg/PoseStamped, geometry_msgs/msg/PoseWithCovariance
-//     + a header, etc.)
-//   * `header.stamp` + `pose.pose.position` + `pose.pose.orientation`
+//   * `header.stamp` + `pose.{position, orientation}`
+//     (geometry_msgs/msg/PoseStamped, PoseWithCovarianceStamped)
+//   * `header.stamp` + `pose.pose.{position, orientation}`
 //     (nav_msgs/msg/Odometry and its kin)
-//   * `header.stamp` + `transform.translation` + `transform.rotation`
+//   * `header.stamp` + `transform.{translation, rotation}`
 //     (geometry_msgs/msg/TransformStamped)
+//   * `position` + `orientation` (no header)
+//     (geometry_msgs/msg/Pose)
+//   * `translation` + `rotation` (no header)
+//     (geometry_msgs/msg/Transform)
 //
-// Returns std::nullopt when no recognizable (header, pose|transform)
-// pair can be located. The caller should surface that as a clear CLI
-// error.
-std::optional<TrajectoryPose> extract_pose(
-  const rosidl_typesupport_introspection_cpp::MessageMembers & members, const void * base);
+// `fallback_timestamp_ns` is used when the message has no header.stamp;
+// callers should pass the bag log time (recorder receive time) so the
+// output trajectory still has a sensible time axis.
+//
+// Returns std::nullopt when the pose fields cannot be located (the
+// message does not look like any supported shape).
+std::optional<PoseExtraction> extract_pose(
+  const rosidl_typesupport_introspection_cpp::MessageMembers & members, const void * base,
+  int64_t fallback_timestamp_ns);
 
 // Write poses in the TUM trajectory format: one sample per line,
 //
