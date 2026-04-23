@@ -18,7 +18,7 @@ find_package(mcap_vendor REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(SQLite3 REQUIRED)
-# Used by the seek command to decode bag payloads. Deserialization is
+# Used by the walk command to decode bag payloads. Deserialization is
 # delegated to the active RMW (via rmw_deserialize), so we need the rmw
 # dispatcher at runtime. The per-package typesupport libraries
 # (lib<pkg>__rosidl_typesupport_cpp.so and the _introspection_ variant)
@@ -100,7 +100,7 @@ target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIB
 add_executable(bagwiz
   src/main.cpp
   src/commands/ls.cpp
-  src/commands/seek.cpp
+  src/commands/walk.cpp
   src/commands/traj.cpp
 )
 target_link_libraries(bagwiz PRIVATE bagwiz_core CLI11::CLI11 fmt::fmt)
