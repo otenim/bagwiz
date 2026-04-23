@@ -35,24 +35,38 @@ namespace
 constexpr const char * kLogger = "bagwiz.cmd.traj";
 constexpr const char * kFormatTum = "tum";
 
-// Declarative catalogue of the ROS 2 message types `traj` accepts in
-// v1. Every entry is a scalar (one message == one sample); array-shaped
-// types (TFMessage, Path, PoseArray) are tracked for v2 and explicitly
-// rejected below until that work lands.
+// Declarative catalogue of the ROS 2 message types `traj` accepts.
+// `kind` drives the per-message extraction path: scalar (one message ==
+// one sample) vs multi-sample (one message -> zero-or-more samples via
+// an array field plus a `--frame-id` selector).
+enum class TypeKind {
+  kScalarStamped,    // header + pose/transform, single sample
+  kScalarUnstamped,  // bare Pose / Transform, timestamp from bag log time
+  kTfMessage,        // array of TransformStamped, filter by child_frame_id
+  kPath,             // Header + array of PoseStamped, validate header.frame_id
+};
+
 struct SupportedType
 {
   std::string_view name;
-  bool has_header_stamp;  // false => fall back to bag log time
+  TypeKind kind;
 };
 
-constexpr std::array<SupportedType, 6> kSupportedTypes = {{
-  {"geometry_msgs/msg/PoseStamped", true},
-  {"geometry_msgs/msg/PoseWithCovarianceStamped", true},
-  {"geometry_msgs/msg/TransformStamped", true},
-  {"nav_msgs/msg/Odometry", true},
-  {"geometry_msgs/msg/Pose", false},
-  {"geometry_msgs/msg/Transform", false},
+constexpr std::array<SupportedType, 8> kSupportedTypes = {{
+  {"geometry_msgs/msg/PoseStamped", TypeKind::kScalarStamped},
+  {"geometry_msgs/msg/PoseWithCovarianceStamped", TypeKind::kScalarStamped},
+  {"geometry_msgs/msg/TransformStamped", TypeKind::kScalarStamped},
+  {"nav_msgs/msg/Odometry", TypeKind::kScalarStamped},
+  {"geometry_msgs/msg/Pose", TypeKind::kScalarUnstamped},
+  {"geometry_msgs/msg/Transform", TypeKind::kScalarUnstamped},
+  {"tf2_msgs/msg/TFMessage", TypeKind::kTfMessage},
+  {"nav_msgs/msg/Path", TypeKind::kPath},
 }};
+
+bool kind_requires_frame_id(TypeKind k)
+{
+  return k == TypeKind::kTfMessage || k == TypeKind::kPath;
+}
 
 const SupportedType * lookup_supported(std::string_view type_name)
 {
@@ -68,23 +82,39 @@ const SupportedType * lookup_supported(std::string_view type_name)
 // type" error so users can always see what's allowed.
 constexpr const char * kSupportedTypesHelp =
   "Supported topic types:\n"
-  "  Stamped (header.stamp used as TUM timestamp):\n"
+  "  Stamped scalar (header.stamp used as TUM timestamp):\n"
   "    - geometry_msgs/msg/PoseStamped\n"
   "    - geometry_msgs/msg/PoseWithCovarianceStamped\n"
   "    - geometry_msgs/msg/TransformStamped\n"
   "    - nav_msgs/msg/Odometry\n"
-  "  Unstamped (bag log time used as TUM timestamp):\n"
+  "  Unstamped scalar (bag log time used as TUM timestamp):\n"
   "    - geometry_msgs/msg/Pose\n"
-  "    - geometry_msgs/msg/Transform";
+  "    - geometry_msgs/msg/Transform\n"
+  "  Multi-sample (requires --frame-id):\n"
+  "    - tf2_msgs/msg/TFMessage     (filter: child_frame_id == --frame-id)\n"
+  "    - nav_msgs/msg/Path          (validate: header.frame_id == --frame-id)";
 
 }  // namespace
 
 // `bagwiz traj <input> <topic> <output> [-f tum] [--frame-id <id>]`
-// extracts a topic's pose trajectory and writes it to disk. v1 accepts
-// only the scalar types listed in kSupportedTypes; multi-sample types
-// (TFMessage, Path, PoseArray) are tracked for a future PR and rejected
-// with a clear error today. `--frame-id` is reserved for that follow-up
-// and silently ignored when specified on v1 types.
+// extracts a topic's pose trajectory and writes it to disk.
+//
+// Accepted types fall into three kinds (see kSupportedTypes):
+//   * scalar stamped    -- one sample per message, stamp from header.stamp
+//                          (PoseStamped, PoseWithCovarianceStamped,
+//                          TransformStamped, Odometry)
+//   * scalar unstamped  -- one sample per message, stamp from bag log time
+//                          (Pose, Transform); emits a one-shot warning
+//   * multi-sample      -- zero or more samples per message via an array
+//                          field, with `--frame-id` as the selector:
+//                            TFMessage: filter by child_frame_id
+//                            Path     : validate top-level header.frame_id
+//
+// For multi-sample types `--frame-id` is mandatory and the command
+// fails fast if it is missing. For scalar types it is silently ignored.
+// PoseArray is deliberately out of scope: every pose in one message
+// shares the same stamp, which yields duplicate-timestamp rows that
+// are awkward for TUM consumers.
 class TrajCommand : public Command
 {
 public:
@@ -106,8 +136,9 @@ public:
       ->check(CLI::IsMember({kFormatTum}));
     app.add_option(
       "--frame-id", frame_id_,
-      "Frame identifier. Reserved for multi-sample types (TFMessage, Path); "
-      "ignored for the single-sample types supported today.");
+      "Frame identifier. Required for multi-sample types: filters by child_frame_id on "
+      "tf2_msgs/msg/TFMessage, validates header.frame_id on nav_msgs/msg/Path. "
+      "Ignored for single-sample (scalar) types.");
     app.footer(kSupportedTypesHelp);
   }
 
@@ -143,6 +174,15 @@ public:
       return 1;
     }
 
+    if (kind_requires_frame_id(spec->kind) && frame_id_.empty()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "Type '%s' is multi-sample; --frame-id is required (filter for TFMessage, validator "
+        "for Path).",
+        type_name.c_str());
+      return 1;
+    }
+
     io::ReadFilter filter;
     filter.topics.push_back(topic_);
     reader->set_filter(filter);
@@ -174,38 +214,69 @@ public:
       ++decoded;
       try {
         const core::DeserializedMessage msg(introspection, raw.payload);
-        const auto extraction = core::extract_pose(msg.members(), msg.data(), raw.timestamp_ns);
-        if (!extraction) {
-          // Should not be reachable for whitelisted types (the shape
-          // check inside extract_pose matches by field names) but keep
-          // the fast-fail in case a non-std variant of a supported name
-          // slips through.
-          BAGWIZ_LOG_ERROR(
-            kLogger, "Failed to extract pose from message #%ld of type '%s' (unexpected schema).",
-            decoded, type_name.c_str());
-          return 1;
+        switch (spec->kind) {
+          case TypeKind::kScalarStamped:
+          case TypeKind::kScalarUnstamped: {
+            const auto extraction = core::extract_pose(msg.members(), msg.data(), raw.timestamp_ns);
+            if (!extraction) {
+              BAGWIZ_LOG_ERROR(
+                kLogger,
+                "Failed to extract pose from message #%ld of type '%s' (unexpected schema).",
+                decoded, type_name.c_str());
+              return 1;
+            }
+            if (!extraction->used_header_stamp && !warned_bag_log_time) {
+              BAGWIZ_LOG_WARN(
+                kLogger,
+                "Type '%s' has no header; using bag log time (recorder receive time) for TUM "
+                "timestamps.",
+                type_name.c_str());
+              warned_bag_log_time = true;
+            }
+            poses.push_back(extraction->pose);
+            break;
+          }
+          case TypeKind::kTfMessage: {
+            auto tf = core::extract_tf_message_poses(msg.members(), msg.data(), frame_id_);
+            if (!tf.ok()) {
+              BAGWIZ_LOG_ERROR(
+                kLogger, "TFMessage extraction failed at message #%ld: %s", decoded,
+                tf.error.c_str());
+              return 1;
+            }
+            poses.insert(poses.end(), tf.poses.begin(), tf.poses.end());
+            break;
+          }
+          case TypeKind::kPath: {
+            auto path = core::extract_path_poses(msg.members(), msg.data(), frame_id_);
+            if (!path.ok()) {
+              BAGWIZ_LOG_ERROR(
+                kLogger, "Path validation failed at message #%ld: %s", decoded, path.error.c_str());
+              return 1;
+            }
+            poses.insert(poses.end(), path.poses.begin(), path.poses.end());
+            break;
+          }
         }
-        if (!extraction->used_header_stamp && !warned_bag_log_time) {
-          BAGWIZ_LOG_WARN(
-            kLogger,
-            "Type '%s' has no header; using bag log time (recorder receive time) for TUM "
-            "timestamps.",
-            type_name.c_str());
-          warned_bag_log_time = true;
-        }
-        poses.push_back(extraction->pose);
       } catch (const std::exception & e) {
         BAGWIZ_LOG_ERROR(kLogger, "decode error on message #%ld: %s", decoded, e.what());
         return 1;
       }
     }
 
-    if (!frame_id_.empty()) {
-      // v1 silently ignores --frame-id; leave a debug-level trace so
-      // anyone debugging knows it was received but unused.
+    if (!frame_id_.empty() && !kind_requires_frame_id(spec->kind)) {
+      // Scalar types don't need --frame-id; leave a debug trace so
+      // anyone troubleshooting knows the flag was observed but unused.
       BAGWIZ_LOG_DEBUG(
         kLogger, "--frame-id='%s' ignored for scalar type '%s'", frame_id_.c_str(),
         type_name.c_str());
+    }
+
+    if (spec->kind == TypeKind::kTfMessage && poses.empty() && decoded > 0) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "No TransformStamped in '%s' matched child_frame_id='%s'; writing an empty trajectory.",
+        topic_.c_str(), frame_id_.c_str());
     }
 
     if (poses.empty()) {

@@ -75,3 +75,6 @@ desktop.ini
 # Claude Code / local tooling
 .claude/
 CLAUDE.local.md
+
+# Trajectory outputs (produced by bagwiz traj)
+*.tum
