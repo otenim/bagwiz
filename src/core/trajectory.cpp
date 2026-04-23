@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ios>
+#include <string>
 #include <string_view>
 
 namespace bagwiz::core
@@ -117,10 +118,14 @@ bool fill_translation_rotation(
   return true;
 }
 
-// Locate `header.stamp` and pull {sec,nanosec} out of it. Returns the
-// combined nanosecond timestamp via `out` on success.
-bool read_header_stamp_ns(
-  const ts_types::MessageMembers & members, const void * base, std::int64_t & out)
+// Locate `header` + its `stamp` / `frame_id` sub-members. On success
+// `timestamp_ns` holds (sec * 1e9 + nanosec) and `frame_id` holds the
+// contents of `header.frame_id` (empty when the field is absent or
+// not a string). Returns false when the message has no scalar `header`
+// member at all -- the caller treats that as the "unstamped" case.
+bool read_header(
+  const ts_types::MessageMembers & members, const void * base, std::int64_t & timestamp_ns,
+  std::string & frame_id)
 {
   const auto * header = find_member(members, "header");
   if (!is_scalar_message(header)) {
@@ -148,7 +153,14 @@ bool read_header_stamp_ns(
   std::uint32_t n = 0;
   std::memcpy(&s, byte_ptr(stamp_base) + sec->offset_, sizeof(s));
   std::memcpy(&n, byte_ptr(stamp_base) + nsec->offset_, sizeof(n));
-  out = static_cast<std::int64_t>(s) * 1'000'000'000LL + static_cast<std::int64_t>(n);
+  timestamp_ns = static_cast<std::int64_t>(s) * 1'000'000'000LL + static_cast<std::int64_t>(n);
+
+  const auto * fid = find_member(header_mem, "frame_id");
+  if (fid != nullptr && !fid->is_array_ && fid->type_id_ == ts_types::ROS_TYPE_STRING) {
+    frame_id = *reinterpret_cast<const std::string *>(byte_ptr(header_base) + fid->offset_);
+  } else {
+    frame_id.clear();
+  }
   return true;
 }
 
@@ -158,11 +170,19 @@ std::optional<PoseExtraction> extract_pose(
   const ts_types::MessageMembers & members, const void * base, std::int64_t fallback_timestamp_ns)
 {
   PoseExtraction out;
-  if (read_header_stamp_ns(members, base, out.pose.timestamp_ns)) {
+  if (read_header(members, base, out.pose.timestamp_ns, out.frame_id)) {
     out.used_header_stamp = true;
   } else {
     out.pose.timestamp_ns = fallback_timestamp_ns;
     out.used_header_stamp = false;
+    out.frame_id.clear();
+  }
+
+  // Optional top-level child_frame_id (Odometry, TransformStamped). Empty
+  // for PoseStamped / Pose / Transform which do not carry one.
+  if (const auto * cf = find_member(members, "child_frame_id");
+      cf != nullptr && !cf->is_array_ && cf->type_id_ == ts_types::ROS_TYPE_STRING) {
+    out.child_frame_id = *reinterpret_cast<const std::string *>(byte_ptr(base) + cf->offset_);
   }
 
   // TransformStamped-shaped: transform.{translation, rotation}
