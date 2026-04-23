@@ -35,7 +35,7 @@ namespace
 constexpr const char * kLogger = "bagwiz.cmd.traj";
 constexpr const char * kFormatTum = "tum";
 
-// Declarative catalogue of the ROS 2 message types `traj` accepts.
+// Declarative catalogue of the ROS 2 message types `traj export` accepts.
 // `kind` drives the per-message extraction path: scalar (one message ==
 // one sample) vs multi-sample (one message -> zero-or-more samples via
 // an array field plus a `--base-frame` selector).
@@ -78,8 +78,9 @@ const SupportedType * lookup_supported(std::string_view type_name)
   return nullptr;
 }
 
-// Human-readable block appended to help output and to the "unsupported
-// type" error so users can always see what's allowed.
+// Human-readable block appended to the `traj export --help` output and
+// to the "unsupported type" error so users can always see what's
+// allowed.
 constexpr const char * kSupportedTypesHelp =
   "Supported topic types:\n"
   "  Stamped scalar (header.stamp used as TUM timestamp):\n"
@@ -96,72 +97,102 @@ constexpr const char * kSupportedTypesHelp =
 
 }  // namespace
 
-// `bagwiz traj <input> <topic> <output> [-f tum] [--base-frame <id>]`
-// extracts a topic's pose trajectory and writes it to disk.
+// `bagwiz traj` is a command group for trajectory-shaped operations.
+// Today the only subcommand is `export`, which pulls a topic's poses
+// out of a bag and writes them to a file. The group is already wired
+// up as a CLI11 subcommand so future operations (convert, align,
+// compare, ...) can be added by dropping a new `configure_*` +
+// `run_*` pair next to the existing one.
 //
-// Accepted types fall into three kinds (see kSupportedTypes):
-//   * scalar stamped    -- one sample per message, stamp from header.stamp
-//                          (PoseStamped, PoseWithCovarianceStamped,
-//                          TransformStamped, Odometry)
-//   * scalar unstamped  -- one sample per message, stamp from bag log time
-//                          (Pose, Transform); emits a one-shot warning
-//   * multi-sample      -- zero or more samples per message via an array
-//                          field, with `--base-frame` as the selector:
-//                            TFMessage: filter by child_frame_id
-//                            Path     : validate top-level header.frame_id
-//
-// For multi-sample types `--base-frame` is mandatory and the command
-// fails fast if it is missing. For scalar types it is silently ignored.
-// PoseArray is deliberately out of scope: every pose in one message
-// shares the same stamp, which yields duplicate-timestamp rows that
-// are awkward for TUM consumers.
+// Subcommands
+// -----------
+//   export    Extract a topic's pose trajectory and save it (currently TUM).
+//             Accepted shapes: scalar stamped (header.stamp timestamps),
+//             scalar unstamped (bag log time timestamps, one-shot warning),
+//             and multi-sample (TFMessage / Path with `--base-frame`).
 class TrajCommand : public Command
 {
 public:
   std::string_view name() const override { return "traj"; }
-  std::string_view description() const override
-  {
-    return "Extract a topic's pose trajectory and save it (currently TUM format)";
-  }
+  std::string_view description() const override { return "Trajectory operations (export, ...)"; }
 
   void configure(CLI::App & app) override
   {
-    app.add_option("input", input_path_, "Bag path (file or directory)")
-      ->required()
-      ->check(CLI::ExistingPath);
-    app.add_option("topic", topic_, "Topic name to extract poses from")->required();
-    app.add_option("output", output_path_, "Output file path")->required();
-    app.add_option("-f,--format", format_, "Output format")
-      ->default_val(kFormatTum)
-      ->check(CLI::IsMember({kFormatTum}));
-    app.add_option(
-      "--base-frame", base_frame_,
-      "Frame identifier. Required for multi-sample types: filters by child_frame_id on "
-      "tf2_msgs/msg/TFMessage, validates header.frame_id on nav_msgs/msg/Path. "
-      "Ignored for single-sample (scalar) types.");
-    app.footer(kSupportedTypesHelp);
+    app.require_subcommand(1);
+    configure_export(app);
+    // New subcommands go here: configure_convert(app), configure_align(app), ...
   }
 
   int run() override
   {
+    switch (selected_) {
+      case Subcommand::kExport:
+        return run_export();
+      case Subcommand::kNone:
+        // Unreachable: require_subcommand(1) forces a selection and main
+        // only calls run() after a successful parse. Kept for safety.
+        BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
+        return 1;
+    }
+    return 1;
+  }
+
+private:
+  enum class Subcommand { kNone, kExport };
+  Subcommand selected_ = Subcommand::kNone;
+
+  struct ExportArgs
+  {
+    std::filesystem::path input_path;
+    std::string topic;
+    std::filesystem::path output_path;
+    std::string format;
+    std::string base_frame;
+  } export_args_;
+
+  void configure_export(CLI::App & app)
+  {
+    auto * sub =
+      app.add_subcommand("export", "Extract a topic's pose trajectory and save it (TUM today)");
+    sub->add_option("input", export_args_.input_path, "Bag path (file or directory)")
+      ->required()
+      ->check(CLI::ExistingPath);
+    sub->add_option("topic", export_args_.topic, "Topic name to extract poses from")->required();
+    sub->add_option("output", export_args_.output_path, "Output file path")->required();
+    sub->add_option("-f,--format", export_args_.format, "Output format")
+      ->default_val(kFormatTum)
+      ->check(CLI::IsMember({kFormatTum}));
+    sub->add_option(
+      "--base-frame", export_args_.base_frame,
+      "Frame identifier. Required for multi-sample types: filters by child_frame_id on "
+      "tf2_msgs/msg/TFMessage, validates header.frame_id on nav_msgs/msg/Path. "
+      "Ignored for single-sample (scalar) types.");
+    sub->footer(kSupportedTypesHelp);
+    sub->callback([this]() { selected_ = Subcommand::kExport; });
+  }
+
+  int run_export()
+  {
+    const auto & args = export_args_;
+
     std::unique_ptr<io::BagReader> reader;
     try {
-      reader = io::open_read(input_path_);
+      reader = io::open_read(args.input_path);
     } catch (const std::exception & e) {
-      BAGWIZ_LOG_ERROR(kLogger, "Failed to open %s: %s", input_path_.c_str(), e.what());
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open %s: %s", args.input_path.c_str(), e.what());
       return 1;
     }
 
     const io::TopicInfo * topic_info = nullptr;
     for (const auto & t : reader->topics()) {
-      if (t.name == topic_) {
+      if (t.name == args.topic) {
         topic_info = &t;
         break;
       }
     }
     if (topic_info == nullptr) {
       BAGWIZ_LOG_ERROR(
-        kLogger, "Topic '%s' is not present in %s", topic_.c_str(), input_path_.c_str());
+        kLogger, "Topic '%s' is not present in %s", args.topic.c_str(), args.input_path.c_str());
       return 1;
     }
     const std::string type_name = topic_info->type;
@@ -169,12 +200,12 @@ public:
     const SupportedType * spec = lookup_supported(type_name);
     if (spec == nullptr) {
       BAGWIZ_LOG_ERROR(
-        kLogger, "Topic '%s' has type '%s', which is not supported by `traj`.\n%s", topic_.c_str(),
-        type_name.c_str(), kSupportedTypesHelp);
+        kLogger, "Topic '%s' has type '%s', which is not supported by `traj export`.\n%s",
+        args.topic.c_str(), type_name.c_str(), kSupportedTypesHelp);
       return 1;
     }
 
-    if (kind_requires_base_frame(spec->kind) && base_frame_.empty()) {
+    if (kind_requires_base_frame(spec->kind) && args.base_frame.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger,
         "Type '%s' is multi-sample; --base-frame is required (filter for TFMessage, validator "
@@ -184,7 +215,7 @@ public:
     }
 
     io::ReadFilter filter;
-    filter.topics.push_back(topic_);
+    filter.topics.push_back(args.topic);
     reader->set_filter(filter);
 
     const core::IntrospectionLoad introspection = core::load_introspection(type_name);
@@ -237,7 +268,7 @@ public:
             break;
           }
           case TypeKind::kTfMessage: {
-            auto tf = core::extract_tf_message_poses(msg.members(), msg.data(), base_frame_);
+            auto tf = core::extract_tf_message_poses(msg.members(), msg.data(), args.base_frame);
             if (!tf.ok()) {
               BAGWIZ_LOG_ERROR(
                 kLogger, "TFMessage extraction failed at message #%ld: %s", decoded,
@@ -248,7 +279,7 @@ public:
             break;
           }
           case TypeKind::kPath: {
-            auto path = core::extract_path_poses(msg.members(), msg.data(), base_frame_);
+            auto path = core::extract_path_poses(msg.members(), msg.data(), args.base_frame);
             if (!path.ok()) {
               BAGWIZ_LOG_ERROR(
                 kLogger, "Path validation failed at message #%ld: %s", decoded, path.error.c_str());
@@ -264,11 +295,11 @@ public:
       }
     }
 
-    if (!base_frame_.empty() && !kind_requires_base_frame(spec->kind)) {
+    if (!args.base_frame.empty() && !kind_requires_base_frame(spec->kind)) {
       // Scalar types don't need --base-frame; leave a debug trace so
       // anyone troubleshooting knows the flag was observed but unused.
       BAGWIZ_LOG_DEBUG(
-        kLogger, "--base-frame='%s' ignored for scalar type '%s'", base_frame_.c_str(),
+        kLogger, "--base-frame='%s' ignored for scalar type '%s'", args.base_frame.c_str(),
         type_name.c_str());
     }
 
@@ -276,22 +307,24 @@ public:
       BAGWIZ_LOG_WARN(
         kLogger,
         "No TransformStamped in '%s' matched child_frame_id='%s'; writing an empty trajectory.",
-        topic_.c_str(), base_frame_.c_str());
+        args.topic.c_str(), args.base_frame.c_str());
     }
 
     if (poses.empty()) {
       BAGWIZ_LOG_WARN(
-        kLogger, "No messages found on topic '%s'; writing an empty trajectory.", topic_.c_str());
+        kLogger, "No messages found on topic '%s'; writing an empty trajectory.",
+        args.topic.c_str());
     }
 
-    if (format_ != kFormatTum) {
-      BAGWIZ_LOG_ERROR(kLogger, "Unsupported format '%s'", format_.c_str());
+    if (args.format != kFormatTum) {
+      BAGWIZ_LOG_ERROR(kLogger, "Unsupported format '%s'", args.format.c_str());
       return 1;
     }
 
-    std::ofstream out(output_path_, std::ios::out | std::ios::trunc);
+    std::ofstream out(args.output_path, std::ios::out | std::ios::trunc);
     if (!out) {
-      BAGWIZ_LOG_ERROR(kLogger, "Failed to open output path %s for writing", output_path_.c_str());
+      BAGWIZ_LOG_ERROR(
+        kLogger, "Failed to open output path %s for writing", args.output_path.c_str());
       return 1;
     }
     core::write_tum(out, poses);
@@ -299,16 +332,9 @@ public:
 
     BAGWIZ_LOG_INFO(
       kLogger, "Wrote %zu poses (from %ld messages) to %s in %s format", poses.size(), decoded,
-      output_path_.c_str(), format_.c_str());
+      args.output_path.c_str(), args.format.c_str());
     return 0;
   }
-
-private:
-  std::filesystem::path input_path_;
-  std::string topic_;
-  std::filesystem::path output_path_;
-  std::string format_;
-  std::string base_frame_;
 };
 
 BAGWIZ_REGISTER_COMMAND(TrajCommand)
