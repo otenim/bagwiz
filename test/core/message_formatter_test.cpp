@@ -6,8 +6,9 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/core/introspection_loader.hpp"
 #include "bagwiz/core/message_formatter.hpp"
+
+#include "bagwiz/core/introspection_loader.hpp"
 
 #include <gtest/gtest.h>
 

@@ -18,7 +18,10 @@ namespace
 using bagwiz::core::classify_key;
 using bagwiz::core::KeyEvent;
 
-TEST(ClassifyKey, EmptyIsUnknown) { EXPECT_EQ(classify_key(""), KeyEvent::kUnknown); }
+TEST(ClassifyKey, EmptyIsUnknown)
+{
+  EXPECT_EQ(classify_key(""), KeyEvent::kUnknown);
+}
 
 TEST(ClassifyKey, NextBindings)
 {
@@ -53,9 +56,9 @@ TEST(ClassifyKey, QuitBindings)
 {
   EXPECT_EQ(classify_key("q"), KeyEvent::kQuit);
   EXPECT_EQ(classify_key("Q"), KeyEvent::kQuit);
-  EXPECT_EQ(classify_key(std::string_view("\x1B", 1)), KeyEvent::kQuit);   // lone ESC
-  EXPECT_EQ(classify_key(std::string_view("\x03", 1)), KeyEvent::kQuit);   // Ctrl-C
-  EXPECT_EQ(classify_key(std::string_view("\x04", 1)), KeyEvent::kQuit);   // Ctrl-D
+  EXPECT_EQ(classify_key(std::string_view("\x1B", 1)), KeyEvent::kQuit);  // lone ESC
+  EXPECT_EQ(classify_key(std::string_view("\x03", 1)), KeyEvent::kQuit);  // Ctrl-C
+  EXPECT_EQ(classify_key(std::string_view("\x04", 1)), KeyEvent::kQuit);  // Ctrl-D
 }
 
 TEST(ClassifyKey, ScrollBindings)

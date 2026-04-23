@@ -15,8 +15,7 @@ namespace bagwiz::core
 {
 
 TopicPattern::TopicPattern(std::string_view pattern)
-: mode_(
-    pattern.empty() ? Mode::kAll : (pattern.front() == '/' ? Mode::kPrefix : Mode::kSubstring)),
+: mode_(pattern.empty() ? Mode::kAll : (pattern.front() == '/' ? Mode::kPrefix : Mode::kSubstring)),
   match_all_(mode_ == Mode::kAll),
   pattern_(pattern)
 {
@@ -28,8 +27,7 @@ bool TopicPattern::matches(const std::string & topic) const
     case Mode::kAll:
       return true;
     case Mode::kPrefix:
-      return topic.size() >= pattern_.size() &&
-             topic.compare(0, pattern_.size(), pattern_) == 0;
+      return topic.size() >= pattern_.size() && topic.compare(0, pattern_.size(), pattern_) == 0;
     case Mode::kSubstring:
       return topic.find(pattern_) != std::string::npos;
   }

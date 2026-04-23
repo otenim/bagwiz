@@ -9,8 +9,9 @@
 #ifndef BAGWIZ__CORE__TERMINAL_INPUT_HPP_
 #define BAGWIZ__CORE__TERMINAL_INPUT_HPP_
 
-#include <string_view>
 #include <termios.h>
+
+#include <string_view>
 
 namespace bagwiz::core
 {
@@ -18,18 +19,17 @@ namespace bagwiz::core
 // High-level events the interactive UI cares about. Raw key bytes (single
 // chars or escape sequences) are collapsed into these buckets by
 // classify_key().
-enum class KeyEvent
-{
-  kNext,         // next message
-  kPrev,         // previous message
-  kFirst,        // jump to first
-  kLast,         // jump to last (may force a full scan in the caller)
-  kScrollUp,     // scroll the current message's rendered body up by one line
-  kScrollDown,   // scroll the current message's rendered body down by one line
-  kScrollHead,   // jump to the top of the current message's body
-  kScrollTail,   // jump to the bottom of the current message's body
-  kQuit,         // exit the interactive loop
-  kUnknown,      // unrecognized input; caller should ignore or beep
+enum class KeyEvent {
+  kNext,        // next message
+  kPrev,        // previous message
+  kFirst,       // jump to first
+  kLast,        // jump to last (may force a full scan in the caller)
+  kScrollUp,    // scroll the current message's rendered body up by one line
+  kScrollDown,  // scroll the current message's rendered body down by one line
+  kScrollHead,  // jump to the top of the current message's body
+  kScrollTail,  // jump to the bottom of the current message's body
+  kQuit,        // exit the interactive loop
+  kUnknown,     // unrecognized input; caller should ignore or beep
 };
 
 // Pure classifier for an already-captured byte sequence. Exposed so unit

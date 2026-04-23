@@ -8,12 +8,13 @@
 
 #include "bagwiz/core/terminal_input.hpp"
 
-#include <cerrno>
-#include <cstring>
 #include <poll.h>
-#include <string_view>
 #include <termios.h>
 #include <unistd.h>
+
+#include <cerrno>
+#include <cstring>
+#include <string_view>
 
 namespace bagwiz::core
 {

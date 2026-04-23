@@ -15,6 +15,8 @@
 #include "bagwiz/io/bag_io.hpp"
 
 #include <fmt/core.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -27,8 +29,6 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <sys/ioctl.h>
-#include <unistd.h>
 #include <vector>
 
 namespace bagwiz::commands
@@ -68,9 +68,7 @@ std::vector<std::byte> copy_payload(std::span<const std::byte> src)
 // the pager still works on pipes or ioctl-hostile environments.
 int terminal_rows()
 {
-  struct winsize ws
-  {
-  };
+  struct winsize ws{};
   if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) {
     return static_cast<int>(ws.ws_row);
   }
@@ -156,8 +154,8 @@ public:
       }
     }
     if (topic_info == nullptr) {
-      BAGWIZ_LOG_ERROR(kLogger, "Topic '%s' is not present in %s", topic_.c_str(),
-                       input_path_.c_str());
+      BAGWIZ_LOG_ERROR(
+        kLogger, "Topic '%s' is not present in %s", topic_.c_str(), input_path_.c_str());
       return 1;
     }
 
@@ -207,8 +205,8 @@ public:
     };
 
     if (!load_next()) {
-      fmt::print(stdout, "No messages found for topic '{}' in {}.\n", topic_name,
-                 input_path_.string());
+      fmt::print(
+        stdout, "No messages found for topic '{}' in {}.\n", topic_name, input_path_.string());
       return 0;
     }
 
@@ -230,8 +228,9 @@ public:
       fmt::print(stdout, "\x1b[2J\x1b[H");
       const auto & msg = cache[index];
       const char * total_suffix = exhausted ? "" : "+";
-      fmt::print(stdout, "[{} / {}{}]  {}  {}\n", index + 1, cache.size(), total_suffix,
-                 topic_name, type_name);
+      fmt::print(
+        stdout, "[{} / {}{}]  {}  {}\n", index + 1, cache.size(), total_suffix, topic_name,
+        type_name);
       fmt::print(stdout, "timestamp: {}\n", format_timestamp(msg.timestamp_ns));
       fmt::print(stdout, "size:      {} bytes\n\n", msg.payload.size());
 
@@ -244,15 +243,13 @@ public:
       if (formatted.ok()) {
         const auto lines = split_lines(formatted.text);
         total_body_lines = lines.size();
-        const std::size_t max_scroll =
-          total_body_lines > static_cast<std::size_t>(rows)
-            ? total_body_lines - static_cast<std::size_t>(rows)
-            : 0;
+        const std::size_t max_scroll = total_body_lines > static_cast<std::size_t>(rows)
+                                         ? total_body_lines - static_cast<std::size_t>(rows)
+                                         : 0;
         if (scroll > max_scroll) {
           scroll = max_scroll;
         }
-        const std::size_t end =
-          std::min(scroll + static_cast<std::size_t>(rows), total_body_lines);
+        const std::size_t end = std::min(scroll + static_cast<std::size_t>(rows), total_body_lines);
         for (std::size_t i = scroll; i < end; ++i) {
           fmt::print(stdout, "{}\n", lines[i]);
         }
@@ -266,15 +263,15 @@ public:
       // Footer: repeated index so it stays visible on long messages, a
       // scroll indicator when applicable, the key legend, and any
       // transient status from the last action.
-      fmt::print(stdout, "\n  [{} / {}{}]  {}", index + 1, cache.size(), total_suffix,
-                 topic_name);
+      fmt::print(stdout, "\n  [{} / {}{}]  {}", index + 1, cache.size(), total_suffix, topic_name);
       if (!scroll_hint.empty()) {
         fmt::print(stdout, "    {}", scroll_hint);
       }
       fmt::print(stdout, "\n");
-      fmt::print(stdout,
-                 "  [→/Space] next   [←/b] prev   [↑/k] up   [↓/j] down   "
-                 "[Home/H] head   [End/T] tail   [g] first   [G] last   [q] quit\n");
+      fmt::print(
+        stdout,
+        "  [→/Space] next   [←/b] prev   [↑/k] up   [↓/j] down   "
+        "[Home/H] head   [End/T] tail   [g] first   [G] last   [q] quit\n");
       if (!status.empty()) {
         fmt::print(stdout, "  {}\n", status);
       }
