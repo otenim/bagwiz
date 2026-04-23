@@ -82,13 +82,13 @@ const SupportedType * lookup_supported(std::string_view type_name)
 // to the "unsupported type" error so users can always see what's
 // allowed.
 constexpr const char * kSupportedTypesHelp =
-  "Supported topic types:\n"
-  "  Stamped scalar (header.stamp used as TUM timestamp):\n"
+  "Supported message types:\n"
+  "  Stamped (timestamp from header.stamp):\n"
   "    - geometry_msgs/msg/PoseStamped\n"
   "    - geometry_msgs/msg/PoseWithCovarianceStamped\n"
   "    - geometry_msgs/msg/TransformStamped\n"
   "    - nav_msgs/msg/Odometry\n"
-  "  Unstamped scalar (bag log time used as TUM timestamp):\n"
+  "  Unstamped (timestamp from bag log time):\n"
   "    - geometry_msgs/msg/Pose\n"
   "    - geometry_msgs/msg/Transform\n"
   "  Multi-sample (requires --base-frame):\n"
@@ -98,15 +98,13 @@ constexpr const char * kSupportedTypesHelp =
 }  // namespace
 
 // `bagwiz traj` is a command group for trajectory-shaped operations.
-// Today the only subcommand is `export`, which pulls a topic's poses
-// out of a bag and writes them to a file. The group is already wired
-// up as a CLI11 subcommand so future operations (convert, align,
-// compare, ...) can be added by dropping a new `configure_*` +
+// The group is wired up as a CLI11 subcommand so operations (convert,
+// align, compare, ...) can be added by dropping a new `configure_*` +
 // `run_*` pair next to the existing one.
 //
 // Subcommands
 // -----------
-//   export    Extract a topic's pose trajectory and save it (currently TUM).
+//   export    Extract a topic's pose trajectory and save it.
 //             Accepted shapes: scalar stamped (header.stamp timestamps),
 //             scalar unstamped (bag log time timestamps, one-shot warning),
 //             and multi-sample (TFMessage / Path with `--base-frame`).
@@ -114,7 +112,7 @@ class TrajCommand : public Command
 {
 public:
   std::string_view name() const override { return "traj"; }
-  std::string_view description() const override { return "Trajectory operations (export, ...)"; }
+  std::string_view description() const override { return "Trajectory operations"; }
 
   void configure(CLI::App & app) override
   {
@@ -152,8 +150,7 @@ private:
 
   void configure_export(CLI::App & app)
   {
-    auto * sub =
-      app.add_subcommand("export", "Extract a topic's pose trajectory and save it (TUM today)");
+    auto * sub = app.add_subcommand("export", "Extract a topic's pose trajectory and save it");
     sub->add_option("input", export_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
@@ -166,7 +163,7 @@ private:
       "--base-frame", export_args_.base_frame,
       "Frame identifier. Required for multi-sample types: filters by child_frame_id on "
       "tf2_msgs/msg/TFMessage, validates header.frame_id on nav_msgs/msg/Path. "
-      "Ignored for single-sample (scalar) types.");
+      "Ignored for Stamped / Unstamped types.");
     sub->footer(kSupportedTypesHelp);
     sub->callback([this]() { selected_ = Subcommand::kExport; });
   }
@@ -258,9 +255,7 @@ private:
             }
             if (!extraction->used_header_stamp && !warned_bag_log_time) {
               BAGWIZ_LOG_WARN(
-                kLogger,
-                "Type '%s' has no header; using bag log time (recorder receive time) for TUM "
-                "timestamps.",
+                kLogger, "Type '%s' has no header; using bag log time (recorder receive time).",
                 type_name.c_str());
               warned_bag_log_time = true;
             }
