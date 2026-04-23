@@ -13,9 +13,6 @@
 #include <optional>
 #include <ostream>
 #include <span>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace rosidl_typesupport_introspection_cpp
 {
@@ -75,37 +72,6 @@ struct PoseExtraction
 std::optional<PoseExtraction> extract_pose(
   const rosidl_typesupport_introspection_cpp::MessageMembers & members, const void * base,
   int64_t fallback_timestamp_ns);
-
-// Result of extracting zero or more pose samples from one multi-sample
-// message (tf2_msgs/msg/TFMessage, nav_msgs/msg/Path, ...). On success
-// `poses` holds the samples and `error` is empty; on a fatal problem
-// (e.g. Path.header.frame_id mismatch) `error` describes it and the
-// caller is expected to abort the extraction.
-struct MultiSampleResult
-{
-  std::vector<TrajectoryPose> poses;
-  std::string error;
-
-  bool ok() const { return error.empty(); }
-};
-
-// Extract zero or more samples from a `tf2_msgs/msg/TFMessage` record,
-// keeping only the `TransformStamped` elements whose `child_frame_id`
-// equals `child_frame_id_filter`. Elements that fail to match are
-// silently skipped (filter semantics); malformed elements are skipped
-// too and do not abort the iteration.
-MultiSampleResult extract_tf_message_poses(
-  const rosidl_typesupport_introspection_cpp::MessageMembers & members, const void * base,
-  std::string_view child_frame_id_filter);
-
-// Extract zero or more samples from a `nav_msgs/msg/Path` record. The
-// message's top-level `header.frame_id` must equal `expected_frame_id`
-// (validation semantics); a mismatch populates `error` so the caller
-// can abort with a clear message. On success each `PoseStamped` in
-// `poses[]` becomes one TrajectoryPose.
-MultiSampleResult extract_path_poses(
-  const rosidl_typesupport_introspection_cpp::MessageMembers & members, const void * base,
-  std::string_view expected_frame_id);
 
 // Write poses in the TUM trajectory format: one sample per line,
 //
