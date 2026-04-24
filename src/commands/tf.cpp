@@ -15,6 +15,8 @@
 #include "bagwiz/io/bag_io.hpp"
 
 #include <fmt/core.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Quaternion.h>
 #include <tf2/buffer_core.h>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
@@ -177,11 +179,14 @@ private:
   enum class Subcommand { kNone, kWalk };
   Subcommand selected_ = Subcommand::kNone;
 
+  enum class RotationFormat { kQuaternion, kEuler };
+
   struct WalkArgs
   {
     std::filesystem::path input_path;
     std::string from_frame;
     std::string to_frame;
+    RotationFormat rot = RotationFormat::kQuaternion;
   } walk_args_;
 
   void configure_walk(CLI::App & app)
@@ -196,6 +201,15 @@ private:
          "Reference (fixed) frame -- the output expresses <to> in this frame's coordinates")
       ->required();
     sub->add_option("to", walk_args_.to_frame, "Tracked (moving) frame to sample")->required();
+    sub->add_option(
+         "-r,--rot", walk_args_.rot,
+         "Rotation format: q=quaternion (default), e=euler (roll/pitch/yaw in radians)")
+      ->transform(CLI::CheckedTransformer(
+        std::map<std::string, RotationFormat>{
+          {"q", RotationFormat::kQuaternion},
+          {"e", RotationFormat::kEuler},
+        },
+        CLI::ignore_case));
     sub->callback([this]() { selected_ = Subcommand::kWalk; });
   }
 
@@ -285,11 +299,25 @@ private:
         fmt::print(stdout, "  x: {:.15g}\n", tf.transform.translation.x);
         fmt::print(stdout, "  y: {:.15g}\n", tf.transform.translation.y);
         fmt::print(stdout, "  z: {:.15g}\n", tf.transform.translation.z);
-        fmt::print(stdout, "rotation (quaternion):\n");
-        fmt::print(stdout, "  x: {:.15g}\n", tf.transform.rotation.x);
-        fmt::print(stdout, "  y: {:.15g}\n", tf.transform.rotation.y);
-        fmt::print(stdout, "  z: {:.15g}\n", tf.transform.rotation.z);
-        fmt::print(stdout, "  w: {:.15g}\n", tf.transform.rotation.w);
+        if (args.rot == RotationFormat::kQuaternion) {
+          fmt::print(stdout, "rotation (quaternion):\n");
+          fmt::print(stdout, "  x: {:.15g}\n", tf.transform.rotation.x);
+          fmt::print(stdout, "  y: {:.15g}\n", tf.transform.rotation.y);
+          fmt::print(stdout, "  z: {:.15g}\n", tf.transform.rotation.z);
+          fmt::print(stdout, "  w: {:.15g}\n", tf.transform.rotation.w);
+        } else {
+          tf2::Quaternion q(
+            tf.transform.rotation.x, tf.transform.rotation.y, tf.transform.rotation.z,
+            tf.transform.rotation.w);
+          double roll = 0.0;
+          double pitch = 0.0;
+          double yaw = 0.0;
+          tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+          fmt::print(stdout, "rotation (euler, rad):\n");
+          fmt::print(stdout, "  roll:  {:.15g}\n", roll);
+          fmt::print(stdout, "  pitch: {:.15g}\n", pitch);
+          fmt::print(stdout, "  yaw:   {:.15g}\n", yaw);
+        }
       } catch (const tf2::TransformException & e) {
         fmt::print(stdout, "⚠  lookup failed at this step: {}\n", e.what());
       }
