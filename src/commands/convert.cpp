@@ -543,9 +543,10 @@ private:
       (args.storage == "sqlite3") ? io::Format::Sqlite3 : io::Format::Mcap;
 
     // Reject same-storage repack: it's almost always a user mistake (and a
-    // plain copy is what they actually want). Detect by sniffing the input
-    // through the same factory rules the reader uses.
-    const auto source_format = detect_input_format(args.input_path);
+    // plain copy is what they actually want). Detection is by magic bytes
+    // (single-file inputs) or metadata.yaml (directory layouts) — never
+    // by extension — so renamed files are still classified correctly.
+    const auto source_format = io::detect_format(args.input_path);
     if (source_format == target_format) {
       BAGWIZ_LOG_ERROR(
         kLogger, "input is already in '%s' storage; nothing to convert", args.storage.c_str());
@@ -625,43 +626,6 @@ private:
     }
 
     return 0;
-  }
-
-  // Resolve the storage backend of `input` using the same rules as the
-  // reader factory: directory layout reads metadata.yaml's
-  // storage_identifier; single-file inputs are decided by extension first
-  // and magic-byte sniffing as a fallback. Any failure here is non-fatal —
-  // we return Format::Auto and let the caller skip the same-storage check.
-  static io::Format detect_input_format(const std::filesystem::path & input)
-  {
-    std::error_code ec;
-    if (std::filesystem::is_directory(input, ec)) {
-      const auto metadata_path = input / "metadata.yaml";
-      if (!std::filesystem::exists(metadata_path)) {
-        return io::Format::Auto;
-      }
-      try {
-        const auto md = io::load_metadata_yaml(metadata_path);
-        if (md.storage_identifier == "mcap") {
-          return io::Format::Mcap;
-        }
-        if (md.storage_identifier == "sqlite3") {
-          return io::Format::Sqlite3;
-        }
-      } catch (const std::exception &) {
-        // fall through
-      }
-      return io::Format::Auto;
-    }
-
-    const auto ext = input.extension().string();
-    if (ext == ".mcap") {
-      return io::Format::Mcap;
-    }
-    if (ext == ".db3") {
-      return io::Format::Sqlite3;
-    }
-    return io::Format::Auto;
   }
 };
 

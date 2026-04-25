@@ -187,6 +187,9 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_writer_roundtrip_test test/io/writer_roundtrip_test.cpp)
   target_link_libraries(bagwiz_writer_roundtrip_test bagwiz_core)
 
+  ament_add_gtest(bagwiz_detect_format_test test/io/detect_format_test.cpp)
+  target_link_libraries(bagwiz_detect_format_test bagwiz_core)
+
   ament_add_gtest(bagwiz_ros1_to_cdr_test test/core/ros1_to_cdr_test.cpp)
   target_link_libraries(bagwiz_ros1_to_cdr_test bagwiz_core)
 

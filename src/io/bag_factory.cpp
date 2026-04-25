@@ -35,41 +35,68 @@ constexpr std::array<unsigned char, 6> kMcapMagic = {0x89, 'M', 'C', 'A', 'P', '
 // SQLite3 header prefix (first 16 bytes are "SQLite format 3\0").
 constexpr const char * kSqliteMagic = "SQLite format 3";
 
-Format detect_format_from_file(const std::filesystem::path & path)
+// Magic-byte sniff: opens `path`, reads up to 16 bytes, and matches the
+// MCAP / SQLite3 prefix. Returns Format::Auto on any failure (open error,
+// short read, no match) so callers can fall through to higher-level
+// diagnostics.
+Format sniff_file_magic(const std::filesystem::path & path) noexcept
 {
-  // Fast path: by extension.
-  const auto ext = path.extension().string();
-  if (ext == ".mcap") {
-    return Format::Mcap;
-  }
-  if (ext == ".db3") {
-    return Format::Sqlite3;
-  }
-
-  // Fallback: peek magic bytes.
   std::ifstream f(path, std::ios::binary);
   if (!f) {
-    throw std::runtime_error("cannot open file for format detection: " + path.string());
+    return Format::Auto;
   }
   std::array<char, 16> buf{};
   f.read(buf.data(), buf.size());
   const auto read = f.gcount();
+  if (read < 0) {
+    return Format::Auto;
+  }
+  const auto bytes = static_cast<std::size_t>(read);
 
-  if (static_cast<std::size_t>(read) >= kMcapMagic.size()) {
+  if (bytes >= kMcapMagic.size()) {
     if (std::memcmp(buf.data(), kMcapMagic.data(), kMcapMagic.size()) == 0) {
       return Format::Mcap;
     }
   }
-  if (read >= static_cast<std::streamsize>(std::strlen(kSqliteMagic))) {
-    if (std::memcmp(buf.data(), kSqliteMagic, std::strlen(kSqliteMagic)) == 0) {
+  const auto sqlite_len = std::strlen(kSqliteMagic);
+  if (bytes >= sqlite_len) {
+    if (std::memcmp(buf.data(), kSqliteMagic, sqlite_len) == 0) {
       return Format::Sqlite3;
     }
   }
-
-  throw std::runtime_error("unable to detect bag format: " + path.string());
+  return Format::Auto;
 }
 
 }  // namespace
+
+Format detect_format(const std::filesystem::path & path) noexcept
+{
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) {
+    return Format::Auto;
+  }
+
+  if (std::filesystem::is_directory(path, ec)) {
+    const auto metadata_path = path / "metadata.yaml";
+    if (!std::filesystem::exists(metadata_path, ec)) {
+      return Format::Auto;
+    }
+    try {
+      const auto md = load_metadata_yaml(metadata_path);
+      if (md.storage_identifier == "mcap") {
+        return Format::Mcap;
+      }
+      if (md.storage_identifier == "sqlite3") {
+        return Format::Sqlite3;
+      }
+    } catch (const std::exception &) {
+      // fall through; treat unparseable metadata.yaml as undetectable
+    }
+    return Format::Auto;
+  }
+
+  return sniff_file_magic(path);
+}
 
 std::unique_ptr<BagReader> open_read(const std::filesystem::path & path, OpenOptions options)
 {
@@ -99,7 +126,7 @@ std::unique_ptr<BagReader> open_read(const std::filesystem::path & path, OpenOpt
 
   Format fmt = options.format;
   if (fmt == Format::Auto) {
-    fmt = detect_format_from_file(path);
+    fmt = sniff_file_magic(path);
   }
 
   switch (fmt) {
@@ -108,7 +135,7 @@ std::unique_ptr<BagReader> open_read(const std::filesystem::path & path, OpenOpt
     case Format::Sqlite3:
       return detail::open_sqlite3_file(path);
     case Format::Auto:
-      throw std::runtime_error("format auto-detection failed: " + path.string());
+      throw std::runtime_error("unable to detect bag format: " + path.string());
   }
   throw std::runtime_error("unreachable: unhandled Format");
 }

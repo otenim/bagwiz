@@ -128,6 +128,18 @@ std::unique_ptr<BagReader> open_read(const std::filesystem::path & path, OpenOpt
 std::unique_ptr<BagWriter> open_write(
   const std::filesystem::path & path, CreateOptions options = {});
 
+// Identify the storage format of an existing bag without opening a reader.
+//
+// - For directory layouts: parses metadata.yaml's storage_identifier.
+// - For single-file inputs: reads the first 16 bytes and matches the
+//   format-specific magic prefix (MCAP `\x89MCAP0`, SQLite3
+//   `SQLite format 3\0`). Extensions are not consulted, so renamed or
+//   extensionless files are still classified correctly.
+//
+// Returns Format::Auto when the input does not exist or no signal
+// matches. This function never throws.
+Format detect_format(const std::filesystem::path & path) noexcept;
+
 }  // namespace bagwiz::io
 
 #endif  // BAGWIZ__IO__BAG_IO_HPP_
