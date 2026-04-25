@@ -237,12 +237,11 @@ public:
       const auto formatted = core::format_message(introspection, msg.payload);
 
       const int rows = std::max(1, terminal_rows() - kOverheadRows);
-      std::size_t total_body_lines = 0;
       std::string scroll_hint;
 
       if (formatted.ok()) {
         const auto lines = split_lines(formatted.text);
-        total_body_lines = lines.size();
+        const std::size_t total_body_lines = lines.size();
         const std::size_t max_scroll = total_body_lines > static_cast<std::size_t>(rows)
                                          ? total_body_lines - static_cast<std::size_t>(rows)
                                          : 0;

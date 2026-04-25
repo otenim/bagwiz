@@ -59,7 +59,7 @@ void exec_or_throw(sqlite3 * db, const char * sql)
 // ---------------------------------------------------------------------------
 // Single .db3 file writer.
 // ---------------------------------------------------------------------------
-class SqliteFileWriter : public BagWriter
+class SqliteFileWriter final : public BagWriter
 {
 public:
   explicit SqliteFileWriter(const std::filesystem::path & path)
@@ -94,7 +94,7 @@ public:
   {
     if (!closed_) {
       try {
-        close();
+        SqliteFileWriter::close();
       } catch (const std::exception & e) {
         BAGWIZ_LOG_WARN(kLogger, "SqliteFileWriter close failed: %s", e.what());
       } catch (...) {
@@ -234,7 +234,7 @@ private:
 // ---------------------------------------------------------------------------
 // Directory writer: single .db3 shard + metadata.yaml.
 // ---------------------------------------------------------------------------
-class SqliteDirectoryWriter : public BagWriter
+class SqliteDirectoryWriter final : public BagWriter
 {
 public:
   SqliteDirectoryWriter(const std::filesystem::path & dir, const CreateOptions & options)
@@ -250,7 +250,7 @@ public:
   {
     if (!closed_) {
       try {
-        close();
+        SqliteDirectoryWriter::close();
       } catch (const std::exception & e) {
         BAGWIZ_LOG_WARN(kLogger, "SqliteDirectoryWriter close failed: %s", e.what());
       } catch (...) {

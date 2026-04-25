@@ -14,13 +14,15 @@
 #include "bagwiz/core/terminal_input.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
+#include <tf2_msgs/msg/tf_message.hpp>
+
 #include <fmt/core.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/buffer_core.h>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
-#include <tf2_msgs/msg/tf_message.hpp>
+#include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
@@ -30,11 +32,12 @@
 #include <ctime>
 #include <exception>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <unistd.h>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace bagwiz::commands
@@ -196,20 +199,23 @@ private:
     sub->add_option("input", walk_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option(
-         "from", walk_args_.from_frame,
-         "Reference (fixed) frame -- the output expresses <to> in this frame's coordinates")
+    sub
+      ->add_option(
+        "from", walk_args_.from_frame,
+        "Reference (fixed) frame -- the output expresses <to> in this frame's coordinates")
       ->required();
     sub->add_option("to", walk_args_.to_frame, "Tracked (moving) frame to sample")->required();
-    sub->add_option(
-         "-r,--rot", walk_args_.rot,
-         "Rotation format: q=quaternion (default), e=euler (roll/pitch/yaw in radians)")
-      ->transform(CLI::CheckedTransformer(
-        std::map<std::string, RotationFormat>{
-          {"q", RotationFormat::kQuaternion},
-          {"e", RotationFormat::kEuler},
-        },
-        CLI::ignore_case));
+    sub
+      ->add_option(
+        "-r,--rot", walk_args_.rot,
+        "Rotation format: q=quaternion (default), e=euler (roll/pitch/yaw in radians)")
+      ->transform(
+        CLI::CheckedTransformer(
+          std::map<std::string, RotationFormat>{
+            {"q", RotationFormat::kQuaternion},
+            {"e", RotationFormat::kEuler},
+          },
+          CLI::ignore_case));
     sub->callback([this]() { selected_ = Subcommand::kWalk; });
   }
 
@@ -233,8 +239,7 @@ private:
 
     const auto tf_topics = collect_tf_topics(*reader);
     if (tf_topics.empty()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "Bag has no tf2_msgs/msg/TFMessage topic; nothing to walk.");
+      BAGWIZ_LOG_ERROR(kLogger, "Bag has no tf2_msgs/msg/TFMessage topic; nothing to walk.");
       return 1;
     }
 
@@ -260,8 +265,7 @@ private:
     // of producing N pages of the same error.
     try {
       (void)tf_buffer.lookupTransform(
-        args.from_frame, args.to_frame,
-        tf2::TimePoint(std::chrono::nanoseconds(timeline.front())));
+        args.from_frame, args.to_frame, tf2::TimePoint(std::chrono::nanoseconds(timeline.front())));
     } catch (const tf2::LookupException & e) {
       BAGWIZ_LOG_ERROR(kLogger, "TF chain error: %s", e.what());
       return 1;
@@ -288,8 +292,7 @@ private:
     auto render = [&]() {
       fmt::print(stdout, "\x1b[2J\x1b[H");
       const std::int64_t ts = timeline[index];
-      fmt::print(
-        stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
+      fmt::print(stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
       fmt::print(stdout, "TF: {}  ->  {}\n\n", args.from_frame, args.to_frame);
 
       try {
@@ -322,8 +325,7 @@ private:
         fmt::print(stdout, "⚠  lookup failed at this step: {}\n", e.what());
       }
 
-      fmt::print(
-        stdout, "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [q] quit\n");
+      fmt::print(stdout, "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [q] quit\n");
       if (!status.empty()) {
         fmt::print(stdout, "  {}\n", status);
       }

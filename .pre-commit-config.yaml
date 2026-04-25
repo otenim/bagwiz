@@ -88,6 +88,19 @@ repos:
         args: [--quiet]
         exclude: .cu
 
+  - repo: https://github.com/pocc/pre-commit-hooks
+    rev: v1.3.5
+    hooks:
+      - id: cppcheck
+        args:
+          - --enable=all
+          - --language=c++
+          - --std=c++20
+          - --suppressions-list=.cppcheck_suppressions
+          - --inline-suppr
+          - --quiet
+          - --error-exitcode=1
+
   - repo: https://github.com/python-jsonschema/check-jsonschema
     rev: 0.36.2
     hooks:

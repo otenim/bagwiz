@@ -26,6 +26,7 @@ namespace
 namespace ts_types = rosidl_typesupport_introspection_cpp;
 
 const ts_types::MessageMember * find_member(
+  // cppcheck-suppress passedByValue
   const ts_types::MessageMembers & members, std::string_view name)
 {
   for (std::uint32_t i = 0; i < members.member_count_; ++i) {
@@ -99,7 +100,9 @@ bool read_xyzw(
 }
 
 bool fill_translation_rotation(
+  // cppcheck-suppress passedByValue
   const ts_types::MessageMembers & parent, const void * base, std::string_view trans_name,
+  // cppcheck-suppress passedByValue
   std::string_view rot_name, TrajectoryPose & out)
 {
   const auto * trans = find_member(parent, trans_name);

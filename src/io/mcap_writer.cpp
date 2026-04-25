@@ -148,7 +148,7 @@ private:
 // Directory writer: wraps a single McapFileWriter shard and emits a
 // metadata.yaml compatible with rosbag2's expected schema on close().
 // ---------------------------------------------------------------------------
-class McapDirectoryWriter : public BagWriter
+class McapDirectoryWriter final : public BagWriter
 {
 public:
   McapDirectoryWriter(const std::filesystem::path & dir, const CreateOptions & options)
@@ -167,7 +167,7 @@ public:
   {
     if (!closed_) {
       try {
-        close();
+        McapDirectoryWriter::close();
       } catch (const std::exception & e) {
         BAGWIZ_LOG_WARN(kLogger, "McapDirectoryWriter close failed: %s", e.what());
       } catch (...) {

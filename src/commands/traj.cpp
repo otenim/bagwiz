@@ -61,6 +61,7 @@ constexpr std::array<std::string_view, 6> kSupportedTypes = {{
   "geometry_msgs/msg/Transform",
 }};
 
+// cppcheck-suppress passedByValue
 bool is_supported(std::string_view type_name)
 {
   for (const auto & t : kSupportedTypes) {
@@ -71,6 +72,7 @@ bool is_supported(std::string_view type_name)
   return false;
 }
 
+// cppcheck-suppress passedByValue
 bool is_unstamped_type(std::string_view type_name)
 {
   return type_name == "geometry_msgs/msg/Pose" || type_name == "geometry_msgs/msg/Transform";
@@ -80,6 +82,7 @@ bool is_unstamped_type(std::string_view type_name)
 // that names the moving frame. `--of` (tracked frame) requires one of
 // these so the "retarget to a different rigid body" composition is well
 // defined.
+// cppcheck-suppress passedByValue
 bool type_has_child_frame(std::string_view type_name)
 {
   return type_name == "nav_msgs/msg/Odometry" || type_name == "geometry_msgs/msg/TransformStamped";

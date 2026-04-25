@@ -135,6 +135,7 @@ private:
     const auto & schemas = reader_.schemas();
 
     topics_.reserve(channels.size());
+    // cppcheck-suppress unassignedVariable
     for (const auto & [channel_id, channel] : channels) {
       TopicInfo info;
       info.name = channel->topic;
@@ -301,6 +302,7 @@ public:
         combined.end_ns = st.end_ns;
       }
       first = false;
+      // cppcheck-suppress unassignedVariable
       for (const auto & [k, v] : st.per_topic) {
         combined.per_topic[k] += v;
       }

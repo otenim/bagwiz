@@ -405,6 +405,7 @@ public:
         combined.end_ns = st.end_ns;
       }
       first = false;
+      // cppcheck-suppress unassignedVariable
       for (const auto & [k, v] : st.per_topic) {
         combined.per_topic[k] += v;
       }

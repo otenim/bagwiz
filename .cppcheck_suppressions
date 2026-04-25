@@ -1,6 +1,9 @@
 *:*/test/*
+*:test/*
 *:*/examples/*
+*:examples/*
 *:*/benchmarks/*
+*:benchmarks/*
 
 checkersReport
 missingInclude
