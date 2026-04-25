@@ -124,6 +124,13 @@ BagMetadata load_metadata_yaml(const std::filesystem::path & yaml_path)
     md.end_ns = *start + *duration;
   }
 
+  if (auto cm = info["compression_mode"]; cm && cm.IsScalar()) {
+    md.compression_mode = cm.as<std::string>("");
+  }
+  if (auto cf = info["compression_format"]; cf && cf.IsScalar()) {
+    md.compression_format = cf.as<std::string>("");
+  }
+
   return md;
 }
 

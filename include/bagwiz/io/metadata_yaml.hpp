@@ -42,6 +42,12 @@ struct BagMetadata
   // from `topics_with_message_count`. May be empty even when has_summary
   // is true (older writers).
   std::unordered_map<std::string, int64_t> per_topic_counts;
+
+  // rosbag2-layer compression metadata (separate from any storage-native
+  // compression like mcap chunk compression). Empty string == not present
+  // in the YAML, which the reader treats as equivalent to "NONE".
+  std::string compression_mode;    // "" / "NONE" / "FILE" / "MESSAGE"
+  std::string compression_format;  // "" / "zstd" / ...
 };
 
 // Parse `<dir>/metadata.yaml`. Throws on IO or schema errors.
