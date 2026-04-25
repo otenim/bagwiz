@@ -36,6 +36,15 @@ find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_msgs REQUIRED)
+# Standard message packages whose types are entries in the
+# `bagwiz convert ros1_to_ros2` whitelist. We don't include their
+# headers; we just need the typesupport .so files installed and on
+# AMENT_PREFIX_PATH at runtime so introspection_loader can dlopen them.
+find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 
 # CLI11 and fmt are not available as rosdep keys on all supported distros, so
 # fetch them at configure time. Both are small, header-light libraries.
@@ -72,6 +81,7 @@ add_library(bagwiz_core
   src/core/logging.cpp
   src/core/message_deserializer.cpp
   src/core/message_formatter.cpp
+  src/core/ros1_to_cdr.cpp
   src/core/terminal_input.cpp
   src/core/topic_pattern.cpp
   src/core/trajectory.cpp
@@ -80,6 +90,7 @@ add_library(bagwiz_core
   src/io/mcap_reader.cpp
   src/io/mcap_writer.cpp
   src/io/metadata_yaml.cpp
+  src/io/rosbag1_reader.cpp
   src/io/sqlite3_reader.cpp
   src/io/sqlite3_writer.cpp
 )
@@ -109,6 +120,7 @@ target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIB
 # ---------------------------------------------------------------------------
 add_executable(bagwiz
   src/main.cpp
+  src/commands/convert.cpp
   src/commands/ls.cpp
   src/commands/walk.cpp
   src/commands/traj.cpp
@@ -138,6 +150,11 @@ ament_export_dependencies(
   geometry_msgs
   tf2
   tf2_msgs
+  std_msgs
+  sensor_msgs
+  nav_msgs
+  diagnostic_msgs
+  builtin_interfaces
 )
 
 if(BUILD_TESTING)
@@ -166,6 +183,12 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_writer_roundtrip_test test/io/writer_roundtrip_test.cpp)
   target_link_libraries(bagwiz_writer_roundtrip_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_ros1_to_cdr_test test/core/ros1_to_cdr_test.cpp)
+  target_link_libraries(bagwiz_ros1_to_cdr_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_rosbag1_reader_test test/io/rosbag1_reader_test.cpp)
+  target_link_libraries(bagwiz_rosbag1_reader_test bagwiz_core)
 endif()
 
 ament_package()
