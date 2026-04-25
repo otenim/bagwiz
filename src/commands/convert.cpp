@@ -8,10 +8,14 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/core/cdr_to_ros1.hpp"
 #include "bagwiz/core/logging.hpp"
+#include "bagwiz/core/ros1_message_definitions.hpp"
 #include "bagwiz/core/ros1_to_cdr.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "bagwiz/io/metadata_yaml.hpp"
 #include "bagwiz/io/rosbag1_reader.hpp"
+#include "bagwiz/io/rosbag1_writer.hpp"
 
 #include <cinttypes>
 #include <cstddef>
@@ -43,11 +47,22 @@ struct PerConn
   uint64_t failures = 0;
 };
 
+// Per-topic state used by 2to1, indexed by ROS 2 topic name.
+struct TwoToOnePerTopic
+{
+  std::string topic;
+  std::string ros2_type;
+  std::string ros1_type;
+  bool keep = false;
+  uint32_t conn_id = 0;
+  uint64_t written = 0;
+  uint64_t failures = 0;
+};
+
 }  // namespace
 
 // `bagwiz convert` is a command group for cross-format bag conversion.
-// Phase 1 ships only `1to2` (ROS 1 -> ROS 2); the structure leaves
-// room for a future `2to1` to slot in alongside.
+// Ships `1to2` (ROS 1 -> ROS 2) and `2to1` (ROS 2 -> ROS 1).
 class ConvertCommand : public Command
 {
 public:
@@ -58,6 +73,7 @@ public:
   {
     app.require_subcommand(1);
     configure_1to2(app);
+    configure_2to1(app);
   }
 
   int run() override
@@ -65,6 +81,8 @@ public:
     switch (selected_) {
       case Subcommand::k1to2:
         return run_1to2();
+      case Subcommand::k2to1:
+        return run_2to1();
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
@@ -73,7 +91,7 @@ public:
   }
 
 private:
-  enum class Subcommand { kNone, k1to2 };
+  enum class Subcommand { kNone, k1to2, k2to1 };
   Subcommand selected_ = Subcommand::kNone;
 
   struct OneToTwoArgs
@@ -82,6 +100,12 @@ private:
     std::filesystem::path output_path;
     std::string storage = "mcap";
   } r1_to_r2_args_;
+
+  struct TwoToOneArgs
+  {
+    std::filesystem::path input_path;
+    std::filesystem::path output_path;
+  } r2_to_r1_args_;
 
   void configure_1to2(CLI::App & app)
   {
@@ -265,6 +289,201 @@ private:
         BAGWIZ_LOG_WARN(
           kLogger, "Topic '%s': %" PRIu64 " message(s) failed to convert", pc.topic.c_str(),
           pc.failures);
+      }
+    }
+
+    return 0;
+  }
+
+  void configure_2to1(CLI::App & app)
+  {
+    auto * sub = app.add_subcommand("2to1", "Convert a ROS 2 rosbag to a ROS 1 .bag file");
+    sub->add_option("input", r2_to_r1_args_.input_path, "ROS 2 rosbag (file or directory)")
+      ->required()
+      ->check(CLI::ExistingPath);
+    sub->add_option("output", r2_to_r1_args_.output_path, "Output ROS 1 .bag file")->required();
+    sub->footer(
+      "Only standard message types from the built-in whitelist are converted.\n"
+      "Topics with unsupported types are skipped with a warning.\n"
+      "Output is a non-compressed ROS 1 bag v2.0; rosbag2-layer compression\n"
+      "(compression_mode: FILE / MESSAGE) on the input is not supported.");
+    sub->callback([this]() { selected_ = Subcommand::k2to1; });
+  }
+
+  // Inspect metadata.yaml of a directory-layout input to detect rosbag2's
+  // generic compression layer (which we don't decompress). Single-file
+  // inputs have no metadata.yaml; mcap chunk-level compression there is
+  // handled transparently by libmcap.
+  static int check_input_compression(const std::filesystem::path & input)
+  {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(input, ec)) {
+      return 0;
+    }
+    const auto metadata_path = input / "metadata.yaml";
+    if (!std::filesystem::exists(metadata_path)) {
+      return 0;
+    }
+    io::BagMetadata md;
+    try {
+      md = io::load_metadata_yaml(metadata_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "Could not parse metadata.yaml (%s); proceeding without compression check",
+        e.what());
+      return 0;
+    }
+    // rosbag2 emits "NONE" or omits the field for non-compressed bags;
+    // anything else is a hard fail.
+    if (!md.compression_mode.empty() && md.compression_mode != "NONE") {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "input bag uses rosbag2-layer compression (compression_mode='%s', format='%s'); "
+        "decompress with `ros2 bag convert` first",
+        md.compression_mode.c_str(), md.compression_format.c_str());
+      return 1;
+    }
+    return 0;
+  }
+
+  int run_2to1()
+  {
+    const auto & args = r2_to_r1_args_;
+
+    if (const int rc = check_input_compression(args.input_path); rc != 0) {
+      return rc;
+    }
+
+    std::unique_ptr<io::BagReader> reader;
+    try {
+      reader = io::open_read(args.input_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open %s: %s", args.input_path.c_str(), e.what());
+      return 1;
+    }
+
+    // Build per-topic state from the reader's topic list. The reader
+    // returns TopicInfo entries up front (no message scan needed); we
+    // declare connections in the writer eagerly so any
+    // unresolvable-type warnings surface before the message loop runs.
+    std::unique_ptr<io::Rosbag1Writer> writer;
+    try {
+      writer = std::make_unique<io::Rosbag1Writer>(args.output_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open output %s: %s", args.output_path.c_str(), e.what());
+      return 1;
+    }
+
+    std::unordered_map<std::string, TwoToOnePerTopic> per_topic;
+    for (const auto & t : reader->topics()) {
+      TwoToOnePerTopic state;
+      state.topic = t.name;
+      state.ros2_type = t.type;
+
+      auto mapped = core::map_ros2_type(t.type);
+      if (!mapped) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "Skipping topic '%s' (type '%s' not in whitelist)", state.topic.c_str(),
+          state.ros2_type.c_str());
+        per_topic.emplace(state.topic, std::move(state));
+        continue;
+      }
+      state.ros1_type = *mapped;
+
+      const auto * meta = core::find_ros1_meta(state.ros1_type);
+      if (meta == nullptr) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "Skipping topic '%s': no ROS 1 message_definition for '%s' (whitelist mismatch)",
+          state.topic.c_str(), state.ros1_type.c_str());
+        per_topic.emplace(state.topic, std::move(state));
+        continue;
+      }
+
+      try {
+        state.conn_id = writer->declare_connection(
+          state.topic, state.ros1_type, meta->md5sum, meta->message_definition);
+        state.keep = true;
+        BAGWIZ_LOG_INFO(
+          kLogger, "Mapped '%s': %s -> %s", state.topic.c_str(), state.ros2_type.c_str(),
+          state.ros1_type.c_str());
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "declare_connection failed for '%s': %s; skipping topic", state.topic.c_str(),
+          e.what());
+      }
+      per_topic.emplace(state.topic, std::move(state));
+    }
+
+    uint64_t total_in = 0;
+    uint64_t total_out = 0;
+    io::RawMessage msg;
+    while (true) {
+      try {
+        if (!reader->next(msg)) {
+          break;
+        }
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(kLogger, "ros2 read error: %s", e.what());
+        return 1;
+      }
+      ++total_in;
+
+      if (msg.topic == nullptr) {
+        continue;
+      }
+      auto it = per_topic.find(msg.topic->name);
+      if (it == per_topic.end() || !it->second.keep) {
+        continue;
+      }
+      auto & st = it->second;
+
+      auto result = core::convert_cdr_to_ros1(st.ros2_type, msg.payload);
+      if (!result.ok) {
+        ++st.failures;
+        if (st.failures <= 3) {
+          BAGWIZ_LOG_WARN(
+            kLogger, "convert failed on '%s' (type %s): %s", st.topic.c_str(), st.ros2_type.c_str(),
+            result.error.c_str());
+        }
+        continue;
+      }
+
+      try {
+        writer->write(st.conn_id, msg.timestamp_ns, std::span<const std::byte>(result.ros1));
+        ++st.written;
+        ++total_out;
+      } catch (const std::exception & e) {
+        ++st.failures;
+        if (st.failures <= 3) {
+          BAGWIZ_LOG_WARN(
+            kLogger, "writer->write failed on '%s': %s; skipping message", st.topic.c_str(),
+            e.what());
+        }
+      }
+    }
+
+    try {
+      writer->close();
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "writer->close failed: %s", e.what());
+      return 1;
+    }
+
+    std::size_t kept_topics = 0;
+    for (const auto & entry : per_topic) {
+      if (entry.second.keep) {
+        ++kept_topics;
+      }
+    }
+    BAGWIZ_LOG_INFO(
+      kLogger, "Conversion done: %" PRIu64 "/%" PRIu64 " messages written across %zu topic(s)",
+      total_out, total_in, kept_topics);
+    for (const auto & entry : per_topic) {
+      const auto & st = entry.second;
+      if (st.keep && st.failures > 0) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "Topic '%s': %" PRIu64 " message(s) failed to convert", st.topic.c_str(),
+          st.failures);
       }
     }
 

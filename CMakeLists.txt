@@ -77,10 +77,12 @@ FetchContent_MakeAvailable(cli11 fmt)
 # static registrars pull into the final binary.
 # ---------------------------------------------------------------------------
 add_library(bagwiz_core
+  src/core/cdr_to_ros1.cpp
   src/core/introspection_loader.cpp
   src/core/logging.cpp
   src/core/message_deserializer.cpp
   src/core/message_formatter.cpp
+  src/core/ros1_message_definitions.cpp
   src/core/ros1_to_cdr.cpp
   src/core/terminal_input.cpp
   src/core/topic_pattern.cpp
@@ -91,6 +93,7 @@ add_library(bagwiz_core
   src/io/mcap_writer.cpp
   src/io/metadata_yaml.cpp
   src/io/rosbag1_reader.cpp
+  src/io/rosbag1_writer.cpp
   src/io/sqlite3_reader.cpp
   src/io/sqlite3_writer.cpp
 )
@@ -187,8 +190,14 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_ros1_to_cdr_test test/core/ros1_to_cdr_test.cpp)
   target_link_libraries(bagwiz_ros1_to_cdr_test bagwiz_core)
 
+  ament_add_gtest(bagwiz_cdr_to_ros1_test test/core/cdr_to_ros1_test.cpp)
+  target_link_libraries(bagwiz_cdr_to_ros1_test bagwiz_core)
+
   ament_add_gtest(bagwiz_rosbag1_reader_test test/io/rosbag1_reader_test.cpp)
   target_link_libraries(bagwiz_rosbag1_reader_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_rosbag1_writer_test test/io/rosbag1_writer_test.cpp)
+  target_link_libraries(bagwiz_rosbag1_writer_test bagwiz_core)
 endif()
 
 ament_package()
