@@ -15,17 +15,21 @@
 namespace bagwiz::core
 {
 
-// Filter for topic names supplied by users on the command line.
+// Filter for topic / type names supplied by users on the command line.
 //
-// Pattern grammar (chosen to match the two common cases without surprise):
-//   * empty               -> match every topic
-//   * starts with '/'     -> prefix match on the topic name
-//   * does not start '/'  -> substring match anywhere in the topic name
+// Pattern grammar (designed to be intuitive for the common cases):
+//   * empty                  -> match every input
+//   * contains '*' or '?'    -> shell-style glob, anchored at both ends
+//                                 '*' matches any sequence (including '/')
+//                                 '?' matches exactly one character
+//   * otherwise              -> case-sensitive substring match
 //
-// Examples against a topic set like {/sensing/lidar/front/points,
-// /perception/object}:
-//   /sensing             -> prefix match, keeps /sensing/*
-//   lidar/front          -> substring match
+// Examples against {/sensing/lidar/front/points, /perception/object, /tf}:
+//   sensing            -> substring, keeps /sensing/lidar/front/points
+//   /sensing           -> substring, keeps /sensing/lidar/front/points
+//   /sensing/*         -> glob,      keeps /sensing/lidar/front/points
+//   */points           -> glob,      keeps /sensing/lidar/front/points
+//   /sensing/*/points  -> glob,      keeps /sensing/lidar/front/points
 class TopicPattern
 {
 public:
@@ -41,7 +45,7 @@ public:
   bool matches(const std::string & topic) const;
 
 private:
-  enum class Mode { kAll, kPrefix, kSubstring };
+  enum class Mode { kAll, kSubstring, kGlob };
 
   Mode mode_;
   bool match_all_;

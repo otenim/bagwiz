@@ -23,40 +23,68 @@ TEST(TopicPattern, EmptyMatchesEverything)
   EXPECT_TRUE(p.matches(""));
 }
 
-TEST(TopicPattern, AbsolutePrefixMatch)
+TEST(TopicPattern, PlainTextIsSubstring)
 {
+  TopicPattern p("lidar");
+  EXPECT_TRUE(p.matches("/sensing/lidar/front/points"));
+  EXPECT_TRUE(p.matches("lidar"));
+  EXPECT_FALSE(p.matches("/perception/object"));
+}
+
+TEST(TopicPattern, LeadingSlashIsLiteralNotPrefix)
+{
+  // Without glob metacharacters, the leading '/' has no special meaning;
+  // the pattern is matched as a substring.
   TopicPattern p("/sensing");
   EXPECT_TRUE(p.matches("/sensing"));
   EXPECT_TRUE(p.matches("/sensing/lidar/front/points"));
   EXPECT_FALSE(p.matches("/perception/object"));
-  // A substring that is not at the start must not match.
-  EXPECT_FALSE(p.matches("/foo/sensing"));
+  // Substring semantics: '/sensing' inside a longer namespace is also kept.
+  EXPECT_TRUE(p.matches("/foo/sensing/bar"));
 }
 
-TEST(TopicPattern, RelativeSubstringMatch)
+TEST(TopicPattern, GlobAsteriskAnchored)
 {
-  TopicPattern p("lidar/front");
+  // Glob is anchored at both ends.
+  TopicPattern p("/sensing/*");
   EXPECT_TRUE(p.matches("/sensing/lidar/front/points"));
-  EXPECT_TRUE(p.matches("lidar/front"));
-  EXPECT_FALSE(p.matches("/sensing/lidar/rear/points"));
+  EXPECT_TRUE(p.matches("/sensing/imu"));
   EXPECT_FALSE(p.matches("/perception/object"));
+  EXPECT_FALSE(p.matches("/foo/sensing/bar"));
 }
 
-TEST(TopicPattern, AsteriskIsLiteral)
+TEST(TopicPattern, GlobAsteriskInTheMiddle)
 {
-  // '*' is no longer a wildcard; it only matches itself.
-  TopicPattern p("/*/nebula_packets");
-  EXPECT_FALSE(p.matches("/sensing/nebula_packets"));
-  EXPECT_FALSE(p.matches("/foo/nebula_packets"));
-  EXPECT_TRUE(p.matches("/*/nebula_packets"));
+  TopicPattern p("/sensing/*/points");
+  EXPECT_TRUE(p.matches("/sensing/lidar/points"));
+  // '*' may span multiple path segments, so deeper namespaces still match.
+  EXPECT_TRUE(p.matches("/sensing/lidar/front/points"));
+  EXPECT_FALSE(p.matches("/sensing/lidar/front/imu"));
+}
+
+TEST(TopicPattern, GlobTrailingSuffix)
+{
+  TopicPattern p("*/points");
+  EXPECT_TRUE(p.matches("/sensing/lidar/front/points"));
+  EXPECT_TRUE(p.matches("/a/points"));
+  EXPECT_FALSE(p.matches("/sensing/lidar/points/raw"));
+}
+
+TEST(TopicPattern, GlobQuestionMark)
+{
+  TopicPattern p("/tf?");
+  EXPECT_TRUE(p.matches("/tfa"));
+  EXPECT_FALSE(p.matches("/tf"));
+  EXPECT_FALSE(p.matches("/tf_static"));
 }
 
 TEST(TopicPattern, RegexMetacharactersAreLiteral)
 {
-  // '.' and other regex metacharacters are treated as literal characters
-  // because the matcher is a plain string compare.
+  // '.' and other regex metacharacters are not special; only '*' and '?'
+  // trigger glob mode.
   TopicPattern p("/tf.static");
   EXPECT_TRUE(p.matches("/tf.static"));
+  EXPECT_TRUE(p.matches("/prefix/tf.static/suffix"));
   EXPECT_FALSE(p.matches("/tfXstatic"));
 }
 
