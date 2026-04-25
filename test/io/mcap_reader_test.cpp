@@ -110,6 +110,42 @@ std::filesystem::path write_fixture_directory(const std::filesystem::path & dir)
   return dir;
 }
 
+// Metadata.yaml carries the full summary block (message_count + starting_time
+// + duration + topics_with_message_count). The shard file is intentionally
+// not created: any code path that opens it will fail loudly.
+std::filesystem::path write_fixture_directory_summary_only(const std::filesystem::path & dir)
+{
+  std::filesystem::create_directories(dir);
+
+  const auto metadata_path = dir / "metadata.yaml";
+  std::ofstream f(metadata_path);
+  f << "rosbag2_bagfile_information:\n"
+    << "  version: 6\n"
+    << "  storage_identifier: mcap\n"
+    << "  duration:\n"
+    << "    nanoseconds: 1000000001\n"
+    << "  starting_time:\n"
+    << "    nanoseconds_since_epoch: 1000000000\n"
+    << "  message_count: 5\n"
+    << "  relative_file_paths:\n"
+    << "    - bag_0.mcap\n"
+    << "  topics_with_message_count:\n"
+    << "    - topic_metadata:\n"
+    << "        name: /foo\n"
+    << "        type: std_msgs/msg/String\n"
+    << "        serialization_format: cdr\n"
+    << "        offered_qos_profiles: ''\n"
+    << "      message_count: 3\n"
+    << "    - topic_metadata:\n"
+    << "        name: /bar\n"
+    << "        type: std_msgs/msg/Int32\n"
+    << "        serialization_format: cdr\n"
+    << "        offered_qos_profiles: ''\n"
+    << "      message_count: 2\n";
+  f.close();
+  return dir;
+}
+
 class McapReaderTest : public ::testing::Test
 {
 protected:
@@ -219,6 +255,25 @@ TEST_F(McapReaderTest, OpensDirectoryWithMetadata)
     ++count;
   }
   EXPECT_EQ(count, 5);
+}
+
+TEST_F(McapReaderTest, DirectoryStatsServedFromMetadataWithoutOpeningShards)
+{
+  // The fixture writes only metadata.yaml; the shard file is absent. If
+  // open_read or compute_stats touches the shard, it will throw. This is
+  // the proof that the metadata fast path is actually taken.
+  const auto dir = write_fixture_directory_summary_only(tmp_dir_ / "summary_only");
+
+  auto reader = bagwiz::io::open_read(dir);
+  EXPECT_EQ(reader->topics().size(), 2U);
+
+  const auto stats = reader->compute_stats();
+  EXPECT_TRUE(stats.from_summary);
+  EXPECT_EQ(stats.total_messages, 5);
+  EXPECT_EQ(stats.start_ns, 1'000'000'000LL);
+  EXPECT_EQ(stats.end_ns, 2'000'000'001LL);
+  EXPECT_EQ(stats.per_topic.at("/foo"), 3);
+  EXPECT_EQ(stats.per_topic.at("/bar"), 2);
 }
 
 TEST_F(McapReaderTest, RejectsDirectoryWithoutMetadata)

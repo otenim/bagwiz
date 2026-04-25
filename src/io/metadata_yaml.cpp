@@ -12,6 +12,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -22,7 +24,23 @@ namespace bagwiz::io
 namespace
 {
 constexpr const char * kLogger = "bagwiz.io.metadata";
+
+// Read a scalar i64 field if present; otherwise return nullopt. We don't
+// throw on missing fields because older bags may legitimately omit them;
+// the caller decides whether the absence is fatal.
+std::optional<int64_t> read_i64(const YAML::Node & parent, const char * key)
+{
+  if (auto n = parent[key]; n && n.IsScalar()) {
+    try {
+      return n.as<int64_t>();
+    } catch (const YAML::Exception &) {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
 }
+
+}  // namespace
 
 BagMetadata load_metadata_yaml(const std::filesystem::path & yaml_path)
 {
@@ -80,8 +98,30 @@ BagMetadata load_metadata_yaml(const std::filesystem::path & yaml_path)
       if (auto qos = tmeta["offered_qos_profiles"]; qos) {
         topic.offered_qos_profiles = qos.as<std::string>("");
       }
+      if (auto count = read_i64(t, "message_count")) {
+        md.per_topic_counts[topic.name] = *count;
+      }
       md.topics.push_back(std::move(topic));
     }
+  }
+
+  // Summary is the trio of total count, start time and duration. All three
+  // are written together by both bagwiz and rosbag2; treat them as a unit
+  // so callers can rely on `has_summary` without re-validating each field.
+  const auto total = read_i64(info, "message_count");
+  std::optional<int64_t> start;
+  std::optional<int64_t> duration;
+  if (auto st = info["starting_time"]; st && st.IsMap()) {
+    start = read_i64(st, "nanoseconds_since_epoch");
+  }
+  if (auto dur = info["duration"]; dur && dur.IsMap()) {
+    duration = read_i64(dur, "nanoseconds");
+  }
+  if (total && start && duration) {
+    md.has_summary = true;
+    md.total_messages = *total;
+    md.start_ns = *start;
+    md.end_ns = *start + *duration;
   }
 
   return md;

@@ -201,29 +201,65 @@ private:
 // Multi-shard reader: concatenates McapFileReaders in declared order.
 // rosbag2 writes shards in time order without overlap so simple concat is
 // equivalent to time-ordered merge.
+//
+// Shards are opened lazily: when metadata.yaml carries a complete summary
+// (total count, start time, duration, per-topic counts) and the topic list,
+// `topics()` and `compute_stats()` answer from metadata alone, so commands
+// like `bagwiz ls` never touch the shard files. Iteration via `next()` (or
+// a stats query against an incomplete summary) still opens all shards in
+// declared order.
 // ---------------------------------------------------------------------------
 class McapShardReader : public BagReader
 {
 public:
   McapShardReader(
-    std::vector<std::unique_ptr<McapFileReader>> shards, std::vector<TopicInfo> topics)
-  : shards_(std::move(shards)), topics_(std::move(topics))
+    std::filesystem::path dir, std::vector<std::filesystem::path> shard_rel_paths,
+    std::vector<TopicInfo> topics, BagMetadata metadata)
+  : dir_(std::move(dir)),
+    shard_rel_paths_(std::move(shard_rel_paths)),
+    topics_(std::move(topics)),
+    metadata_(std::move(metadata))
   {
+    shards_.resize(shard_rel_paths_.size());
   }
 
-  std::span<const TopicInfo> topics() const override { return topics_; }
+  std::span<const TopicInfo> topics() const override
+  {
+    if (!topics_.empty()) {
+      return topics_;
+    }
+    // Last-resort fallback: derive topics from the first shard. Cached
+    // into topics_ so subsequent calls stay O(1).
+    if (!shard_rel_paths_.empty()) {
+      auto & first = ensure_shard(0);
+      auto shard_topics = first.topics();
+      topics_.assign(shard_topics.begin(), shard_topics.end());
+    }
+    return topics_;
+  }
 
   void set_filter(const ReadFilter & f) override
   {
-    for (auto & s : shards_) {
-      s->set_filter(f);
+    if (iteration_started_) {
+      throw std::runtime_error("BagReader::set_filter called after iteration started");
     }
+    pending_filter_ = f;
+    has_pending_filter_ = true;
   }
 
   bool next(RawMessage & out) override
   {
-    while (current_ < shards_.size()) {
-      if (shards_[current_]->next(out)) {
+    iteration_started_ = true;
+    while (current_ < shard_rel_paths_.size()) {
+      auto & shard = ensure_shard(current_);
+      if (shards_filter_applied_.size() <= current_) {
+        shards_filter_applied_.resize(current_ + 1, false);
+      }
+      if (has_pending_filter_ && !shards_filter_applied_[current_]) {
+        shard.set_filter(pending_filter_);
+        shards_filter_applied_[current_] = true;
+      }
+      if (shard.next(out)) {
         // Remap the shard-local TopicInfo pointer to our owned vector so
         // callers see a stable pointer for the whole bag.
         for (auto & t : topics_) {
@@ -241,11 +277,21 @@ public:
 
   Stats compute_stats() override
   {
+    if (metadata_.has_summary) {
+      Stats stats;
+      stats.from_summary = true;
+      stats.total_messages = metadata_.total_messages;
+      stats.start_ns = metadata_.start_ns;
+      stats.end_ns = metadata_.end_ns;
+      stats.per_topic = metadata_.per_topic_counts;
+      return stats;
+    }
+
     Stats combined;
     combined.from_summary = true;
     bool first = true;
-    for (auto & s : shards_) {
-      auto st = s->compute_stats();
+    for (std::size_t i = 0; i < shard_rel_paths_.size(); ++i) {
+      auto st = ensure_shard(i).compute_stats();
       combined.from_summary = combined.from_summary && st.from_summary;
       combined.total_messages += st.total_messages;
       if (first || st.start_ns < combined.start_ns) {
@@ -263,9 +309,26 @@ public:
   }
 
 private:
-  std::vector<std::unique_ptr<McapFileReader>> shards_;
-  std::vector<TopicInfo> topics_;
+  McapFileReader & ensure_shard(std::size_t i) const
+  {
+    if (!shards_[i]) {
+      shards_[i] = std::make_unique<McapFileReader>(dir_ / shard_rel_paths_[i]);
+    }
+    return *shards_[i];
+  }
+
+  std::filesystem::path dir_;
+  std::vector<std::filesystem::path> shard_rel_paths_;
+  // mutable because topics() and ensure_shard() are logically const for
+  // callers but cache lazily-derived state.
+  mutable std::vector<TopicInfo> topics_;
+  mutable std::vector<std::unique_ptr<McapFileReader>> shards_;
+  BagMetadata metadata_;
+  ReadFilter pending_filter_;
+  bool has_pending_filter_ = false;
+  std::vector<bool> shards_filter_applied_;
   std::size_t current_ = 0;
+  bool iteration_started_ = false;
 };
 
 }  // namespace
@@ -280,21 +343,10 @@ std::unique_ptr<BagReader> open_mcap_directory(const std::filesystem::path & dir
   const auto metadata_path = dir / "metadata.yaml";
   auto md = load_metadata_yaml(metadata_path);
 
-  std::vector<std::unique_ptr<McapFileReader>> shards;
-  shards.reserve(md.relative_file_paths.size());
-  for (const auto & rel : md.relative_file_paths) {
-    shards.push_back(std::make_unique<McapFileReader>(dir / rel));
-  }
-
-  std::vector<TopicInfo> topics;
-  if (!md.topics.empty()) {
-    topics = std::move(md.topics);
-  } else if (!shards.empty()) {
-    auto shard_topics = shards.front()->topics();
-    topics.assign(shard_topics.begin(), shard_topics.end());
-  }
-
-  return std::make_unique<McapShardReader>(std::move(shards), std::move(topics));
+  std::vector<TopicInfo> topics = md.topics;  // copied; metadata_ retains its own
+  std::vector<std::filesystem::path> rel_paths = md.relative_file_paths;
+  return std::make_unique<McapShardReader>(
+    dir, std::move(rel_paths), std::move(topics), std::move(md));
 }
 
 }  // namespace bagwiz::io::detail

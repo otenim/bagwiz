@@ -69,8 +69,10 @@ public:
       ->check(CLI::ExistingPath);
     app.add_option(
       "-p,--pattern", pattern_,
-      "Keep only rows matching the pattern. A pattern starting with '/' is "
-      "matched as a prefix; any other pattern is matched as a substring.");
+      "Keep only rows matching the pattern. Plain text is matched as a "
+      "substring; if the pattern contains '*' or '?' it is matched as a "
+      "shell-style glob anchored at both ends ('*' spans any characters, "
+      "'?' matches a single character).");
     app.add_option("-k,--key", key_, "Field the pattern matches against: topic | type")
       ->default_val(kKeyTopic)
       ->check(CLI::IsMember({kKeyTopic, kKeyType}));
