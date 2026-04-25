@@ -11,8 +11,10 @@
 
 #include "bagwiz/io/bag_io.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bagwiz::io
@@ -20,11 +22,26 @@ namespace bagwiz::io
 
 // Minimal view of a rosbag2 metadata.yaml file, carrying just the fields
 // bagwiz needs to open a directory bag without re-scanning.
+//
+// The summary fields (`has_summary` and below) let `compute_stats()` answer
+// from metadata alone without touching the underlying shards. They are only
+// trusted as a unit: if any required field is missing, `has_summary` stays
+// false and callers fall back to scanning shards.
 struct BagMetadata
 {
   std::string storage_identifier;                          // "mcap" or "sqlite3"
   std::vector<std::filesystem::path> relative_file_paths;  // in play order
   std::vector<TopicInfo> topics;                           // may be empty
+
+  // True when message_count + starting_time + duration are all present.
+  bool has_summary = false;
+  int64_t total_messages = 0;
+  int64_t start_ns = 0;
+  int64_t end_ns = 0;
+  // Per-topic counts keyed by topic name. Populated alongside `topics`
+  // from `topics_with_message_count`. May be empty even when has_summary
+  // is true (older writers).
+  std::unordered_map<std::string, int64_t> per_topic_counts;
 };
 
 // Parse `<dir>/metadata.yaml`. Throws on IO or schema errors.
