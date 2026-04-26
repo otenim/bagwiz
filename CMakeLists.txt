@@ -180,6 +180,9 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_decoder_test test/core/decoder/decoder_test.cpp)
   target_link_libraries(bagwiz_decoder_test bagwiz_core)
 
+  ament_add_gtest(bagwiz_mcap_schema_decode_test test/io/mcap_schema_decode_test.cpp)
+  target_link_libraries(bagwiz_mcap_schema_decode_test bagwiz_core)
+
   ament_add_gtest(bagwiz_terminal_input_test test/core/terminal_input_test.cpp)
   target_link_libraries(bagwiz_terminal_input_test bagwiz_core)
 
