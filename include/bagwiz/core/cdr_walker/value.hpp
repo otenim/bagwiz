@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -64,10 +65,13 @@ struct Value
 
   Value() = default;
   // Direct-init forwarding constructor: lets `Value{x}` compile for any
-  // alternative of the underlying variant. Marked explicit (linter
-  // requirement); call sites already use brace-init form, so the
-  // constraint is invisible at the use site.
-  template <typename T>
+  // alternative of the underlying variant. SFINAE-guarded so it does
+  // NOT participate in overload resolution when T is Value itself —
+  // otherwise the universal reference would shadow the implicit copy
+  // and move constructors and break std::optional<Value> /
+  // std::vector<Value>. Marked explicit (linter requirement); call
+  // sites use brace-init form, so the constraint is invisible at use.
+  template <typename T, typename = std::enable_if_t<!std::is_same_v<std::decay_t<T>, Value>>>
   explicit Value(T && x) : v(std::forward<T>(x))
   {
   }
