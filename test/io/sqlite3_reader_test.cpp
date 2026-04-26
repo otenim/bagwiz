@@ -193,9 +193,20 @@ TEST_F(Sqlite3ReaderTest, OpensSingleFileAndListsTopics)
       seen_bar = true;
       EXPECT_EQ(t.type, "std_msgs/msg/Int32");
     }
+    // SQLite3 has no slot for schema bytes; they stay empty even after
+    // populate_schemas() (which is a no-op on this reader).
+    EXPECT_TRUE(t.schema_text.empty()) << t.name;
+    EXPECT_TRUE(t.schema_encoding.empty()) << t.name;
   }
   EXPECT_TRUE(seen_foo);
   EXPECT_TRUE(seen_bar);
+
+  // populate_schemas() must be safe to call and remain a no-op.
+  reader->populate_schemas();
+  for (const auto & t : reader->topics()) {
+    EXPECT_TRUE(t.schema_text.empty());
+    EXPECT_TRUE(t.schema_encoding.empty());
+  }
 }
 
 TEST_F(Sqlite3ReaderTest, IteratesMessagesInTimeOrder)

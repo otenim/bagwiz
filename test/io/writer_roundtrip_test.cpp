@@ -35,6 +35,15 @@ bagwiz::io::TopicInfo make_topic(std::string name, std::string type)
   return t;
 }
 
+bagwiz::io::TopicInfo make_topic_with_schema(
+  std::string name, std::string type, std::string schema_text)
+{
+  auto t = make_topic(std::move(name), std::move(type));
+  t.schema_encoding = "ros2msg";
+  t.schema_text = std::move(schema_text);
+  return t;
+}
+
 void write_fixture(
   const std::filesystem::path & path, bagwiz::io::CreateOptions options,
   const std::vector<bagwiz::io::TopicInfo> & topics,
@@ -204,4 +213,82 @@ TEST_F(WriterRoundTripTest, AutoLayoutFromExtension)
   write_fixture(dir_path, {}, topics_, messages_);
   EXPECT_TRUE(std::filesystem::exists(dir_path / "metadata.yaml"));
   verify_round_trip(dir_path);
+}
+
+TEST_F(WriterRoundTripTest, McapSchemaRoundTrips)
+{
+  // Self-describing write: schema_text passed at declare_topic() should
+  // come back out verbatim when the bag is reopened. This is the central
+  // payoff of Phase A — bagwiz-written MCAPs carry message definitions
+  // forward instead of the empty schema.data the writer used to emit.
+  const std::vector<bagwiz::io::TopicInfo> topics = {
+    make_topic_with_schema("/foo", "std_msgs/msg/String", "string data"),
+    make_topic_with_schema("/bar", "std_msgs/msg/Int32", "int32 data"),
+  };
+
+  const auto path = tmp_dir_ / "with_schemas.mcap";
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "none";
+  write_fixture(path, options, topics, messages_);
+
+  auto reader = bagwiz::io::open_read(path);
+  bool found_foo = false;
+  bool found_bar = false;
+  for (const auto & t : reader->topics()) {
+    if (t.name == "/foo") {
+      EXPECT_EQ(t.schema_text, "string data");
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      found_foo = true;
+    } else if (t.name == "/bar") {
+      EXPECT_EQ(t.schema_text, "int32 data");
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      found_bar = true;
+    }
+  }
+  EXPECT_TRUE(found_foo);
+  EXPECT_TRUE(found_bar);
+}
+
+TEST_F(WriterRoundTripTest, McapEmptySchemaStillSucceeds)
+{
+  // Legacy callers that don't fill TopicInfo::schema_text (today: every
+  // 1to2 / 2to1 / storage path that hasn't been ported yet) must keep
+  // working — the writer emits an empty Schema record, and the reader
+  // surfaces empty schema_text without erroring.
+  const auto path = tmp_dir_ / "no_schemas.mcap";
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "none";
+  write_fixture(path, options, topics_, messages_);
+
+  auto reader = bagwiz::io::open_read(path);
+  for (const auto & t : reader->topics()) {
+    EXPECT_TRUE(t.schema_text.empty()) << t.name;
+  }
+}
+
+TEST_F(WriterRoundTripTest, Sqlite3IgnoresSchemaFields)
+{
+  // SQLite3 storage has no slot for schema bytes, so they are dropped on
+  // write and absent on read. The roundtrip succeeds; the schema_text
+  // field round-trips to the empty string regardless of input.
+  const std::vector<bagwiz::io::TopicInfo> topics = {
+    make_topic_with_schema("/foo", "std_msgs/msg/String", "string data"),
+    make_topic_with_schema("/bar", "std_msgs/msg/Int32", "int32 data"),
+  };
+
+  const auto path = tmp_dir_ / "schema_sqlite.db3";
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Sqlite3;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  write_fixture(path, options, topics, messages_);
+
+  auto reader = bagwiz::io::open_read(path);
+  for (const auto & t : reader->topics()) {
+    EXPECT_TRUE(t.schema_text.empty()) << t.name;
+    EXPECT_TRUE(t.schema_encoding.empty()) << t.name;
+  }
 }

@@ -141,7 +141,17 @@ private:
       info.name = channel->topic;
       info.serialization_format = channel->messageEncoding;
       if (auto schema_it = schemas.find(channel->schemaId); schema_it != schemas.end()) {
-        info.type = schema_it->second->name;
+        const auto & schema = *schema_it->second;
+        info.type = schema.name;
+        info.schema_encoding = schema.encoding;
+        // schema.data is std::vector<std::byte>; ros2msg / ros2idl payloads
+        // are UTF-8 text. Reinterpret the bytes as char and copy into a
+        // string. Empty when the writer didn't embed schema bytes (legacy
+        // bagwiz output, manually-crafted MCAPs).
+        if (!schema.data.empty()) {
+          info.schema_text.assign(
+            reinterpret_cast<const char *>(schema.data.data()), schema.data.size());
+        }
       }
       if (auto qos_it = channel->metadata.find("offered_qos_profiles");
           qos_it != channel->metadata.end()) {
@@ -262,9 +272,17 @@ public:
       }
       if (shard.next(out)) {
         // Remap the shard-local TopicInfo pointer to our owned vector so
-        // callers see a stable pointer for the whole bag.
+        // callers see a stable pointer for the whole bag. Take the chance
+        // to backfill schema bytes from the shard (which always carries
+        // them) into our metadata-derived TopicInfo (which may not).
         for (auto & t : topics_) {
           if (t.name == out.topic->name) {
+            if (t.schema_text.empty() && !out.topic->schema_text.empty()) {
+              t.schema_text = out.topic->schema_text;
+            }
+            if (t.schema_encoding.empty() && !out.topic->schema_encoding.empty()) {
+              t.schema_encoding = out.topic->schema_encoding;
+            }
             out.topic = &t;
             return true;
           }
@@ -310,6 +328,35 @@ public:
     return combined;
   }
 
+  void populate_schemas() override
+  {
+    if (schemas_loaded_ || shard_rel_paths_.empty()) {
+      schemas_loaded_ = true;
+      return;
+    }
+    // Open shard 0 (rosbag2 writes shards in declared order with consistent
+    // schema/channel definitions across shards, so the first shard is
+    // sufficient) and copy its schema text into our owned topic list. This
+    // is the only path that forces a shard open from the directory reader
+    // and is opt-in via populate_schemas().
+    const auto & first = ensure_shard(0);
+    const auto shard_topics = first.topics();
+    for (auto & t : topics_) {
+      for (const auto & s : shard_topics) {
+        if (t.name == s.name) {
+          if (t.schema_text.empty()) {
+            t.schema_text = s.schema_text;
+          }
+          if (t.schema_encoding.empty()) {
+            t.schema_encoding = s.schema_encoding;
+          }
+          break;
+        }
+      }
+    }
+    schemas_loaded_ = true;
+  }
+
 private:
   McapFileReader & ensure_shard(std::size_t i) const
   {
@@ -331,6 +378,7 @@ private:
   std::vector<bool> shards_filter_applied_;
   std::size_t current_ = 0;
   bool iteration_started_ = false;
+  bool schemas_loaded_ = false;
 };
 
 }  // namespace

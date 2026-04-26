@@ -568,6 +568,12 @@ private:
       return 1;
     }
 
+    // Force schema bytes onto the topic list before declaring so MCAP
+    // outputs preserve self-description across a repack (one-shot shard
+    // open for multi-shard MCAP inputs; no-op for single-file MCAP and
+    // SQLite3 where schemas are either already loaded or not embedded).
+    reader->populate_schemas();
+
     std::size_t declared = 0;
     for (const auto & t : reader->topics()) {
       try {

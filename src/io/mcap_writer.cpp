@@ -92,7 +92,16 @@ public:
     if (auto it = type_to_schema_.find(topic.type); it != type_to_schema_.end()) {
       schema_id = it->second;
     } else {
-      mcap::Schema schema(topic.type, "ros2msg", std::string{});
+      // Embed the message definition when the caller provided one. The
+      // encoding defaults to "ros2msg" because that is what every ROS 2
+      // toolchain (rosbag2, foxglove, mcap_ros2) emits today; if a caller
+      // ever passes raw IDL, they must set schema_encoding explicitly.
+      // Empty schema_text is preserved (and writes an empty Schema) so
+      // legacy callers that have no definition handy still produce a valid
+      // MCAP — just one that loses self-description.
+      const std::string encoding =
+        topic.schema_encoding.empty() ? std::string("ros2msg") : topic.schema_encoding;
+      mcap::Schema schema(topic.type, encoding, topic.schema_text);
       writer_.addSchema(schema);
       schema_id = schema.id;
       type_to_schema_[topic.type] = schema_id;
