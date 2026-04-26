@@ -25,12 +25,25 @@ namespace bagwiz::io
 
 // Per-topic metadata. Populated lazily by BagReader::topics(); never triggers
 // a full-message scan.
+//
+// Schema fields carry the embedded message definition when the storage format
+// preserves it (MCAP `Schema` records) and stays empty otherwise (SQLite3,
+// metadata.yaml-derived listings before populate_schemas() is called). When
+// non-empty they let downstream code decode messages without loading the
+// rosidl introspection typesupport for the type — the central payoff of
+// MCAP's self-describing nature.
 struct TopicInfo
 {
   std::string name;
   std::string type;                  // e.g. "sensor_msgs/msg/Image"
   std::string serialization_format;  // usually "cdr"
   std::string offered_qos_profiles;  // raw YAML string, unparsed
+
+  std::string schema_encoding;  // "ros2msg", "ros2idl", or empty if unknown
+  std::string schema_text;      // raw bytes from the storage layer, decoded as
+                                // UTF-8; empty when the storage carries no
+                                // schema (SQLite3 today, legacy MCAPs written
+                                // with empty Schema.data).
 };
 
 // Zero-copy view of a single message returned by BagReader::next(). Pointers
@@ -85,6 +98,19 @@ public:
   // (MCAP summary, SQLite aggregate queries) and only fall back to a full
   // scan when unavoidable.
   virtual Stats compute_stats() = 0;
+
+  // Backfill TopicInfo::schema_text / schema_encoding for all topics when the
+  // storage embeds schemas but the cheap topics() path did not load them.
+  //
+  // Default: no-op — single-file readers populate schemas at construction.
+  // McapShardReader overrides to open the first shard once and copy schema
+  // bytes into its cached topic list. Idempotent.
+  //
+  // Callers that need decode-ready TopicInfo (decoders, self-describing
+  // writers) must call this before consuming topics(); callers that only
+  // want names / types / counts (`bagwiz ls`) should not, since it forces a
+  // shard open on multi-shard bags.
+  virtual void populate_schemas() {}
 };
 
 // Write-only bag interface. close() finalizes the bag (and writes

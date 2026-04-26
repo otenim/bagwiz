@@ -183,13 +183,66 @@ TEST_F(McapReaderTest, OpensSingleFileAndListsTopics)
       seen_foo = true;
       EXPECT_EQ(t.type, "std_msgs/msg/String");
       EXPECT_EQ(t.serialization_format, "cdr");
+      // Schema bytes from the fixture's mcap::Schema(... "ros2msg",
+      // "string data") are surfaced through TopicInfo.
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      EXPECT_EQ(t.schema_text, "string data");
     } else if (t.name == "/bar") {
       seen_bar = true;
       EXPECT_EQ(t.type, "std_msgs/msg/Int32");
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      EXPECT_EQ(t.schema_text, "int32 data");
     }
   }
   EXPECT_TRUE(seen_foo);
   EXPECT_TRUE(seen_bar);
+}
+
+TEST_F(McapReaderTest, DirectoryPopulatesSchemasOnDemand)
+{
+  // metadata.yaml does not carry schemas (Q1 decision: keep them only in
+  // shards). topics() before populate_schemas() returns empty schemas, and
+  // populate_schemas() backfills from shard 0.
+  const auto dir = write_fixture_directory(tmp_dir_ / "schemas_lazy");
+
+  auto reader = bagwiz::io::open_read(dir);
+  for (const auto & t : reader->topics()) {
+    EXPECT_TRUE(t.schema_text.empty()) << t.name << " had unexpected schema before lazy load";
+    EXPECT_TRUE(t.schema_encoding.empty()) << t.name;
+  }
+
+  reader->populate_schemas();
+  bool found_foo_schema = false;
+  bool found_bar_schema = false;
+  for (const auto & t : reader->topics()) {
+    if (t.name == "/foo") {
+      EXPECT_EQ(t.schema_text, "string data");
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      found_foo_schema = true;
+    } else if (t.name == "/bar") {
+      EXPECT_EQ(t.schema_text, "int32 data");
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      found_bar_schema = true;
+    }
+  }
+  EXPECT_TRUE(found_foo_schema);
+  EXPECT_TRUE(found_bar_schema);
+}
+
+TEST_F(McapReaderTest, DirectoryNextBackfillsSchemaOpportunistically)
+{
+  // Even without an explicit populate_schemas() call, iteration through
+  // next() should backfill schemas onto the shared TopicInfo so consumers
+  // that follow the iterator see them.
+  const auto dir = write_fixture_directory(tmp_dir_ / "schemas_via_next");
+
+  auto reader = bagwiz::io::open_read(dir);
+  bagwiz::io::RawMessage msg;
+  ASSERT_TRUE(reader->next(msg));
+  // The TopicInfo* the message points at is owned by the shard reader; it
+  // must carry the schema from the MCAP shard.
+  EXPECT_FALSE(msg.topic->schema_text.empty());
+  EXPECT_EQ(msg.topic->schema_encoding, "ros2msg");
 }
 
 TEST_F(McapReaderTest, IteratesMessagesInTimeOrder)
