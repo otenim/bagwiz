@@ -8,7 +8,7 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
-#include "bagwiz/core/introspection_loader.hpp"
+#include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/message_formatter.hpp"
 #include "bagwiz/core/terminal_input.hpp"
@@ -169,18 +169,18 @@ public:
     const std::string topic_name = topic_info->name;
     const std::string type_name = topic_info->type;
 
-    // Decoding is mandatory: bail out before entering the TUI if the
-    // introspection typesupport library is not installed. The user can
-    // source the right workspace and re-run.
-    const core::IntrospectionLoad introspection = core::load_introspection(type_name);
-    if (!introspection.ok()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger,
-        "Message type '%s' could not be loaded (tried %s; error: %s). Source a workspace that "
-        "provides the package and re-run.",
-        type_name.c_str(), introspection.library_name.c_str(), introspection.error.c_str());
+    // Open a decoder for this topic. The factory picks the schema-driven
+    // path when the MCAP shard carries a non-empty `ros2msg` schema for
+    // the type and falls back to the introspection typesupport otherwise.
+    // For schema-only inputs (or with `BAGWIZ_DECODER=introspection`) the
+    // user must still source a workspace that provides the package — the
+    // factory surfaces both attempts in the error string.
+    auto open_decoder = core::decoder::open_decoder(*topic_info);
+    if (!open_decoder.ok()) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open decoder: %s", open_decoder.error.c_str());
       return 1;
     }
+    const auto & decoder = *open_decoder.decoder;
 
     std::vector<OwnedMessage> cache;
     bool exhausted = false;
@@ -234,7 +234,9 @@ public:
       fmt::print(stdout, "timestamp: {}\n", format_timestamp(msg.timestamp_ns));
       fmt::print(stdout, "size:      {} bytes\n\n", msg.payload.size());
 
-      const auto formatted = core::format_message(introspection, msg.payload);
+      const auto decoded = decoder.decode(msg.payload);
+      const auto formatted =
+        decoded.ok() ? core::format_message(*decoded.value) : core::FormatResult{"", decoded.error};
 
       const int rows = std::max(1, terminal_rows() - kOverheadRows);
       std::string scroll_hint;

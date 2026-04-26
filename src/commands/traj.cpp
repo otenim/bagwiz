@@ -8,14 +8,13 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
-#include "bagwiz/core/introspection_loader.hpp"
+#include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/logging.hpp"
-#include "bagwiz/core/message_deserializer.hpp"
+#include "bagwiz/core/tf_value_extract.hpp"
 #include "bagwiz/core/trajectory.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
-#include <tf2_msgs/msg/tf_message.hpp>
 
 #include <fmt/core.h>
 #include <tf2/LinearMath/Quaternion.h>
@@ -35,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace bagwiz::commands
@@ -165,18 +165,39 @@ void load_tf_buffer(
     is_static_by_topic[t.name] = t.is_static;
   }
 
-  const core::IntrospectionLoad introspection = core::load_introspection(kTfMessageType);
-  if (!introspection.ok()) {
-    throw std::runtime_error(
-      "Could not load introspection for tf2_msgs/msg/TFMessage: " + introspection.error);
+  // One decoder per TF topic. The factory picks the schema-driven
+  // backend when the MCAP shard carries the embedded ros2msg schema for
+  // tf2_msgs/msg/TFMessage and falls back to introspection otherwise.
+  std::unordered_map<std::string, std::unique_ptr<core::decoder::Decoder>> decoder_by_topic;
+  for (const auto & topic_info : tf_reader->topics()) {
+    if (topic_info.type != kTfMessageType) {
+      continue;
+    }
+    if (is_static_by_topic.find(topic_info.name) == is_static_by_topic.end()) {
+      continue;
+    }
+    auto open = core::decoder::open_decoder(topic_info);
+    if (!open.ok()) {
+      throw std::runtime_error(
+        "Could not open decoder for TF topic '" + topic_info.name + "': " + open.error);
+    }
+    decoder_by_topic.emplace(topic_info.name, std::move(open.decoder));
   }
 
   io::RawMessage raw;
   while (tf_reader->next(raw)) {
-    const core::DeserializedMessage msg(introspection, raw.payload);
-    const auto * tf_msg = static_cast<const tf2_msgs::msg::TFMessage *>(msg.data());
+    auto it = decoder_by_topic.find(raw.topic->name);
+    if (it == decoder_by_topic.end()) {
+      continue;
+    }
+    const auto decoded = it->second->decode(raw.payload);
+    if (!decoded.ok()) {
+      throw std::runtime_error(
+        "Failed to decode TF message on '" + raw.topic->name + "': " + decoded.error);
+    }
+    const auto transforms = core::extract_tf_message(*decoded.value);
     const bool is_static = is_static_by_topic.at(raw.topic->name);
-    for (const auto & t : tf_msg->transforms) {
+    for (const auto & t : transforms) {
       buffer.setTransform(t, "bagwiz", is_static);
     }
   }
@@ -372,15 +393,12 @@ private:
     filter.topics.push_back(args.topic);
     reader->set_filter(filter);
 
-    const core::IntrospectionLoad introspection = core::load_introspection(type_name);
-    if (!introspection.ok()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger,
-        "Message type '%s' could not be loaded (tried %s; error: %s). Source a workspace that "
-        "provides the package and re-run.",
-        type_name.c_str(), introspection.library_name.c_str(), introspection.error.c_str());
+    auto open_decoder = core::decoder::open_decoder(*topic_info);
+    if (!open_decoder.ok()) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open decoder: %s", open_decoder.error.c_str());
       return 1;
     }
+    const auto & decoder = *open_decoder.decoder;
 
     std::vector<core::TrajectoryPose> poses;
     std::int64_t decoded = 0;
@@ -398,8 +416,14 @@ private:
       }
       ++decoded;
       try {
-        const core::DeserializedMessage msg(introspection, raw.payload);
-        const auto extraction = core::extract_pose(msg.members(), msg.data(), raw.timestamp_ns);
+        const auto decode_result = decoder.decode(raw.payload);
+        if (!decode_result.ok()) {
+          BAGWIZ_LOG_ERROR(
+            kLogger, "Failed to decode message #%ld of type '%s': %s", decoded, type_name.c_str(),
+            decode_result.error.c_str());
+          return 1;
+        }
+        const auto extraction = core::extract_pose(*decode_result.value, raw.timestamp_ns);
         if (!extraction) {
           BAGWIZ_LOG_ERROR(
             kLogger, "Failed to extract pose from message #%ld of type '%s' (unexpected schema).",

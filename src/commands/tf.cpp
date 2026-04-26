@@ -8,13 +8,11 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
-#include "bagwiz/core/introspection_loader.hpp"
+#include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/logging.hpp"
-#include "bagwiz/core/message_deserializer.hpp"
 #include "bagwiz/core/terminal_input.hpp"
+#include "bagwiz/core/tf_value_extract.hpp"
 #include "bagwiz/io/bag_io.hpp"
-
-#include <tf2_msgs/msg/tf_message.hpp>
 
 #include <fmt/core.h>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -82,6 +80,12 @@ std::vector<TfTopic> collect_tf_topics(const io::BagReader & reader)
 // distinct timestamps emitted by dynamic /tf messages. Those timestamps
 // become the sample points of the `tf walk` timeline -- each one is a
 // moment at which the TF tree observably changed.
+//
+// Decoding goes through the unified open_decoder() path so for MCAP
+// inputs the schema-driven backend handles the work and tf2_msgs no
+// longer needs to be on AMENT_PREFIX_PATH at runtime; only its
+// header-only struct definition is required at build time (via
+// extract_tf_message → geometry_msgs::msg::TransformStamped).
 void load_tf_and_timeline(
   const std::filesystem::path & bag_path, const std::vector<TfTopic> & tf_topics,
   tf2::BufferCore & buffer, std::vector<std::int64_t> & sorted_timestamps)
@@ -98,10 +102,22 @@ void load_tf_and_timeline(
     is_static_by_topic[t.name] = t.is_static;
   }
 
-  const core::IntrospectionLoad introspection = core::load_introspection(kTfMessageType);
-  if (!introspection.ok()) {
-    throw std::runtime_error(
-      "Could not load introspection for tf2_msgs/msg/TFMessage: " + introspection.error);
+  // One decoder per TF topic so the schema_text differences across
+  // shards / topics are handled by the factory rather than us.
+  std::unordered_map<std::string, std::unique_ptr<core::decoder::Decoder>> decoder_by_topic;
+  for (const auto & topic_info : tf_reader->topics()) {
+    if (topic_info.type != kTfMessageType) {
+      continue;
+    }
+    if (is_static_by_topic.find(topic_info.name) == is_static_by_topic.end()) {
+      continue;
+    }
+    auto open = core::decoder::open_decoder(topic_info);
+    if (!open.ok()) {
+      throw std::runtime_error(
+        "Could not open decoder for TF topic '" + topic_info.name + "': " + open.error);
+    }
+    decoder_by_topic.emplace(topic_info.name, std::move(open.decoder));
   }
 
   // Use a sorted vector-then-unique pattern; std::set has worse locality
@@ -111,10 +127,18 @@ void load_tf_and_timeline(
 
   io::RawMessage raw;
   while (tf_reader->next(raw)) {
-    const core::DeserializedMessage msg(introspection, raw.payload);
-    const auto * tf_msg = static_cast<const tf2_msgs::msg::TFMessage *>(msg.data());
+    auto it = decoder_by_topic.find(raw.topic->name);
+    if (it == decoder_by_topic.end()) {
+      continue;
+    }
+    const auto decoded = it->second->decode(raw.payload);
+    if (!decoded.ok()) {
+      throw std::runtime_error(
+        "Failed to decode TF message on '" + raw.topic->name + "': " + decoded.error);
+    }
+    const auto transforms = core::extract_tf_message(*decoded.value);
     const bool is_static = is_static_by_topic.at(raw.topic->name);
-    for (const auto & t : tf_msg->transforms) {
+    for (const auto & t : transforms) {
       buffer.setTransform(t, "bagwiz", is_static);
       if (!is_static) {
         const std::int64_t ns = static_cast<std::int64_t>(t.header.stamp.sec) * 1'000'000'000LL +

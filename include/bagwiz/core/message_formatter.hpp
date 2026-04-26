@@ -9,14 +9,13 @@
 #ifndef BAGWIZ__CORE__MESSAGE_FORMATTER_HPP_
 #define BAGWIZ__CORE__MESSAGE_FORMATTER_HPP_
 
+#include "bagwiz/core/cdr_walker/value.hpp"
+
 #include <cstddef>
-#include <span>
 #include <string>
 
 namespace bagwiz::core
 {
-
-struct IntrospectionLoad;
 
 // Options controlling how format_message renders large values. Defaults
 // keep single-message output reasonable for a terminal screen: primitive
@@ -29,8 +28,8 @@ struct FormatOptions
 };
 
 // Outcome of a format_message() call. On success `text` holds the rendered
-// YAML-ish string; on failure `error` explains what went wrong (RMW
-// deserialize failure or walker error).
+// YAML-ish string; on failure `error` explains what went wrong (always a
+// shape mismatch — the bytes-to-Value step is the decoder's job).
 struct FormatResult
 {
   std::string text;
@@ -38,16 +37,14 @@ struct FormatResult
   bool ok() const { return error.empty(); }
 };
 
-// Decode the CDR payload via the active RMW (rmw_deserialize), then walk
-// the resulting in-memory struct using introspection metadata to emit a
-// YAML-ish rendering that mirrors `ros2 topic echo`.
+// Render a decoded message to a YAML-ish string mirroring `ros2 topic
+// echo`. Input is the Value produced by the Phase D decoder (either
+// schema-driven or introspection-based — both yield the same shape).
 //
-// The caller passes an IntrospectionLoad that resolved both the cpp and
-// introspection typesupports. Allocation + construction + destruction of
-// the intermediate struct are managed internally (RAII).
-FormatResult format_message(
-  const IntrospectionLoad & introspection, std::span<const std::byte> cdr_payload,
-  const FormatOptions & options = {});
+// The Value MUST wrap a top-level Object (a struct). Primitive or
+// sequence Values at the root are rejected; the shape contract for
+// "decoded message" is always an Object.
+FormatResult format_message(const cdr_walker::Value & root, const FormatOptions & options = {});
 
 }  // namespace bagwiz::core
 

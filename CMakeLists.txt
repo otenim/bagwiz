@@ -18,33 +18,23 @@ find_package(mcap_vendor REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(SQLite3 REQUIRED)
-# Used by the walk command to decode bag payloads. Deserialization is
-# delegated to the active RMW (via rmw_deserialize), so we need the rmw
-# dispatcher at runtime. The per-package typesupport libraries
-# (lib<pkg>__rosidl_typesupport_cpp.so and the _introspection_ variant)
-# are loaded at runtime via dlopen; we only need their headers + the
-# dispatch struct definitions at build time.
+# Introspection fallback path: rmw_deserialize plus the per-package
+# typesupport `.so`s loaded at runtime via dlopen. Required even after
+# the schema-driven path lands (Phase D) because SQLite3 inputs and
+# legacy MCAPs without embedded schemas still go through introspection.
 find_package(rmw REQUIRED)
 find_package(rmw_implementation REQUIRED)
 find_package(rosidl_runtime_c REQUIRED)
 find_package(rosidl_runtime_cpp REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
-# The `traj export --in/--of` and `tf walk` commands read TF from the
-# bag and evaluate transforms. tf2 provides BufferCore + math helpers;
-# tf2_msgs / geometry_msgs give us the generated C++ struct layouts we
-# reinterpret_cast the deserialized payload to.
+# tf2 supplies BufferCore + math helpers used by `tf walk` and
+# `traj export --in/--of`. geometry_msgs is needed for the
+# header-only TransformStamped struct we hand to BufferCore::setTransform
+# from tf_value_extract; tf2_msgs is no longer linked because Phase F
+# decodes TFMessage through the schema-driven path instead of
+# reinterpret_cast'ing the typesupport buffer.
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
-find_package(tf2_msgs REQUIRED)
-# Standard message packages whose types are entries in the
-# `bagwiz convert ros1_to_ros2` whitelist. We don't include their
-# headers; we just need the typesupport .so files installed and on
-# AMENT_PREFIX_PATH at runtime so introspection_loader can dlopen them.
-find_package(std_msgs REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(nav_msgs REQUIRED)
-find_package(diagnostic_msgs REQUIRED)
-find_package(builtin_interfaces REQUIRED)
 
 # CLI11 and fmt are not available as rosdep keys on all supported distros, so
 # fetch them at configure time. Both are small, header-light libraries.
@@ -93,6 +83,7 @@ add_library(bagwiz_core
   src/core/ros1_message_definitions.cpp
   src/core/ros1_to_cdr.cpp
   src/core/terminal_input.cpp
+  src/core/tf_value_extract.cpp
   src/core/topic_pattern.cpp
   src/core/trajectory.cpp
   src/commands/registry.cpp
@@ -121,7 +112,6 @@ ament_target_dependencies(bagwiz_core PUBLIC
   rosidl_typesupport_introspection_cpp
   geometry_msgs
   tf2
-  tf2_msgs
 )
 target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIBS})
 
@@ -160,16 +150,20 @@ ament_export_dependencies(
   rosidl_typesupport_introspection_cpp
   geometry_msgs
   tf2
-  tf2_msgs
-  std_msgs
-  sensor_msgs
-  nav_msgs
-  diagnostic_msgs
-  builtin_interfaces
 )
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+
+  # Standard message packages used by the introspection-path tests
+  # (decoder_test, ros1_to_cdr_test, message_formatter regression).
+  # These are no longer runtime deps of bagwiz_core after Phase G; they
+  # only need to be on AMENT_PREFIX_PATH at test time.
+  find_package(std_msgs REQUIRED)
+  find_package(sensor_msgs REQUIRED)
+  find_package(nav_msgs REQUIRED)
+  find_package(diagnostic_msgs REQUIRED)
+  find_package(builtin_interfaces REQUIRED)
 
   ament_add_gtest(bagwiz_smoke_test test/smoke_test.cpp)
   target_link_libraries(bagwiz_smoke_test bagwiz_core)
@@ -185,6 +179,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_decoder_test test/core/decoder/decoder_test.cpp)
   target_link_libraries(bagwiz_decoder_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_mcap_schema_decode_test test/io/mcap_schema_decode_test.cpp)
+  target_link_libraries(bagwiz_mcap_schema_decode_test bagwiz_core)
 
   ament_add_gtest(bagwiz_terminal_input_test test/core/terminal_input_test.cpp)
   target_link_libraries(bagwiz_terminal_input_test bagwiz_core)

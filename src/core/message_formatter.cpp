@@ -8,16 +8,13 @@
 
 #include "bagwiz/core/message_formatter.hpp"
 
-#include "bagwiz/core/introspection_loader.hpp"
-#include "bagwiz/core/message_deserializer.hpp"
-
-#include <rosidl_typesupport_introspection_cpp/field_types.hpp>
-#include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
+#include "bagwiz/core/cdr_walker/value.hpp"
 
 #include <cstdint>
 #include <cstdio>
-#include <exception>
+#include <cstring>
 #include <string>
+#include <variant>
 
 namespace bagwiz::core
 {
@@ -25,7 +22,7 @@ namespace bagwiz::core
 namespace
 {
 
-namespace ts_types = rosidl_typesupport_introspection_cpp;
+namespace cdr = bagwiz::core::cdr_walker;
 
 // --- helpers --------------------------------------------------------------
 
@@ -40,13 +37,6 @@ std::string double_to_string(double value)
 {
   char buf[32];
   std::snprintf(buf, sizeof(buf), "%.17g", value);
-  return std::string(buf);
-}
-
-std::string hex_uint16_to_string(std::uint16_t value)
-{
-  char buf[16];
-  std::snprintf(buf, sizeof(buf), "u+%04x", value);
   return std::string(buf);
 }
 
@@ -72,94 +62,49 @@ std::string escape_for_yaml(const std::string & s)
   return out;
 }
 
-const ts_types::MessageMembers & nested_members_of(const ts_types::MessageMember & m)
+// True when the Value holds one of the leaf primitive variants. Object
+// and Sequence are not primitives.
+bool is_primitive(const cdr::Value & v)
 {
-  return *static_cast<const ts_types::MessageMembers *>(m.members_->data);
+  return !std::holds_alternative<cdr::Object>(v.v) && !std::holds_alternative<cdr::Sequence>(v.v) &&
+         !std::holds_alternative<std::monostate>(v.v);
 }
 
-// Convert a pointer-to-field into its textual YAML value for any primitive
-// type id. `ptr` must point at an object whose C++ type matches `type_id`
-// (this is the layout guarantee provided by rosidl_generator_cpp).
-std::string primitive_at(const void * ptr, std::uint8_t type_id)
+// Render a single primitive Value. Number formatting matches the legacy
+// MessageMembers walker exactly so existing test corpora and any
+// downstream tools that grep YAML keep working.
+std::string primitive_to_string(const cdr::Value & v)
 {
-  using ts_types::ROS_TYPE_BOOLEAN;
-  using ts_types::ROS_TYPE_CHAR;
-  using ts_types::ROS_TYPE_DOUBLE;
-  using ts_types::ROS_TYPE_FLOAT;
-  using ts_types::ROS_TYPE_INT16;
-  using ts_types::ROS_TYPE_INT32;
-  using ts_types::ROS_TYPE_INT64;
-  using ts_types::ROS_TYPE_INT8;
-  using ts_types::ROS_TYPE_LONG_DOUBLE;
-  using ts_types::ROS_TYPE_OCTET;
-  using ts_types::ROS_TYPE_STRING;
-  using ts_types::ROS_TYPE_UINT16;
-  using ts_types::ROS_TYPE_UINT32;
-  using ts_types::ROS_TYPE_UINT64;
-  using ts_types::ROS_TYPE_UINT8;
-  using ts_types::ROS_TYPE_WCHAR;
-  using ts_types::ROS_TYPE_WSTRING;
-  switch (type_id) {
-    case ROS_TYPE_BOOLEAN:
-      return *static_cast<const bool *>(ptr) ? "true" : "false";
-    case ROS_TYPE_OCTET:
-    case ROS_TYPE_UINT8:
-      return std::to_string(static_cast<unsigned>(*static_cast<const std::uint8_t *>(ptr)));
-    case ROS_TYPE_CHAR:
-    case ROS_TYPE_INT8:
-      return std::to_string(static_cast<int>(*static_cast<const std::int8_t *>(ptr)));
-    case ROS_TYPE_UINT16:
-      return std::to_string(*static_cast<const std::uint16_t *>(ptr));
-    case ROS_TYPE_INT16:
-      return std::to_string(*static_cast<const std::int16_t *>(ptr));
-    case ROS_TYPE_UINT32:
-      return std::to_string(*static_cast<const std::uint32_t *>(ptr));
-    case ROS_TYPE_INT32:
-      return std::to_string(*static_cast<const std::int32_t *>(ptr));
-    case ROS_TYPE_UINT64:
-      return std::to_string(*static_cast<const std::uint64_t *>(ptr));
-    case ROS_TYPE_INT64:
-      return std::to_string(*static_cast<const std::int64_t *>(ptr));
-    case ROS_TYPE_FLOAT:
-      return float_to_string(*static_cast<const float *>(ptr));
-    case ROS_TYPE_DOUBLE:
-      return double_to_string(*static_cast<const double *>(ptr));
-    case ROS_TYPE_LONG_DOUBLE:
-      return "<long double>";
-    case ROS_TYPE_STRING:
-      return escape_for_yaml(*static_cast<const std::string *>(ptr));
-    case ROS_TYPE_WCHAR:
-      return hex_uint16_to_string(*static_cast<const std::uint16_t *>(ptr));
-    case ROS_TYPE_WSTRING:
-      return "<wstring>";
-    default:
-      return "<unknown type " + std::to_string(static_cast<int>(type_id)) + ">";
-  }
-}
-
-bool is_primitive(std::uint8_t type_id)
-{
-  return type_id != ts_types::ROS_TYPE_MESSAGE;
-}
-
-// Count of elements for an array/sequence member. Falls back to
-// `array_size_` for callers that did not set size_function (shouldn't
-// happen for rosidl-generated code, but the null-check keeps us safe).
-std::size_t member_count(const ts_types::MessageMember & m, const void * field_ptr)
-{
-  if (m.size_function != nullptr) {
-    return m.size_function(field_ptr);
-  }
-  return m.array_size_;
-}
-
-const void * member_element(
-  const ts_types::MessageMember & m, const void * field_ptr, std::size_t index)
-{
-  // get_const_function is the universal accessor for both std::array and
-  // std::vector (and BoundedVector) across introspection-cpp. It handles
-  // the indirection details we do not want to replicate.
-  return m.get_const_function(field_ptr, index);
+  return std::visit(
+    [](const auto & x) -> std::string {
+      using T = std::decay_t<decltype(x)>;
+      if constexpr (std::is_same_v<T, bool>) {
+        return x ? "true" : "false";
+      } else if constexpr (std::is_same_v<T, std::uint8_t>) {
+        return std::to_string(static_cast<unsigned>(x));
+      } else if constexpr (std::is_same_v<T, std::int8_t>) {
+        return std::to_string(static_cast<int>(x));
+      } else if constexpr (std::is_same_v<T, std::uint16_t> || std::is_same_v<T, std::uint32_t>) {
+        return std::to_string(x);
+      } else if constexpr (std::is_same_v<T, std::int16_t> || std::is_same_v<T, std::int32_t>) {
+        return std::to_string(x);
+      } else if constexpr (std::is_same_v<T, std::uint64_t>) {
+        return std::to_string(x);
+      } else if constexpr (std::is_same_v<T, std::int64_t>) {
+        return std::to_string(x);
+      } else if constexpr (std::is_same_v<T, float>) {
+        return float_to_string(x);
+      } else if constexpr (std::is_same_v<T, double>) {
+        return double_to_string(x);
+      } else if constexpr (std::is_same_v<T, std::string>) {
+        return escape_for_yaml(x);
+      } else {
+        // monostate, Object, Sequence — caller must filter via
+        // is_primitive() before calling.
+        return "<non-primitive>";
+      }
+    },
+    v.v);
 }
 
 // --- emitter --------------------------------------------------------------
@@ -169,68 +114,73 @@ class Emitter
 public:
   Emitter(std::string & out, const FormatOptions & opts) : out_(out), opts_(opts) {}
 
-  void emit_members(
-    const ts_types::MessageMembers & members, const void * base, const std::string & indent,
-    std::size_t depth)
+  // Top-level entry: emit each field of the root Object at no indent.
+  void emit_object(const cdr::Object & obj, const std::string & indent, std::size_t depth)
   {
     if (depth > opts_.max_depth) {
       out_ += indent;
       out_ += "<max depth reached>\n";
       return;
     }
-    const auto * base_bytes = static_cast<const std::uint8_t *>(base);
-    for (std::uint32_t i = 0; i < members.member_count_; ++i) {
-      const ts_types::MessageMember & m = members.members_[i];
-      const void * field = base_bytes + m.offset_;
-      emit_member(m, field, indent, depth);
+    for (const auto & [name, value] : obj.fields) {
+      emit_field(name, value, indent, depth);
     }
   }
 
 private:
-  void emit_member(
-    const ts_types::MessageMember & m, const void * field, const std::string & indent,
+  void emit_field(
+    const std::string & name, const cdr::Value & value, const std::string & indent,
     std::size_t depth)
   {
     out_ += indent;
-    out_ += m.name_;
+    out_ += name;
     out_ += ':';
 
-    if (!m.is_array_) {
-      if (is_primitive(m.type_id_)) {
-        out_ += ' ';
-        out_ += primitive_at(field, m.type_id_);
-        out_ += '\n';
-      } else {
-        out_ += '\n';
-        emit_members(nested_members_of(m), field, indent + "  ", depth + 1);
-      }
+    if (const auto * obj = std::get_if<cdr::Object>(&value.v)) {
+      out_ += '\n';
+      emit_object(*obj, indent + "  ", depth + 1);
       return;
     }
+    if (const auto * seq = std::get_if<cdr::Sequence>(&value.v)) {
+      emit_sequence(*seq, indent, depth);
+      return;
+    }
+    out_ += ' ';
+    out_ += primitive_to_string(value);
+    out_ += '\n';
+  }
 
-    const std::size_t count = member_count(m, field);
-    if (count == 0) {
+  void emit_sequence(const cdr::Sequence & seq, const std::string & indent, std::size_t depth)
+  {
+    if (seq.elements.empty()) {
       out_ += " []\n";
       return;
     }
-
-    if (is_primitive(m.type_id_)) {
-      emit_primitive_array(m, count, field);
+    // Treat as primitive-array if first element is primitive. Sequences
+    // are homogeneous in ROS 2 so checking element 0 is sufficient.
+    if (is_primitive(seq.elements.front())) {
+      emit_primitive_array(seq);
       return;
     }
-
-    // Array / sequence of messages: block style with "- " markers.
+    // Sequence of nested objects: block style with `- ` markers.
     out_ += '\n';
-    const ts_types::MessageMembers & sub = nested_members_of(m);
     const std::string item_indent = indent + "  ";
-    for (std::size_t i = 0; i < count; ++i) {
-      const void * elem = member_element(m, field, i);
-      emit_message_list_item(sub, elem, indent, item_indent, depth + 1);
+    for (const auto & elem : seq.elements) {
+      const auto * obj = std::get_if<cdr::Object>(&elem.v);
+      if (obj == nullptr) {
+        // Non-primitive, non-object element (e.g. a nested sequence).
+        // ROS 2 does not allow this in the wire format but render
+        // defensively.
+        out_ += indent + "  - <unsupported nested element>\n";
+        continue;
+      }
+      emit_message_list_item(*obj, indent, item_indent, depth + 1);
     }
   }
 
-  void emit_primitive_array(
-    const ts_types::MessageMember & m, std::size_t count, const void * field)
+  void emit_primitive_array(const cdr::Sequence & seq)
   {
+    const std::size_t count = seq.elements.size();
     if (count > opts_.max_inline_array) {
       out_ += " [<";
       out_ += std::to_string(count);
@@ -242,72 +192,72 @@ private:
       if (i != 0) {
         out_ += ", ";
       }
-      const void * elem = member_element(m, field, i);
-      out_ += primitive_at(elem, m.type_id_);
+      out_ += primitive_to_string(seq.elements[i]);
     }
     out_ += "]\n";
   }
 
   // One element of a list of messages. The first child field uses the
-  // "- " dash; subsequent ones align under it.
+  // "- " dash marker; subsequent ones align under it. Mirrors the
+  // YAML-ish style the legacy formatter emitted so reviewers can diff
+  // outputs verbatim during the Phase E rollout.
   void emit_message_list_item(
-    const ts_types::MessageMembers & sub, const void * base, const std::string & list_indent,
-    const std::string & item_indent, std::size_t depth)
+    const cdr::Object & obj, const std::string & list_indent, const std::string & item_indent,
+    std::size_t depth)
   {
     if (depth > opts_.max_depth) {
       out_ += list_indent;
       out_ += "- <max depth reached>\n";
       return;
     }
-    if (sub.member_count_ == 0) {
+    if (obj.fields.empty()) {
       out_ += list_indent;
       out_ += "- {}\n";
       return;
     }
-    const auto * base_bytes = static_cast<const std::uint8_t *>(base);
-    for (std::uint32_t i = 0; i < sub.member_count_; ++i) {
-      const ts_types::MessageMember & child = sub.members_[i];
-      const void * child_field = base_bytes + child.offset_;
+    for (std::size_t i = 0; i < obj.fields.size(); ++i) {
+      const auto & entry = obj.fields[i];
       out_ += (i == 0) ? list_indent : item_indent;
       out_ += (i == 0) ? "- " : "  ";
-      out_ += child.name_;
+      out_ += entry.first;
       out_ += ':';
-      emit_list_item_child_value(child, child_field, item_indent, depth);
+      emit_list_item_child_value(entry.second, item_indent, depth);
     }
   }
 
   void emit_list_item_child_value(
-    const ts_types::MessageMember & m, const void * field, const std::string & item_indent,
-    std::size_t depth)
+    const cdr::Value & value, const std::string & item_indent, std::size_t depth)
   {
-    if (!m.is_array_) {
-      if (is_primitive(m.type_id_)) {
-        out_ += ' ';
-        out_ += primitive_at(field, m.type_id_);
-        out_ += '\n';
-      } else {
-        out_ += '\n';
-        emit_members(nested_members_of(m), field, item_indent + "    ", depth + 1);
+    if (const auto * obj = std::get_if<cdr::Object>(&value.v)) {
+      out_ += '\n';
+      emit_object(*obj, item_indent + "    ", depth + 1);
+      return;
+    }
+    if (const auto * seq = std::get_if<cdr::Sequence>(&value.v)) {
+      if (seq->elements.empty()) {
+        out_ += " []\n";
+        return;
+      }
+      if (is_primitive(seq->elements.front())) {
+        emit_primitive_array(*seq);
+        return;
+      }
+      out_ += '\n';
+      const std::string inner_list_indent = item_indent + "  ";
+      const std::string inner_item_indent = inner_list_indent + "  ";
+      for (const auto & elem : seq->elements) {
+        const auto * inner_obj = std::get_if<cdr::Object>(&elem.v);
+        if (inner_obj == nullptr) {
+          out_ += inner_list_indent + "- <unsupported nested element>\n";
+          continue;
+        }
+        emit_message_list_item(*inner_obj, inner_list_indent, inner_item_indent, depth + 1);
       }
       return;
     }
-    const std::size_t count = member_count(m, field);
-    if (count == 0) {
-      out_ += " []\n";
-      return;
-    }
-    if (is_primitive(m.type_id_)) {
-      emit_primitive_array(m, count, field);
-      return;
-    }
+    out_ += ' ';
+    out_ += primitive_to_string(value);
     out_ += '\n';
-    const ts_types::MessageMembers & sub = nested_members_of(m);
-    const std::string inner_list_indent = item_indent + "  ";
-    const std::string inner_item_indent = inner_list_indent + "  ";
-    for (std::size_t i = 0; i < count; ++i) {
-      const void * elem = member_element(m, field, i);
-      emit_message_list_item(sub, elem, inner_list_indent, inner_item_indent, depth + 1);
-    }
   }
 
   std::string & out_;
@@ -316,23 +266,16 @@ private:
 
 }  // namespace
 
-FormatResult format_message(
-  const IntrospectionLoad & introspection, std::span<const std::byte> cdr_payload,
-  const FormatOptions & options)
+FormatResult format_message(const cdr_walker::Value & root, const FormatOptions & options)
 {
   FormatResult result;
-  if (!introspection.ok()) {
-    result.error = "introspection not loaded";
+  const auto * obj = std::get_if<cdr_walker::Object>(&root.v);
+  if (obj == nullptr) {
+    result.error = "format_message: top-level Value is not an Object";
     return result;
   }
-  try {
-    DeserializedMessage decoded(introspection, cdr_payload);
-    Emitter emitter(result.text, options);
-    emitter.emit_members(decoded.members(), decoded.data(), "", 0);
-  } catch (const std::exception & e) {
-    result.text.clear();
-    result.error = e.what();
-  }
+  Emitter emitter(result.text, options);
+  emitter.emit_object(*obj, "", 0);
   return result;
 }
 
