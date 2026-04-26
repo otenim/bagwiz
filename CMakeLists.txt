@@ -78,6 +78,8 @@ FetchContent_MakeAvailable(cli11 fmt)
 # ---------------------------------------------------------------------------
 add_library(bagwiz_core
   src/core/cdr_to_ros1.cpp
+  src/core/cdr_walker/cdr_reader.cpp
+  src/core/cdr_walker/walker.cpp
   src/core/introspection_loader.cpp
   src/core/logging.cpp
   src/core/message_deserializer.cpp
@@ -173,6 +175,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_msg_schema_parser_test test/core/msg_schema/parser_test.cpp)
   target_link_libraries(bagwiz_msg_schema_parser_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_cdr_walker_test test/core/cdr_walker/walker_test.cpp)
+  target_link_libraries(bagwiz_cdr_walker_test bagwiz_core)
 
   ament_add_gtest(bagwiz_terminal_input_test test/core/terminal_input_test.cpp)
   target_link_libraries(bagwiz_terminal_input_test bagwiz_core)
