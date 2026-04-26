@@ -62,7 +62,8 @@ struct TwoToOnePerTopic
 }  // namespace
 
 // `bagwiz convert` is a command group for cross-format bag conversion.
-// Ships `1to2` (ROS 1 -> ROS 2) and `2to1` (ROS 2 -> ROS 1).
+// Ships `1to2` (ROS 1 -> ROS 2), `2to1` (ROS 2 -> ROS 1), and
+// `storage` (ROS 2 mcap <-> sqlite3 repack).
 class ConvertCommand : public Command
 {
 public:
@@ -74,6 +75,7 @@ public:
     app.require_subcommand(1);
     configure_1to2(app);
     configure_2to1(app);
+    configure_storage(app);
   }
 
   int run() override
@@ -83,6 +85,8 @@ public:
         return run_1to2();
       case Subcommand::k2to1:
         return run_2to1();
+      case Subcommand::kStorage:
+        return run_storage();
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
@@ -91,7 +95,7 @@ public:
   }
 
 private:
-  enum class Subcommand { kNone, k1to2, k2to1 };
+  enum class Subcommand { kNone, k1to2, k2to1, kStorage };
   Subcommand selected_ = Subcommand::kNone;
 
   struct OneToTwoArgs
@@ -106,6 +110,13 @@ private:
     std::filesystem::path input_path;
     std::filesystem::path output_path;
   } r2_to_r1_args_;
+
+  struct StorageArgs
+  {
+    std::filesystem::path input_path;
+    std::string storage;  // "mcap" or "sqlite3"
+    std::filesystem::path output_path;
+  } storage_args_;
 
   void configure_1to2(CLI::App & app)
   {
@@ -485,6 +496,133 @@ private:
           kLogger, "Topic '%s': %" PRIu64 " message(s) failed to convert", st.topic.c_str(),
           st.failures);
       }
+    }
+
+    return 0;
+  }
+
+  void configure_storage(CLI::App & app)
+  {
+    auto * sub =
+      app.add_subcommand("storage", "Repack a ROS 2 rosbag into a different storage backend");
+    sub->add_option("input", storage_args_.input_path, "Input ROS 2 rosbag (file or directory)")
+      ->required()
+      ->check(CLI::ExistingPath);
+    sub->add_option("storage", storage_args_.storage, "Target storage backend")
+      ->required()
+      ->check(CLI::IsMember({"mcap", "sqlite3"}));
+    sub
+      ->add_option(
+        "output", storage_args_.output_path, "Output rosbag2 directory (or .mcap/.db3 file)")
+      ->required();
+    sub->footer(
+      "Messages are copied verbatim — only the storage backend changes; no\n"
+      "deserialization or type conversion is performed.\n"
+      "Inputs that use rosbag2-layer compression (compression_mode != NONE)\n"
+      "are rejected; decompress with `ros2 bag convert` first.");
+    sub->callback([this]() { selected_ = Subcommand::kStorage; });
+  }
+
+  int run_storage()
+  {
+    const auto & args = storage_args_;
+
+    if (const int rc = check_input_compression(args.input_path); rc != 0) {
+      return rc;
+    }
+
+    std::unique_ptr<io::BagReader> reader;
+    try {
+      reader = io::open_read(args.input_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open %s: %s", args.input_path.c_str(), e.what());
+      return 1;
+    }
+
+    const io::Format target_format =
+      (args.storage == "sqlite3") ? io::Format::Sqlite3 : io::Format::Mcap;
+
+    // Reject same-storage repack: it's almost always a user mistake (and a
+    // plain copy is what they actually want). Detection is by magic bytes
+    // (single-file inputs) or metadata.yaml (directory layouts) — never
+    // by extension — so renamed files are still classified correctly.
+    const auto source_format = io::detect_format(args.input_path);
+    if (source_format == target_format) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "input is already in '%s' storage; nothing to convert", args.storage.c_str());
+      return 1;
+    }
+
+    io::CreateOptions copts;
+    copts.format = target_format;
+    copts.layout = io::Layout::Auto;  // factory picks SingleFile if extension matches
+    // Mirror 1to2: leave compression off so the output is predictable;
+    // callers can recompress with `ros2 bag convert` if they want.
+    copts.mcap_compression = "none";
+
+    std::unique_ptr<io::BagWriter> writer;
+    try {
+      writer = io::open_write(args.output_path, copts);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open output %s: %s", args.output_path.c_str(), e.what());
+      return 1;
+    }
+
+    std::size_t declared = 0;
+    for (const auto & t : reader->topics()) {
+      try {
+        writer->declare_topic(t);
+        ++declared;
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "declare_topic failed for '%s': %s; skipping topic", t.name.c_str(), e.what());
+      }
+    }
+
+    uint64_t total_in = 0;
+    uint64_t total_out = 0;
+    uint64_t total_failed = 0;
+    io::RawMessage msg;
+    while (true) {
+      try {
+        if (!reader->next(msg)) {
+          break;
+        }
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(kLogger, "ros2 read error: %s", e.what());
+        return 1;
+      }
+      ++total_in;
+
+      if (msg.topic == nullptr) {
+        continue;
+      }
+
+      try {
+        writer->write(msg.topic->name, msg.timestamp_ns, msg.payload);
+        ++total_out;
+      } catch (const std::exception & e) {
+        ++total_failed;
+        if (total_failed <= 3) {
+          BAGWIZ_LOG_WARN(
+            kLogger, "writer->write failed on '%s': %s; skipping message", msg.topic->name.c_str(),
+            e.what());
+        }
+      }
+    }
+
+    try {
+      writer->close();
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "writer->close failed: %s", e.what());
+      return 1;
+    }
+
+    BAGWIZ_LOG_INFO(
+      kLogger, "Repack done: %" PRIu64 "/%" PRIu64 " messages written across %zu topic(s)",
+      total_out, total_in, declared);
+    if (total_failed > 0) {
+      BAGWIZ_LOG_WARN(kLogger, "%" PRIu64 " message(s) failed to write", total_failed);
     }
 
     return 0;
