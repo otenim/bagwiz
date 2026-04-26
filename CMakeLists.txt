@@ -82,6 +82,8 @@ add_library(bagwiz_core
   src/core/logging.cpp
   src/core/message_deserializer.cpp
   src/core/message_formatter.cpp
+  src/core/msg_schema/parser.cpp
+  src/core/msg_schema/schema_model.cpp
   src/core/ros1_message_definitions.cpp
   src/core/ros1_to_cdr.cpp
   src/core/terminal_input.cpp
@@ -168,6 +170,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_message_formatter_test test/core/message_formatter_test.cpp)
   target_link_libraries(bagwiz_message_formatter_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_msg_schema_parser_test test/core/msg_schema/parser_test.cpp)
+  target_link_libraries(bagwiz_msg_schema_parser_test bagwiz_core)
 
   ament_add_gtest(bagwiz_terminal_input_test test/core/terminal_input_test.cpp)
   target_link_libraries(bagwiz_terminal_input_test bagwiz_core)
