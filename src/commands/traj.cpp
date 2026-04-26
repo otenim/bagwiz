@@ -8,6 +8,7 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/introspection_loader.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/message_deserializer.hpp"
@@ -372,15 +373,12 @@ private:
     filter.topics.push_back(args.topic);
     reader->set_filter(filter);
 
-    const core::IntrospectionLoad introspection = core::load_introspection(type_name);
-    if (!introspection.ok()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger,
-        "Message type '%s' could not be loaded (tried %s; error: %s). Source a workspace that "
-        "provides the package and re-run.",
-        type_name.c_str(), introspection.library_name.c_str(), introspection.error.c_str());
+    auto open_decoder = core::decoder::open_decoder(*topic_info);
+    if (!open_decoder.ok()) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open decoder: %s", open_decoder.error.c_str());
       return 1;
     }
+    const auto & decoder = *open_decoder.decoder;
 
     std::vector<core::TrajectoryPose> poses;
     std::int64_t decoded = 0;
@@ -398,8 +396,14 @@ private:
       }
       ++decoded;
       try {
-        const core::DeserializedMessage msg(introspection, raw.payload);
-        const auto extraction = core::extract_pose(msg.members(), msg.data(), raw.timestamp_ns);
+        const auto decode_result = decoder.decode(raw.payload);
+        if (!decode_result.ok()) {
+          BAGWIZ_LOG_ERROR(
+            kLogger, "Failed to decode message #%ld of type '%s': %s", decoded, type_name.c_str(),
+            decode_result.error.c_str());
+          return 1;
+        }
+        const auto extraction = core::extract_pose(*decode_result.value, raw.timestamp_ns);
         if (!extraction) {
           BAGWIZ_LOG_ERROR(
             kLogger, "Failed to extract pose from message #%ld of type '%s' (unexpected schema).",

@@ -9,17 +9,13 @@
 #ifndef BAGWIZ__CORE__TRAJECTORY_HPP_
 #define BAGWIZ__CORE__TRAJECTORY_HPP_
 
+#include "bagwiz/core/cdr_walker/value.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <ostream>
 #include <span>
 #include <string>
-
-namespace rosidl_typesupport_introspection_cpp
-{
-struct MessageMembers_s;
-using MessageMembers = MessageMembers_s;
-}  // namespace rosidl_typesupport_introspection_cpp
 
 namespace bagwiz::core
 {
@@ -58,7 +54,8 @@ struct PoseExtraction
   bool used_header_stamp = false;
 };
 
-// Extract a pose sample from a deserialized ROS 2 message by introspection.
+// Extract a pose sample from a decoded message, regardless of which
+// decoder backend (schema-driven or introspection) produced the Value.
 //
 // Supported shapes (no template specialization required):
 //   * `header.stamp` + `pose.{position, orientation}`
@@ -77,10 +74,10 @@ struct PoseExtraction
 // output trajectory still has a sensible time axis.
 //
 // Returns std::nullopt when the pose fields cannot be located (the
-// message does not look like any supported shape).
+// message does not look like any supported shape) or when the Value
+// is not a top-level Object.
 std::optional<PoseExtraction> extract_pose(
-  const rosidl_typesupport_introspection_cpp::MessageMembers & members, const void * base,
-  int64_t fallback_timestamp_ns);
+  const cdr_walker::Value & message, std::int64_t fallback_timestamp_ns);
 
 // Write poses in the TUM trajectory format: one sample per line,
 //

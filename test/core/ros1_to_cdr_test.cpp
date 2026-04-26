@@ -8,8 +8,9 @@
 
 #include "bagwiz/core/ros1_to_cdr.hpp"
 
-#include "bagwiz/core/introspection_loader.hpp"
+#include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/message_formatter.hpp"
+#include "bagwiz/io/bag_io.hpp"
 
 #include <gtest/gtest.h>
 
@@ -71,15 +72,28 @@ private:
 
 std::string format_ros2(const std::string & ros2_type, const std::vector<std::byte> & cdr)
 {
-  const auto ts = bagwiz::core::load_introspection(ros2_type);
-  if (!ts.ok()) {
-    return "<load fail: " + ts.error + ">";
+  // The Phase D/E pipeline replaces the old IntrospectionLoad + format_message
+  // overload with a TopicInfo-driven factory. Build a minimal TopicInfo so the
+  // factory routes through introspection (no schema_text), decode the bytes,
+  // and feed the resulting Value to the new format_message().
+  bagwiz::io::TopicInfo topic;
+  topic.name = "/ros1_to_cdr_test";
+  topic.type = ros2_type;
+  topic.serialization_format = "cdr";
+
+  auto open = bagwiz::core::decoder::open_decoder(topic);
+  if (!open.ok()) {
+    return "<open fail: " + open.error + ">";
   }
-  auto r = bagwiz::core::format_message(ts, cdr);
-  if (!r.ok()) {
-    return "<format fail: " + r.error + ">";
+  const auto decoded = open.decoder->decode(cdr);
+  if (!decoded.ok()) {
+    return "<decode fail: " + decoded.error + ">";
   }
-  return r.text;
+  auto formatted = bagwiz::core::format_message(*decoded.value);
+  if (!formatted.ok()) {
+    return "<format fail: " + formatted.error + ">";
+  }
+  return formatted.text;
 }
 
 }  // namespace

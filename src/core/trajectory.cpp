@@ -8,14 +8,14 @@
 
 #include "bagwiz/core/trajectory.hpp"
 
-#include <rosidl_typesupport_introspection_cpp/field_types.hpp>
-#include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
+#include "bagwiz/core/cdr_walker/value.hpp"
 
 #include <cstdint>
-#include <cstring>
 #include <ios>
+#include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 
 namespace bagwiz::core
 {
@@ -23,144 +23,142 @@ namespace bagwiz::core
 namespace
 {
 
-namespace ts_types = rosidl_typesupport_introspection_cpp;
+namespace cdr = bagwiz::core::cdr_walker;
 
-const ts_types::MessageMember * find_member(
-  // cppcheck-suppress passedByValue
-  const ts_types::MessageMembers & members, std::string_view name)
+const cdr::Object * find_object(const cdr::Value & v) noexcept
 {
-  for (std::uint32_t i = 0; i < members.member_count_; ++i) {
-    if (name == members.members_[i].name_) {
-      return &members.members_[i];
+  return std::get_if<cdr::Object>(&v.v);
+}
+
+// cppcheck-suppress passedByValue
+const cdr::Value * find_field(const cdr::Object & obj, std::string_view name) noexcept
+{
+  for (const auto & entry : obj.fields) {
+    if (entry.first == name) {
+      return &entry.second;
     }
   }
   return nullptr;
 }
 
-bool is_scalar_message(const ts_types::MessageMember * m)
+// Coerce a Value holding either float or double into double. Writers
+// ubiquitously use float64 for pose data but the robustness of accepting
+// float32 is a cheap guarantee.
+bool to_double(const cdr::Value & v, double & out)
 {
-  return m != nullptr && m->type_id_ == ts_types::ROS_TYPE_MESSAGE && !m->is_array_;
-}
-
-const ts_types::MessageMembers * submembers(const ts_types::MessageMember * m)
-{
-  return static_cast<const ts_types::MessageMembers *>(m->members_->data);
-}
-
-const std::uint8_t * byte_ptr(const void * p)
-{
-  return static_cast<const std::uint8_t *>(p);
-}
-
-// Pull a double out of a member that holds one of the CDR numeric
-// primitives and cast. Writers ubiquitously use float64 for pose data but
-// the robustness of accepting float32 is a cheap guarantee.
-bool read_double(const ts_types::MessageMember & m, const void * base, double & out)
-{
-  const void * p = byte_ptr(base) + m.offset_;
-  switch (m.type_id_) {
-    case ts_types::ROS_TYPE_DOUBLE: {
-      double v = 0.0;
-      std::memcpy(&v, p, sizeof(v));
-      out = v;
-      return true;
-    }
-    case ts_types::ROS_TYPE_FLOAT: {
-      float v = 0.0F;
-      std::memcpy(&v, p, sizeof(v));
-      out = static_cast<double>(v);
-      return true;
-    }
-    default:
-      return false;
+  if (const auto * d = std::get_if<double>(&v.v)) {
+    out = *d;
+    return true;
   }
+  if (const auto * f = std::get_if<float>(&v.v)) {
+    out = static_cast<double>(*f);
+    return true;
+  }
+  return false;
 }
 
-bool read_xyz(
-  const ts_types::MessageMembers & m, const void * base, double & x, double & y, double & z)
+bool read_xyz(const cdr::Object & obj, double & x, double & y, double & z)
 {
-  const auto * mx = find_member(m, "x");
-  const auto * my = find_member(m, "y");
-  const auto * mz = find_member(m, "z");
-  if (mx == nullptr || my == nullptr || mz == nullptr) {
+  const auto * fx = find_field(obj, "x");
+  const auto * fy = find_field(obj, "y");
+  const auto * fz = find_field(obj, "z");
+  if (fx == nullptr || fy == nullptr || fz == nullptr) {
     return false;
   }
-  return read_double(*mx, base, x) && read_double(*my, base, y) && read_double(*mz, base, z);
+  return to_double(*fx, x) && to_double(*fy, y) && to_double(*fz, z);
 }
 
-bool read_xyzw(
-  const ts_types::MessageMembers & m, const void * base, double & x, double & y, double & z,
-  double & w)
+bool read_xyzw(const cdr::Object & obj, double & x, double & y, double & z, double & w)
 {
-  const auto * mw = find_member(m, "w");
-  if (!read_xyz(m, base, x, y, z) || mw == nullptr) {
+  const auto * fw = find_field(obj, "w");
+  if (fw == nullptr || !read_xyz(obj, x, y, z)) {
     return false;
   }
-  return read_double(*mw, base, w);
+  return to_double(*fw, w);
 }
 
+// Look up `parent.<trans_name>` (an Object: Vector3) and `parent.<rot_name>`
+// (an Object: Quaternion) and copy their xyz / xyzw into `out`. Returns
+// false on any missing or wrong-shaped field.
 bool fill_translation_rotation(
-  // cppcheck-suppress passedByValue
-  const ts_types::MessageMembers & parent, const void * base, std::string_view trans_name,
-  // cppcheck-suppress passedByValue
-  std::string_view rot_name, TrajectoryPose & out)
+  const cdr::Object & parent, const std::string_view & trans_name,
+  const std::string_view & rot_name, TrajectoryPose & out)
 {
-  const auto * trans = find_member(parent, trans_name);
-  const auto * rot = find_member(parent, rot_name);
-  if (!is_scalar_message(trans) || !is_scalar_message(rot)) {
+  const auto * trans_v = find_field(parent, trans_name);
+  const auto * rot_v = find_field(parent, rot_name);
+  if (trans_v == nullptr || rot_v == nullptr) {
     return false;
   }
-  const void * t_base = byte_ptr(base) + trans->offset_;
-  const void * r_base = byte_ptr(base) + rot->offset_;
-  if (!read_xyz(*submembers(trans), t_base, out.tx, out.ty, out.tz)) {
+  const auto * trans_obj = find_object(*trans_v);
+  const auto * rot_obj = find_object(*rot_v);
+  if (trans_obj == nullptr || rot_obj == nullptr) {
     return false;
   }
-  if (!read_xyzw(*submembers(rot), r_base, out.qx, out.qy, out.qz, out.qw)) {
+  if (!read_xyz(*trans_obj, out.tx, out.ty, out.tz)) {
     return false;
   }
-  return true;
+  return read_xyzw(*rot_obj, out.qx, out.qy, out.qz, out.qw);
 }
 
-// Locate `header` + its `stamp` / `frame_id` sub-members. On success
-// `timestamp_ns` holds (sec * 1e9 + nanosec) and `frame_id` holds the
-// contents of `header.frame_id` (empty when the field is absent or
-// not a string). Returns false when the message has no scalar `header`
-// member at all -- the caller treats that as the "unstamped" case.
-bool read_header(
-  const ts_types::MessageMembers & members, const void * base, std::int64_t & timestamp_ns,
-  std::string & frame_id)
+// Locate `header` + its `stamp.{sec, nanosec}` and `frame_id`. On
+// success, `timestamp_ns` holds (sec * 1e9 + nanosec) and `frame_id`
+// holds the contents of `header.frame_id` (empty when absent or
+// non-string). Returns false when there is no scalar `header` Object
+// at all — caller treats that as the "unstamped" case.
+bool read_header(const cdr::Object & root, std::int64_t & timestamp_ns, std::string & frame_id)
 {
-  const auto * header = find_member(members, "header");
-  if (!is_scalar_message(header)) {
+  const auto * header_v = find_field(root, "header");
+  if (header_v == nullptr) {
     return false;
   }
-  const auto & header_mem = *submembers(header);
-  const void * header_base = byte_ptr(base) + header->offset_;
+  const auto * header = find_object(*header_v);
+  if (header == nullptr) {
+    return false;
+  }
 
-  const auto * stamp = find_member(header_mem, "stamp");
-  if (!is_scalar_message(stamp)) {
+  const auto * stamp_v = find_field(*header, "stamp");
+  if (stamp_v == nullptr) {
     return false;
   }
-  const auto & stamp_mem = *submembers(stamp);
-  const void * stamp_base = byte_ptr(header_base) + stamp->offset_;
+  const auto * stamp = find_object(*stamp_v);
+  if (stamp == nullptr) {
+    return false;
+  }
 
-  const auto * sec = find_member(stamp_mem, "sec");
-  const auto * nsec = find_member(stamp_mem, "nanosec");
-  if (sec == nullptr || nsec == nullptr) {
+  const auto * sec_v = find_field(*stamp, "sec");
+  const auto * nsec_v = find_field(*stamp, "nanosec");
+  if (sec_v == nullptr || nsec_v == nullptr) {
     return false;
   }
-  if (sec->type_id_ != ts_types::ROS_TYPE_INT32 || nsec->type_id_ != ts_types::ROS_TYPE_UINT32) {
+  // builtin_interfaces/Time uses int32 sec + uint32 nanosec. Accept
+  // either signedness for sec because the Python mcap-ros2-support
+  // reference inadvertently emits it as uint32, and bags written by
+  // tools that follow the Python contract round-trip with that wider
+  // type.
+  std::int64_t sec_value = 0;
+  if (const auto * sec_i32 = std::get_if<std::int32_t>(&sec_v->v)) {
+    sec_value = *sec_i32;
+  } else if (const auto * sec_u32 = std::get_if<std::uint32_t>(&sec_v->v)) {
+    sec_value = *sec_u32;
+  } else {
     return false;
   }
-  std::int32_t s = 0;
-  std::uint32_t n = 0;
-  std::memcpy(&s, byte_ptr(stamp_base) + sec->offset_, sizeof(s));
-  std::memcpy(&n, byte_ptr(stamp_base) + nsec->offset_, sizeof(n));
-  timestamp_ns = static_cast<std::int64_t>(s) * 1'000'000'000LL + static_cast<std::int64_t>(n);
+  std::int64_t nsec_value = 0;
+  if (const auto * nsec_u32 = std::get_if<std::uint32_t>(&nsec_v->v)) {
+    nsec_value = *nsec_u32;
+  } else if (const auto * nsec_i32 = std::get_if<std::int32_t>(&nsec_v->v)) {
+    nsec_value = *nsec_i32;
+  } else {
+    return false;
+  }
+  timestamp_ns = sec_value * 1'000'000'000LL + nsec_value;
 
-  const auto * fid = find_member(header_mem, "frame_id");
-  if (fid != nullptr && !fid->is_array_ && fid->type_id_ == ts_types::ROS_TYPE_STRING) {
-    frame_id = *reinterpret_cast<const std::string *>(byte_ptr(header_base) + fid->offset_);
+  if (const auto * fid_v = find_field(*header, "frame_id")) {
+    if (const auto * fid = std::get_if<std::string>(&fid_v->v)) {
+      frame_id = *fid;
+    } else {
+      frame_id.clear();
+    }
   } else {
     frame_id.clear();
   }
@@ -170,10 +168,15 @@ bool read_header(
 }  // namespace
 
 std::optional<PoseExtraction> extract_pose(
-  const ts_types::MessageMembers & members, const void * base, std::int64_t fallback_timestamp_ns)
+  const cdr_walker::Value & message, std::int64_t fallback_timestamp_ns)
 {
+  const auto * root = find_object(message);
+  if (root == nullptr) {
+    return std::nullopt;
+  }
+
   PoseExtraction out;
-  if (read_header(members, base, out.pose.timestamp_ns, out.frame_id)) {
+  if (read_header(*root, out.pose.timestamp_ns, out.frame_id)) {
     out.used_header_stamp = true;
   } else {
     out.pose.timestamp_ns = fallback_timestamp_ns;
@@ -183,50 +186,48 @@ std::optional<PoseExtraction> extract_pose(
 
   // Optional top-level child_frame_id (Odometry, TransformStamped). Empty
   // for PoseStamped / Pose / Transform which do not carry one.
-  if (const auto * cf = find_member(members, "child_frame_id");
-      cf != nullptr && !cf->is_array_ && cf->type_id_ == ts_types::ROS_TYPE_STRING) {
-    out.child_frame_id = *reinterpret_cast<const std::string *>(byte_ptr(base) + cf->offset_);
+  if (const auto * cf_v = find_field(*root, "child_frame_id")) {
+    if (const auto * cf = std::get_if<std::string>(&cf_v->v)) {
+      out.child_frame_id = *cf;
+    }
   }
 
   // TransformStamped-shaped: transform.{translation, rotation}
-  if (const auto * trans = find_member(members, "transform"); is_scalar_message(trans)) {
-    const void * t_base = byte_ptr(base) + trans->offset_;
-    if (fill_translation_rotation(
-          *submembers(trans), t_base, "translation", "rotation", out.pose)) {
-      return out;
+  if (const auto * trans_v = find_field(*root, "transform")) {
+    if (const auto * trans_obj = find_object(*trans_v)) {
+      if (fill_translation_rotation(*trans_obj, "translation", "rotation", out.pose)) {
+        return out;
+      }
     }
   }
 
   // Bare Transform (no header): translation + rotation at the top level.
-  if (
-    find_member(members, "translation") != nullptr && find_member(members, "rotation") != nullptr) {
-    if (fill_translation_rotation(members, base, "translation", "rotation", out.pose)) {
+  if (find_field(*root, "translation") != nullptr && find_field(*root, "rotation") != nullptr) {
+    if (fill_translation_rotation(*root, "translation", "rotation", out.pose)) {
       return out;
     }
   }
 
   // PoseStamped-shaped (pose.{position, orientation}) or Odometry-shaped
   // (pose.pose.{position, orientation}).
-  if (const auto * pose = find_member(members, "pose"); is_scalar_message(pose)) {
-    const auto & pose_mem = *submembers(pose);
-    const void * pose_base = byte_ptr(base) + pose->offset_;
-
-    if (const auto * inner = find_member(pose_mem, "pose"); is_scalar_message(inner)) {
-      const void * inner_base = byte_ptr(pose_base) + inner->offset_;
-      if (fill_translation_rotation(
-            *submembers(inner), inner_base, "position", "orientation", out.pose)) {
+  if (const auto * pose_v = find_field(*root, "pose")) {
+    if (const auto * pose_obj = find_object(*pose_v)) {
+      if (const auto * inner_v = find_field(*pose_obj, "pose")) {
+        if (const auto * inner_obj = find_object(*inner_v)) {
+          if (fill_translation_rotation(*inner_obj, "position", "orientation", out.pose)) {
+            return out;
+          }
+        }
+      }
+      if (fill_translation_rotation(*pose_obj, "position", "orientation", out.pose)) {
         return out;
       }
-    }
-    if (fill_translation_rotation(pose_mem, pose_base, "position", "orientation", out.pose)) {
-      return out;
     }
   }
 
   // Bare Pose (no header): position + orientation at the top level.
-  if (
-    find_member(members, "position") != nullptr && find_member(members, "orientation") != nullptr) {
-    if (fill_translation_rotation(members, base, "position", "orientation", out.pose)) {
+  if (find_field(*root, "position") != nullptr && find_field(*root, "orientation") != nullptr) {
+    if (fill_translation_rotation(*root, "position", "orientation", out.pose)) {
       return out;
     }
   }
