@@ -79,7 +79,7 @@ bool is_unstamped_type(std::string_view type_name)
 }
 
 // Only Odometry and TransformStamped carry a top-level child_frame_id
-// that names the moving frame. `--of` (tracked frame) requires one of
+// that names the moving frame. `--to` (tracked frame) requires one of
 // these so the "retarget to a different rigid body" composition is well
 // defined.
 // cppcheck-suppress passedByValue
@@ -117,12 +117,12 @@ constexpr const char * kSupportedTypesHelp =
   "    - geometry_msgs/msg/Transform\n"
   "\n"
   "Frame selection\n"
-  "  --in <frame>  Reference (fixed) frame the output is expressed in.\n"
-  "                Defaults to the topic's header.frame_id.\n"
-  "  --of <frame>  Tracked (moving) frame whose pose each sample\n"
-  "                represents. Defaults to the topic's child_frame_id\n"
-  "                (Odometry, TransformStamped); `--of` is rejected for\n"
-  "                types that do not carry child_frame_id.\n"
+  "  --from <frame>  Reference (fixed) frame the output is expressed in.\n"
+  "                  Defaults to the topic's header.frame_id.\n"
+  "  --to <frame>    Tracked (moving) frame whose pose each sample\n"
+  "                  represents. Defaults to the topic's child_frame_id\n"
+  "                  (Odometry, TransformStamped); `--to` is rejected for\n"
+  "                  types that do not carry child_frame_id.\n"
   "  Either flag pulls TF from the bag (any tf2_msgs/msg/TFMessage\n"
   "  topic; names ending in `tf_static` are treated as static). Fails\n"
   "  fast if the bag has no TF or a lookup is out of range.";
@@ -252,8 +252,8 @@ tf2::Transform to_tf2(const geometry_msgs::msg::TransformStamped & ts)
 //             Supported types: PoseStamped, PoseWithCovarianceStamped,
 //             TransformStamped, Odometry (header.stamp timestamps) and
 //             Pose, Transform (bag log time timestamps, one-shot warning).
-//             `--in <frame>` picks the output reference frame;
-//             `--of <frame>` picks the tracked body. Either pulls TF
+//             `--from <frame>` picks the output reference frame;
+//             `--to <frame>` picks the tracked body. Either pulls TF
 //             from the bag.
 class TrajCommand : public Command
 {
@@ -289,8 +289,8 @@ private:
     std::string topic;
     std::filesystem::path output_path;
     std::string format;
-    std::string in_frame;
-    std::string of_frame;
+    std::string from_frame;
+    std::string to_frame;
   } export_args_;
 
   void configure_export(CLI::App & app)
@@ -305,11 +305,11 @@ private:
       ->default_val(kFormatTum)
       ->check(CLI::IsMember({kFormatTum}));
     sub->add_option(
-      "--in", export_args_.in_frame,
+      "--from", export_args_.from_frame,
       "Reference (fixed) frame the output trajectory is expressed in. "
       "Defaults to the topic's header.frame_id. Requires TF in the bag when non-default.");
     sub->add_option(
-      "--of", export_args_.of_frame,
+      "--to", export_args_.to_frame,
       "Tracked (moving) frame whose pose each sample represents. Defaults to the topic's "
       "child_frame_id. Requires a type with child_frame_id (Odometry, TransformStamped).");
     sub->footer(kSupportedTypesHelp);
@@ -349,35 +349,35 @@ private:
       return 1;
     }
 
-    const bool in_set = !args.in_frame.empty();
-    const bool of_set = !args.of_frame.empty();
-    const bool use_tf = in_set || of_set;
+    const bool from_set = !args.from_frame.empty();
+    const bool to_set = !args.to_frame.empty();
+    const bool use_tf = from_set || to_set;
 
     if (use_tf && is_unstamped_type(type_name)) {
       BAGWIZ_LOG_ERROR(
         kLogger,
-        "--in / --of cannot be used with unstamped type '%s' (no header.frame_id to start "
+        "--from / --to cannot be used with unstamped type '%s' (no header.frame_id to start "
         "from).",
         type_name.c_str());
       return 1;
     }
-    if (of_set && !type_has_child_frame(type_name)) {
+    if (to_set && !type_has_child_frame(type_name)) {
       BAGWIZ_LOG_ERROR(
         kLogger,
-        "--of requires a type with child_frame_id (nav_msgs/msg/Odometry or "
+        "--to requires a type with child_frame_id (nav_msgs/msg/Odometry or "
         "geometry_msgs/msg/TransformStamped); got '%s'.",
         type_name.c_str());
       return 1;
     }
 
-    // Optional TF buffer populated only when --in or --of is given.
+    // Optional TF buffer populated only when --from or --to is given.
     tf2::BufferCore tf_buffer;
     if (use_tf) {
       const auto tf_topics = collect_tf_topics(*reader);
       if (tf_topics.empty()) {
         BAGWIZ_LOG_ERROR(
           kLogger,
-          "--in / --of specified but the bag has no tf2_msgs/msg/TFMessage topic; TF is "
+          "--from / --to specified but the bag has no tf2_msgs/msg/TFMessage topic; TF is "
           "required to change the reference or tracked frame.");
         return 1;
       }
@@ -438,36 +438,36 @@ private:
         }
 
         // Compose: start with message_pose (= T_source_tracked), retarget
-        // tracked -> --of on the right, then shift the coordinate system
-        // source -> --in on the left. Skipping either half is a no-op when
+        // tracked -> --to on the right, then shift the coordinate system
+        // source -> --from on the left. Skipping either half is a no-op when
         // the requested frame already matches.
         tf2::Transform P = to_tf2(extraction->pose);
         const tf2::TimePoint tp(std::chrono::nanoseconds(extraction->pose.timestamp_ns));
 
-        if (of_set && args.of_frame != extraction->child_frame_id) {
+        if (to_set && args.to_frame != extraction->child_frame_id) {
           try {
             const auto tf =
-              tf_buffer.lookupTransform(extraction->child_frame_id, args.of_frame, tp);
+              tf_buffer.lookupTransform(extraction->child_frame_id, args.to_frame, tp);
             P = P * to_tf2(tf);
           } catch (const tf2::TransformException & e) {
             BAGWIZ_LOG_ERROR(
               kLogger,
-              "TF lookup failed at message #%ld (--of: target='%s' source='%s' t=%ld ns): %s",
-              decoded, extraction->child_frame_id.c_str(), args.of_frame.c_str(),
+              "TF lookup failed at message #%ld (--to: target='%s' source='%s' t=%ld ns): %s",
+              decoded, extraction->child_frame_id.c_str(), args.to_frame.c_str(),
               extraction->pose.timestamp_ns, e.what());
             return 1;
           }
         }
 
-        if (in_set && args.in_frame != extraction->frame_id) {
+        if (from_set && args.from_frame != extraction->frame_id) {
           try {
-            const auto tf = tf_buffer.lookupTransform(args.in_frame, extraction->frame_id, tp);
+            const auto tf = tf_buffer.lookupTransform(args.from_frame, extraction->frame_id, tp);
             P = to_tf2(tf) * P;
           } catch (const tf2::TransformException & e) {
             BAGWIZ_LOG_ERROR(
               kLogger,
-              "TF lookup failed at message #%ld (--in: target='%s' source='%s' t=%ld ns): %s",
-              decoded, args.in_frame.c_str(), extraction->frame_id.c_str(),
+              "TF lookup failed at message #%ld (--from: target='%s' source='%s' t=%ld ns): %s",
+              decoded, args.from_frame.c_str(), extraction->frame_id.c_str(),
               extraction->pose.timestamp_ns, e.what());
             return 1;
           }
