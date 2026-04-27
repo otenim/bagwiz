@@ -11,12 +11,11 @@
 #include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/terminal_input.hpp"
+#include "bagwiz/core/tf_rotation.hpp"
 #include "bagwiz/core/tf_value_extract.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <fmt/core.h>
-#include <tf2/LinearMath/Matrix3x3.h>
-#include <tf2/LinearMath/Quaternion.h>
 #include <tf2/buffer_core.h>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
@@ -238,7 +237,7 @@ private:
   enum class Subcommand { kNone, kWalk };
   Subcommand selected_ = Subcommand::kNone;
 
-  enum class RotationFormat { kQuaternion, kEuler };
+  enum class RotationFormat { kQuaternion, kEulerRad, kEulerDeg };
 
   struct WalkArgs
   {
@@ -264,12 +263,15 @@ private:
     sub
       ->add_option(
         "-r,--rot", walk_args_.rot,
-        "Rotation format: q=quaternion (default), e=euler (roll/pitch/yaw in radians)")
+        "Rotation format: quat (default) | euler | euler_rad | euler_deg "
+        "(euler is an alias for euler_rad)")
       ->transform(
         CLI::CheckedTransformer(
           std::map<std::string, RotationFormat>{
-            {"q", RotationFormat::kQuaternion},
-            {"e", RotationFormat::kEuler},
+            {"quat", RotationFormat::kQuaternion},
+            {"euler", RotationFormat::kEulerRad},
+            {"euler_rad", RotationFormat::kEulerRad},
+            {"euler_deg", RotationFormat::kEulerDeg},
           },
           CLI::ignore_case));
     sub->callback([this]() { selected_ = Subcommand::kWalk; });
@@ -386,17 +388,17 @@ private:
           fmt::print(stdout, "  z: {:.15g}\n", tf.transform.rotation.z);
           fmt::print(stdout, "  w: {:.15g}\n", tf.transform.rotation.w);
         } else {
-          tf2::Quaternion q(
+          auto rpy = core::quat_to_euler_rad(
             tf.transform.rotation.x, tf.transform.rotation.y, tf.transform.rotation.z,
             tf.transform.rotation.w);
-          double roll = 0.0;
-          double pitch = 0.0;
-          double yaw = 0.0;
-          tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-          fmt::print(stdout, "rotation (euler, rad):\n");
-          fmt::print(stdout, "  roll:  {:.15g}\n", roll);
-          fmt::print(stdout, "  pitch: {:.15g}\n", pitch);
-          fmt::print(stdout, "  yaw:   {:.15g}\n", yaw);
+          const bool deg = args.rot == RotationFormat::kEulerDeg;
+          if (deg) {
+            rpy = core::euler_rad_to_euler_deg(rpy);
+          }
+          fmt::print(stdout, "rotation (euler, {}):\n", deg ? "deg" : "rad");
+          fmt::print(stdout, "  roll:  {:.15g}\n", rpy.roll);
+          fmt::print(stdout, "  pitch: {:.15g}\n", rpy.pitch);
+          fmt::print(stdout, "  yaw:   {:.15g}\n", rpy.yaw);
         }
       } catch (const tf2::TransformException & e) {
         // Past extrapolation has been cropped at init, so the only
