@@ -15,7 +15,9 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 namespace bagwiz::core
 {
@@ -233,6 +235,38 @@ std::optional<PoseExtraction> extract_pose(
   }
 
   return std::nullopt;
+}
+
+std::vector<PoseExtraction> extract_pose_candidates(
+  const cdr_walker::Value & message, std::int64_t fallback_timestamp_ns)
+{
+  std::vector<PoseExtraction> out;
+
+  const auto * root = find_object(message);
+  if (root == nullptr) {
+    return out;
+  }
+
+  // tf2_msgs/msg/TFMessage shape: top-level Object with a `transforms`
+  // Sequence of TransformStamped. Each contained edge becomes its own
+  // candidate so the caller can pick the relevant one (typically the
+  // edge that matches the requested --from/--to, or any edge that
+  // composes to it through the TF buffer).
+  if (const auto * transforms_v = find_field(*root, "transforms")) {
+    if (const auto * seq = std::get_if<cdr::Sequence>(&transforms_v->v)) {
+      for (const auto & elem : seq->elements) {
+        if (auto extraction = extract_pose(elem, fallback_timestamp_ns)) {
+          out.push_back(std::move(*extraction));
+        }
+      }
+      return out;
+    }
+  }
+
+  if (auto extraction = extract_pose(message, fallback_timestamp_ns)) {
+    out.push_back(std::move(*extraction));
+  }
+  return out;
 }
 
 void write_tum(std::ostream & os, std::span<const TrajectoryPose> poses)

@@ -16,6 +16,7 @@
 #include <ostream>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace bagwiz::core
 {
@@ -77,6 +78,28 @@ struct PoseExtraction
 // message does not look like any supported shape) or when the Value
 // is not a top-level Object.
 std::optional<PoseExtraction> extract_pose(
+  const cdr_walker::Value & message, std::int64_t fallback_timestamp_ns);
+
+// Extract one or more pose candidates from a decoded message.
+//
+// For all the single-shape inputs that `extract_pose` already handles
+// (PoseStamped, Odometry, TransformStamped, Pose, Transform), this
+// returns a vector of size 0 or 1 mirroring the optional from
+// `extract_pose`.
+//
+// For tf2_msgs/msg/TFMessage the message carries N TransformStamped
+// edges per dispatch; this returns one PoseExtraction per contained
+// edge, each populated as if the contained TransformStamped had been
+// `extract_pose`d standalone (its own header.stamp, frame_id from the
+// element's header, child_frame_id from its top-level field). The
+// caller is then responsible for picking the relevant edge — e.g. by
+// composing through a TF buffer to a user-requested (--from, --to)
+// pair and emitting only the first candidate that resolves.
+//
+// Returns an empty vector when the Value is not a top-level Object,
+// when no candidate has the expected shape, or when a TFMessage
+// carries an empty `transforms` sequence.
+std::vector<PoseExtraction> extract_pose_candidates(
   const cdr_walker::Value & message, std::int64_t fallback_timestamp_ns);
 
 // Write poses in the TUM trajectory format: one sample per line,

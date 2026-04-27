@@ -24,6 +24,7 @@
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -51,10 +52,12 @@ constexpr std::string_view kTfStaticSuffix = "tf_static";
 // Declarative list of ROS 2 message types `traj export` accepts. The
 // first six are scalar (one message == one sample); extract_pose works
 // the same way for all of them and falls back to bag log time when the
-// message has no header. `tf2_msgs/msg/TFMessage` is the odd one out:
-// it carries N TransformStamped edges per message, so the user must
-// pick the edge with --from / --to and we drive a TF lookup at each
-// message's stamp instead of decoding a single pose field.
+// message has no header. `tf2_msgs/msg/TFMessage` carries N
+// TransformStamped edges per message; extract_pose_candidates yields
+// one candidate per contained edge and the inner loop picks the first
+// one that composes to the user-requested (--from, --to). Both
+// flags are mandatory for TFMessage because there is no implicit
+// single edge to fall back on.
 constexpr std::array<std::string_view, 7> kSupportedTypes = {{
   "geometry_msgs/msg/PoseStamped",
   "geometry_msgs/msg/PoseWithCovarianceStamped",
@@ -396,9 +399,13 @@ private:
       return 1;
     }
 
-    // Optional TF buffer populated only when --from or --to is given.
+    // TF buffer is consulted only when we need to compose a candidate
+    // through the TF tree to reach (--from, --to). For TFMessage input
+    // the inner loop uses strict edge match (no compose), so loading
+    // the buffer would just waste a bag pass and open extra decoders.
+    const bool needs_tf_buffer = use_tf && !is_tf_message_type(type_name);
     tf2::BufferCore tf_buffer;
-    if (use_tf) {
+    if (needs_tf_buffer) {
       const auto tf_topics = collect_tf_topics(*reader);
       if (tf_topics.empty()) {
         BAGWIZ_LOG_ERROR(
@@ -428,7 +435,9 @@ private:
 
     std::vector<core::TrajectoryPose> poses;
     std::int64_t decoded = 0;
+    std::int64_t skipped = 0;
     bool warned_bag_log_time = false;
+    std::string last_skip_reason;
 
     io::RawMessage raw;
     while (true) {
@@ -450,95 +459,100 @@ private:
           return 1;
         }
 
-        // TFMessage carries N edges per message and has no single
-        // (frame_id, child_frame_id) pair; the buffer was already
-        // populated from every TF topic in the bag, so each input
-        // message just drives one lookup at its latest contained stamp.
-        if (is_tf_message_type(type_name)) {
-          const auto transforms = core::extract_tf_message(*decode_result.value);
-          if (transforms.empty()) {
-            continue;
-          }
-          std::int64_t stamp_ns = 0;
-          for (const auto & t : transforms) {
-            const auto t_ns = static_cast<std::int64_t>(t.header.stamp.sec) * 1'000'000'000LL +
-                              static_cast<std::int64_t>(t.header.stamp.nanosec);
-            if (t_ns > stamp_ns) {
-              stamp_ns = t_ns;
-            }
-          }
-          if (stamp_ns == 0) {
-            stamp_ns = raw.timestamp_ns;
-          }
-          const tf2::TimePoint tp{std::chrono::nanoseconds(stamp_ns)};
-          try {
-            const auto tf = tf_buffer.lookupTransform(args.from_frame, args.to_frame, tp);
-            core::TrajectoryPose out_pose;
-            out_pose.timestamp_ns = stamp_ns;
-            from_tf2(to_tf2(tf), out_pose);
-            poses.push_back(out_pose);
-          } catch (const tf2::TransformException & e) {
-            BAGWIZ_LOG_ERROR(
-              kLogger, "TF lookup failed at message #%ld (target='%s' source='%s' t=%ld ns): %s",
-              decoded, args.from_frame.c_str(), args.to_frame.c_str(), stamp_ns, e.what());
-            return 1;
-          }
+        // Unified extraction: every supported message yields one or
+        // more (frame_id, child_frame_id, pose, stamp) candidates. Most
+        // types produce a single candidate; tf2_msgs/msg/TFMessage
+        // produces one candidate per contained edge.
+        //
+        // Selection differs by what the candidate carries vs. what the
+        // user asked for:
+        //
+        //   * TFMessage input: candidates come pre-labeled with their
+        //     own (frame_id, child_frame_id). The user's --from/--to
+        //     designate exactly which labeled edge to extract, so we
+        //     keep candidates whose label equals (--from, --to) and
+        //     reject the rest. We deliberately do NOT compose other
+        //     edges through the TF buffer — e.g. a `map->ndt_base_link`
+        //     edge with a 150ms-stale stamp would otherwise resolve to
+        //     `map->base_link` via the buffer and pollute the
+        //     trajectory with lagged samples from a different
+        //     publisher.
+        //
+        //   * Other types: the topic's pose is in (frame_id,
+        //     child_frame_id) and the user wants it expressed in
+        //     (--from, --to). Compose via TF on either side as needed.
+        const auto candidates =
+          core::extract_pose_candidates(*decode_result.value, raw.timestamp_ns);
+        if (candidates.empty()) {
+          ++skipped;
           continue;
         }
 
-        const auto extraction = core::extract_pose(*decode_result.value, raw.timestamp_ns);
-        if (!extraction) {
-          BAGWIZ_LOG_ERROR(
-            kLogger, "Failed to extract pose from message #%ld of type '%s' (unexpected schema).",
-            decoded, type_name.c_str());
-          return 1;
-        }
-        if (!extraction->used_header_stamp && !warned_bag_log_time) {
-          BAGWIZ_LOG_WARN(
-            kLogger, "Type '%s' has no header; using bag log time (recorder receive time).",
-            type_name.c_str());
-          warned_bag_log_time = true;
-        }
-
-        // Compose: start with message_pose (= T_source_tracked), retarget
-        // tracked -> --to on the right, then shift the coordinate system
-        // source -> --from on the left. Skipping either half is a no-op when
-        // the requested frame already matches.
-        tf2::Transform P = to_tf2(extraction->pose);
-        const tf2::TimePoint tp(std::chrono::nanoseconds(extraction->pose.timestamp_ns));
-
-        if (to_set && args.to_frame != extraction->child_frame_id) {
-          try {
-            const auto tf =
-              tf_buffer.lookupTransform(extraction->child_frame_id, args.to_frame, tp);
-            P = P * to_tf2(tf);
-          } catch (const tf2::TransformException & e) {
-            BAGWIZ_LOG_ERROR(
-              kLogger,
-              "TF lookup failed at message #%ld (--to: target='%s' source='%s' t=%ld ns): %s",
-              decoded, extraction->child_frame_id.c_str(), args.to_frame.c_str(),
-              extraction->pose.timestamp_ns, e.what());
-            return 1;
+        const bool tfmsg_input = is_tf_message_type(type_name);
+        bool emitted_for_message = false;
+        for (const auto & extraction : candidates) {
+          if (!extraction.used_header_stamp && !warned_bag_log_time) {
+            BAGWIZ_LOG_WARN(
+              kLogger, "Type '%s' has no header; using bag log time (recorder receive time).",
+              type_name.c_str());
+            warned_bag_log_time = true;
           }
-        }
 
-        if (from_set && args.from_frame != extraction->frame_id) {
-          try {
-            const auto tf = tf_buffer.lookupTransform(args.from_frame, extraction->frame_id, tp);
-            P = to_tf2(tf) * P;
-          } catch (const tf2::TransformException & e) {
-            BAGWIZ_LOG_ERROR(
-              kLogger,
-              "TF lookup failed at message #%ld (--from: target='%s' source='%s' t=%ld ns): %s",
-              decoded, args.from_frame.c_str(), extraction->frame_id.c_str(),
-              extraction->pose.timestamp_ns, e.what());
-            return 1;
+          tf2::Transform P = to_tf2(extraction.pose);
+          const tf2::TimePoint tp(std::chrono::nanoseconds(extraction.pose.timestamp_ns));
+
+          if (tfmsg_input) {
+            // Strict edge filter: only the literal (--from, --to) edge
+            // is accepted from a TFMessage input. No compose.
+            if (
+              extraction.frame_id != args.from_frame ||
+              extraction.child_frame_id != args.to_frame) {
+              continue;
+            }
+          } else {
+            // Compose: start with message_pose (= T_source_tracked),
+            // retarget tracked -> --to on the right, then shift the
+            // coordinate system source -> --from on the left. Skipping
+            // either half is a no-op when the requested frame already
+            // matches.
+            if (to_set && args.to_frame != extraction.child_frame_id) {
+              if (extraction.child_frame_id.empty()) {
+                continue;
+              }
+              try {
+                const auto tf =
+                  tf_buffer.lookupTransform(extraction.child_frame_id, args.to_frame, tp);
+                P = P * to_tf2(tf);
+              } catch (const tf2::TransformException & e) {
+                last_skip_reason = std::string("--to: ") + e.what();
+                continue;
+              }
+            }
+
+            if (from_set && args.from_frame != extraction.frame_id) {
+              if (extraction.frame_id.empty()) {
+                continue;
+              }
+              try {
+                const auto tf = tf_buffer.lookupTransform(args.from_frame, extraction.frame_id, tp);
+                P = to_tf2(tf) * P;
+              } catch (const tf2::TransformException & e) {
+                last_skip_reason = std::string("--from: ") + e.what();
+                continue;
+              }
+            }
           }
+
+          core::TrajectoryPose out_pose = extraction.pose;
+          from_tf2(P, out_pose);
+          poses.push_back(out_pose);
+          emitted_for_message = true;
+          break;
         }
 
-        core::TrajectoryPose out_pose = extraction->pose;
-        from_tf2(P, out_pose);
-        poses.push_back(out_pose);
+        if (!emitted_for_message) {
+          ++skipped;
+        }
       } catch (const std::exception & e) {
         BAGWIZ_LOG_ERROR(kLogger, "decode error on message #%ld: %s", decoded, e.what());
         return 1;
@@ -546,9 +560,22 @@ private:
     }
 
     if (poses.empty()) {
-      BAGWIZ_LOG_WARN(
-        kLogger, "No messages found on topic '%s'; writing an empty trajectory.",
-        args.topic.c_str());
+      // Output is empty: either the topic carried no messages, or
+      // every message failed to compose to (--from, --to). The two
+      // cases ask for very different fixes, so distinguish them.
+      if (decoded == 0) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "No messages found on topic '%s'; writing an empty trajectory.",
+          args.topic.c_str());
+      } else {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "All %ld messages on topic '%s' were skipped (no candidate composed to "
+          "(--from='%s', --to='%s')). Last reason: %s",
+          decoded, args.topic.c_str(), args.from_frame.c_str(), args.to_frame.c_str(),
+          last_skip_reason.empty() ? "(none recorded)" : last_skip_reason.c_str());
+        return 1;
+      }
     }
 
     if (args.format != kFormatTum) {
@@ -565,9 +592,20 @@ private:
     core::write_tum(out, poses);
     out.close();
 
+    // Bag log time and header.stamp generally agree, but transient
+    // system load can swap a few adjacent samples; downstream tools
+    // (e.g. evo) require a non-decreasing time axis, so always sort.
+    // stable_sort is essentially free on already-sorted input and
+    // preserves bag order for any equal stamps.
+    std::stable_sort(
+      poses.begin(), poses.end(),
+      [](const core::TrajectoryPose & a, const core::TrajectoryPose & b) {
+        return a.timestamp_ns < b.timestamp_ns;
+      });
+
     BAGWIZ_LOG_INFO(
-      kLogger, "Wrote %zu poses (from %ld messages) to %s in %s format", poses.size(), decoded,
-      args.output_path.c_str(), args.format.c_str());
+      kLogger, "Wrote %zu poses (from %ld messages, %ld skipped) to %s in %s format", poses.size(),
+      decoded, skipped, args.output_path.c_str(), args.format.c_str());
     return 0;
   }
 };
