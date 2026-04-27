@@ -98,6 +98,22 @@ Format detect_format(const std::filesystem::path & path) noexcept
   return sniff_file_magic(path);
 }
 
+Format infer_format_from_extension(const std::filesystem::path & path) noexcept
+{
+  // path.extension() includes the leading dot. We compare case-sensitively
+  // because rosbag2 / mcap tooling consistently emit lowercase extensions;
+  // an uppercase `.MCAP` is unusual enough that we'd rather force `--storage`
+  // than guess.
+  const auto ext = path.extension().string();
+  if (ext == ".mcap") {
+    return Format::Mcap;
+  }
+  if (ext == ".db3") {
+    return Format::Sqlite3;
+  }
+  return Format::Auto;
+}
+
 std::unique_ptr<BagReader> open_read(const std::filesystem::path & path, OpenOptions options)
 {
   std::error_code ec;

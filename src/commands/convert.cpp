@@ -37,6 +37,29 @@ namespace
 
 constexpr const char * kLogger = "bagwiz.cmd.convert";
 
+// Resolve the target storage backend for a write. The CLI takes `--storage`
+// optionally; when omitted, we fall back to inferring from the output path's
+// extension (`.mcap` / `.db3`). If neither is conclusive — typically a
+// directory output without an explicit flag — we surface a clear error
+// instead of silently picking a default, since the user has not actually
+// chosen one. `storage_flag` is the CLI string value (empty when the user
+// did not pass `--storage`); the returned format is never `Format::Auto`.
+io::Format resolve_target_storage(
+  const std::string & storage_flag, const std::filesystem::path & output_path,
+  std::string & error_out)
+{
+  if (!storage_flag.empty()) {
+    return (storage_flag == "sqlite3") ? io::Format::Sqlite3 : io::Format::Mcap;
+  }
+  const auto inferred = io::infer_format_from_extension(output_path);
+  if (inferred != io::Format::Auto) {
+    return inferred;
+  }
+  error_out = "cannot determine target storage from output path '" + output_path.string() +
+              "'; pass --storage <mcap|sqlite3> or use a .mcap/.db3 extension";
+  return io::Format::Auto;
+}
+
 struct PerConn
 {
   std::string topic;
@@ -102,7 +125,7 @@ private:
   {
     std::filesystem::path input_path;
     std::filesystem::path output_path;
-    std::string storage = "mcap";
+    std::string storage;  // empty when --storage not passed; resolved at run time
   } r1_to_r2_args_;
 
   struct TwoToOneArgs
@@ -114,8 +137,8 @@ private:
   struct StorageArgs
   {
     std::filesystem::path input_path;
-    std::string storage;  // "mcap" or "sqlite3"
     std::filesystem::path output_path;
+    std::string storage;  // empty when --storage not passed; resolved at run time
   } storage_args_;
 
   void configure_1to2(CLI::App & app)
@@ -128,18 +151,29 @@ private:
       ->add_option(
         "output", r1_to_r2_args_.output_path, "Output rosbag2 directory (or .mcap/.db3 file)")
       ->required();
-    sub->add_option("-s,--storage", r1_to_r2_args_.storage, "Output storage backend")
-      ->default_val("mcap")
+    sub
+      ->add_option(
+        "-s,--storage", r1_to_r2_args_.storage,
+        "Output storage backend (default: inferred from output extension)")
       ->check(CLI::IsMember({"mcap", "sqlite3"}));
     sub->footer(
       "Only standard message types from the built-in whitelist are converted.\n"
-      "Topics with unsupported types are skipped with a warning.");
+      "Topics with unsupported types are skipped with a warning.\n"
+      "If --storage is omitted, the backend is inferred from the output path's\n"
+      "extension (.mcap or .db3); other paths (e.g. a directory) require --storage.");
     sub->callback([this]() { selected_ = Subcommand::k1to2; });
   }
 
   int run_1to2()
   {
     const auto & args = r1_to_r2_args_;
+
+    std::string err;
+    const io::Format target_format = resolve_target_storage(args.storage, args.output_path, err);
+    if (target_format == io::Format::Auto) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", err.c_str());
+      return 1;
+    }
 
     std::unique_ptr<io::Rosbag1Reader> reader;
     try {
@@ -157,7 +191,7 @@ private:
     // conn_id we have not seen yet — that's what we do below.
 
     io::CreateOptions copts;
-    copts.format = (args.storage == "sqlite3") ? io::Format::Sqlite3 : io::Format::Mcap;
+    copts.format = target_format;
     copts.layout = io::Layout::Auto;  // factory picks Directory unless path ends in .mcap/.db3
     // Disable mcap chunk compression by default — conversion output is
     // typically a re-record, callers can recompress later if they want.
@@ -508,16 +542,20 @@ private:
     sub->add_option("input", storage_args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option("storage", storage_args_.storage, "Target storage backend")
-      ->required()
-      ->check(CLI::IsMember({"mcap", "sqlite3"}));
     sub
       ->add_option(
         "output", storage_args_.output_path, "Output rosbag2 directory (or .mcap/.db3 file)")
       ->required();
+    sub
+      ->add_option(
+        "-s,--storage", storage_args_.storage,
+        "Target storage backend (default: inferred from output extension)")
+      ->check(CLI::IsMember({"mcap", "sqlite3"}));
     sub->footer(
       "Messages are copied verbatim — only the storage backend changes; no\n"
       "deserialization or type conversion is performed.\n"
+      "If --storage is omitted, the backend is inferred from the output path's\n"
+      "extension (.mcap or .db3); other paths (e.g. a directory) require --storage.\n"
       "Inputs that use rosbag2-layer compression (compression_mode != NONE)\n"
       "are rejected; decompress with `ros2 bag convert` first.");
     sub->callback([this]() { selected_ = Subcommand::kStorage; });
@@ -531,6 +569,13 @@ private:
       return rc;
     }
 
+    std::string err;
+    const io::Format target_format = resolve_target_storage(args.storage, args.output_path, err);
+    if (target_format == io::Format::Auto) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", err.c_str());
+      return 1;
+    }
+
     std::unique_ptr<io::BagReader> reader;
     try {
       reader = io::open_read(args.input_path);
@@ -539,17 +584,14 @@ private:
       return 1;
     }
 
-    const io::Format target_format =
-      (args.storage == "sqlite3") ? io::Format::Sqlite3 : io::Format::Mcap;
-
     // Reject same-storage repack: it's almost always a user mistake (and a
     // plain copy is what they actually want). Detection is by magic bytes
     // (single-file inputs) or metadata.yaml (directory layouts) — never
     // by extension — so renamed files are still classified correctly.
     const auto source_format = io::detect_format(args.input_path);
     if (source_format == target_format) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "input is already in '%s' storage; nothing to convert", args.storage.c_str());
+      const char * fmt_name = (target_format == io::Format::Sqlite3) ? "sqlite3" : "mcap";
+      BAGWIZ_LOG_ERROR(kLogger, "input is already in '%s' storage; nothing to convert", fmt_name);
       return 1;
     }
 

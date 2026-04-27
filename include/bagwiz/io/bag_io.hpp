@@ -166,6 +166,13 @@ std::unique_ptr<BagWriter> open_write(
 // matches. This function never throws.
 Format detect_format(const std::filesystem::path & path) noexcept;
 
+// Infer Format from a path's extension only. The path does not need to
+// exist — this is intended for output paths where the user has signalled
+// intent through the filename (e.g. `out.mcap` -> Mcap, `out.db3` ->
+// Sqlite3). Any other extension (or none, e.g. directory targets) yields
+// Format::Auto so callers can fall back to an explicit `--storage` flag.
+Format infer_format_from_extension(const std::filesystem::path & path) noexcept;
+
 }  // namespace bagwiz::io
 
 #endif  // BAGWIZ__IO__BAG_IO_HPP_
