@@ -77,8 +77,6 @@ KeyEvent classify_key(std::string_view bytes)
         return KeyEvent::kFirst;
       case 'G':
         return KeyEvent::kLast;
-      case 's':
-        return KeyEvent::kJumpToValid;
       case 'k':
         return KeyEvent::kScrollUp;
       case 'j':

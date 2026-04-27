@@ -52,12 +52,6 @@ TEST(ClassifyKey, FirstAndLast)
   EXPECT_EQ(classify_key("G"), KeyEvent::kLast);
 }
 
-TEST(ClassifyKey, JumpToValid)
-{
-  EXPECT_EQ(classify_key("s"), KeyEvent::kJumpToValid);
-  EXPECT_EQ(classify_key("S"), KeyEvent::kUnknown);
-}
-
 TEST(ClassifyKey, QuitBindings)
 {
   EXPECT_EQ(classify_key("q"), KeyEvent::kQuit);

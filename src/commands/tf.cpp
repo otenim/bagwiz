@@ -32,7 +32,6 @@
 #include <filesystem>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -167,14 +166,14 @@ std::string format_timestamp(std::int64_t ns)
 }
 
 // tf2::ExtrapolationException::what() carries the cache boundary in
-// the form "earliest data is at time X" or "latest data is at time
-// X". We parse it back out so we can render a friendlier message
-// (delta from the current step, target step index in the timeline)
-// rather than dumping the raw multi-line error text.
+// the form "earliest data is at time X". We parse it back out so the
+// init-time probe can crop the timeline to the chain's published
+// range. Only the "into the past" boundary is used today; the
+// "into the future" wording is rare enough at timeline.front() that
+// we simply ignore it and let the per-step renderer surface it.
 struct ExtrapolationBoundary
 {
   bool past = false;     // requested time is BEFORE the available range
-  bool future = false;   // requested time is AFTER the available range
   double stamp_s = 0.0;  // the boundary stamp parsed from the message
   bool stamp_parsed = false;
 };
@@ -183,22 +182,16 @@ ExtrapolationBoundary parse_extrapolation(const std::string & what)
 {
   ExtrapolationBoundary out;
   out.past = what.find("into the past") != std::string::npos;
-  out.future = what.find("into the future") != std::string::npos;
 
-  for (const std::string_view marker :
-       {std::string_view{"earliest data is at time "},
-        std::string_view{"latest data is at time "}}) {
-    const auto pos = what.find(marker);
-    if (pos == std::string::npos) {
-      continue;
-    }
-    const char * begin = what.c_str() + pos + marker.size();
+  static constexpr std::string_view kMarker = "earliest data is at time ";
+  const auto pos = what.find(kMarker);
+  if (pos != std::string::npos) {
+    const char * begin = what.c_str() + pos + kMarker.size();
     char * end = nullptr;
     const double v = std::strtod(begin, &end);
     if (end != begin) {
       out.stamp_s = v;
       out.stamp_parsed = true;
-      break;
     }
   }
   return out;
@@ -328,17 +321,13 @@ private:
       return 1;
     }
 
-    // Sanity-check the chain once at the first timestamp so chain
-    // errors (frame not in the tree at all, missing bridge) fail
-    // fast instead of producing N pages of the same error.
-    //
-    // If timeline.front() is before the first publication of the
-    // chain (typical when the chain involves a localizer that warms
-    // up after early sensor /tf messages), parse the boundary out of
-    // tf2's extrapolation message and seed the cursor to the first
-    // valid step. The user lands on usable data immediately instead
-    // of having to press [s] / [→] past the warm-up region.
-    std::size_t initial_index = 0;
+    // Probe the chain at timeline.front() to (a) fail fast on chain
+    // errors (frame not in the tree at all, missing bridge) and (b)
+    // crop the warm-up region: when the chain is not yet established
+    // at the bag's first dynamic stamp (typical when sensor /tf
+    // precedes the localizer), tf2 reports the earliest stamp the
+    // chain *is* queryable from. Drop everything before that so the
+    // walk only ever shows valid steps.
     try {
       (void)tf_buffer.lookupTransform(
         args.from_frame, args.to_frame, tf2::TimePoint(std::chrono::nanoseconds(timeline.front())));
@@ -352,15 +341,17 @@ private:
       const auto info = parse_extrapolation(e.what());
       if (info.past && info.stamp_parsed) {
         const std::int64_t boundary_ns = static_cast<std::int64_t>(info.stamp_s * 1e9);
-        const auto it = std::lower_bound(timeline.begin(), timeline.end(), boundary_ns);
-        if (it != timeline.end()) {
-          initial_index = static_cast<std::size_t>(std::distance(timeline.begin(), it));
-        }
+        timeline.erase(
+          timeline.begin(), std::lower_bound(timeline.begin(), timeline.end(), boundary_ns));
       }
-      // The "future" branch at timeline.front() would mean the chain
-      // stopped publishing before the bag's first dynamic stamp.
-      // That is bizarre; stay at index 0 and let the per-step
-      // renderer surface it.
+      if (timeline.empty()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "TF chain '%s' -> '%s' is never resolvable in this bag (no dynamic /tf stamps fall "
+          "within the chain's published range).",
+          args.from_frame.c_str(), args.to_frame.c_str());
+        return 1;
+      }
     } catch (const tf2::TransformException & e) {
       BAGWIZ_LOG_ERROR(kLogger, "TF error: %s", e.what());
       return 1;
@@ -372,17 +363,10 @@ private:
       return 1;
     }
 
-    std::size_t index = initial_index;
+    std::size_t index = 0;
     std::string status;
-    // When the current step's lookup fails with extrapolation, the
-    // renderer fills this with the timeline index of the first/last
-    // valid step so the [s] handler below can jump there directly.
-    // Cleared on entry to every render so a successful lookup
-    // disables the jump key.
-    std::optional<std::size_t> jump_target;
 
     auto render = [&]() {
-      jump_target.reset();
       fmt::print(stdout, "\x1b[2J\x1b[H");
       const std::int64_t ts = timeline[index];
       fmt::print(stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
@@ -414,73 +398,16 @@ private:
           fmt::print(stdout, "  pitch: {:.15g}\n", pitch);
           fmt::print(stdout, "  yaw:   {:.15g}\n", yaw);
         }
-      } catch (const tf2::ExtrapolationException & e) {
-        // The TF chain exists in this bag but is not yet (or no
-        // longer) being published at the current step's stamp. Tell
-        // the user where the chain *is* available and which key to
-        // press to get there, instead of dumping tf2's two-line
-        // error text.
-        const auto info = parse_extrapolation(e.what());
-        const double current_s = static_cast<double>(ts) / 1e9;
-
-        if (info.past) {
-          fmt::print(
-            stdout, "⚠  TF '{}' -> '{}' has no data yet at this step.\n", args.from_frame,
-            args.to_frame);
-        } else if (info.future) {
-          fmt::print(
-            stdout, "⚠  TF '{}' -> '{}' is no longer published past this step.\n", args.from_frame,
-            args.to_frame);
-        } else {
-          fmt::print(
-            stdout, "⚠  TF '{}' -> '{}' is unavailable at this step.\n", args.from_frame,
-            args.to_frame);
-        }
-
-        if (info.stamp_parsed) {
-          const double delta = info.stamp_s - current_s;
-          fmt::print(
-            stdout, "   {} publication: {:+.3f}s ({:.9f})\n",
-            info.past     ? "first"
-            : info.future ? "last"
-                          : "boundary",
-            delta, info.stamp_s);
-
-          // Locate the timeline step that brackets the boundary so
-          // the [s] key can jump there in one keystroke. lower_bound
-          // for "past" = first step at-or-after the earliest
-          // available stamp; upper_bound-1 for "future" = last step
-          // at-or-before the latest available stamp.
-          const std::int64_t boundary_ns = static_cast<std::int64_t>(info.stamp_s * 1e9);
-          if (info.past) {
-            const auto it = std::lower_bound(timeline.begin(), timeline.end(), boundary_ns);
-            if (it != timeline.end()) {
-              jump_target = static_cast<std::size_t>(std::distance(timeline.begin(), it));
-              fmt::print(
-                stdout, "   Press [s] to jump to step {} (first valid).\n", *jump_target + 1);
-            }
-          } else if (info.future) {
-            const auto it = std::upper_bound(timeline.begin(), timeline.end(), boundary_ns);
-            if (it != timeline.begin()) {
-              jump_target = static_cast<std::size_t>(std::distance(timeline.begin(), it)) - 1;
-              fmt::print(
-                stdout, "   Press [s] to jump to step {} (last valid).\n", *jump_target + 1);
-            }
-          }
-        }
-      } catch (const tf2::LookupException & e) {
-        fmt::print(stdout, "⚠  Frame is not present in this bag's TF tree: {}\n", e.what());
-      } catch (const tf2::ConnectivityException & e) {
-        fmt::print(
-          stdout, "⚠  No path between '{}' and '{}' in this bag's TF tree: {}\n", args.from_frame,
-          args.to_frame, e.what());
       } catch (const tf2::TransformException & e) {
+        // Past extrapolation has been cropped at init, so the only
+        // failures expected here are mid-bag gaps or the chain
+        // ceasing to publish before the bag ends. Surface tf2's
+        // text directly; rare enough that we do not need
+        // hand-formatted versions.
         fmt::print(stdout, "⚠  Lookup failed at this step: {}\n", e.what());
       }
 
-      fmt::print(
-        stdout,
-        "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [s] skip-to-valid   [q] quit\n");
+      fmt::print(stdout, "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [q] quit\n");
       if (!status.empty()) {
         fmt::print(stdout, "  {}\n", status);
       }
@@ -513,16 +440,6 @@ private:
           break;
         case core::KeyEvent::kLast:
           index = timeline.size() - 1;
-          break;
-        case core::KeyEvent::kJumpToValid:
-          // Jump to whichever step the renderer flagged as the
-          // boundary of valid data. Disabled on successful lookups
-          // because there is nothing meaningful to jump to.
-          if (jump_target) {
-            index = *jump_target;
-          } else {
-            status = "(this step is already valid; nothing to jump to)";
-          }
           break;
         case core::KeyEvent::kScrollUp:
         case core::KeyEvent::kScrollDown:

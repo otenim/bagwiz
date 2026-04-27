@@ -324,12 +324,6 @@ public:
           }
           break;
         }
-        case core::KeyEvent::kJumpToValid:
-          // 'walk' has no notion of a "valid" target; every message is
-          // renderable. Treat it as a no-op so the redraw still runs
-          // and a stray 's' does not silently consume input.
-          status = "(no jump target in this view)";
-          break;
         case core::KeyEvent::kScrollUp:
           if (scroll > 0) {
             --scroll;
