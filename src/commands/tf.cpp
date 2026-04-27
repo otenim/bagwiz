@@ -165,6 +165,38 @@ std::string format_timestamp(std::int64_t ns)
   return fmt::format("{}.{:09d} UTC ({}.{:09d} s)", buf, nanos, seconds, nanos);
 }
 
+// tf2::ExtrapolationException::what() carries the cache boundary in
+// the form "earliest data is at time X". We parse it back out so the
+// init-time probe can crop the timeline to the chain's published
+// range. Only the "into the past" boundary is used today; the
+// "into the future" wording is rare enough at timeline.front() that
+// we simply ignore it and let the per-step renderer surface it.
+struct ExtrapolationBoundary
+{
+  bool past = false;     // requested time is BEFORE the available range
+  double stamp_s = 0.0;  // the boundary stamp parsed from the message
+  bool stamp_parsed = false;
+};
+
+ExtrapolationBoundary parse_extrapolation(const std::string & what)
+{
+  ExtrapolationBoundary out;
+  out.past = what.find("into the past") != std::string::npos;
+
+  static constexpr std::string_view kMarker = "earliest data is at time ";
+  const auto pos = what.find(kMarker);
+  if (pos != std::string::npos) {
+    const char * begin = what.c_str() + pos + kMarker.size();
+    char * end = nullptr;
+    const double v = std::strtod(begin, &end);
+    if (end != begin) {
+      out.stamp_s = v;
+      out.stamp_parsed = true;
+    }
+  }
+  return out;
+}
+
 }  // namespace
 
 // `bagwiz tf` is a command group for TF inspection. Today it carries a
@@ -267,7 +299,12 @@ private:
       return 1;
     }
 
-    tf2::BufferCore tf_buffer;
+    // Default tf2::BufferCore cache is 10 s, which silently ages out
+    // older transforms while we replay an entire bag into it: by the
+    // time loading finishes the buffer only has the last 10 s. Use a
+    // very large window so every transform from the bag stays
+    // available for lookup.
+    tf2::BufferCore tf_buffer{std::chrono::hours(24 * 365)};
     std::vector<std::int64_t> timeline;
     try {
       load_tf_and_timeline(args.input_path, tf_topics, tf_buffer, timeline);
@@ -284,9 +321,13 @@ private:
       return 1;
     }
 
-    // Sanity-check the chain once at the first timestamp so chain errors
-    // (frame not in the tree at all, missing bridge) fail fast instead
-    // of producing N pages of the same error.
+    // Probe the chain at timeline.front() to (a) fail fast on chain
+    // errors (frame not in the tree at all, missing bridge) and (b)
+    // crop the warm-up region: when the chain is not yet established
+    // at the bag's first dynamic stamp (typical when sensor /tf
+    // precedes the localizer), tf2 reports the earliest stamp the
+    // chain *is* queryable from. Drop everything before that so the
+    // walk only ever shows valid steps.
     try {
       (void)tf_buffer.lookupTransform(
         args.from_frame, args.to_frame, tf2::TimePoint(std::chrono::nanoseconds(timeline.front())));
@@ -296,9 +337,21 @@ private:
     } catch (const tf2::ConnectivityException & e) {
       BAGWIZ_LOG_ERROR(kLogger, "TF chain error: %s", e.what());
       return 1;
-    } catch (const tf2::ExtrapolationException &) {
-      // Expected at chain edges; the per-step renderer reports this
-      // inline so the user can navigate past it.
+    } catch (const tf2::ExtrapolationException & e) {
+      const auto info = parse_extrapolation(e.what());
+      if (info.past && info.stamp_parsed) {
+        const std::int64_t boundary_ns = static_cast<std::int64_t>(info.stamp_s * 1e9);
+        timeline.erase(
+          timeline.begin(), std::lower_bound(timeline.begin(), timeline.end(), boundary_ns));
+      }
+      if (timeline.empty()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "TF chain '%s' -> '%s' is never resolvable in this bag (no dynamic /tf stamps fall "
+          "within the chain's published range).",
+          args.from_frame.c_str(), args.to_frame.c_str());
+        return 1;
+      }
     } catch (const tf2::TransformException & e) {
       BAGWIZ_LOG_ERROR(kLogger, "TF error: %s", e.what());
       return 1;
@@ -346,7 +399,12 @@ private:
           fmt::print(stdout, "  yaw:   {:.15g}\n", yaw);
         }
       } catch (const tf2::TransformException & e) {
-        fmt::print(stdout, "⚠  lookup failed at this step: {}\n", e.what());
+        // Past extrapolation has been cropped at init, so the only
+        // failures expected here are mid-bag gaps or the chain
+        // ceasing to publish before the bag ends. Surface tf2's
+        // text directly; rare enough that we do not need
+        // hand-formatted versions.
+        fmt::print(stdout, "⚠  Lookup failed at this step: {}\n", e.what());
       }
 
       fmt::print(stdout, "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [q] quit\n");
