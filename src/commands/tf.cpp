@@ -165,6 +165,44 @@ std::string format_timestamp(std::int64_t ns)
   return fmt::format("{}.{:09d} UTC ({}.{:09d} s)", buf, nanos, seconds, nanos);
 }
 
+// tf2::ExtrapolationException::what() carries the cache boundary in
+// the form "earliest data is at time X" or "latest data is at time
+// X". We parse it back out so we can render a friendlier message
+// (delta from the current step, target step index in the timeline)
+// rather than dumping the raw multi-line error text.
+struct ExtrapolationBoundary
+{
+  bool past = false;     // requested time is BEFORE the available range
+  bool future = false;   // requested time is AFTER the available range
+  double stamp_s = 0.0;  // the boundary stamp parsed from the message
+  bool stamp_parsed = false;
+};
+
+ExtrapolationBoundary parse_extrapolation(const std::string & what)
+{
+  ExtrapolationBoundary out;
+  out.past = what.find("into the past") != std::string::npos;
+  out.future = what.find("into the future") != std::string::npos;
+
+  for (const std::string_view marker :
+       {std::string_view{"earliest data is at time "},
+        std::string_view{"latest data is at time "}}) {
+    const auto pos = what.find(marker);
+    if (pos == std::string::npos) {
+      continue;
+    }
+    const char * begin = what.c_str() + pos + marker.size();
+    char * end = nullptr;
+    const double v = std::strtod(begin, &end);
+    if (end != begin) {
+      out.stamp_s = v;
+      out.stamp_parsed = true;
+      break;
+    }
+  }
+  return out;
+}
+
 }  // namespace
 
 // `bagwiz tf` is a command group for TF inspection. Today it carries a
@@ -350,8 +388,66 @@ private:
           fmt::print(stdout, "  pitch: {:.15g}\n", pitch);
           fmt::print(stdout, "  yaw:   {:.15g}\n", yaw);
         }
+      } catch (const tf2::ExtrapolationException & e) {
+        // The TF chain exists in this bag but is not yet (or no
+        // longer) being published at the current step's stamp. Tell
+        // the user where the chain *is* available and which key to
+        // press to get there, instead of dumping tf2's two-line
+        // error text.
+        const auto info = parse_extrapolation(e.what());
+        const double current_s = static_cast<double>(ts) / 1e9;
+
+        if (info.past) {
+          fmt::print(
+            stdout, "⚠  TF '{}' -> '{}' has no data yet at this step.\n", args.from_frame,
+            args.to_frame);
+        } else if (info.future) {
+          fmt::print(
+            stdout, "⚠  TF '{}' -> '{}' is no longer published past this step.\n", args.from_frame,
+            args.to_frame);
+        } else {
+          fmt::print(
+            stdout, "⚠  TF '{}' -> '{}' is unavailable at this step.\n", args.from_frame,
+            args.to_frame);
+        }
+
+        if (info.stamp_parsed) {
+          const double delta = info.stamp_s - current_s;
+          fmt::print(
+            stdout, "   {} publication: {:+.3f}s ({:.9f})\n",
+            info.past     ? "first"
+            : info.future ? "last"
+                          : "boundary",
+            delta, info.stamp_s);
+
+          // Locate the timeline step that brackets the boundary so the
+          // user can jump there directly. lower_bound for "past" =
+          // first step at-or-after the earliest available stamp;
+          // upper_bound-1 for "future" = last step at-or-before the
+          // latest available stamp.
+          const std::int64_t boundary_ns = static_cast<std::int64_t>(info.stamp_s * 1e9);
+          if (info.past) {
+            const auto it = std::lower_bound(timeline.begin(), timeline.end(), boundary_ns);
+            if (it != timeline.end()) {
+              const std::size_t target = std::distance(timeline.begin(), it) + 1;
+              fmt::print(stdout, "   Try [→] / [G] (next valid step: {}).\n", target);
+            }
+          } else if (info.future) {
+            const auto it = std::upper_bound(timeline.begin(), timeline.end(), boundary_ns);
+            if (it != timeline.begin()) {
+              const std::size_t target = std::distance(timeline.begin(), it);
+              fmt::print(stdout, "   Try [←] / [g] (last valid step: {}).\n", target);
+            }
+          }
+        }
+      } catch (const tf2::LookupException & e) {
+        fmt::print(stdout, "⚠  Frame is not present in this bag's TF tree: {}\n", e.what());
+      } catch (const tf2::ConnectivityException & e) {
+        fmt::print(
+          stdout, "⚠  No path between '{}' and '{}' in this bag's TF tree: {}\n", args.from_frame,
+          args.to_frame, e.what());
       } catch (const tf2::TransformException & e) {
-        fmt::print(stdout, "⚠  lookup failed at this step: {}\n", e.what());
+        fmt::print(stdout, "⚠  Lookup failed at this step: {}\n", e.what());
       }
 
       fmt::print(stdout, "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [q] quit\n");
