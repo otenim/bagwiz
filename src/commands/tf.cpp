@@ -328,9 +328,17 @@ private:
       return 1;
     }
 
-    // Sanity-check the chain once at the first timestamp so chain errors
-    // (frame not in the tree at all, missing bridge) fail fast instead
-    // of producing N pages of the same error.
+    // Sanity-check the chain once at the first timestamp so chain
+    // errors (frame not in the tree at all, missing bridge) fail
+    // fast instead of producing N pages of the same error.
+    //
+    // If timeline.front() is before the first publication of the
+    // chain (typical when the chain involves a localizer that warms
+    // up after early sensor /tf messages), parse the boundary out of
+    // tf2's extrapolation message and seed the cursor to the first
+    // valid step. The user lands on usable data immediately instead
+    // of having to press [s] / [→] past the warm-up region.
+    std::size_t initial_index = 0;
     try {
       (void)tf_buffer.lookupTransform(
         args.from_frame, args.to_frame, tf2::TimePoint(std::chrono::nanoseconds(timeline.front())));
@@ -340,9 +348,19 @@ private:
     } catch (const tf2::ConnectivityException & e) {
       BAGWIZ_LOG_ERROR(kLogger, "TF chain error: %s", e.what());
       return 1;
-    } catch (const tf2::ExtrapolationException &) {
-      // Expected at chain edges; the per-step renderer reports this
-      // inline so the user can navigate past it.
+    } catch (const tf2::ExtrapolationException & e) {
+      const auto info = parse_extrapolation(e.what());
+      if (info.past && info.stamp_parsed) {
+        const std::int64_t boundary_ns = static_cast<std::int64_t>(info.stamp_s * 1e9);
+        const auto it = std::lower_bound(timeline.begin(), timeline.end(), boundary_ns);
+        if (it != timeline.end()) {
+          initial_index = static_cast<std::size_t>(std::distance(timeline.begin(), it));
+        }
+      }
+      // The "future" branch at timeline.front() would mean the chain
+      // stopped publishing before the bag's first dynamic stamp.
+      // That is bizarre; stay at index 0 and let the per-step
+      // renderer surface it.
     } catch (const tf2::TransformException & e) {
       BAGWIZ_LOG_ERROR(kLogger, "TF error: %s", e.what());
       return 1;
@@ -354,7 +372,7 @@ private:
       return 1;
     }
 
-    std::size_t index = 0;
+    std::size_t index = initial_index;
     std::string status;
     // When the current step's lookup fails with extrapolation, the
     // renderer fills this with the timeline index of the first/last
