@@ -114,6 +114,23 @@ cdr::Object make_header(std::int32_t sec, std::uint32_t nanosec, const std::stri
   return header;
 }
 
+// Build one TransformStamped element matching what the schema-driven
+// decoder lays down for tf2_msgs/msg/TFMessage.transforms[i].
+cdr::Object make_transform_stamped(
+  std::int32_t sec, std::uint32_t nanosec, const std::string & frame_id,
+  const std::string & child_frame_id, double tx, double ty, double tz)
+{
+  cdr::Object transform;
+  transform.fields.emplace_back("translation", cdr::Value{make_xyz(tx, ty, tz)});
+  transform.fields.emplace_back("rotation", cdr::Value{make_xyzw(0.0, 0.0, 0.0, 1.0)});
+
+  cdr::Object root;
+  root.fields.emplace_back("header", cdr::Value{make_header(sec, nanosec, frame_id)});
+  root.fields.emplace_back("child_frame_id", cdr::Value{child_frame_id});
+  root.fields.emplace_back("transform", cdr::Value{std::move(transform)});
+  return root;
+}
+
 }  // namespace
 
 // --- extract_pose -----------------------------------------------------
@@ -256,4 +273,80 @@ TEST(ExtractPose, RejectsNonObjectRoot)
   // anything else is a usage error and yields nullopt.
   const auto extraction = bagwiz::core::extract_pose(cdr::Value{cdr::Sequence{}}, 0);
   EXPECT_FALSE(extraction.has_value());
+}
+
+// --- extract_pose_candidates -----------------------------------------
+
+TEST(ExtractPoseCandidates, TfMessageYieldsOneCandidatePerEdge)
+{
+  // tf2_msgs/msg/TFMessage carries a `transforms` Sequence of
+  // TransformStamped. extract_pose_candidates flattens the sequence so
+  // the caller can pick the relevant edge per message.
+  cdr::Sequence transforms;
+  transforms.elements.emplace_back(make_transform_stamped(1, 0, "map", "odom", 1.0, 0.0, 0.0));
+  transforms.elements.emplace_back(
+    make_transform_stamped(1, 100, "odom", "base_link", 0.0, 2.0, 0.0));
+
+  cdr::Object root;
+  root.fields.emplace_back("transforms", cdr::Value{std::move(transforms)});
+
+  const auto candidates = bagwiz::core::extract_pose_candidates(cdr::Value{root}, 999);
+  ASSERT_EQ(candidates.size(), 2u);
+
+  EXPECT_EQ(candidates[0].frame_id, "map");
+  EXPECT_EQ(candidates[0].child_frame_id, "odom");
+  EXPECT_TRUE(candidates[0].used_header_stamp);
+  EXPECT_EQ(candidates[0].pose.timestamp_ns, 1'000'000'000LL);
+  EXPECT_DOUBLE_EQ(candidates[0].pose.tx, 1.0);
+
+  EXPECT_EQ(candidates[1].frame_id, "odom");
+  EXPECT_EQ(candidates[1].child_frame_id, "base_link");
+  EXPECT_EQ(candidates[1].pose.timestamp_ns, 1'000'000'100LL);
+  EXPECT_DOUBLE_EQ(candidates[1].pose.ty, 2.0);
+}
+
+TEST(ExtractPoseCandidates, EmptyTfMessageYieldsEmptyVector)
+{
+  // A TFMessage with zero edges is well-formed but produces no
+  // candidates. Caller treats this as "skip".
+  cdr::Object root;
+  root.fields.emplace_back("transforms", cdr::Value{cdr::Sequence{}});
+
+  const auto candidates = bagwiz::core::extract_pose_candidates(cdr::Value{root}, 0);
+  EXPECT_TRUE(candidates.empty());
+}
+
+TEST(ExtractPoseCandidates, NonTfMessageDelegatesToExtractPose)
+{
+  // A regular PoseStamped-shaped message produces exactly one candidate
+  // identical to what extract_pose would return.
+  cdr::Object pose;
+  pose.fields.emplace_back("position", cdr::Value{make_xyz(4.0, 5.0, 6.0)});
+  pose.fields.emplace_back("orientation", cdr::Value{make_xyzw(0.0, 0.0, 0.0, 1.0)});
+
+  cdr::Object root;
+  root.fields.emplace_back("header", cdr::Value{make_header(2, 0, "map")});
+  root.fields.emplace_back("pose", cdr::Value{std::move(pose)});
+
+  const auto candidates = bagwiz::core::extract_pose_candidates(cdr::Value{root}, 0);
+  ASSERT_EQ(candidates.size(), 1u);
+  EXPECT_EQ(candidates[0].frame_id, "map");
+  EXPECT_DOUBLE_EQ(candidates[0].pose.tx, 4.0);
+}
+
+TEST(ExtractPoseCandidates, UnsupportedShapeYieldsEmptyVector)
+{
+  // A message that's neither TFMessage-shaped nor pose-shaped → no
+  // candidates. Caller treats this as "skip".
+  cdr::Object root;
+  root.fields.emplace_back("data", cdr::Value{std::string{"hello"}});
+
+  const auto candidates = bagwiz::core::extract_pose_candidates(cdr::Value{root}, 0);
+  EXPECT_TRUE(candidates.empty());
+}
+
+TEST(ExtractPoseCandidates, RejectsNonObjectRoot)
+{
+  const auto candidates = bagwiz::core::extract_pose_candidates(cdr::Value{cdr::Sequence{}}, 0);
+  EXPECT_TRUE(candidates.empty());
 }
