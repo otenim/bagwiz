@@ -48,17 +48,21 @@ constexpr const char * kFormatTum = "tum";
 constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
 constexpr std::string_view kTfStaticSuffix = "tf_static";
 
-// Declarative list of ROS 2 message types `traj export` accepts. Every
-// entry is scalar (one message == one sample); extract_pose works the
-// same way for all of them and falls back to bag log time when the
-// message has no header.
-constexpr std::array<std::string_view, 6> kSupportedTypes = {{
+// Declarative list of ROS 2 message types `traj export` accepts. The
+// first six are scalar (one message == one sample); extract_pose works
+// the same way for all of them and falls back to bag log time when the
+// message has no header. `tf2_msgs/msg/TFMessage` is the odd one out:
+// it carries N TransformStamped edges per message, so the user must
+// pick the edge with --from / --to and we drive a TF lookup at each
+// message's stamp instead of decoding a single pose field.
+constexpr std::array<std::string_view, 7> kSupportedTypes = {{
   "geometry_msgs/msg/PoseStamped",
   "geometry_msgs/msg/PoseWithCovarianceStamped",
   "geometry_msgs/msg/TransformStamped",
   "nav_msgs/msg/Odometry",
   "geometry_msgs/msg/Pose",
   "geometry_msgs/msg/Transform",
+  "tf2_msgs/msg/TFMessage",
 }};
 
 // cppcheck-suppress passedByValue
@@ -78,14 +82,22 @@ bool is_unstamped_type(std::string_view type_name)
   return type_name == "geometry_msgs/msg/Pose" || type_name == "geometry_msgs/msg/Transform";
 }
 
-// Only Odometry and TransformStamped carry a top-level child_frame_id
-// that names the moving frame. `--to` (tracked frame) requires one of
-// these so the "retarget to a different rigid body" composition is well
-// defined.
+// cppcheck-suppress passedByValue
+bool is_tf_message_type(std::string_view type_name)
+{
+  return type_name == kTfMessageType;
+}
+
+// Types where `--to` (tracked frame) is meaningful. Odometry and
+// TransformStamped carry a top-level child_frame_id, so the override
+// composes against that. TFMessage carries no single (parent, child)
+// edge at the message level, so `--to` (and `--from`) are mandatory and
+// select which edge of the TF tree to extract via lookup.
 // cppcheck-suppress passedByValue
 bool type_has_child_frame(std::string_view type_name)
 {
-  return type_name == "nav_msgs/msg/Odometry" || type_name == "geometry_msgs/msg/TransformStamped";
+  return type_name == "nav_msgs/msg/Odometry" ||
+         type_name == "geometry_msgs/msg/TransformStamped" || is_tf_message_type(type_name);
 }
 
 // /tf_static and any topic whose name terminates in "tf_static" use the
@@ -115,6 +127,8 @@ constexpr const char * kSupportedTypesHelp =
   "  Unstamped (timestamp from bag log time):\n"
   "    - geometry_msgs/msg/Pose\n"
   "    - geometry_msgs/msg/Transform\n"
+  "  Multi-edge (requires both --from and --to):\n"
+  "    - tf2_msgs/msg/TFMessage  (one row per input message via TF lookup)\n"
   "\n"
   "Frame selection\n"
   "  --from <frame>  Reference (fixed) frame the output is expressed in.\n"
@@ -125,7 +139,9 @@ constexpr const char * kSupportedTypesHelp =
   "                  types that do not carry child_frame_id.\n"
   "  Either flag pulls TF from the bag (any tf2_msgs/msg/TFMessage\n"
   "  topic; names ending in `tf_static` are treated as static). Fails\n"
-  "  fast if the bag has no TF or a lookup is out of range.";
+  "  fast if the bag has no TF or a lookup is out of range.\n"
+  "  For tf2_msgs/msg/TFMessage input both --from and --to are required;\n"
+  "  there is no implicit edge to extract.";
 
 struct TfTopic
 {
@@ -364,9 +380,19 @@ private:
     if (to_set && !type_has_child_frame(type_name)) {
       BAGWIZ_LOG_ERROR(
         kLogger,
-        "--to requires a type with child_frame_id (nav_msgs/msg/Odometry or "
-        "geometry_msgs/msg/TransformStamped); got '%s'.",
+        "--to requires a type with child_frame_id (nav_msgs/msg/Odometry, "
+        "geometry_msgs/msg/TransformStamped, or tf2_msgs/msg/TFMessage); got '%s'.",
         type_name.c_str());
+      return 1;
+    }
+    // TFMessage is N edges per message; without both --from and --to we
+    // have nothing to extract.
+    if (is_tf_message_type(type_name) && (!from_set || !to_set)) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "Topic '%s' has type 'tf2_msgs/msg/TFMessage'; both --from and --to are required to "
+        "select which edge of the TF tree to extract.",
+        args.topic.c_str());
       return 1;
     }
 
@@ -423,6 +449,43 @@ private:
             decode_result.error.c_str());
           return 1;
         }
+
+        // TFMessage carries N edges per message and has no single
+        // (frame_id, child_frame_id) pair; the buffer was already
+        // populated from every TF topic in the bag, so each input
+        // message just drives one lookup at its latest contained stamp.
+        if (is_tf_message_type(type_name)) {
+          const auto transforms = core::extract_tf_message(*decode_result.value);
+          if (transforms.empty()) {
+            continue;
+          }
+          std::int64_t stamp_ns = 0;
+          for (const auto & t : transforms) {
+            const auto t_ns = static_cast<std::int64_t>(t.header.stamp.sec) * 1'000'000'000LL +
+                              static_cast<std::int64_t>(t.header.stamp.nanosec);
+            if (t_ns > stamp_ns) {
+              stamp_ns = t_ns;
+            }
+          }
+          if (stamp_ns == 0) {
+            stamp_ns = raw.timestamp_ns;
+          }
+          const tf2::TimePoint tp{std::chrono::nanoseconds(stamp_ns)};
+          try {
+            const auto tf = tf_buffer.lookupTransform(args.from_frame, args.to_frame, tp);
+            core::TrajectoryPose out_pose;
+            out_pose.timestamp_ns = stamp_ns;
+            from_tf2(to_tf2(tf), out_pose);
+            poses.push_back(out_pose);
+          } catch (const tf2::TransformException & e) {
+            BAGWIZ_LOG_ERROR(
+              kLogger, "TF lookup failed at message #%ld (target='%s' source='%s' t=%ld ns): %s",
+              decoded, args.from_frame.c_str(), args.to_frame.c_str(), stamp_ns, e.what());
+            return 1;
+          }
+          continue;
+        }
+
         const auto extraction = core::extract_pose(*decode_result.value, raw.timestamp_ns);
         if (!extraction) {
           BAGWIZ_LOG_ERROR(
