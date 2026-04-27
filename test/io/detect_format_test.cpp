@@ -168,3 +168,36 @@ TEST_F(DetectFormatTest, EmptyDirectoryReturnsAuto)
   std::filesystem::create_directories(dir);
   EXPECT_EQ(bagwiz::io::detect_format(dir), bagwiz::io::Format::Auto);
 }
+
+// `infer_format_from_extension` is intended for output paths chosen by the
+// user — the file does not need to exist. Only the extension is consulted,
+// so renaming is irrelevant here (callers that need magic-byte truth use
+// `detect_format` instead).
+TEST(InferFormatFromExtension, McapExtension)
+{
+  EXPECT_EQ(bagwiz::io::infer_format_from_extension("/tmp/out.mcap"), bagwiz::io::Format::Mcap);
+}
+
+TEST(InferFormatFromExtension, Sqlite3Extension)
+{
+  EXPECT_EQ(bagwiz::io::infer_format_from_extension("/tmp/out.db3"), bagwiz::io::Format::Sqlite3);
+}
+
+TEST(InferFormatFromExtension, DirectoryStyleReturnsAuto)
+{
+  EXPECT_EQ(bagwiz::io::infer_format_from_extension("/tmp/out_dir"), bagwiz::io::Format::Auto);
+  EXPECT_EQ(bagwiz::io::infer_format_from_extension("/tmp/out_dir/"), bagwiz::io::Format::Auto);
+}
+
+TEST(InferFormatFromExtension, UnknownExtensionReturnsAuto)
+{
+  EXPECT_EQ(bagwiz::io::infer_format_from_extension("/tmp/out.bag"), bagwiz::io::Format::Auto);
+  EXPECT_EQ(bagwiz::io::infer_format_from_extension("/tmp/out.txt"), bagwiz::io::Format::Auto);
+}
+
+TEST(InferFormatFromExtension, UppercaseExtensionReturnsAuto)
+{
+  // Case-sensitive on purpose — uppercase extensions are rare enough in
+  // rosbag2 tooling that we'd rather force `--storage` than guess.
+  EXPECT_EQ(bagwiz::io::infer_format_from_extension("/tmp/out.MCAP"), bagwiz::io::Format::Auto);
+}
