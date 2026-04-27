@@ -267,7 +267,12 @@ private:
       return 1;
     }
 
-    tf2::BufferCore tf_buffer;
+    // Default tf2::BufferCore cache is 10 s, which silently ages out
+    // older transforms while we replay an entire bag into it: by the
+    // time loading finishes the buffer only has the last 10 s. Use a
+    // very large window so every transform from the bag stays
+    // available for lookup.
+    tf2::BufferCore tf_buffer{std::chrono::hours(24 * 365)};
     std::vector<std::int64_t> timeline;
     try {
       load_tf_and_timeline(args.input_path, tf_topics, tf_buffer, timeline);

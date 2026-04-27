@@ -443,7 +443,13 @@ private:
     // pre-filtered candidates already have the desired (frame_id,
     // child_frame_id) and no compose is needed, so use_tf is false
     // and we skip the buffer pass.
-    tf2::BufferCore tf_buffer;
+    //
+    // Cache window: tf2::BufferCore defaults to 10 s, which silently
+    // ages out older transforms as the bag streams in; by the time
+    // loading finishes the buffer only retains the last 10 s and any
+    // earlier lookup reports "extrapolation into the past". Use a
+    // very large window so the entire bag fits.
+    tf2::BufferCore tf_buffer{std::chrono::hours(24 * 365)};
     if (use_tf) {
       const auto tf_topics = collect_tf_topics(*reader);
       if (tf_topics.empty()) {
