@@ -64,7 +64,8 @@ std::filesystem::path write_fixture_mcap(const std::filesystem::path & dir)
     msg.publishTime = msg.logTime;
     msg.data = reinterpret_cast<const std::byte *>(payload.data());
     msg.dataSize = payload.size();
-    writer.write(msg);
+    const auto write_status = writer.write(msg);
+    EXPECT_TRUE(write_status.ok()) << write_status.message;
   }
   for (int i = 0; i < 2; ++i) {
     mcap::Message msg;
@@ -74,7 +75,8 @@ std::filesystem::path write_fixture_mcap(const std::filesystem::path & dir)
     msg.publishTime = msg.logTime;
     msg.data = reinterpret_cast<const std::byte *>(payload.data());
     msg.dataSize = payload.size();
-    writer.write(msg);
+    const auto write_status = writer.write(msg);
+    EXPECT_TRUE(write_status.ok()) << write_status.message;
   }
 
   writer.close();
