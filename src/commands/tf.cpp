@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -355,8 +356,15 @@ private:
 
     std::size_t index = 0;
     std::string status;
+    // When the current step's lookup fails with extrapolation, the
+    // renderer fills this with the timeline index of the first/last
+    // valid step so the [s] handler below can jump there directly.
+    // Cleared on entry to every render so a successful lookup
+    // disables the jump key.
+    std::optional<std::size_t> jump_target;
 
     auto render = [&]() {
+      jump_target.reset();
       fmt::print(stdout, "\x1b[2J\x1b[H");
       const std::int64_t ts = timeline[index];
       fmt::print(stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
@@ -420,23 +428,25 @@ private:
                           : "boundary",
             delta, info.stamp_s);
 
-          // Locate the timeline step that brackets the boundary so the
-          // user can jump there directly. lower_bound for "past" =
-          // first step at-or-after the earliest available stamp;
-          // upper_bound-1 for "future" = last step at-or-before the
-          // latest available stamp.
+          // Locate the timeline step that brackets the boundary so
+          // the [s] key can jump there in one keystroke. lower_bound
+          // for "past" = first step at-or-after the earliest
+          // available stamp; upper_bound-1 for "future" = last step
+          // at-or-before the latest available stamp.
           const std::int64_t boundary_ns = static_cast<std::int64_t>(info.stamp_s * 1e9);
           if (info.past) {
             const auto it = std::lower_bound(timeline.begin(), timeline.end(), boundary_ns);
             if (it != timeline.end()) {
-              const std::size_t target = std::distance(timeline.begin(), it) + 1;
-              fmt::print(stdout, "   Try [→] / [G] (next valid step: {}).\n", target);
+              jump_target = static_cast<std::size_t>(std::distance(timeline.begin(), it));
+              fmt::print(
+                stdout, "   Press [s] to jump to step {} (first valid).\n", *jump_target + 1);
             }
           } else if (info.future) {
             const auto it = std::upper_bound(timeline.begin(), timeline.end(), boundary_ns);
             if (it != timeline.begin()) {
-              const std::size_t target = std::distance(timeline.begin(), it);
-              fmt::print(stdout, "   Try [←] / [g] (last valid step: {}).\n", target);
+              jump_target = static_cast<std::size_t>(std::distance(timeline.begin(), it)) - 1;
+              fmt::print(
+                stdout, "   Press [s] to jump to step {} (last valid).\n", *jump_target + 1);
             }
           }
         }
@@ -450,7 +460,9 @@ private:
         fmt::print(stdout, "⚠  Lookup failed at this step: {}\n", e.what());
       }
 
-      fmt::print(stdout, "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [q] quit\n");
+      fmt::print(
+        stdout,
+        "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [s] skip-to-valid   [q] quit\n");
       if (!status.empty()) {
         fmt::print(stdout, "  {}\n", status);
       }
@@ -483,6 +495,16 @@ private:
           break;
         case core::KeyEvent::kLast:
           index = timeline.size() - 1;
+          break;
+        case core::KeyEvent::kJumpToValid:
+          // Jump to whichever step the renderer flagged as the
+          // boundary of valid data. Disabled on successful lookups
+          // because there is nothing meaningful to jump to.
+          if (jump_target) {
+            index = *jump_target;
+          } else {
+            status = "(this step is already valid; nothing to jump to)";
+          }
           break;
         case core::KeyEvent::kScrollUp:
         case core::KeyEvent::kScrollDown:
