@@ -299,8 +299,8 @@ private:
     sub->add_option("input", export_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option("topic", export_args_.topic, "Topic name to extract poses from")->required();
     sub->add_option("output", export_args_.output_path, "Output file path")->required();
+    sub->add_option("topic", export_args_.topic, "Topic name to extract poses from")->required();
     sub->add_option("-f,--format", export_args_.format, "Output format")
       ->default_val(kFormatTum)
       ->check(CLI::IsMember({kFormatTum}));
