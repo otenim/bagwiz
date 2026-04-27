@@ -192,6 +192,9 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_trajectory_test test/core/trajectory_test.cpp)
   target_link_libraries(bagwiz_trajectory_test bagwiz_core)
 
+  ament_add_gtest(bagwiz_tf_rotation_test test/core/tf_rotation_test.cpp)
+  target_link_libraries(bagwiz_tf_rotation_test bagwiz_core)
+
   ament_add_gtest(bagwiz_mcap_reader_test test/io/mcap_reader_test.cpp)
   target_link_libraries(bagwiz_mcap_reader_test bagwiz_core)
 
