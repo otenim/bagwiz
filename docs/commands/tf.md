@@ -40,9 +40,9 @@ bagwiz tf walk [OPTIONS] <input> <from> <to>
 - All `tf2_msgs/msg/TFMessage` topics are read in a single pass:
   - Topics whose name ends in `tf_static` are inserted as static
     transforms; everything else as dynamic transforms.
-  - The set of distinct timestamps emitted by **dynamic** `/tf`
-    messages becomes the walk's timeline. Each one is a moment at
-    which the TF tree observably changed.
+  - The set of distinct timestamps emitted by dynamic `/tf` messages
+    (i.e. excluding `tf_static`) becomes the walk's timeline. Each one
+    is a moment at which the TF tree observably changed.
 - Before entering the interactive view, bagwiz probes
   `lookupTransform(<from>, <to>, timeline.front())`:
   - If the chain is structurally broken (frame absent, no connecting
