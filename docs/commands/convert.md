@@ -89,9 +89,9 @@ bagwiz convert 2to1 <input> <output>
 
 - The output is a non-compressed ROS 1 bag v2.0.
 - rosbag2-layer compression on the input
-  (`compression_mode: FILE` / `MESSAGE` in `metadata.yaml`) is **not**
-  supported and rejected with a clear error. Decompress the input first
-  with `ros2 bag convert`.
+  (`compression_mode: FILE` / `MESSAGE` in `metadata.yaml`) is not
+  supported and is rejected with a clear error. Decompress the input
+  first with `ros2 bag convert`.
   - Note: MCAP chunk-level compression on a single-file MCAP input is
     transparent to bagwiz (libmcap handles it), and is therefore
     accepted.

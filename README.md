@@ -7,17 +7,17 @@ converting bag content without spinning up a ROS graph.
 
 ## Highlights
 
-- **Unified bag I/O** — directory-layout rosbag2, single-file `*.mcap`
+- Unified bag I/O — directory-layout rosbag2, single-file `*.mcap`
   / `*.db3`, and ROS 1 `*.bag` all open through the same reader API.
-- **Schema-driven decoding** — for MCAP shards that embed `ros2msg`
+- Schema-driven decoding — for MCAP shards that embed `ros2msg`
   schemas, no per-package typesupport `.so` is needed at runtime; the
   introspection fallback handles legacy MCAPs, SQLite3, and ROS 1.
-- **Interactive scrubbing** — `walk` and `tf walk` provide pager-style
+- Interactive scrubbing — `walk` and `tf walk` provide pager-style
   TUIs over messages and TF lookups.
-- **Cross-format conversion** — `convert` covers ROS 1 ↔ ROS 2 and
+- Cross-format conversion — `convert` covers ROS 1 ↔ ROS 2 and
   storage-only repacks (MCAP ↔ SQLite3) for the standard message
   whitelist.
-- **TUM trajectory export** — `traj export` lifts pose-bearing topics
+- TUM trajectory export — `traj export` lifts pose-bearing topics
   (and arbitrary `/tf` edges) into a tool-friendly file.
 
 ## Installation
