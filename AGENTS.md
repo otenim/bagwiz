@@ -56,3 +56,15 @@ Guidelines for AI agents contributing to this repository.
 - Write PR descriptions that are comprehensive and detailed, yet
   concise: cover the problem, the solution, and the test plan without
   unnecessary verbosity.
+
+## 7. Resource Management
+
+- When writing code that acquires or releases a resource (memory, file
+  handles, sockets, mutex locks, terminal modes, ROS handles, etc.),
+  follow the RAII principle as much as possible: tie the resource's
+  lifetime to a stack object whose constructor acquires it and whose
+  destructor releases it. Prefer standard wrappers (`std::unique_ptr`,
+  `std::lock_guard`, `std::fstream`, ...) or a small purpose-built
+  guard type over manual `new` / `delete`, paired `open` / `close`
+  calls scattered through the body, or `try` / `catch` blocks whose
+  only job is cleanup.
