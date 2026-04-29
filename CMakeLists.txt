@@ -12,6 +12,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rcutils REQUIRED)
 find_package(mcap_vendor REQUIRED)
 # yaml_cpp_vendor sets yaml-cpp_DIR so the real yaml-cpp package is found.
@@ -78,6 +79,7 @@ add_library(bagwiz_core
   src/core/logging.cpp
   src/core/message_deserializer.cpp
   src/core/message_formatter.cpp
+  src/core/msg_definition_resolver.cpp
   src/core/msg_schema/parser.cpp
   src/core/msg_schema/schema_model.cpp
   src/core/ros1_message_definitions.cpp
@@ -102,6 +104,7 @@ target_include_directories(bagwiz_core
     $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(bagwiz_core PUBLIC
+  ament_index_cpp
   rcutils
   mcap_vendor
   yaml_cpp_vendor
@@ -216,6 +219,10 @@ if(BUILD_TESTING)
   ament_add_gtest(
     bagwiz_ros1_message_definitions_test test/core/ros1_message_definitions_test.cpp)
   target_link_libraries(bagwiz_ros1_message_definitions_test bagwiz_core)
+
+  ament_add_gtest(
+    bagwiz_msg_definition_resolver_test test/core/msg_definition_resolver_test.cpp)
+  target_link_libraries(bagwiz_msg_definition_resolver_test bagwiz_core)
 
   ament_add_gtest(bagwiz_rosbag1_reader_test test/io/rosbag1_reader_test.cpp)
   target_link_libraries(bagwiz_rosbag1_reader_test bagwiz_core)

@@ -10,6 +10,7 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/core/cdr_to_ros1.hpp"
 #include "bagwiz/core/logging.hpp"
+#include "bagwiz/core/msg_definition_resolver.hpp"
 #include "bagwiz/core/ros1_message_definitions.hpp"
 #include "bagwiz/core/ros1_to_cdr.hpp"
 #include "bagwiz/io/bag_io.hpp"
@@ -616,15 +617,50 @@ private:
     // SQLite3 where schemas are either already loaded or not embedded).
     reader->populate_schemas();
 
+    // SQLite3 storage in Humble (and earlier) does not embed message
+    // definitions, so reader->topics() comes back with empty
+    // schema_text. Resolve each missing definition from
+    // $AMENT_PREFIX_PATH/share/<pkg>/msg/<Type>.msg before declaring
+    // the topic — otherwise the resulting MCAP loses self-description
+    // and breaks strict downstream readers like rosbags-convert.
     std::size_t declared = 0;
+    std::size_t resolved_defs = 0;
+    std::size_t unresolved_defs = 0;
     for (const auto & t : reader->topics()) {
+      io::TopicInfo augmented = t;
+      if (augmented.schema_text.empty()) {
+        auto resolved = core::resolve_message_definition(augmented.type);
+        if (!resolved.text.empty()) {
+          augmented.schema_text = std::move(resolved.text);
+          augmented.schema_encoding = std::move(resolved.encoding);
+          ++resolved_defs;
+        } else {
+          ++unresolved_defs;
+          if (unresolved_defs <= 5) {
+            BAGWIZ_LOG_WARN(
+              kLogger,
+              "no .msg on disk for type '%s' (topic '%s'); writing MCAP without "
+              "self-description for this topic",
+              augmented.type.c_str(), augmented.name.c_str());
+          }
+        }
+      }
       try {
-        writer->declare_topic(t);
+        writer->declare_topic(augmented);
         ++declared;
       } catch (const std::exception & e) {
         BAGWIZ_LOG_WARN(
           kLogger, "declare_topic failed for '%s': %s; skipping topic", t.name.c_str(), e.what());
       }
+    }
+    if (resolved_defs > 0) {
+      BAGWIZ_LOG_INFO(
+        kLogger, "resolved %zu missing message definition(s) from $AMENT_PREFIX_PATH",
+        resolved_defs);
+    }
+    if (unresolved_defs > 5) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "(plus %zu more topic(s) without resolvable .msg)", unresolved_defs - 5);
     }
 
     uint64_t total_in = 0;
