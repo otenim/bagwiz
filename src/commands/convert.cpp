@@ -209,6 +209,14 @@ private:
     std::unordered_map<uint32_t, PerConn> per_conn;
     std::unordered_set<std::string> declared_topics;
 
+    // Track schema resolution outcomes so we can summarise at the end of
+    // the run. Without this, an MCAP output that silently lost
+    // self-description for half its topics would surface only as a
+    // Foxglove "schema encoding '' is not supported" error downstream.
+    std::size_t resolved_defs = 0;
+    std::size_t unresolved_defs = 0;
+    std::unordered_set<std::string> warned_types;
+
     auto ensure_declared = [&](uint32_t conn_id) -> PerConn * {
       auto it = per_conn.find(conn_id);
       if (it != per_conn.end()) {
@@ -253,6 +261,29 @@ private:
           t.type = pc.ros2_type;
           t.serialization_format = "cdr";
           t.offered_qos_profiles = "";  // ROS 1 has no equivalent
+
+          // Resolve the ROS 2 .msg text from $AMENT_PREFIX_PATH so MCAP
+          // outputs carry self-description. Without this, Foxglove
+          // rejects the channel with `schema encoding '' is not
+          // supported`. ROS 1's `message_definition` field carries the
+          // ROS 1 grammar, which is not what ROS 2 readers expect, so
+          // we ignore it and resolve from the installed ROS 2 packages.
+          auto resolved = core::resolve_message_definition(pc.ros2_type);
+          if (!resolved.text.empty()) {
+            t.schema_text = std::move(resolved.text);
+            t.schema_encoding = std::move(resolved.encoding);
+            ++resolved_defs;
+          } else if (warned_types.insert(pc.ros2_type).second) {
+            ++unresolved_defs;
+            if (unresolved_defs <= 5) {
+              BAGWIZ_LOG_WARN(
+                kLogger,
+                "no .msg on disk for type '%s' (topic '%s'); writing without "
+                "self-description for this topic",
+                pc.ros2_type.c_str(), pc.topic.c_str());
+            }
+          }
+
           try {
             writer->declare_topic(t);
             declared_topics.insert(pc.topic);
@@ -330,6 +361,15 @@ private:
     BAGWIZ_LOG_INFO(
       kLogger, "Conversion done: %" PRIu64 "/%" PRIu64 " messages written across %zu topic(s)",
       total_out, total_in, declared_topics.size());
+    if (resolved_defs > 0) {
+      BAGWIZ_LOG_INFO(
+        kLogger, "resolved %zu missing message definition(s) from $AMENT_PREFIX_PATH",
+        resolved_defs);
+    }
+    if (unresolved_defs > 5) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "(plus %zu more type(s) without resolvable .msg)", unresolved_defs - 5);
+    }
     for (const auto & [conn_id, pc] : per_conn) {
       if (pc.keep && pc.failures > 0) {
         BAGWIZ_LOG_WARN(
