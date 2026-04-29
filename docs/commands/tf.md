@@ -1,10 +1,13 @@
 # `bagwiz tf`
 
-TF inspection. Currently ships a single subcommand:
+TF inspection on a ROS 2 rosbag. Currently ships a single subcommand:
 
 | Subcommand                | Purpose                                                              |
 | ------------------------- | -------------------------------------------------------------------- |
 | [`walk`](#bagwiz-tf-walk) | Step through the TF between two frames at each dynamic `/tf` update. |
+
+ROS 1 `*.bag` inputs are not supported — convert them first with
+[`bagwiz convert 1to2`](convert.md#bagwiz-convert-1to2).
 
 ---
 
@@ -25,7 +28,7 @@ bagwiz tf walk [OPTIONS] <input> <from> <to>
 
 | Name    | Description                                                                        |
 | ------- | ---------------------------------------------------------------------------------- |
-| `input` | Bag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.bag`).                          |
+| `input` | ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`).                          |
 | `from`  | Reference (fixed) frame — the output expresses `<to>` in this frame's coordinates. |
 | `to`    | Tracked (moving) frame to sample.                                                  |
 

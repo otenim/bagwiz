@@ -1,7 +1,8 @@
 # `bagwiz ls`
 
-List the topics contained in a single rosbag, with per-topic message counts
-and average frequencies.
+List the topics contained in a single ROS 2 rosbag, with per-topic message
+counts and average frequencies. ROS 1 `*.bag` inputs are not supported —
+convert them first with [`bagwiz convert 1to2`](convert.md#bagwiz-convert-1to2).
 
 ## Usage
 
@@ -11,9 +12,9 @@ bagwiz ls [OPTIONS] <input>
 
 ## Positional arguments
 
-| Name    | Description                                                                                           |
-| ------- | ----------------------------------------------------------------------------------------------------- |
-| `input` | Bag path. Either a rosbag2 directory, a single-file rosbag2 (`*.mcap` / `*.db3`), or a ROS 1 `*.bag`. |
+| Name    | Description                                                                 |
+| ------- | --------------------------------------------------------------------------- |
+| `input` | ROS 2 rosbag path: a rosbag2 directory or a single-file `*.mcap` / `*.db3`. |
 
 ## Options
 
