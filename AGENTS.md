@@ -7,6 +7,10 @@ Guidelines for AI agents contributing to this repository.
 - Always write source code and documentation in English.
 - When modifying source code, update the corresponding documentation
   (e.g. `README.md`, command-line help text) to reflect the changes.
+- When writing documentation, always consult the corresponding source
+  code so that the description does not drift from the actual
+  behavior. Verify claims against the implementation rather than
+  relying on memory or assumptions.
 - Use bold (`**...**`) sparingly in Markdown (documentation, PR
   descriptions, commit message bodies). Reserve it for genuinely
   critical warnings or terms that must stand out from surrounding
