@@ -21,8 +21,16 @@ namespace bagwiz::core
 
 // Translate a ROS 1 type name (e.g. "std_msgs/Header") to the ROS 2 type
 // name we will write into the output bag (e.g. "std_msgs/msg/Header").
-// Returns nullopt for any type the converter does not handle; callers
-// should drop those topics with a warning.
+//
+// The mapping is auto-derived for any well-formed `pkg/Type` input by
+// inserting the `/msg/` infix. A small override table handles historical
+// renames that don't follow the `/msg/` rule (e.g. `tf/tfMessage` →
+// `tf2_msgs/msg/TFMessage`); see `ros1_to_ros2_renames` in the .cpp.
+//
+// Returns nullopt only for malformed inputs (empty, missing slash,
+// extra path segments, non-identifier segments). Callers must still
+// validate that the resulting ROS 2 type can be loaded — auto-derive
+// tells you what name to look up, not whether it exists.
 std::optional<std::string> map_ros1_type(std::string_view ros1_type);
 
 struct Ros1ToCdrResult
@@ -38,16 +46,14 @@ struct Ros1ToCdrResult
 //
 // Implementation notes:
 //   * Loads the destination type's introspection via the existing
-//     `load_introspection` helper. Any unknown type produces ok=false.
+//     `load_introspection` helper. Types whose package isn't installed
+//     (no `lib<pkg>__rosidl_typesupport_introspection_cpp.so`) produce
+//     ok=false; callers handle that as a topic-skip.
 //   * Walks the destination type's field tree. ROS 1 raw and CDR share
 //     primitive layouts (little-endian, same widths) so primitives are
 //     a memcpy plus alignment padding.
 //   * std_msgs/msg/Header has its 4-byte ROS 1 `seq` field skipped on
 //     input; ROS 2 dropped this field.
-//   * Custom types that are not in the whitelist still pass through if
-//     the introspection happens to be loadable and structurally
-//     identical, but they are gated by map_ros1_type() upstream so the
-//     code path is normally not exercised for them.
 Ros1ToCdrResult convert_ros1_to_cdr(
   std::string_view dest_ros2_type, std::span<const std::byte> ros1_payload);
 

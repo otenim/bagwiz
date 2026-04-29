@@ -70,20 +70,38 @@ private:
 
 }  // namespace
 
-TEST(CdrToRos1, MapsKnownTypes)
+TEST(CdrToRos1, AutoDerivesArbitraryTypes)
 {
+  // Any well-formed `pkg/msg/Type` strips the `/msg/` infix to produce
+  // the ROS 1 form, regardless of whether the type was previously
+  // hard-coded in a whitelist.
   EXPECT_EQ(*bagwiz::core::map_ros2_type("std_msgs/msg/Header"), "std_msgs/Header");
   EXPECT_EQ(
     *bagwiz::core::map_ros2_type("geometry_msgs/msg/PoseStamped"), "geometry_msgs/PoseStamped");
-  // tf collision: forward had two ROS 1 sources, reverse picks the canonical one.
+  // tf modernisation: forward had `tf/tfMessage` (legacy) and
+  // `tf2_msgs/TFMessage` (modern); reverse always picks the modern form
+  // since auto-derive strips `/msg/` directly.
   EXPECT_EQ(*bagwiz::core::map_ros2_type("tf2_msgs/msg/TFMessage"), "tf2_msgs/TFMessage");
   EXPECT_EQ(*bagwiz::core::map_ros2_type("can_msgs/msg/Frame"), "can_msgs/Frame");
+  // Custom types not in any historical whitelist now derive cleanly.
+  EXPECT_EQ(
+    *bagwiz::core::map_ros2_type("autoware_msgs/msg/DetectedObject"),
+    "autoware_msgs/DetectedObject");
+  EXPECT_EQ(*bagwiz::core::map_ros2_type("foo_pkg/msg/Bar"), "foo_pkg/Bar");
 }
 
-TEST(CdrToRos1, MapsUnknownTypeToNullopt)
+TEST(CdrToRos1, MalformedTypeReturnsNullopt)
 {
-  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo_pkg/msg/Bar").has_value());
-  EXPECT_FALSE(bagwiz::core::map_ros2_type("std_msgs/msg/SomethingWeird").has_value());
+  // Inputs without the `/msg/` infix or with malformed segments must
+  // return nullopt so callers skip the topic.
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("just_a_word").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo/Bar").has_value());          // missing /msg/
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("/msg/Bar").has_value());         // empty pkg
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo/msg/").has_value());         // empty type
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo/msg/Sub/Bar").has_value());  // extra segment
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("1foo/msg/Bar").has_value());  // pkg starts with digit
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo-pkg/msg/Bar").has_value());  // hyphen invalid
 }
 
 TEST(CdrToRos1, CanMsgsFrameRos1MetaMatchesUpstream)
