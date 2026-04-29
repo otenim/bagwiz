@@ -1,18 +1,21 @@
 # `bagwiz traj`
 
-Trajectory-shaped operations on a rosbag. Currently ships a single
+Trajectory-shaped operations on a ROS 2 rosbag. Currently ships a single
 subcommand:
 
 | Subcommand                      | Purpose                                                  |
 | ------------------------------- | -------------------------------------------------------- |
 | [`export`](#bagwiz-traj-export) | Extract a topic's pose trajectory and save it to a file. |
 
+ROS 1 `*.bag` inputs are not supported — convert them first with
+[`bagwiz convert 1to2`](convert.md#bagwiz-convert-1to2).
+
 ---
 
 ## `bagwiz traj export`
 
-Extract a pose-bearing topic from a bag and write the resulting trajectory
-to a file in a tool-friendly format.
+Extract a pose-bearing topic from a ROS 2 rosbag and write the resulting
+trajectory to a file in a tool-friendly format.
 
 ### Usage
 
@@ -24,7 +27,7 @@ bagwiz traj export [OPTIONS] <input> <output> <topic>
 
 | Name     | Description                                               |
 | -------- | --------------------------------------------------------- |
-| `input`  | Bag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.bag`). |
+| `input`  | ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`). |
 | `output` | Output file path. Will be truncated if it already exists. |
 | `topic`  | Topic name to extract poses from.                         |
 
