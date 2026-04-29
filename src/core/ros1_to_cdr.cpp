@@ -92,6 +92,12 @@ const std::unordered_map<std::string, std::string> & ros1_to_ros2_typemap()
     {"diagnostic_msgs/DiagnosticStatus", "diagnostic_msgs/msg/DiagnosticStatus"},
     {"diagnostic_msgs/KeyValue", "diagnostic_msgs/msg/KeyValue"},
 
+    // can_msgs is from ros-industrial/ros_canopen and is wire-compatible
+    // between ROS 1 and ROS 2 (the only structural difference is the
+    // ROS 1 Header.seq prefix, which the Header pre-hook already
+    // handles for every message that embeds Header).
+    {"can_msgs/Frame", "can_msgs/msg/Frame"},
+
     {"builtin_interfaces/Time", "builtin_interfaces/msg/Time"},
     {"builtin_interfaces/Duration", "builtin_interfaces/msg/Duration"},
   };

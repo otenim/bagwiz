@@ -702,9 +702,13 @@ const std::unordered_map<std::string, Ros1TypeMeta> & build_table()
       "float64 variance        # 0 is interpreted as variance unknown\n";
     m.emplace(
       "sensor_msgs/Temperature",
-      Ros1TypeMeta{
-        "ff71b307acdbe7c871a5a6cd1fd4c8f9",
-        compose({temperature_msg, "\n", kSep, "MSG: std_msgs/Header\n", kHeaderMsg})});
+      Ros1TypeMeta{// Verified via `rosmsg md5 sensor_msgs/Temperature` on
+                   // ros-noetic-sensor-msgs. The previous value differed in the
+                   // last 14 hex characters — likely a transcription typo — and
+                   // would have caused ROS 1 readers to reject bags produced by
+                   // `convert 2to1`.
+                   "ff71b307acdbe7c871a5a6d7ed359100",
+                   compose({temperature_msg, "\n", kSep, "MSG: std_msgs/Header\n", kHeaderMsg})});
 
     constexpr std::string_view fluid_pressure_msg =
       " # Single pressure reading.  This message is appropriate for measuring the\n"
@@ -779,7 +783,12 @@ const std::unordered_map<std::string, Ros1TypeMeta> & build_table()
     m.emplace(
       "diagnostic_msgs/DiagnosticStatus",
       Ros1TypeMeta{
-        "67c8e9c47e2876d3b1e5dac0fdf3a39c",
+        // Verified via `rosmsg md5 diagnostic_msgs/DiagnosticStatus` on
+        // ros-noetic-diagnostic-msgs. The previous value here was wrong
+        // (didn't match any md5 algorithm variant against the canonical
+        // .msg) and would have caused ROS 1 readers to reject bags
+        // produced by `convert 2to1`.
+        "d0ce08bc6e5ba34c7754f563a9cabaf1",
         compose(
           {diagnostic_status_msg, "\n", kSep, "MSG: diagnostic_msgs/KeyValue\n", key_value_msg})});
 
@@ -795,6 +804,23 @@ const std::unordered_map<std::string, Ros1TypeMeta> & build_table()
           {diagnostic_array_msg, "\n", kSep, "MSG: std_msgs/Header\n", kHeaderMsg, "\n", kSep,
            "MSG: diagnostic_msgs/DiagnosticStatus\n", diagnostic_status_msg, "\n", kSep,
            "MSG: diagnostic_msgs/KeyValue\n", key_value_msg})});
+
+    // ---- can_msgs (ros-industrial/ros_canopen) ----
+    // The .msg text below matches what `rosmsg show -r can_msgs/Frame`
+    // emits on Noetic (ros-noetic-can-msgs 0.8.5). md5 verified against
+    // `rosmsg md5 can_msgs/Frame` in a Noetic container.
+    constexpr std::string_view frame_msg =
+      "Header header\n"
+      "uint32 id\n"
+      "bool is_rtr\n"
+      "bool is_extended\n"
+      "bool is_error\n"
+      "uint8 dlc\n"
+      "uint8[8] data\n";
+    m.emplace(
+      "can_msgs/Frame", Ros1TypeMeta{
+                          "64ae5cebf967dc6aae4e78f5683a5b25",
+                          compose({frame_msg, "\n", kSep, "MSG: std_msgs/Header\n", kHeaderMsg})});
 
     return m;
   }();

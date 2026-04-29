@@ -213,6 +213,10 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_cdr_to_ros1_test test/core/cdr_to_ros1_test.cpp)
   target_link_libraries(bagwiz_cdr_to_ros1_test bagwiz_core)
 
+  ament_add_gtest(
+    bagwiz_ros1_message_definitions_test test/core/ros1_message_definitions_test.cpp)
+  target_link_libraries(bagwiz_ros1_message_definitions_test bagwiz_core)
+
   ament_add_gtest(bagwiz_rosbag1_reader_test test/io/rosbag1_reader_test.cpp)
   target_link_libraries(bagwiz_rosbag1_reader_test bagwiz_core)
 
