@@ -9,6 +9,7 @@
 #include "bagwiz/io/bag_io.hpp"
 
 #include <gtest/gtest.h>
+#include <sqlite3.h>
 
 #include <array>
 #include <cstddef>
@@ -270,11 +271,12 @@ TEST_F(WriterRoundTripTest, McapEmptySchemaStillSucceeds)
   }
 }
 
-TEST_F(WriterRoundTripTest, Sqlite3IgnoresSchemaFields)
+TEST_F(WriterRoundTripTest, Sqlite3PreservesSchemaFieldsViaMessageDefinitionsTable)
 {
-  // SQLite3 storage has no slot for schema bytes, so they are dropped on
-  // write and absent on read. The roundtrip succeeds; the schema_text
-  // field round-trips to the empty string regardless of input.
+  // SQLite3 v4 storage carries schema bytes in the `message_definitions`
+  // table (added in Iron). bagwiz writes the v4 layout unconditionally
+  // and round-trips schema_text / schema_encoding accordingly. Topics
+  // sharing a type point at one shared message_definitions row.
   const std::vector<bagwiz::io::TopicInfo> topics = {
     make_topic_with_schema("/foo", "std_msgs/msg/String", "string data"),
     make_topic_with_schema("/bar", "std_msgs/msg/Int32", "int32 data"),
@@ -287,8 +289,144 @@ TEST_F(WriterRoundTripTest, Sqlite3IgnoresSchemaFields)
   write_fixture(path, options, topics, messages_);
 
   auto reader = bagwiz::io::open_read(path);
+  std::size_t matched = 0;
   for (const auto & t : reader->topics()) {
-    EXPECT_TRUE(t.schema_text.empty()) << t.name;
-    EXPECT_TRUE(t.schema_encoding.empty()) << t.name;
+    if (t.name == "/foo") {
+      EXPECT_EQ(t.schema_text, "string data") << "schema_text not preserved for /foo";
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      ++matched;
+    } else if (t.name == "/bar") {
+      EXPECT_EQ(t.schema_text, "int32 data") << "schema_text not preserved for /bar";
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      ++matched;
+    }
   }
+  EXPECT_EQ(matched, 2U);
+}
+
+TEST_F(WriterRoundTripTest, Sqlite3WritesIronCompatibleV4Layout)
+{
+  // Verify the on-disk layout matches Iron rosbag2's expected
+  // schema_version=4: `topics.type_description_hash` column exists,
+  // `message_definitions` table exists, and `schema(schema_version)`
+  // reports 4. This is the structural contract Iron+ rosbag2 readers
+  // probe for via `field_exists` / `table_exists`.
+  bagwiz::io::TopicInfo t;
+  t.name = "/imu";
+  t.type = "sensor_msgs/msg/Imu";
+  t.serialization_format = "cdr";
+  t.schema_encoding = "ros2msg";
+  t.schema_text = "stub";
+  t.type_description_hash = "RIHS01_deadbeef";
+
+  const auto path = tmp_dir_ / "iron_layout.db3";
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Sqlite3;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  const std::vector<bagwiz::io::TopicInfo> topics = {t};
+  const std::vector<std::pair<std::string, int64_t>> empty_msgs;
+  write_fixture(path, options, topics, empty_msgs);
+
+  // Probe the on-disk schema directly with sqlite3 — this is the
+  // identical interrogation Iron's rosbag2 reader performs.
+  sqlite3 * db = nullptr;
+  ASSERT_EQ(sqlite3_open(path.string().c_str(), &db), SQLITE_OK);
+
+  const auto column_exists = [&](const std::string & table, const std::string & col) {
+    sqlite3_stmt * stmt = nullptr;
+    EXPECT_EQ(
+      sqlite3_prepare_v2(db, ("PRAGMA table_info('" + table + "')").c_str(), -1, &stmt, nullptr),
+      SQLITE_OK);
+    bool found = false;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      const auto * name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+      if (name != nullptr && col == name) {
+        found = true;
+        break;
+      }
+    }
+    sqlite3_finalize(stmt);
+    return found;
+  };
+  const auto table_exists = [&](const std::string & name) {
+    sqlite3_stmt * stmt = nullptr;
+    EXPECT_EQ(
+      sqlite3_prepare_v2(
+        db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", -1, &stmt, nullptr),
+      SQLITE_OK);
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    const bool found = sqlite3_step(stmt) == SQLITE_ROW;
+    sqlite3_finalize(stmt);
+    return found;
+  };
+
+  EXPECT_TRUE(column_exists("topics", "type_description_hash"));
+  EXPECT_TRUE(table_exists("message_definitions"));
+  EXPECT_TRUE(column_exists("message_definitions", "encoded_message_definition"));
+
+  // Verify the schema_version row.
+  sqlite3_stmt * stmt = nullptr;
+  ASSERT_EQ(
+    sqlite3_prepare_v2(db, "SELECT schema_version FROM schema", -1, &stmt, nullptr), SQLITE_OK);
+  ASSERT_EQ(sqlite3_step(stmt), SQLITE_ROW);
+  EXPECT_EQ(sqlite3_column_int(stmt, 0), 4);
+  sqlite3_finalize(stmt);
+
+  // Verify the message_definitions row content matches what we wrote.
+  ASSERT_EQ(
+    sqlite3_prepare_v2(
+      db,
+      "SELECT topic_type, encoding, encoded_message_definition, type_description_hash "
+      "FROM message_definitions",
+      -1, &stmt, nullptr),
+    SQLITE_OK);
+  ASSERT_EQ(sqlite3_step(stmt), SQLITE_ROW);
+  EXPECT_EQ(
+    std::string(reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0))),
+    "sensor_msgs/msg/Imu");
+  EXPECT_EQ(std::string(reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1))), "ros2msg");
+  EXPECT_EQ(std::string(reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2))), "stub");
+  EXPECT_EQ(
+    std::string(reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3))), "RIHS01_deadbeef");
+  sqlite3_finalize(stmt);
+
+  // type_description_hash must also be on the topics row.
+  ASSERT_EQ(
+    sqlite3_prepare_v2(db, "SELECT type_description_hash FROM topics", -1, &stmt, nullptr),
+    SQLITE_OK);
+  ASSERT_EQ(sqlite3_step(stmt), SQLITE_ROW);
+  EXPECT_EQ(
+    std::string(reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0))), "RIHS01_deadbeef");
+  sqlite3_finalize(stmt);
+
+  sqlite3_close(db);
+}
+
+TEST_F(WriterRoundTripTest, Sqlite3DedupsMessageDefinitionsByType)
+{
+  // Two topics on the same type must produce exactly one
+  // message_definitions row — matching upstream rosbag2 behaviour
+  // (one row per unique topic_type, not per topic).
+  const std::vector<bagwiz::io::TopicInfo> topics = {
+    make_topic_with_schema("/a", "std_msgs/msg/String", "string data"),
+    make_topic_with_schema("/b", "std_msgs/msg/String", "string data"),
+  };
+
+  const auto path = tmp_dir_ / "dedup_msgdef.db3";
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Sqlite3;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  const std::vector<std::pair<std::string, int64_t>> empty_msgs;
+  write_fixture(path, options, topics, empty_msgs);
+
+  sqlite3 * db = nullptr;
+  ASSERT_EQ(sqlite3_open(path.string().c_str(), &db), SQLITE_OK);
+  sqlite3_stmt * stmt = nullptr;
+  ASSERT_EQ(
+    sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM message_definitions", -1, &stmt, nullptr),
+    SQLITE_OK);
+  ASSERT_EQ(sqlite3_step(stmt), SQLITE_ROW);
+  EXPECT_EQ(sqlite3_column_int(stmt, 0), 1);
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
 }

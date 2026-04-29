@@ -42,8 +42,15 @@ struct TopicInfo
   std::string schema_encoding;  // "ros2msg", "ros2idl", or empty if unknown
   std::string schema_text;      // raw bytes from the storage layer, decoded as
                                 // UTF-8; empty when the storage carries no
-                                // schema (SQLite3 today, legacy MCAPs written
-                                // with empty Schema.data).
+                                // schema (legacy SQLite3 v3 bags, MCAPs
+                                // written with empty Schema.data).
+
+  // ROS 2 Iron-and-later type description hash ("RIHS01_<sha256>", per the
+  // rosidl_runtime_c type description spec). Iron+ rosbag2 SQLite3 v4 and
+  // some MCAPs propagate this; older formats leave it empty. bagwiz
+  // preserves it on round-trip but does not currently compute it for
+  // bags where it's missing.
+  std::string type_description_hash;
 };
 
 // Zero-copy view of a single message returned by BagReader::next(). Pointers
