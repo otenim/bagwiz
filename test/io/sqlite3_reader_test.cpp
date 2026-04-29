@@ -89,6 +89,57 @@ std::filesystem::path write_fixture_db3(const std::filesystem::path & dir)
   return path;
 }
 
+// Iron+ schema_version=4 fixture. Same row data as `write_fixture_db3`
+// but with the v4 column on `topics` and the `message_definitions`
+// table populated, so the reader can backfill schema_text /
+// schema_encoding / type_description_hash from the bag itself.
+std::filesystem::path write_fixture_db3_v4(const std::filesystem::path & dir)
+{
+  std::filesystem::create_directories(dir);
+  const auto path = dir / "bag_0.db3";
+
+  sqlite3 * db = nullptr;
+  EXPECT_EQ(sqlite3_open(path.string().c_str(), &db), SQLITE_OK);
+
+  const char * schema =
+    "CREATE TABLE schema(schema_version INTEGER PRIMARY KEY, ros_distro TEXT NOT NULL);"
+    "INSERT INTO schema(schema_version, ros_distro) VALUES (4, 'iron');"
+    "CREATE TABLE topics("
+    "  id INTEGER PRIMARY KEY,"
+    "  name TEXT NOT NULL,"
+    "  type TEXT NOT NULL,"
+    "  serialization_format TEXT NOT NULL,"
+    "  offered_qos_profiles TEXT NOT NULL,"
+    "  type_description_hash TEXT NOT NULL);"
+    "CREATE TABLE message_definitions("
+    "  id INTEGER PRIMARY KEY,"
+    "  topic_type TEXT NOT NULL,"
+    "  encoding TEXT NOT NULL,"
+    "  encoded_message_definition TEXT NOT NULL,"
+    "  type_description_hash TEXT NOT NULL);"
+    "CREATE TABLE messages("
+    "  id INTEGER PRIMARY KEY,"
+    "  topic_id INTEGER NOT NULL,"
+    "  timestamp INTEGER NOT NULL,"
+    "  data BLOB NOT NULL);"
+    "CREATE INDEX timestamp_idx ON messages (timestamp ASC);"
+    "INSERT INTO topics(id, name, type, serialization_format, offered_qos_profiles, "
+    "type_description_hash) VALUES"
+    "  (1, '/foo', 'std_msgs/msg/String', 'cdr', '', 'RIHS01_aaa'),"
+    "  (2, '/bar', 'std_msgs/msg/Int32', 'cdr', '', 'RIHS01_bbb');"
+    "INSERT INTO message_definitions(id, topic_type, encoding, encoded_message_definition, "
+    "type_description_hash) VALUES"
+    "  (1, 'std_msgs/msg/String', 'ros2msg', 'string data', 'RIHS01_aaa'),"
+    "  (2, 'std_msgs/msg/Int32', 'ros2msg', 'int32 data', 'RIHS01_bbb');";
+  char * errmsg = nullptr;
+  EXPECT_EQ(sqlite3_exec(db, schema, nullptr, nullptr, &errmsg), SQLITE_OK)
+    << (errmsg ? errmsg : "");
+  sqlite3_free(errmsg);
+
+  sqlite3_close(db);
+  return path;
+}
+
 std::filesystem::path write_fixture_directory(const std::filesystem::path & dir)
 {
   std::filesystem::create_directories(dir);
@@ -206,6 +257,59 @@ TEST_F(Sqlite3ReaderTest, OpensSingleFileAndListsTopics)
   for (const auto & t : reader->topics()) {
     EXPECT_TRUE(t.schema_text.empty());
     EXPECT_TRUE(t.schema_encoding.empty());
+  }
+}
+
+TEST_F(Sqlite3ReaderTest, ReadsIronSchemaV4WithMessageDefinitions)
+{
+  // Iron+ rosbag2 SQLite3 (schema_version=4) embeds per-type
+  // self-description in the `message_definitions` table and a
+  // `type_description_hash` column on `topics`. The reader must
+  // backfill TopicInfo's schema_text / schema_encoding /
+  // type_description_hash so callers don't need a local typestore
+  // overlay to decode messages.
+  const auto path = write_fixture_db3_v4(tmp_dir_ / "v4");
+
+  auto reader = bagwiz::io::open_read(path);
+  const auto topics = reader->topics();
+  ASSERT_EQ(topics.size(), 2U);
+
+  bool seen_foo = false;
+  bool seen_bar = false;
+  for (const auto & t : topics) {
+    if (t.name == "/foo") {
+      seen_foo = true;
+      EXPECT_EQ(t.type, "std_msgs/msg/String");
+      EXPECT_EQ(t.schema_text, "string data");
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      EXPECT_EQ(t.type_description_hash, "RIHS01_aaa");
+    } else if (t.name == "/bar") {
+      seen_bar = true;
+      EXPECT_EQ(t.type, "std_msgs/msg/Int32");
+      EXPECT_EQ(t.schema_text, "int32 data");
+      EXPECT_EQ(t.schema_encoding, "ros2msg");
+      EXPECT_EQ(t.type_description_hash, "RIHS01_bbb");
+    }
+  }
+  EXPECT_TRUE(seen_foo);
+  EXPECT_TRUE(seen_bar);
+}
+
+TEST_F(Sqlite3ReaderTest, ReadsLegacyV3WithoutMessageDefinitions)
+{
+  // Humble (schema_version=3) bags have no type_description_hash column
+  // and no message_definitions table. The reader must still load the
+  // 5-column form correctly and leave schema_text empty.
+  const auto path = write_fixture_db3(tmp_dir_ / "v3");
+
+  auto reader = bagwiz::io::open_read(path);
+  const auto topics = reader->topics();
+  ASSERT_EQ(topics.size(), 2U);
+
+  for (const auto & t : topics) {
+    EXPECT_TRUE(t.schema_text.empty()) << t.name;
+    EXPECT_TRUE(t.schema_encoding.empty()) << t.name;
+    EXPECT_TRUE(t.type_description_hash.empty()) << t.name;
   }
 }
 

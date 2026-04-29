@@ -103,17 +103,43 @@ public:
 
     auto stmt = sqlite_prepare_or_throw(
       db_.get(),
-      "INSERT INTO topics(name, type, serialization_format, offered_qos_profiles) "
-      "VALUES (?, ?, ?, ?);");
+      "INSERT INTO topics(name, type, serialization_format, offered_qos_profiles, "
+      "type_description_hash) VALUES (?, ?, ?, ?, ?);");
     sqlite3_bind_text(stmt.get(), 1, topic.name.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt.get(), 2, topic.type.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt.get(), 3, topic.serialization_format.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt.get(), 4, topic.offered_qos_profiles.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt.get(), 5, topic.type_description_hash.c_str(), -1, SQLITE_TRANSIENT);
     if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
       throw std::runtime_error("topic insert failed: " + sqlite_errmsg(db_.get()));
     }
 
     topic_to_id_[topic.name] = sqlite3_last_insert_rowid(db_.get());
+
+    // Insert message_definitions row once per type (deduped). Iron+ rosbag2
+    // readers query this table directly for self-description; the row is
+    // optional (rows with empty topic_type are ignored by the upstream
+    // reader, which simply skips encoded_message_definition lookup). We
+    // emit a row whenever we have a non-empty schema_text so the bag stays
+    // self-describing across a repack.
+    if (!topic.schema_text.empty() && type_to_msgdef_id_.count(topic.type) == 0U) {
+      auto def_stmt = sqlite_prepare_or_throw(
+        db_.get(),
+        "INSERT INTO message_definitions("
+        "  topic_type, encoding, encoded_message_definition, type_description_hash) "
+        "VALUES (?, ?, ?, ?);");
+      const std::string encoding =
+        topic.schema_encoding.empty() ? std::string("ros2msg") : topic.schema_encoding;
+      sqlite3_bind_text(def_stmt.get(), 1, topic.type.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(def_stmt.get(), 2, encoding.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(def_stmt.get(), 3, topic.schema_text.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(
+        def_stmt.get(), 4, topic.type_description_hash.c_str(), -1, SQLITE_TRANSIENT);
+      if (sqlite3_step(def_stmt.get()) != SQLITE_DONE) {
+        throw std::runtime_error("message_definitions insert failed: " + sqlite_errmsg(db_.get()));
+      }
+      type_to_msgdef_id_[topic.type] = sqlite3_last_insert_rowid(db_.get());
+    }
   }
 
   void write(
@@ -154,6 +180,16 @@ public:
 private:
   void create_schema()
   {
+    // Mirrors the rosbag2 sqlite3 plugin schema_version=4 layout
+    // (Iron / Jazzy):
+    //   - `topics` carries `type_description_hash` so the bag advertises
+    //     its RIHS type identity to readers that care.
+    //   - `message_definitions` stores per-type self-description so
+    //     readers don't need a local typestore overlay sourced.
+    // Older rosbag2 readers (Humble v3) tolerate the extra column and
+    // unused table — they only SELECT the columns they know about. We
+    // never write the v3-shaped schema; callers that need true v3
+    // compatibility can decompose with rosbag2's reindex tool.
     exec_or_throw(
       db_.get(),
       "CREATE TABLE IF NOT EXISTS schema("
@@ -168,7 +204,14 @@ private:
       "  name TEXT NOT NULL,"
       "  type TEXT NOT NULL,"
       "  serialization_format TEXT NOT NULL,"
-      "  offered_qos_profiles TEXT NOT NULL);"
+      "  offered_qos_profiles TEXT NOT NULL,"
+      "  type_description_hash TEXT NOT NULL DEFAULT '');"
+      "CREATE TABLE IF NOT EXISTS message_definitions("
+      "  id INTEGER PRIMARY KEY,"
+      "  topic_type TEXT NOT NULL,"
+      "  encoding TEXT NOT NULL,"
+      "  encoded_message_definition TEXT NOT NULL,"
+      "  type_description_hash TEXT NOT NULL DEFAULT '');"
       "CREATE TABLE IF NOT EXISTS messages("
       "  id INTEGER PRIMARY KEY,"
       "  topic_id INTEGER NOT NULL,"
@@ -176,8 +219,7 @@ private:
       "  data BLOB NOT NULL);"
       "CREATE INDEX IF NOT EXISTS timestamp_idx ON messages (timestamp ASC);");
 
-    // Record a schema version so downstream rosbag2 readers can negotiate.
-    // Version 4 is the current stable schema in Humble/Jazzy.
+    // Iron / Jazzy schema_version. Older readers ignore unknown values.
     exec_or_throw(
       db_.get(), "INSERT OR IGNORE INTO schema(schema_version, ros_distro) VALUES (4, '');");
   }
@@ -195,6 +237,10 @@ private:
   SqlitePtr db_;
   SqliteStmtPtr insert_stmt_;
   std::unordered_map<std::string, int64_t> topic_to_id_;
+  // Tracks message_definitions rows already written, keyed by ROS 2 type
+  // name. Each type gets exactly one row regardless of how many topics
+  // share it.
+  std::unordered_map<std::string, int64_t> type_to_msgdef_id_;
   int pending_in_tx_ = 0;
   bool closed_ = false;
 };

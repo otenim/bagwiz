@@ -155,8 +155,20 @@ private:
 
   void populate_topics()
   {
-    auto stmt = sqlite_prepare_or_throw(
-      db_.get(), "SELECT id, name, type, serialization_format, offered_qos_profiles FROM topics");
+    // Detect Iron+ schema by probing for the type_description_hash
+    // column on `topics`. We trust the column existence rather than
+    // reading the `schema` table because some bags written by older
+    // tooling claim schema_version=4 in the schema table while still
+    // emitting the v3-shaped layout (a bug bagwiz itself exhibited
+    // before this PR).
+    const bool has_v4_topic_columns = column_exists("topics", "type_description_hash");
+
+    const char * const sql_v4 =
+      "SELECT id, name, type, serialization_format, offered_qos_profiles, "
+      "type_description_hash FROM topics";
+    const char * const sql_v3 =
+      "SELECT id, name, type, serialization_format, offered_qos_profiles FROM topics";
+    auto stmt = sqlite_prepare_or_throw(db_.get(), has_v4_topic_columns ? sql_v4 : sql_v3);
     for (;;) {
       const int rc = sqlite3_step(stmt.get());
       if (rc == SQLITE_DONE) {
@@ -171,9 +183,75 @@ private:
       info.type = column_text_or_empty(stmt.get(), 2);
       info.serialization_format = column_text_or_empty(stmt.get(), 3);
       info.offered_qos_profiles = column_text_or_empty(stmt.get(), 4);
+      if (has_v4_topic_columns) {
+        info.type_description_hash = column_text_or_empty(stmt.get(), 5);
+      }
       topic_id_to_idx_[topic_id] = topics_.size();
       topics_.push_back(std::move(info));
     }
+
+    // Iron+ embeds per-type message_definitions. Backfill schema_text /
+    // schema_encoding so the reader returns self-described topics
+    // without callers having to invoke msg_definition_resolver.
+    if (table_exists("message_definitions")) {
+      auto def_stmt = sqlite_prepare_or_throw(
+        db_.get(),
+        "SELECT topic_type, encoding, encoded_message_definition, type_description_hash "
+        "FROM message_definitions");
+      // Build a fast lookup by type so we visit each topics_[i] at most once.
+      for (;;) {
+        const int rc = sqlite3_step(def_stmt.get());
+        if (rc == SQLITE_DONE) {
+          break;
+        }
+        if (rc != SQLITE_ROW) {
+          throw std::runtime_error("message_definitions query failed: " + sqlite_errmsg(db_.get()));
+        }
+        const std::string topic_type = column_text_or_empty(def_stmt.get(), 0);
+        const std::string encoding = column_text_or_empty(def_stmt.get(), 1);
+        const std::string text = column_text_or_empty(def_stmt.get(), 2);
+        const std::string hash = column_text_or_empty(def_stmt.get(), 3);
+        for (auto & t : topics_) {
+          if (t.type != topic_type) {
+            continue;
+          }
+          if (t.schema_text.empty()) {
+            t.schema_text = text;
+          }
+          if (t.schema_encoding.empty()) {
+            t.schema_encoding = encoding;
+          }
+          if (t.type_description_hash.empty() && !hash.empty()) {
+            t.type_description_hash = hash;
+          }
+        }
+      }
+    }
+  }
+
+  // Lightweight column / table existence probes. Both return false on
+  // any sqlite error so `populate_topics` falls back gracefully when
+  // the bag is shaped unexpectedly (e.g. test fixtures that omit the
+  // `schema` table entirely).
+  bool column_exists(const char * table, const char * column) const
+  {
+    auto stmt = sqlite_prepare_or_throw(
+      db_.get(), (std::string("PRAGMA table_info('") + table + "')").c_str());
+    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+      const auto * name = reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 1));
+      if (name != nullptr && std::string(name) == column) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool table_exists(const char * table) const
+  {
+    auto stmt = sqlite_prepare_or_throw(
+      db_.get(), "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1");
+    sqlite3_bind_text(stmt.get(), 1, table, -1, SQLITE_TRANSIENT);
+    return sqlite3_step(stmt.get()) == SQLITE_ROW;
   }
 
   void ensure_iterator()
