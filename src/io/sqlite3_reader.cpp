@@ -11,6 +11,7 @@
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
+#include "bagwiz/io/sqlite3_helpers.hpp"
 
 #include <sqlite3.h>
 
@@ -21,7 +22,6 @@
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -33,95 +33,26 @@ namespace
 {
 constexpr const char * kLogger = "bagwiz.io.sqlite3";
 
-std::string sqlite_errmsg(sqlite3 * db)
-{
-  return db ? std::string(sqlite3_errmsg(db)) : "<null db>";
-}
-
-// RAII wrapper for sqlite3_stmt so prepare/step/finalize cannot leak a handle
-// on exception paths.
-class Statement
-{
-public:
-  Statement(sqlite3 * db, std::string_view sql) : db_(db)
-  {
-    const int rc =
-      sqlite3_prepare_v2(db, sql.data(), static_cast<int>(sql.size()), &stmt_, nullptr);
-    if (rc != SQLITE_OK) {
-      throw std::runtime_error(
-        "sqlite3_prepare_v2 failed: " + sqlite_errmsg(db) + " (sql=" + std::string(sql) + ")");
-    }
-  }
-  ~Statement()
-  {
-    if (stmt_) {
-      sqlite3_finalize(stmt_);
-    }
-  }
-  Statement(const Statement &) = delete;
-  Statement & operator=(const Statement &) = delete;
-  Statement(Statement && other) noexcept : db_(other.db_), stmt_(other.stmt_)
-  {
-    other.stmt_ = nullptr;
-  }
-  Statement & operator=(Statement && other) noexcept
-  {
-    if (this != &other) {
-      if (stmt_) {
-        sqlite3_finalize(stmt_);
-      }
-      db_ = other.db_;
-      stmt_ = other.stmt_;
-      other.stmt_ = nullptr;
-    }
-    return *this;
-  }
-
-  sqlite3_stmt * get() const { return stmt_; }
-
-private:
-  sqlite3 * db_ = nullptr;
-  sqlite3_stmt * stmt_ = nullptr;
-};
-
 // ---------------------------------------------------------------------------
 // Single .db3 file reader.
 // ---------------------------------------------------------------------------
 class SqliteFileReader : public BagReader
 {
 public:
-  explicit SqliteFileReader(const std::filesystem::path & path) : path_(path)
+  explicit SqliteFileReader(const std::filesystem::path & path)
+  : path_(path),
+    db_(sqlite_open_or_throw(
+      path.string(), SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, "sqlite3 open"))
   {
-    const int rc = sqlite3_open_v2(
-      path.string().c_str(), &db_, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr);
-    if (rc != SQLITE_OK) {
-      const std::string msg = sqlite_errmsg(db_);
-      if (db_) {
-        sqlite3_close(db_);
-        db_ = nullptr;
-      }
-      throw std::runtime_error("sqlite3 open failed for " + path.string() + ": " + msg);
-    }
-
     // Read-only streaming tuning. Failures are non-fatal (best-effort).
-    sqlite3_exec(db_, "PRAGMA query_only = 1;", nullptr, nullptr, nullptr);
-    sqlite3_exec(db_, "PRAGMA mmap_size = 268435456;", nullptr, nullptr, nullptr);
-    sqlite3_exec(db_, "PRAGMA cache_size = -65536;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db_.get(), "PRAGMA query_only = 1;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db_.get(), "PRAGMA mmap_size = 268435456;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db_.get(), "PRAGMA cache_size = -65536;", nullptr, nullptr, nullptr);
 
     populate_topics();
   }
 
-  ~SqliteFileReader() override
-  {
-    if (read_stmt_) {
-      sqlite3_finalize(read_stmt_);
-      read_stmt_ = nullptr;
-    }
-    if (db_) {
-      sqlite3_close(db_);
-      db_ = nullptr;
-    }
-  }
+  ~SqliteFileReader() override = default;
 
   SqliteFileReader(const SqliteFileReader &) = delete;
   SqliteFileReader & operator=(const SqliteFileReader &) = delete;
@@ -146,18 +77,18 @@ public:
     }
 
     for (;;) {
-      const int rc = sqlite3_step(read_stmt_);
+      const int rc = sqlite3_step(read_stmt_.get());
       if (rc == SQLITE_DONE) {
         return false;
       }
       if (rc != SQLITE_ROW) {
-        throw std::runtime_error("sqlite3_step failed: " + sqlite_errmsg(db_));
+        throw std::runtime_error("sqlite3_step failed: " + sqlite_errmsg(db_.get()));
       }
 
-      const int64_t topic_id = sqlite3_column_int64(read_stmt_, 0);
-      const int64_t timestamp = sqlite3_column_int64(read_stmt_, 1);
-      const void * data = sqlite3_column_blob(read_stmt_, 2);
-      const int data_size = sqlite3_column_bytes(read_stmt_, 2);
+      const int64_t topic_id = sqlite3_column_int64(read_stmt_.get(), 0);
+      const int64_t timestamp = sqlite3_column_int64(read_stmt_.get(), 1);
+      const void * data = sqlite3_column_blob(read_stmt_.get(), 2);
+      const int data_size = sqlite3_column_bytes(read_stmt_.get(), 2);
 
       auto idx_it = topic_id_to_idx_.find(topic_id);
       if (idx_it == topic_id_to_idx_.end()) {
@@ -180,8 +111,8 @@ public:
     // messages table (index-assisted but still O(n) for COUNT).
     stats.from_summary = false;
 
-    Statement stmt(
-      db_,
+    auto stmt = sqlite_prepare_or_throw(
+      db_.get(),
       "SELECT topic_id, COUNT(*), MIN(timestamp), MAX(timestamp) "
       "FROM messages GROUP BY topic_id");
 
@@ -192,7 +123,7 @@ public:
         break;
       }
       if (rc != SQLITE_ROW) {
-        throw std::runtime_error("stats query failed: " + sqlite_errmsg(db_));
+        throw std::runtime_error("stats query failed: " + sqlite_errmsg(db_.get()));
       }
       const int64_t topic_id = sqlite3_column_int64(stmt.get(), 0);
       const int64_t count = sqlite3_column_int64(stmt.get(), 1);
@@ -224,15 +155,15 @@ private:
 
   void populate_topics()
   {
-    Statement stmt(
-      db_, "SELECT id, name, type, serialization_format, offered_qos_profiles FROM topics");
+    auto stmt = sqlite_prepare_or_throw(
+      db_.get(), "SELECT id, name, type, serialization_format, offered_qos_profiles FROM topics");
     for (;;) {
       const int rc = sqlite3_step(stmt.get());
       if (rc == SQLITE_DONE) {
         break;
       }
       if (rc != SQLITE_ROW) {
-        throw std::runtime_error("topics query failed: " + sqlite_errmsg(db_));
+        throw std::runtime_error("topics query failed: " + sqlite_errmsg(db_.get()));
       }
       const int64_t topic_id = sqlite3_column_int64(stmt.get(), 0);
       TopicInfo info;
@@ -293,15 +224,12 @@ private:
     }
     sql += " ORDER BY timestamp";
 
-    const int rc = sqlite3_prepare_v2(db_, sql.c_str(), -1, &read_stmt_, nullptr);
-    if (rc != SQLITE_OK) {
-      throw std::runtime_error("prepare read query failed: " + sqlite_errmsg(db_));
-    }
+    read_stmt_ = sqlite_prepare_or_throw(db_.get(), sql);
   }
 
   std::filesystem::path path_;
-  sqlite3 * db_ = nullptr;
-  sqlite3_stmt * read_stmt_ = nullptr;
+  SqlitePtr db_;
+  SqliteStmtPtr read_stmt_;
   std::vector<TopicInfo> topics_;
   std::unordered_map<int64_t, std::size_t> topic_id_to_idx_;
   ReadFilter filter_;
@@ -338,7 +266,7 @@ public:
       return topics_;
     }
     if (!shard_rel_paths_.empty()) {
-      auto & first = ensure_shard(0);
+      const auto & first = ensure_shard(0);
       auto shard_topics = first.topics();
       topics_.assign(shard_topics.begin(), shard_topics.end());
     }

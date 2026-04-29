@@ -10,6 +10,7 @@
 
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "bagwiz/io/sqlite3_helpers.hpp"
 
 #include <sqlite3.h>
 #include <yaml-cpp/yaml.h>
@@ -39,11 +40,6 @@ constexpr const char * kLogger = "bagwiz.io.sqlite3";
 // overhead.
 constexpr int kBatchSize = 1024;
 
-std::string sqlite_errmsg(sqlite3 * db)
-{
-  return db ? std::string(sqlite3_errmsg(db)) : "<null db>";
-}
-
 void exec_or_throw(sqlite3 * db, const char * sql)
 {
   char * err = nullptr;
@@ -63,27 +59,18 @@ class SqliteFileWriter final : public BagWriter
 {
 public:
   explicit SqliteFileWriter(const std::filesystem::path & path)
+  : db_(sqlite_open_or_throw(
+      path.string(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX,
+      "sqlite3 open"))
   {
-    const int rc = sqlite3_open_v2(
-      path.string().c_str(), &db_, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX,
-      nullptr);
-    if (rc != SQLITE_OK) {
-      const std::string msg = sqlite_errmsg(db_);
-      if (db_) {
-        sqlite3_close(db_);
-        db_ = nullptr;
-      }
-      throw std::runtime_error("sqlite3 open failed for " + path.string() + ": " + msg);
-    }
-
     // Write-side tuning. journal_mode=MEMORY keeps crash-consistency at the
     // cost of some durability; OFF would be faster but leaves a corrupt bag
     // on crash. bagwiz writes new bags so losing one on crash is acceptable,
     // but MEMORY is the better default.
-    exec_or_throw(db_, "PRAGMA journal_mode = MEMORY;");
-    exec_or_throw(db_, "PRAGMA synchronous = OFF;");
-    exec_or_throw(db_, "PRAGMA temp_store = MEMORY;");
-    exec_or_throw(db_, "PRAGMA cache_size = -65536;");
+    exec_or_throw(db_.get(), "PRAGMA journal_mode = MEMORY;");
+    exec_or_throw(db_.get(), "PRAGMA synchronous = OFF;");
+    exec_or_throw(db_.get(), "PRAGMA temp_store = MEMORY;");
+    exec_or_throw(db_.get(), "PRAGMA cache_size = -65536;");
 
     create_schema();
     prepare_insert_stmt();
@@ -101,14 +88,6 @@ public:
         // Never throw from destructor.
       }
     }
-    if (insert_stmt_) {
-      sqlite3_finalize(insert_stmt_);
-      insert_stmt_ = nullptr;
-    }
-    if (db_) {
-      sqlite3_close(db_);
-      db_ = nullptr;
-    }
   }
 
   SqliteFileWriter(const SqliteFileWriter &) = delete;
@@ -122,27 +101,19 @@ public:
       return;  // already declared
     }
 
-    sqlite3_stmt * stmt = nullptr;
-    const int rc = sqlite3_prepare_v2(
-      db_,
+    auto stmt = sqlite_prepare_or_throw(
+      db_.get(),
       "INSERT INTO topics(name, type, serialization_format, offered_qos_profiles) "
-      "VALUES (?, ?, ?, ?);",
-      -1, &stmt, nullptr);
-    if (rc != SQLITE_OK) {
-      throw std::runtime_error("prepare topic insert failed: " + sqlite_errmsg(db_));
+      "VALUES (?, ?, ?, ?);");
+    sqlite3_bind_text(stmt.get(), 1, topic.name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt.get(), 2, topic.type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt.get(), 3, topic.serialization_format.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt.get(), 4, topic.offered_qos_profiles.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+      throw std::runtime_error("topic insert failed: " + sqlite_errmsg(db_.get()));
     }
-    sqlite3_bind_text(stmt, 1, topic.name.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, topic.type.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, topic.serialization_format.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 4, topic.offered_qos_profiles.c_str(), -1, SQLITE_TRANSIENT);
-    if (sqlite3_step(stmt) != SQLITE_DONE) {
-      const std::string msg = sqlite_errmsg(db_);
-      sqlite3_finalize(stmt);
-      throw std::runtime_error("topic insert failed: " + msg);
-    }
-    sqlite3_finalize(stmt);
 
-    topic_to_id_[topic.name] = sqlite3_last_insert_rowid(db_);
+    topic_to_id_[topic.name] = sqlite3_last_insert_rowid(db_.get());
   }
 
   void write(
@@ -155,14 +126,14 @@ public:
         " (call declare_topic() first)");
     }
 
-    sqlite3_bind_int64(insert_stmt_, 1, it->second);
-    sqlite3_bind_int64(insert_stmt_, 2, timestamp_ns);
+    sqlite3_bind_int64(insert_stmt_.get(), 1, it->second);
+    sqlite3_bind_int64(insert_stmt_.get(), 2, timestamp_ns);
     sqlite3_bind_blob(
-      insert_stmt_, 3, payload.data(), static_cast<int>(payload.size()), SQLITE_STATIC);
-    if (sqlite3_step(insert_stmt_) != SQLITE_DONE) {
-      throw std::runtime_error("message insert failed: " + sqlite_errmsg(db_));
+      insert_stmt_.get(), 3, payload.data(), static_cast<int>(payload.size()), SQLITE_STATIC);
+    if (sqlite3_step(insert_stmt_.get()) != SQLITE_DONE) {
+      throw std::runtime_error("message insert failed: " + sqlite_errmsg(db_.get()));
     }
-    sqlite3_reset(insert_stmt_);
+    sqlite3_reset(insert_stmt_.get());
 
     if (++pending_in_tx_ >= kBatchSize) {
       commit_transaction();
@@ -184,7 +155,7 @@ private:
   void create_schema()
   {
     exec_or_throw(
-      db_,
+      db_.get(),
       "CREATE TABLE IF NOT EXISTS schema("
       "  schema_version INTEGER PRIMARY KEY,"
       "  ros_distro TEXT);"
@@ -207,25 +178,22 @@ private:
 
     // Record a schema version so downstream rosbag2 readers can negotiate.
     // Version 4 is the current stable schema in Humble/Jazzy.
-    exec_or_throw(db_, "INSERT OR IGNORE INTO schema(schema_version, ros_distro) VALUES (4, '');");
+    exec_or_throw(
+      db_.get(), "INSERT OR IGNORE INTO schema(schema_version, ros_distro) VALUES (4, '');");
   }
 
   void prepare_insert_stmt()
   {
-    const int rc = sqlite3_prepare_v2(
-      db_, "INSERT INTO messages(topic_id, timestamp, data) VALUES (?, ?, ?);", -1, &insert_stmt_,
-      nullptr);
-    if (rc != SQLITE_OK) {
-      throw std::runtime_error("prepare message insert failed: " + sqlite_errmsg(db_));
-    }
+    insert_stmt_ = sqlite_prepare_or_throw(
+      db_.get(), "INSERT INTO messages(topic_id, timestamp, data) VALUES (?, ?, ?);");
   }
 
-  void begin_transaction() { exec_or_throw(db_, "BEGIN TRANSACTION;"); }
+  void begin_transaction() { exec_or_throw(db_.get(), "BEGIN TRANSACTION;"); }
 
-  void commit_transaction() { exec_or_throw(db_, "COMMIT;"); }
+  void commit_transaction() { exec_or_throw(db_.get(), "COMMIT;"); }
 
-  sqlite3 * db_ = nullptr;
-  sqlite3_stmt * insert_stmt_ = nullptr;
+  SqlitePtr db_;
+  SqliteStmtPtr insert_stmt_;
   std::unordered_map<std::string, int64_t> topic_to_id_;
   int pending_in_tx_ = 0;
   bool closed_ = false;
