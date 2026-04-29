@@ -159,6 +159,30 @@ TEST(CdrWalker, SingleStringField)
   EXPECT_EQ(std::get<std::string>(root.fields[0].second.v), "hello");
 }
 
+TEST(CdrWalker, AcceptsTrailingPaddingFromEncapsulationOptions)
+{
+  // OMG DDS-XTYPES 1.3 §7.6.3.1.2: the lower two bits of
+  // representation_options encode the count of pad bytes (0-3) appended
+  // after the body so the total encapsulation ends on a 4-byte
+  // boundary. The reader must exclude those bytes from the effective
+  // body so a schema-correct decode succeeds rather than treating them
+  // as part of the payload.
+  const auto parse = ms::parse_message("std_msgs", "String", "string data\n");
+  ASSERT_TRUE(parse.ok()) << parse.error;
+
+  CdrBuilder b;
+  b.put_string("hi");
+  const auto base = b.span();
+  std::vector<std::byte> padded(base.begin(), base.end());
+  padded[3] = std::byte{2};  // 2 pad bytes claimed in options LSB
+  padded.push_back(std::byte{0});
+  padded.push_back(std::byte{0});
+
+  cdr::DecodeResult result;
+  const auto & root = as_object(expect_decode_ok(*parse.schema, padded, result));
+  EXPECT_EQ(std::get<std::string>(field(root, "data").v), "hi");
+}
+
 TEST(CdrWalker, EmptyString)
 {
   // Length-1 (just NUL) and length-0 must both decode to empty string.

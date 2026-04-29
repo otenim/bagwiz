@@ -104,6 +104,7 @@ TEST(Ros1ToCdr, MapsKnownTypes)
   EXPECT_EQ(
     *bagwiz::core::map_ros1_type("geometry_msgs/PoseStamped"), "geometry_msgs/msg/PoseStamped");
   EXPECT_EQ(*bagwiz::core::map_ros1_type("tf/tfMessage"), "tf2_msgs/msg/TFMessage");
+  EXPECT_EQ(*bagwiz::core::map_ros1_type("can_msgs/Frame"), "can_msgs/msg/Frame");
 }
 
 TEST(Ros1ToCdr, MapsUnknownTypeToNullopt)

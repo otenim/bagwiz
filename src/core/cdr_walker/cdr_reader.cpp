@@ -72,11 +72,18 @@ CdrReader::CdrReader(std::span<const std::byte> data) : data_(data)
       ") is not supported; payload requires introspection-typesupport decode");
   }
   little_endian_ = (kind & 0x01) != 0;
+  // Lower two bits of representation_options encode the count of pad
+  // bytes appended after the body to align the encapsulation to a
+  // 4-byte boundary (OMG DDS-XTYPES 1.3 §7.6.3.1.2). Trim those so
+  // remaining()/ensure_remaining() reflect the real body length.
+  const auto pad = static_cast<std::size_t>(static_cast<std::uint8_t>(data[3]) & 0x03);
+  trailing_pad_ = pad <= data.size() - 4 ? pad : 0;
 }
 
 void CdrReader::ensure_remaining(std::size_t n) const
 {
-  if (data_.size() - offset_ < n) {
+  const std::size_t end = data_.size() - trailing_pad_;
+  if (end < offset_ || end - offset_ < n) {
     throw std::runtime_error(
       "CDR underflow: need " + std::to_string(n) + " more bytes at offset " +
       std::to_string(offset_) + " (payload size " + std::to_string(data_.size()) + ")");

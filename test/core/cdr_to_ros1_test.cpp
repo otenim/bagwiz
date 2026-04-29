@@ -8,6 +8,7 @@
 
 #include "bagwiz/core/cdr_to_ros1.hpp"
 
+#include "bagwiz/core/ros1_message_definitions.hpp"
 #include "bagwiz/core/ros1_to_cdr.hpp"
 
 #include <gtest/gtest.h>
@@ -76,12 +77,32 @@ TEST(CdrToRos1, MapsKnownTypes)
     *bagwiz::core::map_ros2_type("geometry_msgs/msg/PoseStamped"), "geometry_msgs/PoseStamped");
   // tf collision: forward had two ROS 1 sources, reverse picks the canonical one.
   EXPECT_EQ(*bagwiz::core::map_ros2_type("tf2_msgs/msg/TFMessage"), "tf2_msgs/TFMessage");
+  EXPECT_EQ(*bagwiz::core::map_ros2_type("can_msgs/msg/Frame"), "can_msgs/Frame");
 }
 
 TEST(CdrToRos1, MapsUnknownTypeToNullopt)
 {
   EXPECT_FALSE(bagwiz::core::map_ros2_type("foo_pkg/msg/Bar").has_value());
   EXPECT_FALSE(bagwiz::core::map_ros2_type("std_msgs/msg/SomethingWeird").has_value());
+}
+
+TEST(CdrToRos1, CanMsgsFrameRos1MetaMatchesUpstream)
+{
+  // Verified against ROS 1 Noetic (`rosmsg md5 can_msgs/Frame` on
+  // ros-noetic-can-msgs 0.8.5). If this assertion fails after a typo
+  // or unintended schema edit, ROS 1 consumers of bags written by the
+  // 2to1 converter will reject the connection record at read time.
+  const auto * meta = bagwiz::core::find_ros1_meta("can_msgs/Frame");
+  ASSERT_NE(meta, nullptr);
+  EXPECT_EQ(meta->md5sum, "64ae5cebf967dc6aae4e78f5683a5b25");
+  // The first stanza of message_definition must be the .msg text as
+  // emitted by `rosmsg show -r can_msgs/Frame` on Noetic.
+  EXPECT_NE(
+    meta->message_definition.find("Header header\nuint32 id\nbool is_rtr\n"), std::string::npos);
+  // And the std_msgs/Header dependency must be appended after the
+  // standard 80-`=` separator (otherwise ROS 1 readers can't resolve
+  // the Header type).
+  EXPECT_NE(meta->message_definition.find("MSG: std_msgs/Header"), std::string::npos);
 }
 
 namespace
@@ -225,6 +246,31 @@ TEST(CdrToRos1, RoundTripsTfMessageWithSequenceOfTransforms)
   EXPECT_TRUE(roundtrip_equal("tf2_msgs/msg/TFMessage", b.view()));
 }
 
+TEST(CdrToRos1, RoundTripsCanMsgsFrame)
+{
+  // can_msgs/Frame from ros-industrial/ros_canopen. Wire layout matches
+  // ROS 2; the only structural difference is the ROS 1 Header.seq
+  // prefix (synthesized as zero on the way back).
+  Ros1Builder b;
+  // header (seq=0 for round-trip)
+  b.u32(0);
+  b.time(123, 456);
+  b.string("can0");
+  // id
+  b.u32(0x18FEF100);
+  // bools
+  b.u8(0);  // is_rtr
+  b.u8(1);  // is_extended
+  b.u8(0);  // is_error
+  // dlc
+  b.u8(8);
+  // data[8]
+  for (std::uint8_t i = 0; i < 8; ++i) {
+    b.u8(static_cast<std::uint8_t>(0xA0 + i));
+  }
+  EXPECT_TRUE(roundtrip_equal("can_msgs/msg/Frame", b.view()));
+}
+
 TEST(CdrToRos1, RoundTripsImuWithCovariance)
 {
   // Imu = Header + Quaternion + 9*f64 + Vector3 + 9*f64 + Vector3 + 9*f64.
@@ -274,4 +320,90 @@ TEST(CdrToRos1, FailsForTruncatedEncapsulationHeader)
   std::vector<std::byte> tiny = {std::byte{0x00}, std::byte{0x01}};
   const auto result = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/String", tiny);
   EXPECT_FALSE(result.ok);
+}
+
+TEST(CdrToRos1, AcceptsTrailingPaddingFromEncapsulationOptions)
+{
+  // OMG DDS-XTYPES 1.3 §7.6.3.1.2: the lower two bits of
+  // representation_options (byte 3 of the encapsulation header) encode
+  // the count of pad bytes (0-3) appended after the body so the total
+  // ends on a 4-byte boundary. FastDDS / CycloneDDS emit this; the
+  // converter must trim those bytes instead of reporting "trailing
+  // bytes after decoding". Reproduces the failure observed on
+  // CameraInfo / NavSatFix / CompressedImage payloads from real bags.
+  Ros1Builder b;
+  b.string("hi");
+  const auto fwd = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/String", b.view());
+  ASSERT_TRUE(fwd.ok) << fwd.error;
+
+  for (std::uint8_t pad = 1; pad <= 3; ++pad) {
+    std::vector<std::byte> padded = fwd.cdr;
+    padded[3] = std::byte{pad};  // encode pad count in options LSB
+    for (std::uint8_t i = 0; i < pad; ++i) {
+      padded.push_back(std::byte{0});
+    }
+
+    const auto back = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/String", padded);
+    ASSERT_TRUE(back.ok) << "pad=" << static_cast<int>(pad) << ": " << back.error;
+    ASSERT_EQ(back.ros1.size(), b.view().size());
+    for (std::size_t i = 0; i < b.view().size(); ++i) {
+      EXPECT_EQ(back.ros1[i], b.view()[i])
+        << "byte " << i << " (pad=" << static_cast<int>(pad) << ")";
+    }
+  }
+}
+
+TEST(CdrToRos1, RejectsNonZeroTrailingBytesNotAccountedForByOptions)
+{
+  // Regression guard for the trailing-pad heuristic: when options claim
+  // zero pad bytes, NON-zero trailing data must still surface as a
+  // decode failure (the heuristic only tolerates zero bytes that bring
+  // the total to a 4-byte boundary).
+  Ros1Builder b;
+  b.string("hi");
+  const auto fwd = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/String", b.view());
+  ASSERT_TRUE(fwd.ok) << fwd.error;
+
+  std::vector<std::byte> with_garbage = fwd.cdr;
+  ASSERT_EQ(static_cast<std::uint8_t>(with_garbage[3]) & 0x03, 0u);
+  with_garbage.push_back(std::byte{0xAB});
+  with_garbage.push_back(std::byte{0xCD});
+  with_garbage.push_back(std::byte{0xEF});
+
+  const auto back = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/String", with_garbage);
+  EXPECT_FALSE(back.ok);
+  EXPECT_NE(back.error.find("trailing"), std::string::npos) << back.error;
+}
+
+TEST(CdrToRos1, AcceptsBodyAlignmentPaddingWithoutOptionsSignal)
+{
+  // Real bags from rmw_fastrtps + rosbag2_storage_mcap leave the
+  // encapsulation header at the literal `00 01 00 00` of PLAIN_CDR_LE
+  // (representation_options = 0) but still pad the body to a 4-byte
+  // boundary, leaving 1-3 zero bytes after the last field. Honor this
+  // pragmatic convention so realistic payloads decode rather than
+  // failing the strict spec check.
+  Ros1Builder b;
+  b.string("hi");
+  const auto fwd = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/String", b.view());
+  ASSERT_TRUE(fwd.ok) << fwd.error;
+  ASSERT_EQ(static_cast<std::uint8_t>(fwd.cdr[3]) & 0x03, 0u);
+
+  // Pad up to a 4-byte boundary with zeros, leaving options=0 untouched.
+  std::vector<std::byte> padded = fwd.cdr;
+  while (padded.size() % 4 != 0) {
+    padded.push_back(std::byte{0});
+  }
+  // Force at least one trailing pad byte so the test exercises the path
+  // even if the original payload happened to land on a 4-byte boundary.
+  if (padded.size() == fwd.cdr.size()) {
+    padded.insert(padded.end(), 4U, std::byte{0});
+  }
+
+  const auto back = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/String", padded);
+  ASSERT_TRUE(back.ok) << back.error;
+  ASSERT_EQ(back.ros1.size(), b.view().size());
+  for (std::size_t i = 0; i < b.view().size(); ++i) {
+    EXPECT_EQ(back.ros1[i], b.view()[i]) << "byte " << i;
+  }
 }

@@ -96,6 +96,10 @@ const std::unordered_map<std::string, std::string> & ros2_to_ros1_typemap()
     {"diagnostic_msgs/msg/DiagnosticArray", "diagnostic_msgs/DiagnosticArray"},
     {"diagnostic_msgs/msg/DiagnosticStatus", "diagnostic_msgs/DiagnosticStatus"},
     {"diagnostic_msgs/msg/KeyValue", "diagnostic_msgs/KeyValue"},
+
+    // can_msgs from ros-industrial/ros_canopen — wire-compatible with
+    // the ROS 1 form once the Header.seq prefix is synthesized.
+    {"can_msgs/msg/Frame", "can_msgs/Frame"},
   };
   return kMap;
 }
@@ -113,9 +117,19 @@ public:
     if (data_.size() < 4) {
       throw std::runtime_error("cdr_to_ros1: CDR payload smaller than 4-byte encapsulation header");
     }
-    // We don't strictly enforce the encapsulation byte values; rosbag2
-    // writers always emit PLAIN_CDR_LE (0x00 0x01) but tolerating the
-    // extras helps with hand-crafted test inputs.
+    // Bytes 0-1 are representation_identifier (encoding kind); bytes 2-3
+    // are representation_options. Per OMG DDS-XTYPES 1.3 §7.6.3.1.2 the
+    // lower two bits of the options field encode the number of padding
+    // bytes (0-3) appended after the body so the total encapsulated size
+    // ends on a 4-byte boundary. We trim that count from the effective
+    // body so the walker's "all bytes consumed" check accepts payloads
+    // produced by FastDDS / CycloneDDS (and rosbag2 storage plugins that
+    // pass the field through). Legacy PLAIN_CDR_LE writers leave
+    // options=0, so this is a no-op for them.
+    const auto pad = static_cast<std::size_t>(static_cast<std::uint8_t>(data_[3]) & 0x03);
+    // Defensive: a malformed tiny payload that happens to have the bits
+    // set but no body to trim must not underflow the effective end.
+    trailing_pad_ = pad <= data_.size() - 4 ? pad : 0;
     body_start_ = 4;
     pos_ = 4;
   }
@@ -156,14 +170,44 @@ public:
     return r;
   }
 
-  bool fully_consumed() const { return pos_ == data_.size(); }
-  std::size_t remaining() const { return data_.size() - pos_; }
+  bool fully_consumed() const
+  {
+    if (pos_ + trailing_pad_ == data_.size()) {
+      return true;
+    }
+    // Tolerance for writers that pad the encapsulated body to a 4-byte
+    // boundary without setting representation_options (observed on real
+    // rosbag2 + rmw_fastrtps payloads, where the header is the literal
+    // `00 01 00 00` PLAIN_CDR_LE encoding but the body is followed by
+    // 1-3 zero bytes). Foxglove Studio's CDR reader uses the same
+    // heuristic: accept up to 3 trailing zero bytes when the total
+    // encapsulated size is a multiple of 4.
+    if (trailing_pad_ != 0 || data_.size() % 4 != 0) {
+      return false;
+    }
+    const std::size_t leftover = data_.size() - pos_;
+    if (leftover > 3) {
+      return false;
+    }
+    for (std::size_t i = pos_; i < data_.size(); ++i) {
+      if (static_cast<std::uint8_t>(data_[i]) != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+  std::size_t remaining() const
+  {
+    const std::size_t end = data_.size() - trailing_pad_;
+    return end > pos_ ? end - pos_ : 0;
+  }
   std::size_t position() const { return pos_; }
 
 private:
   void require(std::size_t n) const
   {
-    if (data_.size() - pos_ < n) {
+    const std::size_t end = data_.size() - trailing_pad_;
+    if (end < pos_ || end - pos_ < n) {
       throw std::runtime_error(
         "cdr_to_ros1: CDR payload truncated at offset " + std::to_string(pos_));
     }
@@ -172,6 +216,7 @@ private:
   std::span<const std::byte> data_;
   std::size_t body_start_ = 0;
   std::size_t pos_ = 0;
+  std::size_t trailing_pad_ = 0;
 };
 
 // Builds a ROS 1 raw payload. ROS 1 wire format has no alignment

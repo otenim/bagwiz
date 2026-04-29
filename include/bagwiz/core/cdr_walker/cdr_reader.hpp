@@ -25,7 +25,14 @@ namespace bagwiz::core::cdr_walker
 //   byte 0: representation_identifier_high (always 0)
 //   byte 1: representation_identifier_low (encoding kind: 0=BE, 1=LE,
 //           2=PL_CDR_BE, 3=PL_CDR_LE)
-//   bytes 2-3: representation_options (ignored)
+//   bytes 2-3: representation_options. Per OMG DDS-XTYPES 1.3
+//              §7.6.3.1.2, the lower two bits of this field encode the
+//              number of padding bytes (0-3) appended after the body so
+//              the total encapsulated size ends on a 4-byte boundary.
+//              We honor that: those bytes are excluded from the body so
+//              `remaining()` and the underflow checks reflect the real
+//              payload length. Legacy PLAIN_CDR_LE writers set
+//              options=0, so this is a no-op for them.
 //
 // Endianness is taken from the low bit of the kind byte (matching what
 // foxglove `_cdr.py` does). PL_CDR (parameter-list-with-CDR, used for
@@ -49,7 +56,11 @@ public:
 
   bool little_endian() const noexcept { return little_endian_; }
   std::size_t offset() const noexcept { return offset_; }
-  std::size_t remaining() const noexcept { return data_.size() - offset_; }
+  std::size_t remaining() const noexcept
+  {
+    const std::size_t end = data_.size() - trailing_pad_;
+    return end > offset_ ? end - offset_ : 0;
+  }
 
   // Primitive reads. Each one aligns to its size and advances offset_.
   bool read_bool();
@@ -85,6 +96,7 @@ private:
 
   std::span<const std::byte> data_;
   std::size_t offset_ = 4;  // skip the 4-byte CDR header
+  std::size_t trailing_pad_ = 0;
   bool little_endian_ = true;
 };
 
