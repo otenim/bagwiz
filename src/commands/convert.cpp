@@ -11,7 +11,6 @@
 #include "bagwiz/core/cdr_to_ros1.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/msg_definition_resolver.hpp"
-#include "bagwiz/core/ros1_message_definitions.hpp"
 #include "bagwiz/core/ros1_meta_synthesizer.hpp"
 #include "bagwiz/core/ros1_to_cdr.hpp"
 #include "bagwiz/core/schema_resolver.hpp"
@@ -217,8 +216,11 @@ private:
         "Output storage backend (default: inferred from output extension)")
       ->check(CLI::IsMember({"mcap", "sqlite3"}));
     sub->footer(
-      "Only standard message types from the built-in whitelist are converted.\n"
-      "Topics with unsupported types are skipped with a warning.\n"
+      "Each topic's ROS 2 schema is resolved from $AMENT_PREFIX_PATH (or the\n"
+      "introspection typesupport library when no .msg is on disk); a ROS 1\n"
+      "md5sum is synthesised from the resolved schema and compared against\n"
+      "the bag's connection record. Topics whose md5 does not match are\n"
+      "skipped with a warning and the run exits non-zero.\n"
       "If --storage is omitted, the backend is inferred from the output path's\n"
       "extension (.mcap or .db3); other paths (e.g. a directory) require --storage.");
     sub->callback([this]() { selected_ = Subcommand::k1to2; });
@@ -512,8 +514,11 @@ private:
       ->check(CLI::ExistingPath);
     sub->add_option("output", r2_to_r1_args_.output_path, "Output ROS 1 .bag file")->required();
     sub->footer(
-      "Only standard message types from the built-in whitelist are converted.\n"
-      "Topics with unsupported types are skipped with a warning.\n"
+      "Each topic's ROS 2 schema is taken from the bag's self-describing\n"
+      "record when present, or resolved from $AMENT_PREFIX_PATH /\n"
+      "introspection typesupport otherwise. The ROS 1 connection's md5sum\n"
+      "and message_definition are synthesised from that schema. Topics\n"
+      "whose schema cannot be resolved are skipped and the run exits non-zero.\n"
       "Output is a non-compressed ROS 1 bag v2.0; rosbag2-layer compression\n"
       "(compression_mode: FILE / MESSAGE) on the input is not supported.");
     sub->callback([this]() { selected_ = Subcommand::k2to1; });
@@ -584,6 +589,27 @@ private:
     }
 
     std::unordered_map<std::string, TwoToOnePerTopic> per_topic;
+    std::vector<SkippedTopic> skipped_topics;
+    std::size_t synthesised_defs = 0;
+
+    // Categorise + record one topic-level skip in 2to1. The 2to1 record
+    // shape is the same as 1to2 (`SkippedTopic`); only the field
+    // population order differs (here we know `ros2_type` first).
+    const auto record_skip_2to1 =
+      [&skipped_topics](const TwoToOnePerTopic & st, TopicSkipReason reason, std::string detail) {
+        SkippedTopic s;
+        s.topic = st.topic;
+        s.ros1_type = st.ros1_type;
+        s.ros2_type = st.ros2_type;
+        s.reason = reason;
+        s.detail = std::move(detail);
+        BAGWIZ_LOG_WARN(
+          kLogger, "Skipping topic '%s' (%s -> %s): %s%s%s", s.topic.c_str(), s.ros2_type.c_str(),
+          s.ros1_type.empty() ? "?" : s.ros1_type.c_str(), topic_skip_reason_label(reason),
+          s.detail.empty() ? "" : " — ", s.detail.c_str());
+        skipped_topics.push_back(std::move(s));
+      };
+
     for (const auto & t : reader->topics()) {
       TwoToOnePerTopic state;
       state.topic = t.name;
@@ -591,34 +617,60 @@ private:
 
       auto mapped = core::map_ros2_type(t.type);
       if (!mapped) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "Skipping topic '%s' (type '%s' not in whitelist)", state.topic.c_str(),
-          state.ros2_type.c_str());
+        record_skip_2to1(state, TopicSkipReason::TypeNameInvalid, "");
         per_topic.emplace(state.topic, std::move(state));
         continue;
       }
       state.ros1_type = *mapped;
 
-      const auto * meta = core::find_ros1_meta(state.ros1_type);
-      if (meta == nullptr) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "Skipping topic '%s': no ROS 1 message_definition for '%s' (whitelist mismatch)",
-          state.topic.c_str(), state.ros1_type.c_str());
+      // Resolve the ROS 2 schema, preferring the bag-embedded text when
+      // the storage layer surfaces one (project decision 5/A): a
+      // self-described bag is the only schema source guaranteed to
+      // match what the producer actually serialised, even if the local
+      // AMENT install drifts.
+      core::ResolveSchemaInput resolve_in;
+      resolve_in.ros2_type = state.ros2_type;
+      resolve_in.bag_embedded_text = t.schema_text;
+      resolve_in.bag_embedded_encoding = t.schema_encoding;
+      const auto resolved = core::resolve_schema(resolve_in);
+      if (!resolved.ok) {
+        std::string detail;
+        for (const auto & c : resolved.candidates) {
+          if (!c.error.empty()) {
+            if (!detail.empty()) {
+              detail += "; ";
+            }
+            detail += c.error;
+          }
+        }
+        record_skip_2to1(state, TopicSkipReason::SchemaUnresolvable, std::move(detail));
+        per_topic.emplace(state.topic, std::move(state));
+        continue;
+      }
+
+      // Synthesise the canonical ROS 1 form's md5 + concatenated
+      // message_definition. The synthesizer applies project decision
+      // 10/B normalisation rules (drop bounds, restore Header.seq,
+      // refuse wstring) and computes the md5 over the resulting ROS
+      // 1-form text.
+      const auto meta = core::synthesize_ros1_meta(state.ros2_type, resolved.text);
+      if (!meta.ok) {
+        record_skip_2to1(state, TopicSkipReason::CanonicalisationRefused, meta.error);
         per_topic.emplace(state.topic, std::move(state));
         continue;
       }
 
       try {
         state.conn_id = writer->declare_connection(
-          state.topic, state.ros1_type, meta->md5sum, meta->message_definition);
+          state.topic, state.ros1_type, meta.meta.md5sum, meta.meta.message_definition);
         state.keep = true;
+        ++synthesised_defs;
         BAGWIZ_LOG_INFO(
-          kLogger, "Mapped '%s': %s -> %s", state.topic.c_str(), state.ros2_type.c_str(),
-          state.ros1_type.c_str());
+          kLogger, "Mapped '%s': %s -> %s [md5 synthesised via %s]", state.topic.c_str(),
+          state.ros2_type.c_str(), state.ros1_type.c_str(),
+          std::string(core::to_string(resolved.source)).c_str());
       } catch (const std::exception & e) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "declare_connection failed for '%s': %s; skipping topic", state.topic.c_str(),
-          e.what());
+        record_skip_2to1(state, TopicSkipReason::WriterDeclareFailed, e.what());
       }
       per_topic.emplace(state.topic, std::move(state));
     }
@@ -687,6 +739,9 @@ private:
     BAGWIZ_LOG_INFO(
       kLogger, "Conversion done: %" PRIu64 "/%" PRIu64 " messages written across %zu topic(s)",
       total_out, total_in, kept_topics);
+    if (synthesised_defs > 0) {
+      BAGWIZ_LOG_INFO(kLogger, "synthesised ROS 1 metadata for %zu topic(s)", synthesised_defs);
+    }
     for (const auto & entry : per_topic) {
       const auto & st = entry.second;
       if (st.keep && st.failures > 0) {
@@ -694,6 +749,27 @@ private:
           kLogger, "Topic '%s': %" PRIu64 " message(s) failed to convert", st.topic.c_str(),
           st.failures);
       }
+    }
+
+    // Topic-skip summary — matches 1to2 in shape (project decision 8/B
+    // is direction-agnostic).
+    if (!skipped_topics.empty()) {
+      BAGWIZ_LOG_WARN(kLogger, "Skipped %zu topic(s):", skipped_topics.size());
+      constexpr std::size_t kMaxDetailRows = 5;
+      const std::size_t shown = std::min(kMaxDetailRows, skipped_topics.size());
+      for (std::size_t i = 0; i < shown; ++i) {
+        const auto & s = skipped_topics[i];
+        BAGWIZ_LOG_WARN(
+          kLogger, "  - '%s' (%s -> %s): %s%s%s", s.topic.c_str(), s.ros2_type.c_str(),
+          s.ros1_type.empty() ? "?" : s.ros1_type.c_str(), topic_skip_reason_label(s.reason),
+          s.detail.empty() ? "" : " — ", s.detail.c_str());
+      }
+      if (skipped_topics.size() > kMaxDetailRows) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "  (... %zu more skipped topic(s) not shown)",
+          skipped_topics.size() - kMaxDetailRows);
+      }
+      return 2;
     }
 
     return 0;
