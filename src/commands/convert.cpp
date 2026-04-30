@@ -72,6 +72,8 @@ struct PerConn
   bool keep = false;      // false → drop messages on this conn
   uint64_t written = 0;
   uint64_t failures = 0;
+  uint64_t overflow_events = 0;  // Total Time/Duration sign-flip events seen
+                                 // for this conn across all messages.
 };
 
 // Reason a topic was excluded from 1to2 output. Topic-level errors are
@@ -139,7 +141,34 @@ struct TwoToOnePerTopic
   uint32_t conn_id = 0;
   uint64_t written = 0;
   uint64_t failures = 0;
+  uint64_t overflow_events = 0;  // see PerConn::overflow_events.
 };
+
+// Append the per-message overflow events emitted by the converter to the
+// per-topic running tally, and (rate-limited) log the first three
+// detailed events per topic. Project decision 9/B: we don't change the
+// wire bytes, we just make sure the event is visible.
+//
+// `limit` is the number of detailed log lines this topic has produced so
+// far; the function increments it. Logging stops past `kMaxOverflowLogs`
+// so a torrent of bad timestamps doesn't drown out other warnings.
+template <typename Events>
+void log_overflow_events_rate_limited(
+  const std::string & topic, const Events & events, uint64_t & topic_total,
+  uint64_t & detailed_logged)
+{
+  constexpr uint64_t kMaxOverflowLogs = 3U;
+  for (const auto & ev : events) {
+    ++topic_total;
+    if (detailed_logged >= kMaxOverflowLogs) {
+      continue;
+    }
+    BAGWIZ_LOG_WARN(
+      kLogger, "Topic '%s': %s.%s value 0x%08x has high bit set; bytes transcribed unchanged",
+      topic.c_str(), ev.type.c_str(), ev.field.c_str(), static_cast<unsigned>(ev.bits));
+    ++detailed_logged;
+  }
+}
 
 }  // namespace
 
@@ -410,6 +439,9 @@ private:
 
     uint64_t total_in = 0;
     uint64_t total_out = 0;
+    // Per-topic counters for rate-limited overflow logs. Keyed by topic
+    // (not conn_id) since we surface the warnings at topic granularity.
+    std::unordered_map<std::string, uint64_t> overflow_log_counts;
     io::Ros1Message msg;
     while (true) {
       try {
@@ -436,6 +468,11 @@ private:
             pc->ros2_type.c_str(), result.error.c_str());
         }
         continue;
+      }
+
+      if (!result.overflows.empty()) {
+        log_overflow_events_rate_limited(
+          pc->topic, result.overflows, pc->overflow_events, overflow_log_counts[pc->topic]);
       }
 
       try {
@@ -475,6 +512,14 @@ private:
         BAGWIZ_LOG_WARN(
           kLogger, "Topic '%s': %" PRIu64 " message(s) failed to convert", pc.topic.c_str(),
           pc.failures);
+      }
+      if (pc.keep && pc.overflow_events > 0) {
+        BAGWIZ_LOG_WARN(
+          kLogger,
+          "Topic '%s': %" PRIu64
+          " Time/Duration sign-flip event(s); "
+          "wire bytes preserved (project decision 9/B)",
+          pc.topic.c_str(), pc.overflow_events);
       }
     }
 
@@ -677,6 +722,7 @@ private:
 
     uint64_t total_in = 0;
     uint64_t total_out = 0;
+    std::unordered_map<std::string, uint64_t> overflow_log_counts;
     io::RawMessage msg;
     while (true) {
       try {
@@ -707,6 +753,11 @@ private:
             result.error.c_str());
         }
         continue;
+      }
+
+      if (!result.overflows.empty()) {
+        log_overflow_events_rate_limited(
+          st.topic, result.overflows, st.overflow_events, overflow_log_counts[st.topic]);
       }
 
       try {
@@ -748,6 +799,14 @@ private:
         BAGWIZ_LOG_WARN(
           kLogger, "Topic '%s': %" PRIu64 " message(s) failed to convert", st.topic.c_str(),
           st.failures);
+      }
+      if (st.keep && st.overflow_events > 0) {
+        BAGWIZ_LOG_WARN(
+          kLogger,
+          "Topic '%s': %" PRIu64
+          " Time/Duration sign-flip event(s); "
+          "wire bytes preserved (project decision 9/B)",
+          st.topic.c_str(), st.overflow_events);
       }
     }
 

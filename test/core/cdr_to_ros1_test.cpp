@@ -323,6 +323,64 @@ TEST(CdrToRos1, RoundTripsImuWithCovariance)
   EXPECT_TRUE(roundtrip_equal("sensor_msgs/msg/Imu", b.view()));
 }
 
+// ROS 2 builtin_interfaces/Time.sec is int32 but ROS 1 reads it as
+// uint32. Default-constructed and timestamp-before-1970 values have
+// the high bit set on a wrap; convert_cdr_to_ros1 must record the event
+// without altering the bytes (project decision 9/B).
+TEST(CdrToRos1, FlagsTimeSecHighBitOverflow)
+{
+  // Build a Header CDR by forward-converting a ROS 1 Header whose sec
+  // has the high bit set. The forward direction is also under test
+  // here, but we only inspect the backward direction's `overflows`.
+  Ros1Builder b;
+  b.u32(0);                // seq
+  b.time(0xFFFFFFFFU, 0);  // sec, nsec
+  b.string("frame");
+
+  const auto fwd = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/Header", b.view());
+  ASSERT_TRUE(fwd.ok) << fwd.error;
+  // Forward also flags the same field; sanity-check.
+  ASSERT_EQ(fwd.overflows.size(), 1U);
+
+  const auto back = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/Header", fwd.cdr);
+  ASSERT_TRUE(back.ok) << back.error;
+  ASSERT_EQ(back.overflows.size(), 1U);
+  EXPECT_EQ(back.overflows[0].type, "builtin_interfaces/Time");
+  EXPECT_EQ(back.overflows[0].field, "sec");
+  EXPECT_EQ(back.overflows[0].bits, 0xFFFFFFFFU);
+}
+
+// Symmetric: ROS 2 Duration.nanosec is uint32, ROS 1 nsec is int32.
+// Values > INT32_MAX (high bit set) flip sign on the way down. The CDR
+// payload is constructed directly so the forward direction doesn't
+// confound the test.
+TEST(CdrToRos1, FlagsDurationNanosecHighBitOverflow)
+{
+  // CDR-LE for builtin_interfaces/msg/Duration: 4-byte encapsulation
+  // header, then int32 sec + uint32 nanosec, naturally aligned.
+  std::vector<std::byte> cdr;
+  cdr.push_back(std::byte{0x00});  // PLAIN_CDR_LE
+  cdr.push_back(std::byte{0x01});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  // sec = 5 (positive int32)
+  for (int i = 0; i < 4; ++i) {
+    cdr.push_back(std::byte{static_cast<unsigned char>(i == 0 ? 5 : 0)});
+  }
+  // nanosec = 0xC0000000 (high bit set; ROS 1 reads as negative int32)
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0xC0});
+
+  const auto back = bagwiz::core::convert_cdr_to_ros1("builtin_interfaces/msg/Duration", cdr);
+  ASSERT_TRUE(back.ok) << back.error;
+  ASSERT_EQ(back.overflows.size(), 1U);
+  EXPECT_EQ(back.overflows[0].type, "builtin_interfaces/Duration");
+  EXPECT_EQ(back.overflows[0].field, "nanosec");
+  EXPECT_EQ(back.overflows[0].bits, 0xC0000000U);
+}
+
 TEST(CdrToRos1, FailsForUnknownSrcType)
 {
   std::vector<std::byte> dummy_cdr = {

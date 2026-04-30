@@ -212,9 +212,13 @@ private:
 
 // ---- walker -------------------------------------------------------------
 
-void walk_message(const ts::MessageMembers & m, CdrReader & r, Ros1Writer & w);
+void walk_message(
+  const ts::MessageMembers & m, CdrReader & r, Ros1Writer & w,
+  std::vector<TimeOverflowEvent> & overflows);
 
-void walk_scalar(const ts::MessageMember & f, CdrReader & r, Ros1Writer & w)
+void walk_scalar(
+  const ts::MessageMember & f, CdrReader & r, Ros1Writer & w,
+  std::vector<TimeOverflowEvent> & overflows)
 {
   switch (f.type_id_) {
     case ts::ROS_TYPE_BOOLEAN:
@@ -266,7 +270,7 @@ void walk_scalar(const ts::MessageMember & f, CdrReader & r, Ros1Writer & w)
 
     case ts::ROS_TYPE_MESSAGE: {
       const auto * sub = static_cast<const ts::MessageMembers *>(f.members_->data);
-      walk_message(*sub, r, w);
+      walk_message(*sub, r, w, overflows);
       return;
     }
 
@@ -277,10 +281,12 @@ void walk_scalar(const ts::MessageMember & f, CdrReader & r, Ros1Writer & w)
   }
 }
 
-void walk_field(const ts::MessageMember & f, CdrReader & r, Ros1Writer & w)
+void walk_field(
+  const ts::MessageMember & f, CdrReader & r, Ros1Writer & w,
+  std::vector<TimeOverflowEvent> & overflows)
 {
   if (!f.is_array_) {
-    walk_scalar(f, r, w);
+    walk_scalar(f, r, w, overflows);
     return;
   }
 
@@ -296,11 +302,31 @@ void walk_field(const ts::MessageMember & f, CdrReader & r, Ros1Writer & w)
   }
 
   for (uint32_t i = 0; i < count; ++i) {
-    walk_scalar(f, r, w);
+    walk_scalar(f, r, w, overflows);
   }
 }
 
-void walk_message(const ts::MessageMembers & m, CdrReader & r, Ros1Writer & w)
+// Read one 32-bit field while watching for the sign-flip case described
+// in TimeOverflowEvent. Symmetric to ros1_to_cdr's helper: bytes pass
+// through unchanged, we only record the event when the high bit is set.
+void walk_signflip_u32(
+  CdrReader & r, Ros1Writer & w, std::vector<TimeOverflowEvent> & overflows,
+  std::string_view type_short, std::string_view field_name)
+{
+  const uint32_t bits = r.read_u32_le();
+  if ((bits & 0x80000000U) != 0U) {
+    TimeOverflowEvent ev;
+    ev.type = std::string(type_short);
+    ev.field = std::string(field_name);
+    ev.bits = bits;
+    overflows.push_back(std::move(ev));
+  }
+  w.write_u32_le(bits);
+}
+
+void walk_message(
+  const ts::MessageMembers & m, CdrReader & r, Ros1Writer & w,
+  std::vector<TimeOverflowEvent> & overflows)
 {
   // Mirror the forward pre-hook in ros1_to_cdr.cpp: ROS 1's Header
   // begins with a `uint32 seq` field that ROS 2 dropped. Synthesize
@@ -310,10 +336,28 @@ void walk_message(const ts::MessageMembers & m, CdrReader & r, Ros1Writer & w)
   const std::string name = m.message_name_ != nullptr ? m.message_name_ : "";
   if (ns == "std_msgs::msg" && name == "Header") {
     w.write_u32_le(0);
+  } else if (ns == "builtin_interfaces::msg" && name == "Time") {
+    // ROS 2 `Time` (int32 sec, uint32 nanosec) ⇒ ROS 1 `time` (uint32
+    // sec, uint32 nsec). Sec's sign convention differs: a negative
+    // ROS 2 sec (timestamp before 1970, or default-constructed 0 with
+    // a very small clock drift) reads as a huge unsigned in ROS 1.
+    walk_signflip_u32(r, w, overflows, "builtin_interfaces/Time", "sec");
+    // nanosec is uint32 on both sides — straight pass-through.
+    const auto bytes = r.read_bytes(4);
+    w.write_bytes(bytes);
+    return;
+  } else if (ns == "builtin_interfaces::msg" && name == "Duration") {
+    // ROS 2 `Duration` (int32 sec, uint32 nanosec) ⇒ ROS 1 `duration`
+    // (int32 sec, int32 nsec). Sec passes through (int32 both sides);
+    // nsec switches from uint32 to int32, so flag values > INT32_MAX.
+    const auto sec_bytes = r.read_bytes(4);
+    w.write_bytes(sec_bytes);
+    walk_signflip_u32(r, w, overflows, "builtin_interfaces/Duration", "nanosec");
+    return;
   }
 
   for (uint32_t i = 0; i < m.member_count_; ++i) {
-    walk_field(m.members_[i], r, w);
+    walk_field(m.members_[i], r, w, overflows);
   }
 }
 
@@ -373,7 +417,7 @@ CdrToRos1Result convert_cdr_to_ros1(
   Ros1Writer writer;
   try {
     CdrReader reader(cdr_payload);
-    walk_message(*load.members, reader, writer);
+    walk_message(*load.members, reader, writer, out.overflows);
     if (!reader.fully_consumed()) {
       out.error = "cdr_to_ros1: CDR payload has " + std::to_string(reader.remaining()) +
                   " trailing byte(s) after decoding type '" + std::string(src_ros2_type) + "'";

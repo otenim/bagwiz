@@ -9,6 +9,8 @@
 #ifndef BAGWIZ__CORE__CDR_TO_ROS1_HPP_
 #define BAGWIZ__CORE__CDR_TO_ROS1_HPP_
 
+#include "bagwiz/core/ros1_to_cdr.hpp"  // for TimeOverflowEvent (shared between directions)
+
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -37,8 +39,12 @@ std::optional<std::string> map_ros2_type(std::string_view ros2_type);
 struct CdrToRos1Result
 {
   bool ok = false;
-  std::string error;            // populated when ok == false
-  std::vector<std::byte> ros1;  // raw ROS 1 wire payload, no encapsulation
+  std::string error;                         // populated when ok == false
+  std::vector<std::byte> ros1;               // raw ROS 1 wire payload, no encapsulation
+  std::vector<TimeOverflowEvent> overflows;  // sign-flip events (see
+                                             // TimeOverflowEvent in
+                                             // ros1_to_cdr.hpp); ROS 1 bytes
+                                             // are still valid.
 };
 
 // Convert one ROS 2 CDR-LE encapsulated payload into a ROS 1 raw wire

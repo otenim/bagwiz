@@ -276,6 +276,73 @@ TEST(Ros1ToCdr, RejectsTrailingBytes)
   EXPECT_NE(result.error.find("trailing"), std::string::npos) << result.error;
 }
 
+// ROS 1 `time.sec` is uint32 but ROS 2 reads it as int32. Values whose
+// high bit is set survive the conversion bit-for-bit (project decision
+// 9/B), but the receiver interprets them as negative epoch seconds. The
+// converter must record the event so the CLI can warn — without
+// changing the wire bytes.
+TEST(Ros1ToCdr, FlagsTimeSecHighBitOverflow)
+{
+  // Build a Header whose stamp.sec has the high bit set. Use a value
+  // that's clearly inside the ROS 1-reachable uint32 range but outside
+  // the ROS 2 int32 range, simulating a bag with a post-2038 timestamp.
+  constexpr std::uint32_t kPost2038 = 0xFFFFFFFFU;
+  Ros1Builder b;
+  b.u32(0);                  // seq (dropped)
+  b.time(kPost2038, 12345);  // stamp.sec = post-2038, stamp.nsec
+  b.string("base_link");
+
+  const auto result = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/Header", b.view());
+  ASSERT_TRUE(result.ok) << result.error;
+
+  ASSERT_EQ(result.overflows.size(), 1U);
+  EXPECT_EQ(result.overflows[0].type, "builtin_interfaces/Time");
+  EXPECT_EQ(result.overflows[0].field, "sec");
+  EXPECT_EQ(result.overflows[0].bits, kPost2038);
+
+  // The bytes must still appear in the output: a downstream ROS 2 reader
+  // would see them as int32 -1 (= 0xFFFFFFFF) but bagwiz does not
+  // alter them.
+  const auto text = format_ros2("std_msgs/msg/Header", result.cdr);
+  // Format may emit -1 (signed view) — either is acceptable, only
+  // confirm the conversion completed.
+  EXPECT_NE(text.find("nanosec: 12345"), std::string::npos) << text;
+}
+
+// Mirror test for Duration.nanosec: ROS 1 stores it as int32, ROS 2 as
+// uint32. A negative ROS 1 nsec (high bit set) flips signedness in
+// ROS 2.
+TEST(Ros1ToCdr, FlagsDurationNanosecHighBitOverflow)
+{
+  // builtin_interfaces/Duration has only two scalar fields, no header.
+  Ros1Builder b;
+  b.u32(5);            // sec (positive int32)
+  b.u32(0xC0000000U);  // nsec — high bit set; in ROS 1 this is negative.
+
+  const auto result =
+    bagwiz::core::convert_ros1_to_cdr("builtin_interfaces/msg/Duration", b.view());
+  ASSERT_TRUE(result.ok) << result.error;
+
+  ASSERT_EQ(result.overflows.size(), 1U);
+  EXPECT_EQ(result.overflows[0].type, "builtin_interfaces/Duration");
+  EXPECT_EQ(result.overflows[0].field, "nanosec");
+  EXPECT_EQ(result.overflows[0].bits, 0xC0000000U);
+}
+
+// Negative case: an in-range Time produces no overflow events. Guards
+// against a regression where the detector would fire on every message.
+TEST(Ros1ToCdr, NoOverflowEventsForInRangeTime)
+{
+  Ros1Builder b;
+  b.u32(0);                     // seq
+  b.time(0x7FFFFFFFU, 999999);  // sec just below the int32 ceiling, nsec ok
+  b.string("frame");
+
+  const auto result = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/Header", b.view());
+  ASSERT_TRUE(result.ok) << result.error;
+  EXPECT_TRUE(result.overflows.empty());
+}
+
 TEST(Ros1ToCdr, FailsForUnknownDestType)
 {
   Ros1Builder b;
