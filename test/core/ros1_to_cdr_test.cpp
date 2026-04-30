@@ -72,10 +72,11 @@ private:
 
 std::string format_ros2(const std::string & ros2_type, const std::vector<std::byte> & cdr)
 {
-  // The Phase D/E pipeline replaces the old IntrospectionLoad + format_message
-  // overload with a TopicInfo-driven factory. Build a minimal TopicInfo so the
-  // factory routes through introspection (no schema_text), decode the bytes,
-  // and feed the resulting Value to the new format_message().
+  // The decoder factory replaces the old IntrospectionLoad +
+  // format_message overload with a TopicInfo-driven open_decoder().
+  // Build a minimal TopicInfo so the factory routes through
+  // introspection (no schema_text), decode the bytes, and feed the
+  // resulting Value to format_message().
   bagwiz::io::TopicInfo topic;
   topic.name = "/ros1_to_cdr_test";
   topic.type = ros2_type;
@@ -98,19 +99,42 @@ std::string format_ros2(const std::string & ros2_type, const std::vector<std::by
 
 }  // namespace
 
-TEST(Ros1ToCdr, MapsKnownTypes)
+TEST(Ros1ToCdr, MapsRenamedTypesViaOverrideTable)
 {
+  // tf/tfMessage was renamed to tf2_msgs/TFMessage between ROS 1 and ROS 2.
+  // The override table catches the legacy alias; the modern alias
+  // auto-derives to the same target.
+  EXPECT_EQ(*bagwiz::core::map_ros1_type("tf/tfMessage"), "tf2_msgs/msg/TFMessage");
+  EXPECT_EQ(*bagwiz::core::map_ros1_type("tf2_msgs/TFMessage"), "tf2_msgs/msg/TFMessage");
+}
+
+TEST(Ros1ToCdr, AutoDerivesArbitraryTypes)
+{
+  // Any well-formed `pkg/Type` name maps to `pkg/msg/Type` regardless
+  // of whether the type was previously hard-coded in a whitelist.
   EXPECT_EQ(*bagwiz::core::map_ros1_type("std_msgs/Header"), "std_msgs/msg/Header");
   EXPECT_EQ(
     *bagwiz::core::map_ros1_type("geometry_msgs/PoseStamped"), "geometry_msgs/msg/PoseStamped");
-  EXPECT_EQ(*bagwiz::core::map_ros1_type("tf/tfMessage"), "tf2_msgs/msg/TFMessage");
   EXPECT_EQ(*bagwiz::core::map_ros1_type("can_msgs/Frame"), "can_msgs/msg/Frame");
+  // Custom types not in any historical whitelist now derive cleanly.
+  EXPECT_EQ(
+    *bagwiz::core::map_ros1_type("autoware_msgs/DetectedObject"),
+    "autoware_msgs/msg/DetectedObject");
+  EXPECT_EQ(*bagwiz::core::map_ros1_type("foo_pkg/Bar"), "foo_pkg/msg/Bar");
 }
 
-TEST(Ros1ToCdr, MapsUnknownTypeToNullopt)
+TEST(Ros1ToCdr, MalformedTypeReturnsNullopt)
 {
-  EXPECT_FALSE(bagwiz::core::map_ros1_type("foo_pkg/Bar").has_value());
-  EXPECT_FALSE(bagwiz::core::map_ros1_type("std_msgs/SomethingWeird").has_value());
+  // Empty / no-slash / leading-slash / trailing-slash / extra-slash inputs
+  // are not valid ROS 1 type names. Returning nullopt forces the caller to
+  // skip the topic with a clear error rather than producing garbage names.
+  EXPECT_FALSE(bagwiz::core::map_ros1_type("").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros1_type("just_a_word").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros1_type("/Bar").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros1_type("foo/").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros1_type("foo/msg/Bar").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros1_type("1foo/Bar").has_value());     // pkg starts with digit
+  EXPECT_FALSE(bagwiz::core::map_ros1_type("foo-pkg/Bar").has_value());  // hyphen invalid
 }
 
 TEST(Ros1ToCdr, ConvertsStdMsgsString)
@@ -251,6 +275,72 @@ TEST(Ros1ToCdr, RejectsTrailingBytes)
   const auto result = bagwiz::core::convert_ros1_to_cdr("geometry_msgs/msg/Vector3", b.view());
   EXPECT_FALSE(result.ok);
   EXPECT_NE(result.error.find("trailing"), std::string::npos) << result.error;
+}
+
+// ROS 1 `time.sec` is uint32 but ROS 2 reads it as int32. Values whose
+// high bit is set survive the conversion bit-for-bit, but the receiver
+// interprets them as negative epoch seconds. The converter must record
+// the event so the CLI can warn — without changing the wire bytes.
+TEST(Ros1ToCdr, FlagsTimeSecHighBitOverflow)
+{
+  // Build a Header whose stamp.sec has the high bit set. Use a value
+  // that's clearly inside the ROS 1-reachable uint32 range but outside
+  // the ROS 2 int32 range, simulating a bag with a post-2038 timestamp.
+  constexpr std::uint32_t kPost2038 = 0xFFFFFFFFU;
+  Ros1Builder b;
+  b.u32(0);                  // seq (dropped)
+  b.time(kPost2038, 12345);  // stamp.sec = post-2038, stamp.nsec
+  b.string("base_link");
+
+  const auto result = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/Header", b.view());
+  ASSERT_TRUE(result.ok) << result.error;
+
+  ASSERT_EQ(result.overflows.size(), 1U);
+  EXPECT_EQ(result.overflows[0].type, "builtin_interfaces/Time");
+  EXPECT_EQ(result.overflows[0].field, "sec");
+  EXPECT_EQ(result.overflows[0].bits, kPost2038);
+
+  // The bytes must still appear in the output: a downstream ROS 2 reader
+  // would see them as int32 -1 (= 0xFFFFFFFF) but bagwiz does not
+  // alter them.
+  const auto text = format_ros2("std_msgs/msg/Header", result.cdr);
+  // Format may emit -1 (signed view) — either is acceptable, only
+  // confirm the conversion completed.
+  EXPECT_NE(text.find("nanosec: 12345"), std::string::npos) << text;
+}
+
+// Mirror test for Duration.nanosec: ROS 1 stores it as int32, ROS 2 as
+// uint32. A negative ROS 1 nsec (high bit set) flips signedness in
+// ROS 2.
+TEST(Ros1ToCdr, FlagsDurationNanosecHighBitOverflow)
+{
+  // builtin_interfaces/Duration has only two scalar fields, no header.
+  Ros1Builder b;
+  b.u32(5);            // sec (positive int32)
+  b.u32(0xC0000000U);  // nsec — high bit set; in ROS 1 this is negative.
+
+  const auto result =
+    bagwiz::core::convert_ros1_to_cdr("builtin_interfaces/msg/Duration", b.view());
+  ASSERT_TRUE(result.ok) << result.error;
+
+  ASSERT_EQ(result.overflows.size(), 1U);
+  EXPECT_EQ(result.overflows[0].type, "builtin_interfaces/Duration");
+  EXPECT_EQ(result.overflows[0].field, "nanosec");
+  EXPECT_EQ(result.overflows[0].bits, 0xC0000000U);
+}
+
+// Negative case: an in-range Time produces no overflow events. Guards
+// against a regression where the detector would fire on every message.
+TEST(Ros1ToCdr, NoOverflowEventsForInRangeTime)
+{
+  Ros1Builder b;
+  b.u32(0);                     // seq
+  b.time(0x7FFFFFFFU, 999999);  // sec just below the int32 ceiling, nsec ok
+  b.string("frame");
+
+  const auto result = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/Header", b.view());
+  ASSERT_TRUE(result.ok) << result.error;
+  EXPECT_TRUE(result.overflows.empty());
 }
 
 TEST(Ros1ToCdr, FailsForUnknownDestType)

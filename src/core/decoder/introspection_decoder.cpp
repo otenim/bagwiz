@@ -37,13 +37,14 @@ cdr_walker::Object walk_members(const ts_types::MessageMembers & members, const 
 // Read one primitive at the given pointer, tagging it with the matching
 // cdr_walker::Value variant. Mirrors the type table in message_formatter
 // but emits Value variants instead of formatted strings so consumers
-// (Phase E formatter, traj, tf) can pattern-match on the original CDR
+// (the YAML formatter, traj, tf) can pattern-match on the original CDR
 // type rather than parsing strings.
 //
-// Wstring and long double are out of scope for the schema-driven path
-// (Q6 limited+fallback). The introspection path nominally COULD handle
-// them via the underlying typesupport, but Value has no variant for
-// them, so we throw to keep behaviour aligned with the schema path.
+// Wstring and long double are out of scope for cdr_walker::Value, which
+// has no variant for either. The introspection path nominally COULD
+// handle them via the underlying typesupport, but we throw here to keep
+// behaviour aligned with the schema-driven path (which rejects such
+// schemas at parse time).
 cdr_walker::Value read_primitive(const void * ptr, std::uint8_t type_id)
 {
   switch (type_id) {

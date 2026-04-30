@@ -8,16 +8,17 @@
 
 // End-to-end tests for the MCAP schema-driven decode pipeline.
 //
-// These exercise the full Phase A → E flow against real .mcap files:
-//   write a bag with an embedded ros2msg schema, reopen it via
-//   bagwiz::io::open_read, hand the TopicInfo to
-//   core::decoder::open_decoder, and decode the message bytes.
+// These exercise the full writer → reader → decoder → formatter flow
+// against real .mcap files: write a bag with an embedded ros2msg
+// schema, reopen it via bagwiz::io::open_read, hand the TopicInfo to
+// core::decoder::open_decoder, and decode the message bytes.
 //
 // The unit tests in test/core/decoder/decoder_test.cpp construct
 // TopicInfo manually and skip the IO layer — they prove the decoder
-// works in isolation. These tests prove the IO layer plumbs schema_text
-// correctly into the factory's selection logic, which is the central
-// contract the Phase A and Phase D PRs both claim.
+// works in isolation. These tests prove the IO layer plumbs
+// schema_text correctly into the factory's selection logic, so the
+// MCAP writer's embedded schema text round-trips into the right
+// decoder backend at read time.
 
 #include "bagwiz/core/cdr_walker/value.hpp"
 #include "bagwiz/core/decoder/decoder.hpp"
@@ -127,10 +128,11 @@ std::filesystem::path write_single_message_bag(
 
 TEST_F(McapSchemaDecodeTest, BagwizWrittenMcapDecodesViaSchemaPath)
 {
-  // The Phase A writer embeds the schema; the Phase D decoder factory
-  // picks the schema backend when schema_text is non-empty. End-to-end
-  // proof that a bagwiz-written MCAP carries enough information to
-  // decode its own messages without going through introspection.
+  // The MCAP writer embeds the schema in the Schema record; the
+  // decoder factory picks the schema-driven backend when schema_text
+  // is non-empty. End-to-end proof that a bagwiz-written MCAP carries
+  // enough information to decode its own messages without going
+  // through introspection.
   //
   // We assert backend == "schema" specifically so a regression that
   // silently routed everything to introspection (e.g. an accidental
@@ -208,8 +210,9 @@ TEST_F(McapSchemaDecodeTest, CustomTypeWithoutTypesupportStillDecodes)
 TEST_F(McapSchemaDecodeTest, DirectoryLayoutLazyPopulatesSchemasForDecoding)
 {
   // Multi-shard / directory-layout bags don't put schemas in
-  // metadata.yaml (Q1: keep schemas only in the shards). topics()
-  // before populate_schemas() returns empty schema_text, so a naive
+  // metadata.yaml — they are stored only in the shard files
+  // themselves. topics() before populate_schemas() returns empty
+  // schema_text, so a naive
   // factory call would fall through to introspection. The shard
   // reader's opportunistic backfill (populate_schemas + the
   // backfill-on-next() path) must restore the schema before
@@ -262,10 +265,11 @@ TEST_F(McapSchemaDecodeTest, DirectoryLayoutLazyPopulatesSchemasForDecoding)
 TEST_F(McapSchemaDecodeTest, EmptySchemaForcesIntrospectionFallback)
 {
   // A bagwiz-written MCAP whose declare_topic() was given an empty
-  // schema_text matches the legacy "before Phase A" output. The
-  // factory must transparently fall back to introspection so the bag
-  // is still readable. We use std_msgs/msg/String so introspection
-  // resolves (the package is on the test-time AMENT_PREFIX_PATH).
+  // schema_text matches the legacy output from before MCAP self-
+  // description was supported. The factory must transparently fall
+  // back to introspection so the bag is still readable. We use
+  // std_msgs/msg/String so introspection resolves (the package is on
+  // the test-time AMENT_PREFIX_PATH).
   bagwiz::io::TopicInfo topic;
   topic.name = "/legacy";
   topic.type = "std_msgs/msg/String";
@@ -299,8 +303,9 @@ TEST_F(McapSchemaDecodeTest, CrossBackendEquivalenceOnRealMcap)
   // Round-trip the same payload twice through the same MCAP fixture
   // but force the introspection backend on the second pass via
   // BAGWIZ_DECODER. The two decoded Value trees must be structurally
-  // equal — the contract Phase E relies on for byte-identical YAML
-  // output.
+  // equal — the YAML formatter relies on this contract to produce
+  // byte-identical output regardless of which backend decoded the
+  // message.
   bagwiz::io::TopicInfo topic;
   topic.name = "/eq";
   topic.type = "std_msgs/msg/String";

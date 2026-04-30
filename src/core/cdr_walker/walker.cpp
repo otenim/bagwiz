@@ -33,8 +33,9 @@ Value decode_message(
   const ms::SchemaModel & schema, const ms::MessageDef & def, CdrReader & reader);
 
 // Read one primitive of the given kind. Throws on Wstring / LongDouble
-// (Phase D filters those out before calling here, but we defend against
-// the parser handing us a schema with one slipping through).
+// (the decoder factory filters those out before calling here, but we
+// defend against the parser handing us a schema with one slipping
+// through).
 Value decode_primitive(ms::PrimitiveKind kind, CdrReader & reader)
 {
   switch (kind) {

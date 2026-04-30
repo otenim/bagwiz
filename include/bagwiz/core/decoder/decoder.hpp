@@ -19,9 +19,10 @@
 #include <string>
 #include <string_view>
 
-// Top-level decoder abstraction for bagwiz. Hides the choice between the
-// schema-driven path (Phases B + C) and the legacy introspection-typesupport
-// path (rmw_deserialize + MessageMembers walk) behind a single interface.
+// Top-level decoder abstraction for bagwiz. Hides the choice between
+// the schema-driven path (msg_schema parser + cdr_walker) and the
+// introspection-typesupport path (rmw_deserialize + MessageMembers
+// walk) behind a single interface.
 //
 // Per-channel decoders are constructed once via open_decoder() and then
 // invoked once per message; both backends front-load their setup costs
@@ -78,8 +79,10 @@ struct OpenDecoderResult
 //      fall through to the schema-first policy.
 //   2. If `topic.schema_text` is non-empty AND `topic.schema_encoding`
 //      is "ros2msg" (the only encoding the schema path supports today)
-//      AND the parsed schema does not transitively reference wstring or
-//      float128 (Q6 limited+fallback) — pick the schema backend.
+//      AND the parsed schema does not transitively reference wstring
+//      or float128 (cdr_walker::Value has no variant for either, so
+//      such schemas must take the introspection path) — pick the
+//      schema backend.
 //   3. Otherwise — pick the introspection backend.
 //
 // On step 2 failure to parse, the factory falls through to step 3

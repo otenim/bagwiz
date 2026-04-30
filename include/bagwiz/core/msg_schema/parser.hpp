@@ -21,8 +21,8 @@
 // channels.
 //
 // Errors are reported as a result struct (no exceptions on the public
-// boundary) so callers in Phase D / E can fall back to the introspection
-// path without try/catch noise.
+// boundary) so the decoder factory and the YAML formatter can fall
+// back to the introspection path without try/catch noise.
 namespace bagwiz::core::msg_schema
 {
 

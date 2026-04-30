@@ -11,13 +11,15 @@
 #include "bagwiz/core/cdr_to_ros1.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/msg_definition_resolver.hpp"
-#include "bagwiz/core/ros1_message_definitions.hpp"
+#include "bagwiz/core/ros1_meta_synthesizer.hpp"
 #include "bagwiz/core/ros1_to_cdr.hpp"
+#include "bagwiz/core/schema_resolver.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "bagwiz/io/rosbag1_reader.hpp"
 #include "bagwiz/io/rosbag1_writer.hpp"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
@@ -29,6 +31,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace bagwiz::commands
 {
@@ -69,6 +72,66 @@ struct PerConn
   bool keep = false;      // false → drop messages on this conn
   uint64_t written = 0;
   uint64_t failures = 0;
+  uint64_t overflow_events = 0;  // Total Time/Duration sign-flip events seen
+                                 // for this conn across all messages.
+};
+
+// Reason a topic was excluded from 1to2 output. The bagwiz convert
+// pipeline distinguishes topic-level errors (whole topic dropped, run
+// exits non-zero, topic listed in the end-of-run summary) from
+// per-message errors (rate-limited warning, message dropped, run can
+// still succeed). Each value below is a topic-level cause.
+enum class TopicSkipReason : int {
+  // Source ROS 1 type does not parse as `pkg/Type` and has no rename
+  // override entry. Catches typos and accidental ROS 2-shaped names in
+  // ROS 1 inputs.
+  TypeNameInvalid,
+  // No source (bag-embedded / AMENT / introspection) could produce a
+  // ROS 2 .msg text. Usually means the matching ROS 2 distro is not
+  // sourced.
+  SchemaUnresolvable,
+  // ROS 2 schema text resolved, but `synthesize_ros1_meta()` refused
+  // to canonicalise it. The synthesizer refuses when a field cannot be
+  // expressed in ROS 1 form at all — currently the only such case is
+  // `wstring`, which has no ROS 1 wire-equivalent counterpart.
+  CanonicalisationRefused,
+  // The MD5 we computed from the ROS 2 schema does not match the bag's
+  // ROS 1 connection md5sum. The default behaviour is to skip the
+  // topic so a wire-shape disagreement does not silently corrupt the
+  // output; the policy is reshaped by --strict (abort) and
+  // --allow-md5-mismatch (downgrade to a warning, admit the topic).
+  Md5Mismatch,
+  // Writer rejected the topic declaration (storage backend error).
+  WriterDeclareFailed,
+};
+
+const char * topic_skip_reason_label(TopicSkipReason r)
+{
+  switch (r) {
+    case TopicSkipReason::TypeNameInvalid:
+      return "invalid ROS 1 type name";
+    case TopicSkipReason::SchemaUnresolvable:
+      return "ROS 2 schema not resolvable from any source";
+    case TopicSkipReason::CanonicalisationRefused:
+      return "ROS 2 schema cannot be canonicalised to ROS 1 form";
+    case TopicSkipReason::Md5Mismatch:
+      return "ROS 1 md5sum does not match ROS 2 schema";
+    case TopicSkipReason::WriterDeclareFailed:
+      return "writer rejected topic declaration";
+  }
+  return "unknown";
+}
+
+// Aggregated record emitted at end-of-run so users see exactly which
+// topics were dropped and why. Carries the reason category plus a
+// human-readable detail string (md5 hex pair, dlerror text, etc.).
+struct SkippedTopic
+{
+  std::string topic;
+  std::string ros1_type;
+  std::string ros2_type;
+  TopicSkipReason reason;
+  std::string detail;
 };
 
 // Per-topic state used by 2to1, indexed by ROS 2 topic name.
@@ -81,7 +144,36 @@ struct TwoToOnePerTopic
   uint32_t conn_id = 0;
   uint64_t written = 0;
   uint64_t failures = 0;
+  uint64_t overflow_events = 0;  // see PerConn::overflow_events.
 };
+
+// Append the per-message overflow events emitted by the converter to the
+// per-topic running tally, and (rate-limited) log the first three
+// detailed events per topic. bagwiz is a wire converter, not a data
+// cleanser: the wire bytes are transcribed unchanged and we surface a
+// warning so the operator can decide whether the post-2038 (or pre-1970)
+// timestamp is intentional.
+//
+// `limit` is the number of detailed log lines this topic has produced so
+// far; the function increments it. Logging stops past `kMaxOverflowLogs`
+// so a torrent of bad timestamps doesn't drown out other warnings.
+template <typename Events>
+void log_overflow_events_rate_limited(
+  const std::string & topic, const Events & events, uint64_t & topic_total,
+  uint64_t & detailed_logged)
+{
+  constexpr uint64_t kMaxOverflowLogs = 3U;
+  for (const auto & ev : events) {
+    ++topic_total;
+    if (detailed_logged >= kMaxOverflowLogs) {
+      continue;
+    }
+    BAGWIZ_LOG_WARN(
+      kLogger, "Topic '%s': %s.%s value 0x%08x has high bit set; bytes transcribed unchanged",
+      topic.c_str(), ev.type.c_str(), ev.field.c_str(), static_cast<unsigned>(ev.bits));
+    ++detailed_logged;
+  }
+}
 
 }  // namespace
 
@@ -127,12 +219,18 @@ private:
     std::filesystem::path input_path;
     std::filesystem::path output_path;
     std::string storage;  // empty when --storage not passed; resolved at run time
+    // Policy flags. Mutually exclusive at the CLI surface; default
+    // behaviour (both false) is "topic-skip on any topic-level error,
+    // exit 2 if anything was skipped".
+    bool strict = false;              // any topic-level error → abort
+    bool allow_md5_mismatch = false;  // Md5Mismatch downgraded to warn-only
   } r1_to_r2_args_;
 
   struct TwoToOneArgs
   {
     std::filesystem::path input_path;
     std::filesystem::path output_path;
+    bool strict = false;  // any topic-level error → abort
   } r2_to_r1_args_;
 
   struct StorageArgs
@@ -157,9 +255,26 @@ private:
         "-s,--storage", r1_to_r2_args_.storage,
         "Output storage backend (default: inferred from output extension)")
       ->check(CLI::IsMember({"mcap", "sqlite3"}));
+    auto * strict_flag = sub->add_flag(
+      "--strict", r1_to_r2_args_.strict,
+      "Abort on the first topic-level error (md5 mismatch, schema "
+      "unresolvable, refused canonicalisation, writer reject) instead "
+      "of skipping the topic and continuing.");
+    auto * allow_flag = sub->add_flag(
+      "--allow-md5-mismatch", r1_to_r2_args_.allow_md5_mismatch,
+      "Treat md5 mismatch between the bag's ROS 1 connection record and "
+      "the synthesised ROS 2 schema as a warning rather than a topic "
+      "skip. Useful for known wire-equivalent renames (e.g. "
+      "sensor_msgs/CameraInfo's D/K/R/P → d/k/r/p across the version "
+      "boundary).");
+    strict_flag->excludes(allow_flag);
     sub->footer(
-      "Only standard message types from the built-in whitelist are converted.\n"
-      "Topics with unsupported types are skipped with a warning.\n"
+      "Each topic's ROS 2 schema is resolved from $AMENT_PREFIX_PATH (or the\n"
+      "introspection typesupport library when no .msg is on disk); a ROS 1\n"
+      "md5sum is synthesised from the resolved schema and compared against\n"
+      "the bag's connection record. Topics whose md5 does not match are\n"
+      "skipped with a warning and the run exits non-zero (or aborted with\n"
+      "--strict, or admitted with --allow-md5-mismatch).\n"
       "If --storage is omitted, the backend is inferred from the output path's\n"
       "extension (.mcap or .db3); other paths (e.g. a directory) require --storage.");
     sub->callback([this]() { selected_ = Subcommand::k1to2; });
@@ -214,8 +329,33 @@ private:
     // self-description for half its topics would surface only as a
     // Foxglove "schema encoding '' is not supported" error downstream.
     std::size_t resolved_defs = 0;
-    std::size_t unresolved_defs = 0;
-    std::unordered_set<std::string> warned_types;
+    std::vector<SkippedTopic> skipped_topics;
+    bool aborted_strict = false;  // set when --strict turns a topic-level
+                                  // error into an immediate run abort.
+
+    // Categorise + record one topic-level skip. Caller is expected to
+    // also flip `pc.keep = false` so the message loop stops admitting
+    // payloads for the affected conn_id. Honours --strict by setting
+    // `aborted_strict` so the run can return early; the caller still
+    // returns the PerConn so the immediate ensure_declared invocation
+    // does not segfault, but the message loop checks the flag and bails.
+    const auto record_skip = [&skipped_topics, &aborted_strict, &args](
+                               const PerConn & pc, TopicSkipReason reason, std::string detail) {
+      SkippedTopic s;
+      s.topic = pc.topic;
+      s.ros1_type = pc.ros1_type;
+      s.ros2_type = pc.ros2_type;
+      s.reason = reason;
+      s.detail = std::move(detail);
+      BAGWIZ_LOG_WARN(
+        kLogger, "Skipping topic '%s' (%s -> %s): %s%s%s", s.topic.c_str(), s.ros1_type.c_str(),
+        s.ros2_type.empty() ? "?" : s.ros2_type.c_str(), topic_skip_reason_label(reason),
+        s.detail.empty() ? "" : " — ", s.detail.c_str());
+      skipped_topics.push_back(std::move(s));
+      if (args.strict) {
+        aborted_strict = true;
+      }
+    };
 
     auto ensure_declared = [&](uint32_t conn_id) -> PerConn * {
       auto it = per_conn.find(conn_id);
@@ -246,65 +386,110 @@ private:
 
       const auto mapped = core::map_ros1_type(src->type);
       if (!mapped) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "Skipping topic '%s' (type '%s' not in whitelist)", pc.topic.c_str(),
-          pc.ros1_type.c_str());
+        record_skip(pc, TopicSkipReason::TypeNameInvalid, "");
         pc.keep = false;
-      } else {
-        pc.ros2_type = *mapped;
-        // Same topic may appear under multiple conn_ids in ROS 1 bags
-        // (e.g. one publisher per chunk). Declare the topic once with
-        // BagWriter; subsequent writes to the same topic are accepted.
-        if (!declared_topics.contains(pc.topic)) {
-          io::TopicInfo t;
-          t.name = pc.topic;
-          t.type = pc.ros2_type;
-          t.serialization_format = "cdr";
-          t.offered_qos_profiles = "";  // ROS 1 has no equivalent
+        return &per_conn.emplace(conn_id, std::move(pc)).first->second;
+      }
+      pc.ros2_type = *mapped;
 
-          // Resolve the ROS 2 .msg text from $AMENT_PREFIX_PATH so MCAP
-          // outputs carry self-description. Without this, Foxglove
-          // rejects the channel with `schema encoding '' is not
-          // supported`. ROS 1's `message_definition` field carries the
-          // ROS 1 grammar, which is not what ROS 2 readers expect, so
-          // we ignore it and resolve from the installed ROS 2 packages.
-          auto resolved = core::resolve_message_definition(pc.ros2_type);
-          if (!resolved.text.empty()) {
-            t.schema_text = std::move(resolved.text);
-            t.schema_encoding = std::move(resolved.encoding);
-            ++resolved_defs;
-          } else if (warned_types.insert(pc.ros2_type).second) {
-            ++unresolved_defs;
-            if (unresolved_defs <= 5) {
-              BAGWIZ_LOG_WARN(
-                kLogger,
-                "no .msg on disk for type '%s' (topic '%s'); writing without "
-                "self-description for this topic",
-                pc.ros2_type.c_str(), pc.topic.c_str());
+      // Same topic may appear under multiple conn_ids in ROS 1 bags
+      // (e.g. one publisher per chunk). Declare the topic once with
+      // BagWriter; subsequent writes to the same topic are accepted.
+      if (!declared_topics.contains(pc.topic)) {
+        // Resolve the ROS 2 schema. ROS 1 bags have no embedded ROS 2
+        // schema, so the bag-embedded path is unused; AMENT and
+        // introspection are the candidate sources.
+        core::ResolveSchemaInput resolve_in;
+        resolve_in.ros2_type = pc.ros2_type;
+        const auto resolved = core::resolve_schema(resolve_in);
+        if (!resolved.ok) {
+          // None of the three sources produced a schema. Most failure
+          // detail lives on the AMENT / introspection candidates; pull
+          // them into one short string for the summary.
+          std::string detail;
+          for (const auto & c : resolved.candidates) {
+            if (!c.error.empty()) {
+              if (!detail.empty()) {
+                detail += "; ";
+              }
+              detail += c.error;
             }
           }
+          record_skip(pc, TopicSkipReason::SchemaUnresolvable, std::move(detail));
+          pc.keep = false;
+          return &per_conn.emplace(conn_id, std::move(pc)).first->second;
+        }
 
-          try {
-            writer->declare_topic(t);
-            declared_topics.insert(pc.topic);
-            BAGWIZ_LOG_INFO(
-              kLogger, "Mapped '%s': %s -> %s", pc.topic.c_str(), pc.ros1_type.c_str(),
-              pc.ros2_type.c_str());
-          } catch (const std::exception & e) {
+        // Synthesise the canonical ROS 1 form to compare md5 against
+        // the bag-recorded md5sum. The canonicalisation can refuse
+        // outright (currently only for `wstring`, which has no ROS 1
+        // wire-equivalent representation) — surface that as a topic-
+        // level skip.
+        const auto meta = core::synthesize_ros1_meta(pc.ros2_type, resolved.text);
+        if (!meta.ok) {
+          record_skip(pc, TopicSkipReason::CanonicalisationRefused, meta.error);
+          pc.keep = false;
+          return &per_conn.emplace(conn_id, std::move(pc)).first->second;
+        }
+
+        if (meta.meta.md5sum != src->md5sum) {
+          // Silent-corruption guard: producer and our schema disagree
+          // on the wire shape. Default policy is topic-skip + non-zero
+          // exit; --allow-md5-mismatch downgrades to a warning that
+          // still admits the topic (useful for known wire-equivalent
+          // renames like sensor_msgs/CameraInfo's D/K/R/P → d/k/r/p
+          // across the ROS 1/ROS 2 boundary); --strict promotes any
+          // topic-level error to abort.
+          std::string detail = "bag md5=" + src->md5sum + " synthesised=" + meta.meta.md5sum +
+                               " (source=" + std::string(core::to_string(resolved.source)) + ")";
+          if (args.allow_md5_mismatch) {
             BAGWIZ_LOG_WARN(
-              kLogger, "declare_topic failed for '%s': %s; skipping topic", pc.topic.c_str(),
-              e.what());
-            pc.ros2_type.clear();
+              kLogger,
+              "md5 mismatch on topic '%s' (%s -> %s) admitted by "
+              "--allow-md5-mismatch: %s",
+              pc.topic.c_str(), pc.ros1_type.c_str(), pc.ros2_type.c_str(), detail.c_str());
+            // Fall through and declare the topic; wire bytes are
+            // forwarded as-is, schema text reflects the local ROS 2
+            // type. Receiver-side compatibility is the user's call.
+          } else {
+            record_skip(pc, TopicSkipReason::Md5Mismatch, std::move(detail));
+            pc.keep = false;
+            return &per_conn.emplace(conn_id, std::move(pc)).first->second;
           }
         }
-        pc.keep = !pc.ros2_type.empty();
+
+        io::TopicInfo t;
+        t.name = pc.topic;
+        t.type = pc.ros2_type;
+        t.serialization_format = "cdr";
+        t.offered_qos_profiles = "";  // ROS 1 has no equivalent
+        t.schema_text = resolved.text;
+        t.schema_encoding = resolved.encoding;
+        ++resolved_defs;
+
+        try {
+          writer->declare_topic(t);
+          declared_topics.insert(pc.topic);
+          BAGWIZ_LOG_INFO(
+            kLogger, "Mapped '%s': %s -> %s [md5 ok via %s]", pc.topic.c_str(),
+            pc.ros1_type.c_str(), pc.ros2_type.c_str(),
+            std::string(core::to_string(resolved.source)).c_str());
+        } catch (const std::exception & e) {
+          record_skip(pc, TopicSkipReason::WriterDeclareFailed, e.what());
+          pc.keep = false;
+          return &per_conn.emplace(conn_id, std::move(pc)).first->second;
+        }
       }
 
+      pc.keep = !pc.ros2_type.empty();
       return &per_conn.emplace(conn_id, std::move(pc)).first->second;
     };
 
     uint64_t total_in = 0;
     uint64_t total_out = 0;
+    // Per-topic counters for rate-limited overflow logs. Keyed by topic
+    // (not conn_id) since we surface the warnings at topic granularity.
+    std::unordered_map<std::string, uint64_t> overflow_log_counts;
     io::Ros1Message msg;
     while (true) {
       try {
@@ -318,6 +503,12 @@ private:
       ++total_in;
 
       auto * pc = ensure_declared(msg.conn_id);
+      if (aborted_strict) {
+        // ensure_declared just hit a topic-level error and --strict was
+        // set; bail without writing the half-finished output.
+        BAGWIZ_LOG_ERROR(kLogger, "Aborting per --strict: see preceding skip warning");
+        return 2;
+      }
       if (pc == nullptr || !pc->keep) {
         continue;
       }
@@ -331,6 +522,11 @@ private:
             pc->ros2_type.c_str(), result.error.c_str());
         }
         continue;
+      }
+
+      if (!result.overflows.empty()) {
+        log_overflow_events_rate_limited(
+          pc->topic, result.overflows, pc->overflow_events, overflow_log_counts[pc->topic]);
       }
 
       try {
@@ -363,12 +559,7 @@ private:
       total_out, total_in, declared_topics.size());
     if (resolved_defs > 0) {
       BAGWIZ_LOG_INFO(
-        kLogger, "resolved %zu missing message definition(s) from $AMENT_PREFIX_PATH",
-        resolved_defs);
-    }
-    if (unresolved_defs > 5) {
-      BAGWIZ_LOG_WARN(
-        kLogger, "(plus %zu more type(s) without resolvable .msg)", unresolved_defs - 5);
+        kLogger, "resolved %zu message definition(s) with md5 verified against bag", resolved_defs);
     }
     for (const auto & [conn_id, pc] : per_conn) {
       if (pc.keep && pc.failures > 0) {
@@ -376,6 +567,38 @@ private:
           kLogger, "Topic '%s': %" PRIu64 " message(s) failed to convert", pc.topic.c_str(),
           pc.failures);
       }
+      if (pc.keep && pc.overflow_events > 0) {
+        BAGWIZ_LOG_WARN(
+          kLogger,
+          "Topic '%s': %" PRIu64
+          " Time/Duration sign-flip event(s); "
+          "wire bytes preserved (bagwiz transcribes timestamps verbatim)",
+          pc.topic.c_str(), pc.overflow_events);
+      }
+    }
+
+    // Topic-skip summary. Exit code reflects whether any topic was
+    // dropped: zero only when every topic in the input was emitted.
+    if (!skipped_topics.empty()) {
+      BAGWIZ_LOG_WARN(kLogger, "Skipped %zu topic(s):", skipped_topics.size());
+      // Show at most the first 5 in detail to keep the trailing summary
+      // tractable on bags with many divergent topics; tally the rest by
+      // reason category so users still see scope.
+      constexpr std::size_t kMaxDetailRows = 5;
+      const std::size_t shown = std::min(kMaxDetailRows, skipped_topics.size());
+      for (std::size_t i = 0; i < shown; ++i) {
+        const auto & s = skipped_topics[i];
+        BAGWIZ_LOG_WARN(
+          kLogger, "  - '%s' (%s -> %s): %s%s%s", s.topic.c_str(), s.ros1_type.c_str(),
+          s.ros2_type.empty() ? "?" : s.ros2_type.c_str(), topic_skip_reason_label(s.reason),
+          s.detail.empty() ? "" : " — ", s.detail.c_str());
+      }
+      if (skipped_topics.size() > kMaxDetailRows) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "  (... %zu more skipped topic(s) not shown)",
+          skipped_topics.size() - kMaxDetailRows);
+      }
+      return 2;  // non-zero exit so callers can detect partial conversion
     }
 
     return 0;
@@ -388,9 +611,17 @@ private:
       ->required()
       ->check(CLI::ExistingPath);
     sub->add_option("output", r2_to_r1_args_.output_path, "Output ROS 1 .bag file")->required();
+    sub->add_flag(
+      "--strict", r2_to_r1_args_.strict,
+      "Abort on the first topic-level error (schema unresolvable, "
+      "refused canonicalisation, writer reject) instead of skipping "
+      "the topic and continuing.");
     sub->footer(
-      "Only standard message types from the built-in whitelist are converted.\n"
-      "Topics with unsupported types are skipped with a warning.\n"
+      "Each topic's ROS 2 schema is taken from the bag's self-describing\n"
+      "record when present, or resolved from $AMENT_PREFIX_PATH /\n"
+      "introspection typesupport otherwise. The ROS 1 connection's md5sum\n"
+      "and message_definition are synthesised from that schema. Topics\n"
+      "whose schema cannot be resolved are skipped and the run exits non-zero.\n"
       "Output is a non-compressed ROS 1 bag v2.0; rosbag2-layer compression\n"
       "(compression_mode: FILE / MESSAGE) on the input is not supported.");
     sub->callback([this]() { selected_ = Subcommand::k2to1; });
@@ -461,6 +692,32 @@ private:
     }
 
     std::unordered_map<std::string, TwoToOnePerTopic> per_topic;
+    std::vector<SkippedTopic> skipped_topics;
+    std::size_t synthesised_defs = 0;
+    bool aborted_strict = false;
+
+    // Categorise + record one topic-level skip in 2to1. The 2to1 record
+    // shape is the same as 1to2 (`SkippedTopic`); only the field
+    // population order differs (here we know `ros2_type` first).
+    const auto record_skip_2to1 = [&skipped_topics, &aborted_strict, &args](
+                                    const TwoToOnePerTopic & st, TopicSkipReason reason,
+                                    std::string detail) {
+      SkippedTopic s;
+      s.topic = st.topic;
+      s.ros1_type = st.ros1_type;
+      s.ros2_type = st.ros2_type;
+      s.reason = reason;
+      s.detail = std::move(detail);
+      BAGWIZ_LOG_WARN(
+        kLogger, "Skipping topic '%s' (%s -> %s): %s%s%s", s.topic.c_str(), s.ros2_type.c_str(),
+        s.ros1_type.empty() ? "?" : s.ros1_type.c_str(), topic_skip_reason_label(reason),
+        s.detail.empty() ? "" : " — ", s.detail.c_str());
+      skipped_topics.push_back(std::move(s));
+      if (args.strict) {
+        aborted_strict = true;
+      }
+    };
+
     for (const auto & t : reader->topics()) {
       TwoToOnePerTopic state;
       state.topic = t.name;
@@ -468,40 +725,78 @@ private:
 
       auto mapped = core::map_ros2_type(t.type);
       if (!mapped) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "Skipping topic '%s' (type '%s' not in whitelist)", state.topic.c_str(),
-          state.ros2_type.c_str());
+        record_skip_2to1(state, TopicSkipReason::TypeNameInvalid, "");
         per_topic.emplace(state.topic, std::move(state));
         continue;
       }
       state.ros1_type = *mapped;
 
-      const auto * meta = core::find_ros1_meta(state.ros1_type);
-      if (meta == nullptr) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "Skipping topic '%s': no ROS 1 message_definition for '%s' (whitelist mismatch)",
-          state.topic.c_str(), state.ros1_type.c_str());
+      // Resolve the ROS 2 schema, preferring the bag-embedded text when
+      // the storage layer surfaces one. A self-described bag is the
+      // only schema source guaranteed to match what the producer
+      // actually serialised, even if the local AMENT install drifts;
+      // resolve_schema() falls back to AMENT and then introspection
+      // when no bag-embedded text is available.
+      core::ResolveSchemaInput resolve_in;
+      resolve_in.ros2_type = state.ros2_type;
+      resolve_in.bag_embedded_text = t.schema_text;
+      resolve_in.bag_embedded_encoding = t.schema_encoding;
+      const auto resolved = core::resolve_schema(resolve_in);
+      if (!resolved.ok) {
+        std::string detail;
+        for (const auto & c : resolved.candidates) {
+          if (!c.error.empty()) {
+            if (!detail.empty()) {
+              detail += "; ";
+            }
+            detail += c.error;
+          }
+        }
+        record_skip_2to1(state, TopicSkipReason::SchemaUnresolvable, std::move(detail));
+        per_topic.emplace(state.topic, std::move(state));
+        continue;
+      }
+
+      // Synthesise the canonical ROS 1 form's md5 + concatenated
+      // message_definition. The synthesizer applies the wire-equivalent
+      // normalisation rules (drop ROS 2-only sequence/string bounds,
+      // strip default values, restore the Header.seq prefix, refuse
+      // wstring) and computes the md5 over the resulting ROS 1-form
+      // text.
+      const auto meta = core::synthesize_ros1_meta(state.ros2_type, resolved.text);
+      if (!meta.ok) {
+        record_skip_2to1(state, TopicSkipReason::CanonicalisationRefused, meta.error);
         per_topic.emplace(state.topic, std::move(state));
         continue;
       }
 
       try {
         state.conn_id = writer->declare_connection(
-          state.topic, state.ros1_type, meta->md5sum, meta->message_definition);
+          state.topic, state.ros1_type, meta.meta.md5sum, meta.meta.message_definition);
         state.keep = true;
+        ++synthesised_defs;
         BAGWIZ_LOG_INFO(
-          kLogger, "Mapped '%s': %s -> %s", state.topic.c_str(), state.ros2_type.c_str(),
-          state.ros1_type.c_str());
+          kLogger, "Mapped '%s': %s -> %s [md5 synthesised via %s]", state.topic.c_str(),
+          state.ros2_type.c_str(), state.ros1_type.c_str(),
+          std::string(core::to_string(resolved.source)).c_str());
       } catch (const std::exception & e) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "declare_connection failed for '%s': %s; skipping topic", state.topic.c_str(),
-          e.what());
+        record_skip_2to1(state, TopicSkipReason::WriterDeclareFailed, e.what());
       }
       per_topic.emplace(state.topic, std::move(state));
+      if (aborted_strict) {
+        break;  // out of the per-topic setup loop; the abort handler
+                // below returns 2 without entering the message loop.
+      }
+    }
+
+    if (aborted_strict) {
+      BAGWIZ_LOG_ERROR(kLogger, "Aborting per --strict: see preceding skip warning");
+      return 2;
     }
 
     uint64_t total_in = 0;
     uint64_t total_out = 0;
+    std::unordered_map<std::string, uint64_t> overflow_log_counts;
     io::RawMessage msg;
     while (true) {
       try {
@@ -534,6 +829,11 @@ private:
         continue;
       }
 
+      if (!result.overflows.empty()) {
+        log_overflow_events_rate_limited(
+          st.topic, result.overflows, st.overflow_events, overflow_log_counts[st.topic]);
+      }
+
       try {
         writer->write(st.conn_id, msg.timestamp_ns, std::span<const std::byte>(result.ros1));
         ++st.written;
@@ -564,6 +864,9 @@ private:
     BAGWIZ_LOG_INFO(
       kLogger, "Conversion done: %" PRIu64 "/%" PRIu64 " messages written across %zu topic(s)",
       total_out, total_in, kept_topics);
+    if (synthesised_defs > 0) {
+      BAGWIZ_LOG_INFO(kLogger, "synthesised ROS 1 metadata for %zu topic(s)", synthesised_defs);
+    }
     for (const auto & entry : per_topic) {
       const auto & st = entry.second;
       if (st.keep && st.failures > 0) {
@@ -571,6 +874,35 @@ private:
           kLogger, "Topic '%s': %" PRIu64 " message(s) failed to convert", st.topic.c_str(),
           st.failures);
       }
+      if (st.keep && st.overflow_events > 0) {
+        BAGWIZ_LOG_WARN(
+          kLogger,
+          "Topic '%s': %" PRIu64
+          " Time/Duration sign-flip event(s); "
+          "wire bytes preserved (bagwiz transcribes timestamps verbatim)",
+          st.topic.c_str(), st.overflow_events);
+      }
+    }
+
+    // Topic-skip summary — matches the 1to2 shape; the topic-level
+    // skip policy is direction-agnostic.
+    if (!skipped_topics.empty()) {
+      BAGWIZ_LOG_WARN(kLogger, "Skipped %zu topic(s):", skipped_topics.size());
+      constexpr std::size_t kMaxDetailRows = 5;
+      const std::size_t shown = std::min(kMaxDetailRows, skipped_topics.size());
+      for (std::size_t i = 0; i < shown; ++i) {
+        const auto & s = skipped_topics[i];
+        BAGWIZ_LOG_WARN(
+          kLogger, "  - '%s' (%s -> %s): %s%s%s", s.topic.c_str(), s.ros2_type.c_str(),
+          s.ros1_type.empty() ? "?" : s.ros1_type.c_str(), topic_skip_reason_label(s.reason),
+          s.detail.empty() ? "" : " — ", s.detail.c_str());
+      }
+      if (skipped_topics.size() > kMaxDetailRows) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "  (... %zu more skipped topic(s) not shown)",
+          skipped_topics.size() - kMaxDetailRows);
+      }
+      return 2;
     }
 
     return 0;

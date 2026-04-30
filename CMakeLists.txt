@@ -83,7 +83,9 @@ add_library(bagwiz_core
   src/core/msg_schema/parser.cpp
   src/core/msg_schema/schema_model.cpp
   src/core/ros1_message_definitions.cpp
+  src/core/ros1_meta_synthesizer.cpp
   src/core/ros1_to_cdr.cpp
+  src/core/schema_resolver.cpp
   src/core/terminal_input.cpp
   src/core/tf_value_extract.cpp
   src/core/topic_pattern.cpp
@@ -221,8 +223,20 @@ if(BUILD_TESTING)
   target_link_libraries(bagwiz_ros1_message_definitions_test bagwiz_core)
 
   ament_add_gtest(
+    bagwiz_ros1_meta_synthesizer_test test/core/ros1_meta_synthesizer_test.cpp)
+  target_link_libraries(bagwiz_ros1_meta_synthesizer_test bagwiz_core)
+
+  ament_add_gtest(
     bagwiz_msg_definition_resolver_test test/core/msg_definition_resolver_test.cpp)
   target_link_libraries(bagwiz_msg_definition_resolver_test bagwiz_core)
+
+  ament_add_gtest(
+    bagwiz_schema_resolver_test test/core/schema_resolver_test.cpp)
+  target_link_libraries(bagwiz_schema_resolver_test bagwiz_core)
+
+  ament_add_gtest(
+    bagwiz_schema_pipeline_test test/core/schema_pipeline_test.cpp)
+  target_link_libraries(bagwiz_schema_pipeline_test bagwiz_core)
 
   ament_add_gtest(bagwiz_rosbag1_reader_test test/io/rosbag1_reader_test.cpp)
   target_link_libraries(bagwiz_rosbag1_reader_test bagwiz_core)

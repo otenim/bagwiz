@@ -26,10 +26,11 @@ namespace bagwiz::core::cdr_walker
 //   - schema has no root (parser was given an empty / malformed input)
 //   - payload is shorter than the encapsulation header
 //   - payload uses PL_CDR encapsulation (XCDR-2 mutable types)
-//   - schema references an unsupported type for the schema-driven path:
-//     wstring or float128 (see Q6 limited+fallback policy). Phase D's
-//     decoder factory should pre-check the schema and route these
-//     channels to the introspection path before ever calling decode().
+//   - schema references an unsupported type for the schema-driven
+//     path: wstring or float128. cdr_walker::Value has no variant for
+//     either, so the decoder factory pre-checks the schema and routes
+//     such channels to the introspection backend before ever calling
+//     decode().
 //   - schema references an unknown nested type that the cross-reference
 //     check missed (defensive — should not happen with parser output).
 //   - CDR underflow (payload truncated mid-field).

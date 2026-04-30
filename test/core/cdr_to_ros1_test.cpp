@@ -70,20 +70,38 @@ private:
 
 }  // namespace
 
-TEST(CdrToRos1, MapsKnownTypes)
+TEST(CdrToRos1, AutoDerivesArbitraryTypes)
 {
+  // Any well-formed `pkg/msg/Type` strips the `/msg/` infix to produce
+  // the ROS 1 form, regardless of whether the type was previously
+  // hard-coded in a whitelist.
   EXPECT_EQ(*bagwiz::core::map_ros2_type("std_msgs/msg/Header"), "std_msgs/Header");
   EXPECT_EQ(
     *bagwiz::core::map_ros2_type("geometry_msgs/msg/PoseStamped"), "geometry_msgs/PoseStamped");
-  // tf collision: forward had two ROS 1 sources, reverse picks the canonical one.
+  // tf modernisation: forward had `tf/tfMessage` (legacy) and
+  // `tf2_msgs/TFMessage` (modern); reverse always picks the modern form
+  // since auto-derive strips `/msg/` directly.
   EXPECT_EQ(*bagwiz::core::map_ros2_type("tf2_msgs/msg/TFMessage"), "tf2_msgs/TFMessage");
   EXPECT_EQ(*bagwiz::core::map_ros2_type("can_msgs/msg/Frame"), "can_msgs/Frame");
+  // Custom types not in any historical whitelist now derive cleanly.
+  EXPECT_EQ(
+    *bagwiz::core::map_ros2_type("autoware_msgs/msg/DetectedObject"),
+    "autoware_msgs/DetectedObject");
+  EXPECT_EQ(*bagwiz::core::map_ros2_type("foo_pkg/msg/Bar"), "foo_pkg/Bar");
 }
 
-TEST(CdrToRos1, MapsUnknownTypeToNullopt)
+TEST(CdrToRos1, MalformedTypeReturnsNullopt)
 {
-  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo_pkg/msg/Bar").has_value());
-  EXPECT_FALSE(bagwiz::core::map_ros2_type("std_msgs/msg/SomethingWeird").has_value());
+  // Inputs without the `/msg/` infix or with malformed segments must
+  // return nullopt so callers skip the topic.
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("just_a_word").has_value());
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo/Bar").has_value());          // missing /msg/
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("/msg/Bar").has_value());         // empty pkg
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo/msg/").has_value());         // empty type
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo/msg/Sub/Bar").has_value());  // extra segment
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("1foo/msg/Bar").has_value());  // pkg starts with digit
+  EXPECT_FALSE(bagwiz::core::map_ros2_type("foo-pkg/msg/Bar").has_value());  // hyphen invalid
 }
 
 TEST(CdrToRos1, CanMsgsFrameRos1MetaMatchesUpstream)
@@ -303,6 +321,65 @@ TEST(CdrToRos1, RoundTripsImuWithCovariance)
     b.f64(static_cast<double>(20 + i));
   }
   EXPECT_TRUE(roundtrip_equal("sensor_msgs/msg/Imu", b.view()));
+}
+
+// ROS 2 builtin_interfaces/Time.sec is int32 but ROS 1 reads it as
+// uint32. Default-constructed and timestamp-before-1970 values have
+// the high bit set on a wrap; convert_cdr_to_ros1 must record the
+// event without altering the bytes (bagwiz transcribes timestamps
+// verbatim).
+TEST(CdrToRos1, FlagsTimeSecHighBitOverflow)
+{
+  // Build a Header CDR by forward-converting a ROS 1 Header whose sec
+  // has the high bit set. The forward direction is also under test
+  // here, but we only inspect the backward direction's `overflows`.
+  Ros1Builder b;
+  b.u32(0);                // seq
+  b.time(0xFFFFFFFFU, 0);  // sec, nsec
+  b.string("frame");
+
+  const auto fwd = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/Header", b.view());
+  ASSERT_TRUE(fwd.ok) << fwd.error;
+  // Forward also flags the same field; sanity-check.
+  ASSERT_EQ(fwd.overflows.size(), 1U);
+
+  const auto back = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/Header", fwd.cdr);
+  ASSERT_TRUE(back.ok) << back.error;
+  ASSERT_EQ(back.overflows.size(), 1U);
+  EXPECT_EQ(back.overflows[0].type, "builtin_interfaces/Time");
+  EXPECT_EQ(back.overflows[0].field, "sec");
+  EXPECT_EQ(back.overflows[0].bits, 0xFFFFFFFFU);
+}
+
+// Symmetric: ROS 2 Duration.nanosec is uint32, ROS 1 nsec is int32.
+// Values > INT32_MAX (high bit set) flip sign on the way down. The CDR
+// payload is constructed directly so the forward direction doesn't
+// confound the test.
+TEST(CdrToRos1, FlagsDurationNanosecHighBitOverflow)
+{
+  // CDR-LE for builtin_interfaces/msg/Duration: 4-byte encapsulation
+  // header, then int32 sec + uint32 nanosec, naturally aligned.
+  std::vector<std::byte> cdr;
+  cdr.push_back(std::byte{0x00});  // PLAIN_CDR_LE
+  cdr.push_back(std::byte{0x01});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  // sec = 5 (positive int32)
+  for (int i = 0; i < 4; ++i) {
+    cdr.push_back(std::byte{static_cast<unsigned char>(i == 0 ? 5 : 0)});
+  }
+  // nanosec = 0xC0000000 (high bit set; ROS 1 reads as negative int32)
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0xC0});
+
+  const auto back = bagwiz::core::convert_cdr_to_ros1("builtin_interfaces/msg/Duration", cdr);
+  ASSERT_TRUE(back.ok) << back.error;
+  ASSERT_EQ(back.overflows.size(), 1U);
+  EXPECT_EQ(back.overflows[0].type, "builtin_interfaces/Duration");
+  EXPECT_EQ(back.overflows[0].field, "nanosec");
+  EXPECT_EQ(back.overflows[0].bits, 0xC0000000U);
 }
 
 TEST(CdrToRos1, FailsForUnknownSrcType)

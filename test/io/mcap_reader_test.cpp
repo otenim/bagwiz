@@ -202,9 +202,10 @@ TEST_F(McapReaderTest, OpensSingleFileAndListsTopics)
 
 TEST_F(McapReaderTest, DirectoryPopulatesSchemasOnDemand)
 {
-  // metadata.yaml does not carry schemas (Q1 decision: keep them only in
-  // shards). topics() before populate_schemas() returns empty schemas, and
-  // populate_schemas() backfills from shard 0.
+  // metadata.yaml does not carry schemas — they live only inside the
+  // individual shard files. topics() before populate_schemas()
+  // therefore returns empty schemas, and populate_schemas() backfills
+  // them by reading shard 0 on demand.
   const auto dir = write_fixture_directory(tmp_dir_ / "schemas_lazy");
 
   auto reader = bagwiz::io::open_read(dir);

@@ -13,6 +13,8 @@
 #include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 
+#include <cctype>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -31,77 +33,48 @@ namespace
 
 namespace ts = rosidl_typesupport_introspection_cpp;
 
-// Whitelist of ROS 1 type names we are willing to convert, mapped to
-// the ROS 2 type name that goes into the output bag's topic metadata.
-// Entries are added one at a time as they are validated end-to-end;
-// untested types stay out of the table on purpose so non-standard bags
-// fail loud rather than producing silently broken output.
-const std::unordered_map<std::string, std::string> & ros1_to_ros2_typemap()
+// Override table for ROS 1 → ROS 2 type names that cannot be derived
+// mechanically from `pkg/Type` → `pkg/msg/Type`. Almost every ROS message
+// type follows the auto-derive rule; the override list exists only for
+// historical renames where the package or type name itself changed
+// across the ROS 1/ROS 2 boundary.
+//
+// To add an entry here, the type must satisfy: (a) a different package
+// name on each side, or (b) a case/spelling change in the type name, or
+// both. Same-package, same-spelling types should NOT appear here — they
+// are handled by the auto-derive fallback in `map_ros1_type`.
+const std::unordered_map<std::string, std::string> & ros1_to_ros2_renames()
 {
   static const std::unordered_map<std::string, std::string> kMap = {
-    {"std_msgs/Bool", "std_msgs/msg/Bool"},
-    {"std_msgs/Header", "std_msgs/msg/Header"},
-    {"std_msgs/String", "std_msgs/msg/String"},
-    {"std_msgs/Float32", "std_msgs/msg/Float32"},
-    {"std_msgs/Float64", "std_msgs/msg/Float64"},
-    {"std_msgs/Int32", "std_msgs/msg/Int32"},
-    {"std_msgs/Int64", "std_msgs/msg/Int64"},
-    {"std_msgs/UInt32", "std_msgs/msg/UInt32"},
-    {"std_msgs/UInt64", "std_msgs/msg/UInt64"},
-
-    {"geometry_msgs/Vector3", "geometry_msgs/msg/Vector3"},
-    {"geometry_msgs/Vector3Stamped", "geometry_msgs/msg/Vector3Stamped"},
-    {"geometry_msgs/Point", "geometry_msgs/msg/Point"},
-    {"geometry_msgs/PointStamped", "geometry_msgs/msg/PointStamped"},
-    {"geometry_msgs/Quaternion", "geometry_msgs/msg/Quaternion"},
-    {"geometry_msgs/QuaternionStamped", "geometry_msgs/msg/QuaternionStamped"},
-    {"geometry_msgs/Pose", "geometry_msgs/msg/Pose"},
-    {"geometry_msgs/PoseStamped", "geometry_msgs/msg/PoseStamped"},
-    {"geometry_msgs/PoseWithCovariance", "geometry_msgs/msg/PoseWithCovariance"},
-    {"geometry_msgs/PoseWithCovarianceStamped", "geometry_msgs/msg/PoseWithCovarianceStamped"},
-    {"geometry_msgs/Transform", "geometry_msgs/msg/Transform"},
-    {"geometry_msgs/TransformStamped", "geometry_msgs/msg/TransformStamped"},
-    {"geometry_msgs/Twist", "geometry_msgs/msg/Twist"},
-    {"geometry_msgs/TwistStamped", "geometry_msgs/msg/TwistStamped"},
-    {"geometry_msgs/TwistWithCovariance", "geometry_msgs/msg/TwistWithCovariance"},
-    {"geometry_msgs/TwistWithCovarianceStamped", "geometry_msgs/msg/TwistWithCovarianceStamped"},
-    {"geometry_msgs/Accel", "geometry_msgs/msg/Accel"},
-    {"geometry_msgs/AccelStamped", "geometry_msgs/msg/AccelStamped"},
-
+    // The ROS 1 `tf` package was renamed to `tf2_msgs` and the `tfMessage`
+    // type was capitalised to `TFMessage`. Both `tf/tfMessage` (legacy)
+    // and `tf2_msgs/TFMessage` (modern) appear in the wild on ROS 1
+    // bags; the modern form auto-derives correctly to
+    // `tf2_msgs/msg/TFMessage`, but the legacy alias needs an explicit
+    // override.
     {"tf/tfMessage", "tf2_msgs/msg/TFMessage"},
-    {"tf2_msgs/TFMessage", "tf2_msgs/msg/TFMessage"},
-
-    {"nav_msgs/Odometry", "nav_msgs/msg/Odometry"},
-    {"nav_msgs/Path", "nav_msgs/msg/Path"},
-
-    {"sensor_msgs/Imu", "sensor_msgs/msg/Imu"},
-    {"sensor_msgs/Image", "sensor_msgs/msg/Image"},
-    {"sensor_msgs/CompressedImage", "sensor_msgs/msg/CompressedImage"},
-    {"sensor_msgs/CameraInfo", "sensor_msgs/msg/CameraInfo"},
-    {"sensor_msgs/PointCloud2", "sensor_msgs/msg/PointCloud2"},
-    {"sensor_msgs/PointField", "sensor_msgs/msg/PointField"},
-    {"sensor_msgs/NavSatFix", "sensor_msgs/msg/NavSatFix"},
-    {"sensor_msgs/NavSatStatus", "sensor_msgs/msg/NavSatStatus"},
-    {"sensor_msgs/LaserScan", "sensor_msgs/msg/LaserScan"},
-    {"sensor_msgs/Range", "sensor_msgs/msg/Range"},
-    {"sensor_msgs/Temperature", "sensor_msgs/msg/Temperature"},
-    {"sensor_msgs/FluidPressure", "sensor_msgs/msg/FluidPressure"},
-    {"sensor_msgs/MagneticField", "sensor_msgs/msg/MagneticField"},
-
-    {"diagnostic_msgs/DiagnosticArray", "diagnostic_msgs/msg/DiagnosticArray"},
-    {"diagnostic_msgs/DiagnosticStatus", "diagnostic_msgs/msg/DiagnosticStatus"},
-    {"diagnostic_msgs/KeyValue", "diagnostic_msgs/msg/KeyValue"},
-
-    // can_msgs is from ros-industrial/ros_canopen and is wire-compatible
-    // between ROS 1 and ROS 2 (the only structural difference is the
-    // ROS 1 Header.seq prefix, which the Header pre-hook already
-    // handles for every message that embeds Header).
-    {"can_msgs/Frame", "can_msgs/msg/Frame"},
-
-    {"builtin_interfaces/Time", "builtin_interfaces/msg/Time"},
-    {"builtin_interfaces/Duration", "builtin_interfaces/msg/Duration"},
   };
   return kMap;
+}
+
+// Validate that `s` is a non-empty identifier-like token
+// (alphanumerics + underscore, no leading digit). ROS message type
+// names use this grammar for both package and type segments.
+bool is_identifier(std::string_view s)
+{
+  if (s.empty()) {
+    return false;
+  }
+  if (std::isdigit(static_cast<unsigned char>(s.front())) != 0) {
+    return false;
+  }
+  for (char c : s) {
+    const auto u = static_cast<unsigned char>(c);
+    if ((std::isalnum(u) == 0) && c != '_') {
+      return false;
+    }
+  }
+  return true;
 }
 
 // ---- byte cursors -------------------------------------------------------
@@ -205,9 +178,13 @@ private:
 
 // ---- walker -------------------------------------------------------------
 
-void walk_message(const ts::MessageMembers & m, Ros1Reader & r, CdrWriter & w);
+void walk_message(
+  const ts::MessageMembers & m, Ros1Reader & r, CdrWriter & w,
+  std::vector<TimeOverflowEvent> & overflows);
 
-void walk_scalar(const ts::MessageMember & f, Ros1Reader & r, CdrWriter & w)
+void walk_scalar(
+  const ts::MessageMember & f, Ros1Reader & r, CdrWriter & w,
+  std::vector<TimeOverflowEvent> & overflows)
 {
   switch (f.type_id_) {
     case ts::ROS_TYPE_BOOLEAN:
@@ -251,7 +228,7 @@ void walk_scalar(const ts::MessageMember & f, Ros1Reader & r, CdrWriter & w)
 
     case ts::ROS_TYPE_MESSAGE: {
       const auto * sub = static_cast<const ts::MessageMembers *>(f.members_->data);
-      walk_message(*sub, r, w);
+      walk_message(*sub, r, w, overflows);
       return;
     }
 
@@ -262,10 +239,12 @@ void walk_scalar(const ts::MessageMember & f, Ros1Reader & r, CdrWriter & w)
   }
 }
 
-void walk_field(const ts::MessageMember & f, Ros1Reader & r, CdrWriter & w)
+void walk_field(
+  const ts::MessageMember & f, Ros1Reader & r, CdrWriter & w,
+  std::vector<TimeOverflowEvent> & overflows)
 {
   if (!f.is_array_) {
-    walk_scalar(f, r, w);
+    walk_scalar(f, r, w, overflows);
     return;
   }
 
@@ -282,24 +261,66 @@ void walk_field(const ts::MessageMember & f, Ros1Reader & r, CdrWriter & w)
   }
 
   for (uint32_t i = 0; i < count; ++i) {
-    walk_scalar(f, r, w);
+    walk_scalar(f, r, w, overflows);
   }
 }
 
-void walk_message(const ts::MessageMembers & m, Ros1Reader & r, CdrWriter & w)
+// Read one 32-bit field while watching for the sign-flip case described
+// in TimeOverflowEvent: ROS 1 stored the value with one signedness, ROS
+// 2 reads it with the opposite. The bytes are passed through unchanged;
+// we only record the event so the caller can surface a per-topic
+// warning.
+void walk_signflip_u32(
+  Ros1Reader & r, CdrWriter & w, std::vector<TimeOverflowEvent> & overflows,
+  std::string_view type_short, std::string_view field_name)
+{
+  const uint32_t bits = r.read_u32_le();
+  if ((bits & 0x80000000U) != 0U) {
+    TimeOverflowEvent ev;
+    ev.type = std::string(type_short);
+    ev.field = std::string(field_name);
+    ev.bits = bits;
+    overflows.push_back(std::move(ev));
+  }
+  w.write_u32_le(bits);
+}
+
+void walk_message(
+  const ts::MessageMembers & m, Ros1Reader & r, CdrWriter & w,
+  std::vector<TimeOverflowEvent> & overflows)
 {
   // Pre-hooks for ROS 1 vs ROS 2 schema differences. The list is short
-  // by design — only Header drops a wire field across the version
+  // by design — only a handful of types differ across the version
   // boundary; everything else is bit-for-bit identical.
   const std::string ns = m.message_namespace_ != nullptr ? m.message_namespace_ : "";
   const std::string name = m.message_name_ != nullptr ? m.message_name_ : "";
   if (ns == "std_msgs::msg" && name == "Header") {
     // ROS 1 Header begins with `uint32 seq`, dropped in ROS 2.
     r.skip(4);
+  } else if (ns == "builtin_interfaces::msg" && name == "Time") {
+    // ROS 1 `time` = (uint32 sec, uint32 nsec). ROS 2 `Time` = (int32
+    // sec, uint32 nanosec). Same 8 bytes; sec's sign convention differs.
+    // Watch the sec field for the sign-flip case (bit 31 set ⇒ ROS 1
+    // value > INT32_MAX, ROS 2 reader sees a negative epoch second).
+    walk_signflip_u32(r, w, overflows, "builtin_interfaces/Time", "sec");
+    // nanosec is uint32 on both sides — straight pass-through.
+    const auto bytes = r.read_bytes(4);
+    w.align(4);
+    w.write_bytes(bytes);
+    return;
+  } else if (ns == "builtin_interfaces::msg" && name == "Duration") {
+    // ROS 1 `duration` = (int32 sec, int32 nsec). ROS 2 `Duration` =
+    // (int32 sec, uint32 nanosec). sec is int32 on both sides — pass
+    // through; nsec switches signedness, so flag the high-bit case.
+    const auto sec_bytes = r.read_bytes(4);
+    w.align(4);
+    w.write_bytes(sec_bytes);
+    walk_signflip_u32(r, w, overflows, "builtin_interfaces/Duration", "nanosec");
+    return;
   }
 
   for (uint32_t i = 0; i < m.member_count_; ++i) {
-    walk_field(m.members_[i], r, w);
+    walk_field(m.members_[i], r, w, overflows);
   }
 }
 
@@ -307,12 +328,39 @@ void walk_message(const ts::MessageMembers & m, Ros1Reader & r, CdrWriter & w)
 
 std::optional<std::string> map_ros1_type(std::string_view ros1_type)
 {
-  const auto & m = ros1_to_ros2_typemap();
-  auto it = m.find(std::string(ros1_type));
-  if (it == m.end()) {
+  // 1. Look in the rename override table first. These are special cases
+  //    where the auto-derive rule would produce the wrong answer (e.g.
+  //    `tf/tfMessage` → `tf2_msgs/msg/TFMessage`).
+  const auto & overrides = ros1_to_ros2_renames();
+  if (auto it = overrides.find(std::string(ros1_type)); it != overrides.end()) {
+    return it->second;
+  }
+
+  // 2. Auto-derive: ROS 1 type names are `pkg/Type`; the equivalent ROS 2
+  //    name is `pkg/msg/Type`. The actual conversion uses the ROS 2 type's
+  //    introspection typesupport (`load_introspection`), so only the name
+  //    is derived here — whether the type is loadable in the current
+  //    environment is checked downstream.
+  const auto slash = ros1_type.find('/');
+  if (slash == std::string_view::npos) {
     return std::nullopt;
   }
-  return it->second;
+  if (ros1_type.find('/', slash + 1) != std::string_view::npos) {
+    // More than one '/' — not a valid ROS 1 type name (and almost
+    // certainly an accidental ROS 2 form passed in).
+    return std::nullopt;
+  }
+  const auto pkg = ros1_type.substr(0, slash);
+  const auto type = ros1_type.substr(slash + 1);
+  if (!is_identifier(pkg) || !is_identifier(type)) {
+    return std::nullopt;
+  }
+  std::string out;
+  out.reserve(pkg.size() + 5 + type.size());
+  out.append(pkg);
+  out.append("/msg/");
+  out.append(type);
+  return out;
 }
 
 Ros1ToCdrResult convert_ros1_to_cdr(
@@ -331,7 +379,7 @@ Ros1ToCdrResult convert_ros1_to_cdr(
   CdrWriter writer;
 
   try {
-    walk_message(*load.members, reader, writer);
+    walk_message(*load.members, reader, writer, out.overflows);
   } catch (const std::exception & e) {
     out.error = e.what();
     return out;
