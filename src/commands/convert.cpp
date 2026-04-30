@@ -214,12 +214,18 @@ private:
     std::filesystem::path input_path;
     std::filesystem::path output_path;
     std::string storage;  // empty when --storage not passed; resolved at run time
+    // Policy flags (project decision 12/A). Mutually exclusive at the
+    // CLI surface; default behaviour (both false) is "topic-skip on any
+    // topic-level error, exit 2 if anything was skipped".
+    bool strict = false;              // any topic-level error → abort
+    bool allow_md5_mismatch = false;  // Md5Mismatch downgraded to warn-only
   } r1_to_r2_args_;
 
   struct TwoToOneArgs
   {
     std::filesystem::path input_path;
     std::filesystem::path output_path;
+    bool strict = false;  // any topic-level error → abort
   } r2_to_r1_args_;
 
   struct StorageArgs
@@ -244,12 +250,26 @@ private:
         "-s,--storage", r1_to_r2_args_.storage,
         "Output storage backend (default: inferred from output extension)")
       ->check(CLI::IsMember({"mcap", "sqlite3"}));
+    auto * strict_flag = sub->add_flag(
+      "--strict", r1_to_r2_args_.strict,
+      "Abort on the first topic-level error (md5 mismatch, schema "
+      "unresolvable, refused canonicalisation, writer reject) instead "
+      "of skipping the topic and continuing.");
+    auto * allow_flag = sub->add_flag(
+      "--allow-md5-mismatch", r1_to_r2_args_.allow_md5_mismatch,
+      "Treat md5 mismatch between the bag's ROS 1 connection record and "
+      "the synthesised ROS 2 schema as a warning rather than a topic "
+      "skip. Useful for known wire-equivalent renames (e.g. "
+      "sensor_msgs/CameraInfo's D/K/R/P → d/k/r/p across the version "
+      "boundary).");
+    strict_flag->excludes(allow_flag);
     sub->footer(
       "Each topic's ROS 2 schema is resolved from $AMENT_PREFIX_PATH (or the\n"
       "introspection typesupport library when no .msg is on disk); a ROS 1\n"
       "md5sum is synthesised from the resolved schema and compared against\n"
       "the bag's connection record. Topics whose md5 does not match are\n"
-      "skipped with a warning and the run exits non-zero.\n"
+      "skipped with a warning and the run exits non-zero (or aborted with\n"
+      "--strict, or admitted with --allow-md5-mismatch).\n"
       "If --storage is omitted, the backend is inferred from the output path's\n"
       "extension (.mcap or .db3); other paths (e.g. a directory) require --storage.");
     sub->callback([this]() { selected_ = Subcommand::k1to2; });
@@ -305,11 +325,16 @@ private:
     // Foxglove "schema encoding '' is not supported" error downstream.
     std::size_t resolved_defs = 0;
     std::vector<SkippedTopic> skipped_topics;
+    bool aborted_strict = false;  // set when --strict turns a topic-level
+                                  // error into an immediate run abort.
 
     // Categorise + record one topic-level skip. Caller is expected to
     // also flip `pc.keep = false` so the message loop stops admitting
-    // payloads for the affected conn_id.
-    const auto record_skip = [&skipped_topics](
+    // payloads for the affected conn_id. Honours --strict by setting
+    // `aborted_strict` so the run can return early; the caller still
+    // returns the PerConn so the immediate ensure_declared invocation
+    // does not segfault, but the message loop checks the flag and bails.
+    const auto record_skip = [&skipped_topics, &aborted_strict, &args](
                                const PerConn & pc, TopicSkipReason reason, std::string detail) {
       SkippedTopic s;
       s.topic = pc.topic;
@@ -322,6 +347,9 @@ private:
         s.ros2_type.empty() ? "?" : s.ros2_type.c_str(), topic_skip_reason_label(reason),
         s.detail.empty() ? "" : " — ", s.detail.c_str());
       skipped_topics.push_back(std::move(s));
+      if (args.strict) {
+        aborted_strict = true;
+      }
     };
 
     auto ensure_declared = [&](uint32_t conn_id) -> PerConn * {
@@ -400,14 +428,26 @@ private:
 
         if (meta.meta.md5sum != src->md5sum) {
           // Silent-corruption guard: producer and our schema disagree
-          // on the wire shape. Default per decision 3/D is topic-skip
-          // + non-zero exit; --strict / --allow-md5-mismatch (commit
-          // #7) will let users reshape this policy.
+          // on the wire shape. Default policy (decision 3/D) is
+          // topic-skip + non-zero exit; --allow-md5-mismatch downgrades
+          // to a warning that still admits the topic (decision 12/A);
+          // --strict promotes any topic-level error to abort.
           std::string detail = "bag md5=" + src->md5sum + " synthesised=" + meta.meta.md5sum +
                                " (source=" + std::string(core::to_string(resolved.source)) + ")";
-          record_skip(pc, TopicSkipReason::Md5Mismatch, std::move(detail));
-          pc.keep = false;
-          return &per_conn.emplace(conn_id, std::move(pc)).first->second;
+          if (args.allow_md5_mismatch) {
+            BAGWIZ_LOG_WARN(
+              kLogger,
+              "md5 mismatch on topic '%s' (%s -> %s) admitted by "
+              "--allow-md5-mismatch: %s",
+              pc.topic.c_str(), pc.ros1_type.c_str(), pc.ros2_type.c_str(), detail.c_str());
+            // Fall through and declare the topic; wire bytes are
+            // forwarded as-is, schema text reflects the local ROS 2
+            // type. Receiver-side compatibility is the user's call.
+          } else {
+            record_skip(pc, TopicSkipReason::Md5Mismatch, std::move(detail));
+            pc.keep = false;
+            return &per_conn.emplace(conn_id, std::move(pc)).first->second;
+          }
         }
 
         io::TopicInfo t;
@@ -455,6 +495,12 @@ private:
       ++total_in;
 
       auto * pc = ensure_declared(msg.conn_id);
+      if (aborted_strict) {
+        // ensure_declared just hit a topic-level error and --strict was
+        // set; bail without writing the half-finished output.
+        BAGWIZ_LOG_ERROR(kLogger, "Aborting per --strict: see preceding skip warning");
+        return 2;
+      }
       if (pc == nullptr || !pc->keep) {
         continue;
       }
@@ -558,6 +604,11 @@ private:
       ->required()
       ->check(CLI::ExistingPath);
     sub->add_option("output", r2_to_r1_args_.output_path, "Output ROS 1 .bag file")->required();
+    sub->add_flag(
+      "--strict", r2_to_r1_args_.strict,
+      "Abort on the first topic-level error (schema unresolvable, "
+      "refused canonicalisation, writer reject) instead of skipping "
+      "the topic and continuing.");
     sub->footer(
       "Each topic's ROS 2 schema is taken from the bag's self-describing\n"
       "record when present, or resolved from $AMENT_PREFIX_PATH /\n"
@@ -636,24 +687,29 @@ private:
     std::unordered_map<std::string, TwoToOnePerTopic> per_topic;
     std::vector<SkippedTopic> skipped_topics;
     std::size_t synthesised_defs = 0;
+    bool aborted_strict = false;
 
     // Categorise + record one topic-level skip in 2to1. The 2to1 record
     // shape is the same as 1to2 (`SkippedTopic`); only the field
     // population order differs (here we know `ros2_type` first).
-    const auto record_skip_2to1 =
-      [&skipped_topics](const TwoToOnePerTopic & st, TopicSkipReason reason, std::string detail) {
-        SkippedTopic s;
-        s.topic = st.topic;
-        s.ros1_type = st.ros1_type;
-        s.ros2_type = st.ros2_type;
-        s.reason = reason;
-        s.detail = std::move(detail);
-        BAGWIZ_LOG_WARN(
-          kLogger, "Skipping topic '%s' (%s -> %s): %s%s%s", s.topic.c_str(), s.ros2_type.c_str(),
-          s.ros1_type.empty() ? "?" : s.ros1_type.c_str(), topic_skip_reason_label(reason),
-          s.detail.empty() ? "" : " — ", s.detail.c_str());
-        skipped_topics.push_back(std::move(s));
-      };
+    const auto record_skip_2to1 = [&skipped_topics, &aborted_strict, &args](
+                                    const TwoToOnePerTopic & st, TopicSkipReason reason,
+                                    std::string detail) {
+      SkippedTopic s;
+      s.topic = st.topic;
+      s.ros1_type = st.ros1_type;
+      s.ros2_type = st.ros2_type;
+      s.reason = reason;
+      s.detail = std::move(detail);
+      BAGWIZ_LOG_WARN(
+        kLogger, "Skipping topic '%s' (%s -> %s): %s%s%s", s.topic.c_str(), s.ros2_type.c_str(),
+        s.ros1_type.empty() ? "?" : s.ros1_type.c_str(), topic_skip_reason_label(reason),
+        s.detail.empty() ? "" : " — ", s.detail.c_str());
+      skipped_topics.push_back(std::move(s));
+      if (args.strict) {
+        aborted_strict = true;
+      }
+    };
 
     for (const auto & t : reader->topics()) {
       TwoToOnePerTopic state;
@@ -718,6 +774,15 @@ private:
         record_skip_2to1(state, TopicSkipReason::WriterDeclareFailed, e.what());
       }
       per_topic.emplace(state.topic, std::move(state));
+      if (aborted_strict) {
+        break;  // out of the per-topic setup loop; the abort handler
+                // below returns 2 without entering the message loop.
+      }
+    }
+
+    if (aborted_strict) {
+      BAGWIZ_LOG_ERROR(kLogger, "Aborting per --strict: see preceding skip warning");
+      return 2;
     }
 
     uint64_t total_in = 0;
