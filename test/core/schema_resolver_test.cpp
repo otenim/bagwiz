@@ -52,8 +52,9 @@ std::size_t count_occurrences(const std::string & hay, std::string_view needle)
 
 // Bag-embedded text wins outright when it is non-empty and the encoding
 // matches "ros2msg" — even if the type also happens to be installed via
-// AMENT. This is the project decision 5/A guarantee: producer-shipped
-// schema beats local install state.
+// AMENT. The producer-shipped schema is the only source guaranteed to
+// match what was actually serialised, so it must beat local install
+// state.
 TEST(SchemaResolver, BagEmbeddedWinsOverAmentWhenAvailable)
 {
   ResolveSchemaInput in;
@@ -125,9 +126,9 @@ TEST(SchemaResolver, EmptyTypeNameReturnsEmptyResult)
 }
 
 // Every source is recorded in `candidates`, even on success, so callers
-// can drive multi-source MD5 crosscheck reporting without re-running the
-// pipeline (project decision 6/C). Order matches priority: bag-embedded,
-// AMENT, introspection.
+// can drive multi-source MD5 crosscheck reporting without re-running
+// the pipeline. Order matches priority: bag-embedded, AMENT,
+// introspection.
 TEST(SchemaResolver, RecordsAllCandidatesForCrosscheck)
 {
   ResolveSchemaInput in;

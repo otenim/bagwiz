@@ -220,8 +220,9 @@ TEST_F(WriterRoundTripTest, McapSchemaRoundTrips)
 {
   // Self-describing write: schema_text passed at declare_topic() should
   // come back out verbatim when the bag is reopened. This is the central
-  // payoff of Phase A — bagwiz-written MCAPs carry message definitions
-  // forward instead of the empty schema.data the writer used to emit.
+  // payoff of MCAP self-description support — bagwiz-written MCAPs
+  // carry message definitions forward instead of the empty schema.data
+  // the writer used to emit before that support landed.
   const std::vector<bagwiz::io::TopicInfo> topics = {
     make_topic_with_schema("/foo", "std_msgs/msg/String", "string data"),
     make_topic_with_schema("/bar", "std_msgs/msg/Int32", "int32 data"),

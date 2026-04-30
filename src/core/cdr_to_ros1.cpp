@@ -307,8 +307,9 @@ void walk_field(
 }
 
 // Read one 32-bit field while watching for the sign-flip case described
-// in TimeOverflowEvent. Symmetric to ros1_to_cdr's helper: bytes pass
-// through unchanged, we only record the event when the high bit is set.
+// in TimeOverflowEvent. Symmetric to ros1_to_cdr's helper: the bytes
+// pass through unchanged, we only record the event when the high bit
+// is set.
 void walk_signflip_u32(
   CdrReader & r, Ros1Writer & w, std::vector<TimeOverflowEvent> & overflows,
   std::string_view type_short, std::string_view field_name)
@@ -330,8 +331,9 @@ void walk_message(
 {
   // Mirror the forward pre-hook in ros1_to_cdr.cpp: ROS 1's Header
   // begins with a `uint32 seq` field that ROS 2 dropped. Synthesize
-  // zero on output. Per project decision (2026-04-26), we don't carry
-  // a per-connection counter — most ROS 1 tooling ignores seq.
+  // zero on output rather than maintain a per-connection counter — the
+  // original ROS 1 seq is unrecoverable from a ROS 2 bag and most ROS
+  // 1 tooling ignores the field.
   const std::string ns = m.message_namespace_ != nullptr ? m.message_namespace_ : "";
   const std::string name = m.message_name_ != nullptr ? m.message_name_ : "";
   if (ns == "std_msgs::msg" && name == "Header") {

@@ -200,7 +200,7 @@ private:
   // One element of a list of messages. The first child field uses the
   // "- " dash marker; subsequent ones align under it. Mirrors the
   // YAML-ish style the legacy formatter emitted so reviewers can diff
-  // outputs verbatim during the Phase E rollout.
+  // outputs verbatim against the previous formatter output.
   void emit_message_list_item(
     const cdr::Object & obj, const std::string & list_indent, const std::string & item_indent,
     std::size_t depth)

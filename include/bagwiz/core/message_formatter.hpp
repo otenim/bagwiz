@@ -38,8 +38,9 @@ struct FormatResult
 };
 
 // Render a decoded message to a YAML-ish string mirroring `ros2 topic
-// echo`. Input is the Value produced by the Phase D decoder (either
-// schema-driven or introspection-based — both yield the same shape).
+// echo`. Input is the Value produced by the decoder factory (either
+// the schema-driven or the introspection-based backend — both yield
+// the same shape).
 //
 // The Value MUST wrap a top-level Object (a struct). Primitive or
 // sequence Values at the root are rejected; the shape contract for

@@ -30,11 +30,11 @@ namespace ms = bagwiz::core::msg_schema;
 namespace
 {
 
-// Tiny CDR-1 payload builder used only by these tests. Production code
-// has no CDR writer (Phase B/C are decode-only); we re-implement the
-// minimum needed to construct realistic test inputs without depending on
-// rmw_serialize. Mirrors the same alignment rules as the reader so both
-// sides exercise the (offset - 4) % size convention.
+// Tiny CDR-1 payload builder used only by these tests. The bagwiz core
+// CDR walker is decode-only (no CDR writer is shipped); we re-implement
+// the minimum needed to construct realistic test inputs without
+// depending on rmw_serialize. Mirrors the same alignment rules as the
+// reader so both sides exercise the (offset - 4) % size convention.
 class CdrBuilder
 {
 public:

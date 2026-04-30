@@ -304,8 +304,9 @@ std::string array_suffix(const ms::ArraySpec & a)
       return "[" + std::to_string(a.size.value_or(0)) + "]";
     case ms::ArrayKind::BoundedSequence:
     case ms::ArrayKind::UnboundedSequence:
-      // Bound is dropped per project decision 10/B (ROS 1 has no bounded
-      // sequences). Caller is expected to log the drop as a warning.
+      // ROS 1 has no bounded sequences, so the upper bound is dropped
+      // (the wire format is identical to an unbounded sequence in CDR).
+      // Caller is expected to log the drop as a warning.
       return "[]";
   }
   return "";
@@ -399,7 +400,9 @@ public:
 
 private:
   // Recursive MD5: caches by short name, throws on missing type or
-  // wstring (the only refusal case under decision 10/B).
+  // wstring (the only field type the synthesizer refuses outright;
+  // every other ROS 2-only construct degrades to its closest ROS 1
+  // form).
   std::string compute_md5(std::string_view short_name)
   {
     if (auto it = md5_cache_.find(std::string(short_name)); it != md5_cache_.end()) {
@@ -539,8 +542,9 @@ private:
     ss << base_short << array_suffix(f.type.array) << " " << f.name << "\n";
   }
 
-  // Surface bound / default drops as warnings. Wire-irrelevant per
-  // decision 10/B but useful for users tracking down "MD5 matched but
+  // Surface bound / default drops as warnings. Wire-irrelevant — both
+  // bounds and ROS 2 default values are absent from the serialised
+  // form — but useful for users tracking down "MD5 matched but
   // something looks off downstream".
   void record_warnings(const ms::FieldDef & f, std::string_view current_short)
   {

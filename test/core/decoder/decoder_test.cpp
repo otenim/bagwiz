@@ -186,11 +186,11 @@ TEST(SchemaDecoder, MissingSchemaFallsThroughToIntrospection)
 
 TEST(SchemaDecoder, WstringSchemaFallsThroughToIntrospection)
 {
-  // Q6 limited+fallback: a schema referencing wstring is treated as
-  // unsupported by the schema backend and routed to introspection.
-  // We only have one wstring-using type (a synthetic one), but std_msgs/
-  // String is on PATH so the fallback resolves. We assert backend is
-  // "introspection".
+  // A schema referencing wstring is treated as unsupported by the
+  // schema-driven backend (cdr_walker::Value has no variant for
+  // wstring) and routed to introspection. We only have one wstring-
+  // using type (a synthetic one), but std_msgs/String is on PATH so
+  // the fallback resolves. We assert backend is "introspection".
   //
   // Use std_msgs/msg/String as the type name (so introspection succeeds)
   // but pass a schema_text that would otherwise parse as a wstring
@@ -237,8 +237,9 @@ TEST(IntrospectionDecoder, FailsOnUnknownType)
 TEST(Equivalence, BothBackendsProduceEqualValueTrees)
 {
   // Same payload, same type, decoded both ways. The two Value trees
-  // should be structurally equal — that's the contract Phase E
-  // consumers will rely on for byte-identical YAML output.
+  // should be structurally equal — the YAML formatter relies on this
+  // contract to produce byte-identical output regardless of which
+  // backend decoded the message.
   CdrBuilder b;
   b.put_string("a roundtripped string");
 

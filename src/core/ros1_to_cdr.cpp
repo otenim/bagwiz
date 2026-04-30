@@ -267,9 +267,9 @@ void walk_field(
 
 // Read one 32-bit field while watching for the sign-flip case described
 // in TimeOverflowEvent: ROS 1 stored the value with one signedness, ROS
-// 2 reads it with the opposite. The bytes are passed through unchanged
-// (project decision 9/B); we only record the event so the caller can
-// surface a per-topic warning.
+// 2 reads it with the opposite. The bytes are passed through unchanged;
+// we only record the event so the caller can surface a per-topic
+// warning.
 void walk_signflip_u32(
   Ros1Reader & r, CdrWriter & w, std::vector<TimeOverflowEvent> & overflows,
   std::string_view type_short, std::string_view field_name)

@@ -16,11 +16,12 @@
 namespace bagwiz::core
 {
 
-// Provenance of a resolved ROS 2 schema. The dynamic-conversion design
-// (project decision 5/A) requires bag-embedded msg text to win over
-// AMENT install metadata, with introspection typesupport as a last-ditch
-// fallback. This enum lets callers report which source was used and lets
-// crosscheck reporting compare candidates from different sources.
+// Provenance of a resolved ROS 2 schema. The resolver tries sources in
+// the priority order BagEmbedded → AmentInstall → Introspection so that
+// a self-described bag wins over local install metadata, and
+// introspection typesupport serves as a last-ditch fallback. This enum
+// lets callers report which source was used and lets crosscheck
+// reporting compare candidates from different sources.
 enum class SchemaSource : int {
   // Schema text shipped inside the bag itself (rosbag2 mcap's
   // self-describing schema, available in Iron+). Highest priority — it
@@ -50,9 +51,13 @@ enum class SchemaSource : int {
 std::string_view to_string(SchemaSource source) noexcept;
 
 // One attempt at a particular source. The resolver records every
-// attempted source (success or failure) so callers can drive multi-source
-// MD5 crosscheck reporting (project decision 6/C) without re-running the
-// resolution pipeline.
+// attempted source (success or failure) so callers can drive multi-
+// source MD5 crosscheck reporting without re-running the resolution
+// pipeline. Each candidate's `text` (when ok) can be passed through
+// `synthesize_ros1_meta` to derive a per-source md5, and any divergence
+// between sources is a meaningful signal — for example, an AMENT-vs-
+// introspection mismatch means the local install drifted from the
+// runtime typesupport.
 struct ResolvedSchemaCandidate
 {
   SchemaSource source;

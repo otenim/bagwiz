@@ -17,6 +17,19 @@ Guidelines for AI agents contributing to this repository.
   prose; do not bold ordinary keywords, type names, or section
   labels — over-use dilutes the signal and makes documents feel
   shouty.
+- Never write phrases that only make sense within the context of an
+  AI–developer conversation. A future contributor or user reading the
+  source must be able to understand the reasoning from the code and
+  documentation alone. Concretely, do not embed shorthand references
+  to design-discussion artifacts that are not in-tree — e.g. "plan A",
+  "option B", "decision 3/D", "project decision 12/A", "Q6 decision",
+  "per the design doc", or numbered selections from a chat-mode
+  question/answer. Such labels are meaningless to anyone who did not
+  participate in the conversation. Instead, spell out the rationale
+  inline — what the rule is and why — so the comment, log message, or
+  documentation stands on its own. If a deeper write-up exists, link
+  to a tracked, in-repo document (e.g. an ADR file under `docs/`),
+  not to a private conversation.
 
 ## 2. Attribution
 

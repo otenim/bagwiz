@@ -20,9 +20,10 @@ namespace bagwiz::core
 
 // One normalisation event surfaced to the caller. Emitted whenever a
 // ROS 2-only construct had to be downgraded to a ROS 1-compatible form
-// (e.g. a bounded array losing its bound). Wire-irrelevant per project
-// decision 10/B, but the caller may want to log them so users can
-// investigate "MD5 matched but Foxglove shows something odd" later.
+// (e.g. a bounded array losing its bound). The wire format is unaffected
+// — these constructs do not appear on the wire — but the caller may
+// want to log them so users can investigate "MD5 matched but Foxglove
+// shows something odd" later.
 struct Ros1MetaWarning
 {
   std::string type;    // e.g. "geometry_msgs/PoseStamped"
@@ -59,7 +60,8 @@ struct Ros1MetaResult
 //     Both `pkg/Type` and `pkg/msg/Type` forms are accepted in
 //     dependency headers and field type references.
 //
-// Normalisation rules (project decision 10/B):
+// Normalisation rules (kept wire-equivalent — every drop here is a
+// ROS 2-only construct that has no wire footprint):
 //   * `pkg/msg/Type` references → `pkg/Type` form (.msg layer name)
 //   * `builtin_interfaces/Time` field → `time` primitive
 //   * `builtin_interfaces/Duration` field → `duration` primitive

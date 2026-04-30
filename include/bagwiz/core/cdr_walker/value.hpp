@@ -16,13 +16,13 @@
 #include <variant>
 #include <vector>
 
-// In-memory representation of a single decoded ROS 2 message. Produced by
-// the CDR walker (decode()); consumed by Phase D MessageView and the
-// downstream YAML / pose / TF formatters.
+// In-memory representation of a single decoded ROS 2 message. Produced
+// by the CDR walker (decode()); consumed by the decoder factory's
+// MessageView wrapper and the downstream YAML / pose / TF formatters.
 //
 // Numeric primitives are kept in their original IDL widths instead of
-// being widened to int64/double — Phase E formatters and Phase F tf math
-// need exact bit-pattern preservation (e.g. float32 vs float64
+// being widened to int64/double — the YAML formatter and the tf math
+// helpers need exact bit-pattern preservation (e.g. float32 vs float64
 // quaternions, uint8 enums on diagnostic_msgs).
 //
 // Object and Sequence reference Value recursively. std::vector is
@@ -58,8 +58,9 @@ struct Value
   std::variant<
     std::monostate, bool, std::int8_t, std::uint8_t, std::int16_t, std::uint16_t, std::int32_t,
     std::uint32_t, std::int64_t, std::uint64_t, float, double,
-    std::string,  // utf-8; wstring is intentionally absent (Phase D will
-                  // route wstring schemas to introspection per Q6)
+    std::string,  // utf-8; wstring is intentionally absent — the
+                  // decoder factory routes wstring schemas to the
+                  // introspection backend instead.
     Object, Sequence>
     v;
 

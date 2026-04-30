@@ -76,10 +76,11 @@ struct PerConn
                                  // for this conn across all messages.
 };
 
-// Reason a topic was excluded from 1to2 output. Topic-level errors are
-// the granularity at which project decision 8/B operates: any of these
-// causes the affected topic to be dropped, the run to exit non-zero, and
-// the topic to appear in the end-of-run summary.
+// Reason a topic was excluded from 1to2 output. The bagwiz convert
+// pipeline distinguishes topic-level errors (whole topic dropped, run
+// exits non-zero, topic listed in the end-of-run summary) from
+// per-message errors (rate-limited warning, message dropped, run can
+// still succeed). Each value below is a topic-level cause.
 enum class TopicSkipReason : int {
   // Source ROS 1 type does not parse as `pkg/Type` and has no rename
   // override entry. Catches typos and accidental ROS 2-shaped names in
@@ -90,13 +91,15 @@ enum class TopicSkipReason : int {
   // sourced.
   SchemaUnresolvable,
   // ROS 2 schema text resolved, but `synthesize_ros1_meta()` refused
-  // to canonicalise it (project decision 10/B — wstring or other ROS
-  // 1-incompatible construct).
+  // to canonicalise it. The synthesizer refuses when a field cannot be
+  // expressed in ROS 1 form at all — currently the only such case is
+  // `wstring`, which has no ROS 1 wire-equivalent counterpart.
   CanonicalisationRefused,
   // The MD5 we computed from the ROS 2 schema does not match the bag's
-  // ROS 1 connection md5sum. The default "silent corruption guard" path
-  // (project decision 3/D); upgraded/downgraded by --strict /
-  // --allow-md5-mismatch in a later commit.
+  // ROS 1 connection md5sum. The default behaviour is to skip the
+  // topic so a wire-shape disagreement does not silently corrupt the
+  // output; the policy is reshaped by --strict (abort) and
+  // --allow-md5-mismatch (downgrade to a warning, admit the topic).
   Md5Mismatch,
   // Writer rejected the topic declaration (storage backend error).
   WriterDeclareFailed,
@@ -146,8 +149,10 @@ struct TwoToOnePerTopic
 
 // Append the per-message overflow events emitted by the converter to the
 // per-topic running tally, and (rate-limited) log the first three
-// detailed events per topic. Project decision 9/B: we don't change the
-// wire bytes, we just make sure the event is visible.
+// detailed events per topic. bagwiz is a wire converter, not a data
+// cleanser: the wire bytes are transcribed unchanged and we surface a
+// warning so the operator can decide whether the post-2038 (or pre-1970)
+// timestamp is intentional.
 //
 // `limit` is the number of detailed log lines this topic has produced so
 // far; the function increments it. Logging stops past `kMaxOverflowLogs`
@@ -214,9 +219,9 @@ private:
     std::filesystem::path input_path;
     std::filesystem::path output_path;
     std::string storage;  // empty when --storage not passed; resolved at run time
-    // Policy flags (project decision 12/A). Mutually exclusive at the
-    // CLI surface; default behaviour (both false) is "topic-skip on any
-    // topic-level error, exit 2 if anything was skipped".
+    // Policy flags. Mutually exclusive at the CLI surface; default
+    // behaviour (both false) is "topic-skip on any topic-level error,
+    // exit 2 if anything was skipped".
     bool strict = false;              // any topic-level error → abort
     bool allow_md5_mismatch = false;  // Md5Mismatch downgraded to warn-only
   } r1_to_r2_args_;
@@ -416,9 +421,10 @@ private:
         }
 
         // Synthesise the canonical ROS 1 form to compare md5 against
-        // the bag-recorded md5sum (project decision 3/D + 4/C). The
-        // canonicalisation can refuse outright (e.g. wstring per
-        // decision 10/B) — surface that as a topic-level skip.
+        // the bag-recorded md5sum. The canonicalisation can refuse
+        // outright (currently only for `wstring`, which has no ROS 1
+        // wire-equivalent representation) — surface that as a topic-
+        // level skip.
         const auto meta = core::synthesize_ros1_meta(pc.ros2_type, resolved.text);
         if (!meta.ok) {
           record_skip(pc, TopicSkipReason::CanonicalisationRefused, meta.error);
@@ -428,10 +434,12 @@ private:
 
         if (meta.meta.md5sum != src->md5sum) {
           // Silent-corruption guard: producer and our schema disagree
-          // on the wire shape. Default policy (decision 3/D) is
-          // topic-skip + non-zero exit; --allow-md5-mismatch downgrades
-          // to a warning that still admits the topic (decision 12/A);
-          // --strict promotes any topic-level error to abort.
+          // on the wire shape. Default policy is topic-skip + non-zero
+          // exit; --allow-md5-mismatch downgrades to a warning that
+          // still admits the topic (useful for known wire-equivalent
+          // renames like sensor_msgs/CameraInfo's D/K/R/P → d/k/r/p
+          // across the ROS 1/ROS 2 boundary); --strict promotes any
+          // topic-level error to abort.
           std::string detail = "bag md5=" + src->md5sum + " synthesised=" + meta.meta.md5sum +
                                " (source=" + std::string(core::to_string(resolved.source)) + ")";
           if (args.allow_md5_mismatch) {
@@ -564,14 +572,13 @@ private:
           kLogger,
           "Topic '%s': %" PRIu64
           " Time/Duration sign-flip event(s); "
-          "wire bytes preserved (project decision 9/B)",
+          "wire bytes preserved (bagwiz transcribes timestamps verbatim)",
           pc.topic.c_str(), pc.overflow_events);
       }
     }
 
-    // Topic-skip summary (project decision 3/D + 8/B). Exit code
-    // reflects whether any topic was dropped: zero only when every
-    // topic in the input was emitted.
+    // Topic-skip summary. Exit code reflects whether any topic was
+    // dropped: zero only when every topic in the input was emitted.
     if (!skipped_topics.empty()) {
       BAGWIZ_LOG_WARN(kLogger, "Skipped %zu topic(s):", skipped_topics.size());
       // Show at most the first 5 in detail to keep the trailing summary
@@ -725,10 +732,11 @@ private:
       state.ros1_type = *mapped;
 
       // Resolve the ROS 2 schema, preferring the bag-embedded text when
-      // the storage layer surfaces one (project decision 5/A): a
-      // self-described bag is the only schema source guaranteed to
-      // match what the producer actually serialised, even if the local
-      // AMENT install drifts.
+      // the storage layer surfaces one. A self-described bag is the
+      // only schema source guaranteed to match what the producer
+      // actually serialised, even if the local AMENT install drifts;
+      // resolve_schema() falls back to AMENT and then introspection
+      // when no bag-embedded text is available.
       core::ResolveSchemaInput resolve_in;
       resolve_in.ros2_type = state.ros2_type;
       resolve_in.bag_embedded_text = t.schema_text;
@@ -750,10 +758,11 @@ private:
       }
 
       // Synthesise the canonical ROS 1 form's md5 + concatenated
-      // message_definition. The synthesizer applies project decision
-      // 10/B normalisation rules (drop bounds, restore Header.seq,
-      // refuse wstring) and computes the md5 over the resulting ROS
-      // 1-form text.
+      // message_definition. The synthesizer applies the wire-equivalent
+      // normalisation rules (drop ROS 2-only sequence/string bounds,
+      // strip default values, restore the Header.seq prefix, refuse
+      // wstring) and computes the md5 over the resulting ROS 1-form
+      // text.
       const auto meta = core::synthesize_ros1_meta(state.ros2_type, resolved.text);
       if (!meta.ok) {
         record_skip_2to1(state, TopicSkipReason::CanonicalisationRefused, meta.error);
@@ -870,13 +879,13 @@ private:
           kLogger,
           "Topic '%s': %" PRIu64
           " Time/Duration sign-flip event(s); "
-          "wire bytes preserved (project decision 9/B)",
+          "wire bytes preserved (bagwiz transcribes timestamps verbatim)",
           st.topic.c_str(), st.overflow_events);
       }
     }
 
-    // Topic-skip summary — matches 1to2 in shape (project decision 8/B
-    // is direction-agnostic).
+    // Topic-skip summary — matches the 1to2 shape; the topic-level
+    // skip policy is direction-agnostic.
     if (!skipped_topics.empty()) {
       BAGWIZ_LOG_WARN(kLogger, "Skipped %zu topic(s):", skipped_topics.size());
       constexpr std::size_t kMaxDetailRows = 5;

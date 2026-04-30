@@ -72,10 +72,11 @@ private:
 
 std::string format_ros2(const std::string & ros2_type, const std::vector<std::byte> & cdr)
 {
-  // The Phase D/E pipeline replaces the old IntrospectionLoad + format_message
-  // overload with a TopicInfo-driven factory. Build a minimal TopicInfo so the
-  // factory routes through introspection (no schema_text), decode the bytes,
-  // and feed the resulting Value to the new format_message().
+  // The decoder factory replaces the old IntrospectionLoad +
+  // format_message overload with a TopicInfo-driven open_decoder().
+  // Build a minimal TopicInfo so the factory routes through
+  // introspection (no schema_text), decode the bytes, and feed the
+  // resulting Value to format_message().
   bagwiz::io::TopicInfo topic;
   topic.name = "/ros1_to_cdr_test";
   topic.type = ros2_type;
@@ -277,10 +278,9 @@ TEST(Ros1ToCdr, RejectsTrailingBytes)
 }
 
 // ROS 1 `time.sec` is uint32 but ROS 2 reads it as int32. Values whose
-// high bit is set survive the conversion bit-for-bit (project decision
-// 9/B), but the receiver interprets them as negative epoch seconds. The
-// converter must record the event so the CLI can warn — without
-// changing the wire bytes.
+// high bit is set survive the conversion bit-for-bit, but the receiver
+// interprets them as negative epoch seconds. The converter must record
+// the event so the CLI can warn — without changing the wire bytes.
 TEST(Ros1ToCdr, FlagsTimeSecHighBitOverflow)
 {
   // Build a Header whose stamp.sec has the high bit set. Use a value

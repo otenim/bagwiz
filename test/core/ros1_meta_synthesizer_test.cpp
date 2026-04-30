@@ -103,8 +103,8 @@ TEST(Ros1MetaSynthesizer, NestedRefDropsArraySuffixInMd5Quirk)
 TEST(Ros1MetaSynthesizer, BoundedSequenceDropsBoundWithWarning)
 {
   // ROS 2-only `int32[<=5]` becomes ROS 1 `int32[]`; the bound is wire-
-  // irrelevant (CDR doesn't enforce sequence bounds at the wire level)
-  // so per decision 10/B we drop and warn rather than refuse.
+  // irrelevant (CDR doesn't enforce sequence bounds at the wire level),
+  // so the synthesizer drops it and warns rather than refusing.
   const std::string_view ros2_msg = "int32[<=5] x\n";
   const auto result = bagwiz::core::synthesize_ros1_meta("foo_pkg/msg/Bounded", ros2_msg);
   ASSERT_TRUE(result.ok) << result.error;
@@ -129,8 +129,8 @@ TEST(Ros1MetaSynthesizer, DefaultValueDroppedWithWarning)
 TEST(Ros1MetaSynthesizer, WstringIsRefused)
 {
   // wstring is wire-incompatible with ROS 1 string (UTF-16-ish vs
-  // UTF-8 with no BOM). Per decision 10/B we refuse synthesis rather
-  // than silently downgrading.
+  // UTF-8 with no BOM). The synthesizer refuses outright rather than
+  // silently downgrading to a wire-mismatched md5.
   const std::string_view ros2_msg = "wstring data\n";
   const auto result = bagwiz::core::synthesize_ros1_meta("foo_pkg/msg/Wide", ros2_msg);
   EXPECT_FALSE(result.ok);

@@ -325,8 +325,9 @@ TEST(CdrToRos1, RoundTripsImuWithCovariance)
 
 // ROS 2 builtin_interfaces/Time.sec is int32 but ROS 1 reads it as
 // uint32. Default-constructed and timestamp-before-1970 values have
-// the high bit set on a wrap; convert_cdr_to_ros1 must record the event
-// without altering the bytes (project decision 9/B).
+// the high bit set on a wrap; convert_cdr_to_ros1 must record the
+// event without altering the bytes (bagwiz transcribes timestamps
+// verbatim).
 TEST(CdrToRos1, FlagsTimeSecHighBitOverflow)
 {
   // Build a Header CDR by forward-converting a ROS 1 Header whose sec

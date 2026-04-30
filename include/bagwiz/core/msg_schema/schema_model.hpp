@@ -18,10 +18,11 @@
 #include <variant>
 #include <vector>
 
-// In-memory model of a parsed ROS 2 .msg schema. Designed as the input to
-// the Phase C CDR walker — every field carries enough information to drive
-// alignment, length-prefix handling, and nested-type recursion without
-// re-parsing the schema text.
+// In-memory model of a parsed ROS 2 .msg schema. Designed as the input
+// to the schema-driven CDR walker (cdr_walker::decode) — every field
+// carries enough information to drive alignment, length-prefix
+// handling, and nested-type recursion without re-parsing the schema
+// text.
 //
 // The shapes mirror Foxglove `mcap-ros2-support` (Apache-2.0):
 // `python/mcap-ros2-support/mcap_ros2/_vendor/rosidl_adapter/parser.py`,
@@ -37,8 +38,9 @@ namespace bagwiz::core::msg_schema
 // `builtin_interfaces/Duration`) — see SchemaModel::find().
 //
 // `Wstring` and `LongDouble` (== `float128`) parse cleanly here but the
-// Phase C decoder will reject them and fall back to the introspection
-// path; that limited+fallback policy is the Q6 decision.
+// schema-driven CDR decoder will reject them — cdr_walker::Value has
+// no variant for either — and the decoder factory falls back to the
+// introspection path for channels whose schemas use these types.
 enum class PrimitiveKind : std::uint8_t {
   Bool,
   Byte,  // unsigned 8-bit; semantically distinct from Uint8 in IDL
@@ -96,10 +98,11 @@ struct FieldType
   bool is_nested() const { return std::holds_alternative<std::string>(base); }
 };
 
-// Default values are parsed but never interpreted by the Phase B parser
-// or Phase C decoder — they only matter to encoders. Stored as the raw
-// post-`field_name` text so a future encoder can re-parse them without
-// us having to settle the integer/float/bool/string ambiguity here.
+// Default values are parsed but never interpreted by the .msg parser
+// or the schema-driven CDR decoder — they only matter to encoders.
+// Stored as the raw post-`field_name` text so a future encoder can
+// re-parse them without us having to settle the integer/float/bool/
+// string ambiguity here.
 struct DefaultValue
 {
   std::string raw;

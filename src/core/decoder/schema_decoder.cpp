@@ -27,12 +27,12 @@ namespace
 
 namespace ms = bagwiz::core::msg_schema;
 
-// Walk every field of every reachable definition and report whether any
-// references wstring or float128. The schema-driven CDR walker rejects
-// these (Q6 limited+fallback) so the factory must route schemas
-// containing them to the introspection path instead. Cheap (a few
-// hundred ns even on the largest TF-style schemas) so safe to call at
-// open() time.
+// Walk every field of every reachable definition and report whether
+// any references wstring or float128. cdr_walker::Value has no variant
+// for either, so the schema-driven walker rejects them; the factory
+// must route schemas containing them to the introspection backend
+// instead. Cheap (a few hundred ns even on the largest TF-style
+// schemas) so safe to call at open() time.
 bool has_unsupported_primitive(const ms::SchemaModel & schema)
 {
   for (const auto & def : schema.definitions()) {
@@ -87,8 +87,8 @@ OpenDecoderResult SchemaDecoder::open(const io::TopicInfo & topic)
   }
   if (has_unsupported_primitive(*parse.schema)) {
     result.error =
-      "schema references wstring or float128 — Phase D limited+fallback policy routes to "
-      "introspection";
+      "schema references wstring or float128 — the decoder factory "
+      "should route this channel to the introspection backend";
     return result;
   }
 

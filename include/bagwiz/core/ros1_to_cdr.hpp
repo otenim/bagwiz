@@ -34,11 +34,12 @@ namespace bagwiz::core
 std::optional<std::string> map_ros1_type(std::string_view ros1_type);
 
 // One detected sign-interpretation mismatch on a `time` / `duration`
-// field. The wire bits are transcribed unchanged (project decision 9/B —
-// bagwiz is a wire converter, not a data cleanser), but the receiver
-// will read the value with a different signedness convention than the
-// producer wrote it; we record the event so the CLI can surface a
-// rate-limited warning per topic.
+// field. The wire bits are transcribed unchanged — bagwiz is a wire
+// converter, not a data cleanser, and the bytes themselves are still
+// valid in the destination encoding — but the receiver will read the
+// value with a different signedness convention than the producer wrote
+// it; we record the event so the CLI can surface a rate-limited
+// warning per topic.
 //
 // Specifically:
 //   * 1to2 `builtin_interfaces/Time.sec`     — ROS 1 uint32 vs ROS 2 int32

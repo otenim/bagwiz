@@ -21,11 +21,12 @@
 // verified against `rosmsg md5 <type>` on ROS 1 Noetic.
 //
 // These exist to catch silent drift between the dynamic synthesis path
-// (commits 2 + 3) and the static whitelist that the dynamic path is
-// designed to replace. If a normalisation rule (decision 10/B) regresses
-// — Header.seq dropped, builtin_interfaces alias mishandled, etc. — the
-// pipeline-derived md5 will diverge from the pinned reference and these
-// tests fail.
+// (resolve_schema → synthesize_ros1_meta) and the static whitelist that
+// the dynamic path replaced. If a normalisation rule regresses — Header.
+// seq dropped from the md5 input, a `builtin_interfaces` alias not
+// unwrapped to `time` / `duration`, a stray comment leaking in — the
+// pipeline-derived md5 will diverge from the pinned reference and one
+// of these cases fails.
 
 namespace
 {
@@ -124,13 +125,15 @@ TEST(SchemaPipeline, AmentMd5MatchesRos1ReferenceForCanonicalTypes)
 // Constant-bearing types (NavSatStatus, BatteryState, …) are
 // deliberately excluded: their introspection-derived md5 *will* diverge
 // from the AMENT-derived md5, and that divergence is the documented
-// limitation of the introspection fallback (project decision 6/C).
+// limitation of the introspection fallback (also called out in
+// schema_resolver.hpp).
 TEST(SchemaPipeline, AmentAndIntrospectionAgreeForConstantFreeTypes)
 {
   // sensor_msgs/PointCloud2, sensor_msgs/NavSatFix, and nav_msgs/Path
   // are deliberately excluded because they reference PointField /
   // NavSatStatus which carry constants — the divergence there is
-  // expected and documented (project decision 6/C).
+  // expected and documented (introspection metadata cannot recover
+  // constants).
   const std::vector<std::string> types = {
     "std_msgs/msg/String",
     "std_msgs/msg/Header",
@@ -208,8 +211,9 @@ TEST(SchemaPipeline, BagEmbeddedTextProducesSameMd5AsAment)
 
 // Negative case: a wstring field aborts synthesis at the boundary, even
 // when the schema itself resolves cleanly (the resolver doesn't inspect
-// field types — only the synthesizer does). This is the integration
-// view of project decision 10/B's wstring refusal.
+// field types — only the synthesizer does). wstring is the one ROS 2
+// construct that has no wire-equivalent ROS 1 representation, so the
+// synthesizer refuses outright rather than emitting a misleading md5.
 TEST(SchemaPipeline, WstringFieldRefusedAtSynthesisBoundary)
 {
   // Construct a schema text by hand — there's no installed ROS 2 type

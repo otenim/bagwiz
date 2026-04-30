@@ -379,8 +379,9 @@ ResolveSchemaResult resolve_schema(const ResolveSchemaInput & input)
     return result;
   }
 
-  // Always attempt every source so the caller can crosscheck. Order
-  // matches project decision 5/A: bag-embedded → AMENT → introspection.
+  // Always attempt every source so the caller can crosscheck. Priority
+  // order is bag-embedded → AMENT → introspection, so the producer-
+  // shipped schema text wins outright when present.
   result.candidates.reserve(3);
   result.candidates.push_back(try_bag_embedded(input));
   result.candidates.push_back(try_ament(input));
