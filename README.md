@@ -9,13 +9,22 @@ All of this happens without spinning up a ROS graph.
 
 ## Installation
 
-Install the ROS 2 / system dependencies declared in
-[`package.xml`](package.xml) via rosdep, from the workspace root that
-contains this repository:
+Bagwiz bundles a few ROS message packages (declared in
+[`bagwiz.repos`](bagwiz.repos)) that are imported into `dependencies/`
+at setup time and built alongside bagwiz. After cloning, source your
+ROS environment and run `setup.bash` to import those sources and
+install the ROS / system dependencies declared in
+[`package.xml`](package.xml):
 
 ```bash
-rosdep install --from-paths . --ignore-src -r -y
+source /opt/ros/${ROS_DISTRO}/setup.bash
+./setup.bash
 ```
+
+`setup.bash` uses [vcstool](https://github.com/dirk-thomas/vcstool) and
+[rosdep](https://docs.ros.org/en/independent/api/rosdep/html/), so make
+sure both are installed (`sudo apt install python3-vcstool python3-rosdep`)
+and that rosdep has been initialised (`sudo rosdep init && rosdep update`).
 
 `CLI11` and `fmt` are fetched automatically at CMake configure time, so
 no extra system install is needed for them.
