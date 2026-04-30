@@ -20,9 +20,12 @@ find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(SQLite3 REQUIRED)
 # Introspection fallback path: rmw_deserialize plus the per-package
-# typesupport `.so`s loaded at runtime via dlopen. Required even after
-# the schema-driven path lands (Phase D) because SQLite3 inputs and
-# legacy MCAPs without embedded schemas still go through introspection.
+# typesupport `.so`s loaded at runtime via dlopen. Still required
+# alongside the schema-driven decoder because SQLite3 inputs and
+# legacy MCAPs without embedded schemas have no schema text for the
+# decoder factory to use, and bag-less callers (the 1to2 / 2to1
+# converters) walk the destination type's MessageMembers tree
+# directly.
 find_package(rmw REQUIRED)
 find_package(rmw_implementation REQUIRED)
 find_package(rosidl_runtime_c REQUIRED)
@@ -31,9 +34,9 @@ find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 # tf2 supplies BufferCore + math helpers used by `tf walk` and
 # `traj export --in/--of`. geometry_msgs is needed for the
 # header-only TransformStamped struct we hand to BufferCore::setTransform
-# from tf_value_extract; tf2_msgs is no longer linked because Phase F
-# decodes TFMessage through the schema-driven path instead of
-# reinterpret_cast'ing the typesupport buffer.
+# from tf_value_extract; tf2_msgs is no longer linked because the tf
+# subcommand decodes TFMessage through the schema-driven path instead
+# of reinterpret_cast'ing the typesupport buffer.
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 
@@ -162,7 +165,8 @@ if(BUILD_TESTING)
 
   # Standard message packages used by the introspection-path tests
   # (decoder_test, ros1_to_cdr_test, message_formatter regression).
-  # These are no longer runtime deps of bagwiz_core after Phase G; they
+  # These are not runtime deps of bagwiz_core — the introspection
+  # backend dlopens the matching `.so` files at runtime — so they
   # only need to be on AMENT_PREFIX_PATH at test time.
   find_package(std_msgs REQUIRED)
   find_package(sensor_msgs REQUIRED)
