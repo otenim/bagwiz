@@ -9,25 +9,36 @@ All of this happens without spinning up a ROS graph.
 
 ## Installation
 
-Bagwiz bundles a few ROS message packages (declared in
-[`bagwiz.repos`](bagwiz.repos)) that are imported into `dependencies/`
-at setup time and built alongside bagwiz. After cloning, source your
-ROS environment and run `setup.bash` to import those sources and
-install the ROS / system dependencies declared in
-[`package.xml`](package.xml):
+You need ROS 2 installed (Ubuntu packages under `/opt/ros/<distro>` are
+typical). Install [vcstool](https://github.com/dirk-thomas/vcstool) and
+[rosdep](https://docs.ros.org/en/independent/api/rosdep/html/) if you do not
+have them yet (`sudo apt install python3-vcstool python3-rosdep`). Run
+`sudo rosdep init && rosdep update` once if rosdep has never been set up on
+the machine.
 
-```bash
-source /opt/ros/${ROS_DISTRO}/setup.bash
-./setup.bash
-```
+From the repository root:
 
-`setup.bash` uses [vcstool](https://github.com/dirk-thomas/vcstool) and
-[rosdep](https://docs.ros.org/en/independent/api/rosdep/html/), so make
-sure both are installed (`sudo apt install python3-vcstool python3-rosdep`)
-and that rosdep has been initialised (`sudo rosdep init && rosdep update`).
+1. Load ROS 2 into your shell (replace `humble` with your distro):
 
-`CLI11` and `fmt` are fetched automatically at CMake configure time, so
-no extra system install is needed for them.
+   ```bash
+   source /opt/ros/humble/setup.bash
+   ```
+
+2. Prepare the workspace:
+
+   ```bash
+   ./setup.bash
+   ```
+
+3. Build — again with ROS sourced (repeat step 1 if you opened a new terminal):
+
+   ```bash
+   ./build.sh
+   ```
+
+Optional flags for `./build.sh` (build type, parallelism, clean rebuild) are
+described in `./build.sh --help`. `CLI11` and `fmt` are pulled in automatically
+when you build; no extra install step for those.
 
 ## Subcommands
 
