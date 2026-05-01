@@ -14,6 +14,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 
 #include <optional>
 #include <vector>
@@ -50,6 +51,10 @@ std::optional<geometry_msgs::msg::PoseStamped> extract_pose_stamped_message(
 // pose.pose (inner geometry_msgs/Pose) are required for trajectory use.
 std::optional<geometry_msgs::msg::PoseWithCovarianceStamped>
 extract_pose_with_covariance_stamped_message(const cdr_walker::Value & message);
+
+// Decode nav_msgs/msg/Odometry (header, child_frame_id, pose.pose).
+// Twist is ignored by callers that only need trajectory pose samples.
+std::optional<nav_msgs::msg::Odometry> extract_odometry_message(const cdr_walker::Value & message);
 
 }  // namespace bagwiz::core
 

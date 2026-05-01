@@ -55,6 +55,9 @@ constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
 constexpr const char * kPoseStampedType = "geometry_msgs/msg/PoseStamped";
 constexpr const char * kPoseWithCovarianceStampedType =
   "geometry_msgs/msg/PoseWithCovarianceStamped";
+constexpr const char * kOdometryType = "nav_msgs/msg/Odometry";
+
+enum class PoseDumpKind { PoseStamped, PoseWithCovarianceStamped, Odometry };
 constexpr std::string_view kTfStaticSuffix = "tf_static";
 
 // /tf_static and any topic whose name terminates in "tf_static" use the
@@ -209,8 +212,10 @@ void load_tf_buffer_and_input_edges(
 //   dump      Write TUM trajectory samples. For tf2_msgs/msg/TFMessage,
 //             --from/--to are required and sampling follows TF chain edges
 //             on the input topic. For PoseStamped / PoseWithCovarianceStamped,
-//             --from/--to are optional; --to is ignored, and --from selects
-//             an optional TF remap from each message's header.frame_id.
+//             --from/--to are optional; --to is ignored; header.frame_id must
+//             be non-empty per message. For nav_msgs/msg/Odometry, header.frame_id
+//             and child_frame_id must be non-empty; --to optionally filters
+//             child_frame_id; --from selects an optional TF remap.
 class TrajCommand : public Command
 {
 public:
@@ -271,13 +276,14 @@ private:
     sub->add_option(
       "--from", dump_args_.from_frame,
       "Reference frame for output poses. Required for tf2_msgs/msg/TFMessage. For "
-      "geometry_msgs/msg/PoseStamped or PoseWithCovarianceStamped: optional; when omitted, "
-      "each row uses that message's header.frame_id (no TF remap). When set, poses are "
-      "transformed from header.frame_id into this frame using TF from the bag.");
+      "geometry_msgs PoseStamped/PoseWithCovarianceStamped or nav_msgs Odometry: optional; "
+      "when omitted, each row uses that message's header.frame_id (no TF remap). When set, "
+      "poses are transformed from header.frame_id into this frame using TF from the bag.");
     sub->add_option(
       "--to", dump_args_.to_frame,
-      "Tracked frame: required for tf2_msgs/msg/TFMessage. Ignored for PoseStamped / "
-      "PoseWithCovarianceStamped.");
+      "Tracked frame: required for tf2_msgs/msg/TFMessage. For nav_msgs/msg/Odometry, "
+      "optional filter: only messages whose child_frame_id equals this value are written. "
+      "Ignored for PoseStamped / PoseWithCovarianceStamped.");
     sub->callback([this]() { selected_ = Subcommand::kDump; });
   }
 
@@ -436,9 +442,11 @@ private:
   }
 
   int run_dump_pose_topic(
-    const DumpArgs & args, const io::TopicInfo & topic_info, bool pose_has_covariance)
+    const DumpArgs & args, const io::TopicInfo & topic_info, PoseDumpKind kind)
   {
-    if (args.to_frame.has_value() && !args.to_frame->empty()) {
+    const bool warn_ignore_to =
+      (kind == PoseDumpKind::PoseStamped || kind == PoseDumpKind::PoseWithCovarianceStamped);
+    if (warn_ignore_to && args.to_frame.has_value() && !args.to_frame->empty()) {
       BAGWIZ_LOG_WARN(kLogger, "'--to' is ignored for topic type '%s'.", topic_info.type.c_str());
     }
     if (args.from_frame.has_value() && args.from_frame->empty()) {
@@ -547,23 +555,56 @@ private:
       }
 
       geometry_msgs::msg::PoseStamped cur;
-      if (pose_has_covariance) {
-        const auto pwc = core::extract_pose_with_covariance_stamped_message(*decoded.value);
-        if (!pwc.has_value()) {
-          ++skipped;
-          last_skip_reason = "could not parse PoseWithCovarianceStamped";
-          continue;
-        }
-        cur.header = pwc->header;
-        cur.pose = pwc->pose.pose;
-      } else {
-        const auto ps = core::extract_pose_stamped_message(*decoded.value);
-        if (!ps.has_value()) {
-          ++skipped;
-          last_skip_reason = "could not parse PoseStamped";
-          continue;
-        }
-        cur = *ps;
+      switch (kind) {
+        case PoseDumpKind::PoseStamped: {
+          const auto ps = core::extract_pose_stamped_message(*decoded.value);
+          if (!ps.has_value()) {
+            ++skipped;
+            last_skip_reason = "could not parse PoseStamped";
+            continue;
+          }
+          cur = *ps;
+        } break;
+        case PoseDumpKind::PoseWithCovarianceStamped: {
+          const auto pwc = core::extract_pose_with_covariance_stamped_message(*decoded.value);
+          if (!pwc.has_value()) {
+            ++skipped;
+            last_skip_reason = "could not parse PoseWithCovarianceStamped";
+            continue;
+          }
+          cur.header = pwc->header;
+          cur.pose = pwc->pose.pose;
+        } break;
+        case PoseDumpKind::Odometry: {
+          const auto odom = core::extract_odometry_message(*decoded.value);
+          if (!odom.has_value()) {
+            ++skipped;
+            last_skip_reason = "could not parse Odometry";
+            continue;
+          }
+          if (odom->header.frame_id.empty() || odom->child_frame_id.empty()) {
+            BAGWIZ_LOG_ERROR(
+              kLogger,
+              "Topic '%s': nav_msgs/msg/Odometry requires non-empty header.frame_id and "
+              "child_frame_id.",
+              args.topic.c_str());
+            return 1;
+          }
+          if (
+            args.to_frame.has_value() && !args.to_frame->empty() &&
+            odom->child_frame_id != *args.to_frame) {
+            continue;
+          }
+          cur.header = odom->header;
+          cur.pose = odom->pose.pose;
+        } break;
+      }
+
+      if (cur.header.frame_id.empty()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Topic '%s': message has empty header.frame_id (required for %s).",
+          args.topic.c_str(), topic_info.type.c_str());
+        return 1;
       }
 
       const std::int64_t ns = static_cast<std::int64_t>(cur.header.stamp.sec) * 1'000'000'000LL +
@@ -650,16 +691,21 @@ private:
     if (topic_info->type == kTfMessageType) {
       return run_dump_tf_message(args);
     }
-    if (
-      topic_info->type == kPoseStampedType || topic_info->type == kPoseWithCovarianceStampedType) {
-      const bool with_cov = (topic_info->type == kPoseWithCovarianceStampedType);
-      return run_dump_pose_topic(args, *topic_info, with_cov);
+    if (topic_info->type == kPoseStampedType) {
+      return run_dump_pose_topic(args, *topic_info, PoseDumpKind::PoseStamped);
+    }
+    if (topic_info->type == kPoseWithCovarianceStampedType) {
+      return run_dump_pose_topic(args, *topic_info, PoseDumpKind::PoseWithCovarianceStamped);
+    }
+    if (topic_info->type == kOdometryType) {
+      return run_dump_pose_topic(args, *topic_info, PoseDumpKind::Odometry);
     }
 
     BAGWIZ_LOG_ERROR(
       kLogger,
       "Topic '%s' has unsupported type '%s'. Supported: tf2_msgs/msg/TFMessage, "
-      "geometry_msgs/msg/PoseStamped, geometry_msgs/msg/PoseWithCovarianceStamped.",
+      "geometry_msgs/msg/PoseStamped, geometry_msgs/msg/PoseWithCovarianceStamped, "
+      "nav_msgs/msg/Odometry.",
       args.topic.c_str(), topic_info->type.c_str());
     return 1;
   }

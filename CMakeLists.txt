@@ -38,6 +38,7 @@ find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 # subcommand decodes TFMessage through the schema-driven path instead
 # of reinterpret_cast'ing the typesupport buffer.
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 
@@ -121,6 +122,7 @@ ament_target_dependencies(bagwiz_core PUBLIC
   rosidl_runtime_cpp
   rosidl_typesupport_introspection_cpp
   geometry_msgs
+  nav_msgs
   std_msgs
   tf2
 )
@@ -160,6 +162,7 @@ ament_export_dependencies(
   rosidl_runtime_cpp
   rosidl_typesupport_introspection_cpp
   geometry_msgs
+  nav_msgs
   std_msgs
   tf2
 )

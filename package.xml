@@ -13,6 +13,7 @@
   <depend>geometry_msgs</depend>
   <depend>libsqlite3-dev</depend>
   <depend>mcap_vendor</depend>
+  <depend>nav_msgs</depend>
   <depend>rcutils</depend>
   <depend>rmw</depend>
   <depend>rmw_implementation</depend>

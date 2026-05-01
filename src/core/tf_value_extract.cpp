@@ -13,6 +13,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/header.hpp>
 
 #include <cstdint>
@@ -215,6 +216,51 @@ bool fill_pose_stamped_root(const cdr::Object & root, geometry_msgs::msg::PoseSt
   return fill_pose_object(*pose_obj, out.pose);
 }
 
+bool fill_pose_with_covariance_pose_only(
+  const cdr::Object & pwc_obj, geometry_msgs::msg::PoseWithCovariance & out)
+{
+  const auto * inner_pose_v = find_field(pwc_obj, "pose");
+  if (inner_pose_v == nullptr) {
+    return false;
+  }
+  const auto * inner_pose_obj = find_object(*inner_pose_v);
+  if (inner_pose_obj == nullptr) {
+    return false;
+  }
+  return fill_pose_object(*inner_pose_obj, out.pose);
+}
+
+bool fill_odometry_root(const cdr::Object & root, nav_msgs::msg::Odometry & out)
+{
+  const auto * header_v = find_field(root, "header");
+  if (header_v == nullptr) {
+    return false;
+  }
+  const auto * header_obj = find_object(*header_v);
+  if (header_obj == nullptr) {
+    return false;
+  }
+  if (!fill_std_msgs_header(*header_obj, out.header)) {
+    return false;
+  }
+
+  if (const auto * cf_v = find_field(root, "child_frame_id")) {
+    if (const auto * s = std::get_if<std::string>(&cf_v->v)) {
+      out.child_frame_id = *s;
+    }
+  }
+
+  const auto * pose_v = find_field(root, "pose");
+  if (pose_v == nullptr) {
+    return false;
+  }
+  const auto * pose_obj = find_object(*pose_v);
+  if (pose_obj == nullptr) {
+    return false;
+  }
+  return fill_pose_with_covariance_pose_only(*pose_obj, out.pose);
+}
+
 bool fill_pose_with_covariance_stamped_root(
   const cdr::Object & root, geometry_msgs::msg::PoseWithCovarianceStamped & out)
 {
@@ -237,15 +283,7 @@ bool fill_pose_with_covariance_stamped_root(
   if (pwc_obj == nullptr) {
     return false;
   }
-  const auto * inner_pose_v = find_field(*pwc_obj, "pose");
-  if (inner_pose_v == nullptr) {
-    return false;
-  }
-  const auto * inner_pose_obj = find_object(*inner_pose_v);
-  if (inner_pose_obj == nullptr) {
-    return false;
-  }
-  return fill_pose_object(*inner_pose_obj, out.pose.pose);
+  return fill_pose_with_covariance_pose_only(*pwc_obj, out.pose);
 }
 
 std::optional<geometry_msgs::msg::PoseStamped> extract_pose_stamped_impl(
@@ -271,6 +309,19 @@ extract_pose_with_covariance_stamped_impl(const cdr_walker::Value & message)
   }
   geometry_msgs::msg::PoseWithCovarianceStamped out;
   if (!fill_pose_with_covariance_stamped_root(*root, out)) {
+    return std::nullopt;
+  }
+  return out;
+}
+
+std::optional<nav_msgs::msg::Odometry> extract_odometry_impl(const cdr_walker::Value & message)
+{
+  const auto * root = find_object(message);
+  if (root == nullptr) {
+    return std::nullopt;
+  }
+  nav_msgs::msg::Odometry out;
+  if (!fill_odometry_root(*root, out)) {
     return std::nullopt;
   }
   return out;
@@ -318,6 +369,11 @@ std::optional<geometry_msgs::msg::PoseWithCovarianceStamped>
 extract_pose_with_covariance_stamped_message(const cdr_walker::Value & message)
 {
   return extract_pose_with_covariance_stamped_impl(message);
+}
+
+std::optional<nav_msgs::msg::Odometry> extract_odometry_message(const cdr_walker::Value & message)
+{
+  return extract_odometry_impl(message);
 }
 
 }  // namespace bagwiz::core
