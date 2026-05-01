@@ -90,6 +90,7 @@ add_library(bagwiz_core
   src/core/ros1_to_cdr.cpp
   src/core/schema_resolver.cpp
   src/core/terminal_input.cpp
+  src/core/tf_chain.cpp
   src/core/tf_value_extract.cpp
   src/core/topic_pattern.cpp
   src/core/trajectory.cpp
@@ -200,6 +201,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_trajectory_test test/core/trajectory_test.cpp)
   target_link_libraries(bagwiz_trajectory_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_tf_chain_test test/core/tf_chain_test.cpp)
+  target_link_libraries(bagwiz_tf_chain_test bagwiz_core)
 
   ament_add_gtest(bagwiz_tf_rotation_test test/core/tf_rotation_test.cpp)
   target_link_libraries(bagwiz_tf_rotation_test bagwiz_core)

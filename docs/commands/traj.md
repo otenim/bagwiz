@@ -3,9 +3,9 @@
 Trajectory-shaped operations on a ROS 2 rosbag. Currently ships a single
 subcommand:
 
-| Subcommand                      | Purpose                                                  |
-| ------------------------------- | -------------------------------------------------------- |
-| [`export`](#bagwiz-traj-export) | Extract a topic's pose trajectory and save it to a file. |
+| Subcommand                      | Purpose                                                           |
+| ------------------------------- | ----------------------------------------------------------------- |
+| [`export`](#bagwiz-traj-export) | Export the `--to → --from` trajectory from a TF stream as a file. |
 
 ROS 1 `*.bag` inputs are not supported — convert them first with
 [`bagwiz convert 1to2`](convert.md#bagwiz-convert-1to2).
@@ -14,81 +14,51 @@ ROS 1 `*.bag` inputs are not supported — convert them first with
 
 ## `bagwiz traj export`
 
-Extract a pose-bearing topic from a ROS 2 rosbag and write the resulting
-trajectory to a file in a tool-friendly format.
+Export the trajectory of frame `--to` expressed in frame `--from`,
+sampled at every TF update on the chain between them that arrives on
+the input topic.
+
+The only supported input is `tf2_msgs/msg/TFMessage`. A static
+counterpart in the same bag (any topic whose name ends with
+`tf_static`) is loaded automatically and used to compose the chain.
 
 ### Usage
 
 ```text
-bagwiz traj export [OPTIONS] <input> <output> <topic>
+bagwiz traj export [OPTIONS] <input> <output> <topic> --from <FRAME> --to <FRAME>
 ```
 
 ### Positional arguments
 
-| Name     | Description                                               |
-| -------- | --------------------------------------------------------- |
-| `input`  | ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`). |
-| `output` | Output file path. Will be truncated if it already exists. |
-| `topic`  | Topic name to extract poses from.                         |
+| Name     | Description                                                                                                                       |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `input`  | ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`).                                                                         |
+| `output` | Output file path. Will be truncated if it already exists.                                                                         |
+| `topic`  | The dynamic `tf2_msgs/msg/TFMessage` topic (typically `/tf`). The topic determines the sampling cadence of the output trajectory. |
 
 ### Options
 
-| Flag                 | Default                     | Description                                                                                                                                                                                                       |
-| -------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-f`, `--format <F>` | `tum`                       | Output format. Currently only `tum` (TUM trajectory format) is supported.                                                                                                                                         |
-| `--from <FRAME>`     | _topic's `header.frame_id`_ | Reference (fixed) frame the output trajectory is expressed in. Setting this to a non-default frame requires TF in the bag.                                                                                        |
-| `--to <FRAME>`       | _topic's `child_frame_id`_  | Tracked (moving) frame whose pose each sample represents. Only valid for types that carry a `child_frame_id`.                                                                                                     |
-| `--edge <SRC:DST>`   | _(none)_                    | TF edge to extract from a `tf2_msgs/msg/TFMessage` input, in `SRC:DST` form. Required for `TFMessage`; rejected for other types. After filtering, `--from` / `--to` apply uniformly (same as `TransformStamped`). |
+| Flag                 | Default      | Description                                                    |
+| -------------------- | ------------ | -------------------------------------------------------------- |
+| `--from <FRAME>`     | _(required)_ | Reference (fixed) frame the output trajectory is expressed in. |
+| `--to <FRAME>`       | _(required)_ | Tracked (moving) frame whose pose each sample represents.      |
+| `-f`, `--format <F>` | `tum`        | Output format. Currently only `tum` is supported.              |
 
-### Supported message types
+### How sampling works
 
-Stamped (sample timestamp comes from `header.stamp`):
-
-- `geometry_msgs/msg/PoseStamped`
-- `geometry_msgs/msg/PoseWithCovarianceStamped`
-- `geometry_msgs/msg/TransformStamped`
-- `nav_msgs/msg/Odometry`
-
-Unstamped (sample timestamp comes from the bag's log time, i.e. recorder
-receive time — a one-shot warning is logged):
-
-- `geometry_msgs/msg/Pose`
-- `geometry_msgs/msg/Transform`
-
-Multi-edge (requires `--edge SRC:DST`):
-
-- `tf2_msgs/msg/TFMessage` — the chosen edge becomes the input "topic";
-  `--from` / `--to` then apply the same way as for `TransformStamped`.
-
-`--to` is rejected for types that have no `child_frame_id` (i.e.
-`PoseStamped`, `PoseWithCovarianceStamped`, `Pose`, `Transform`).
-`--from` / `--to` are rejected for the unstamped types since they have
-no `header.frame_id` to anchor on.
-
-### Frame composition (`--from` / `--to`)
-
-Each input message produces one or more `(frame_id, child_frame_id, pose,
-stamp)` candidates. `--edge` (when applicable) pre-filters them down to
-the labeled edge you asked for. After that, the output pose `P` is
-composed as:
-
-```text
-P  := T_from_source @ message_pose @ T_tracked_to
-```
-
-…where the left/right multiplications are skipped when the requested
-frame already matches the candidate's frame. In particular, when only
-`--edge` is given on a `TFMessage` input (no `--from` / `--to`), no TF
-lookup is performed at all.
-
-When `--from` or `--to` differs from the candidate's natural frame, the
-TF tree is loaded from the bag:
-
-- All `tf2_msgs/msg/TFMessage` topics are scanned.
-- Topics whose name ends in `tf_static` are inserted as static
-  transforms; everything else as dynamic transforms.
-- Per-message lookups that fall outside the published TF range are
-  skipped and counted in the final summary.
+1. The bag is scanned once. Every `tf2_msgs/msg/TFMessage` topic is
+   loaded into a single TF buffer; topics whose name ends with
+   `tf_static` are inserted as static transforms, the rest as dynamic.
+2. The chain `--from → … → --to` is resolved against the buffer (a
+   stable topology is assumed; resolution happens once).
+3. While reading the input topic, every `TransformStamped` whose
+   `(frame_id, child_frame_id)` lies on the chain contributes its
+   `header.stamp` to the sample-time set.
+4. Sample times are sorted and de-duplicated.
+5. For each sample time `t`, `lookupTransform(--from, --to, t)` runs
+   against the (static + dynamic) TF buffer and the result is written
+   to the output file. Lookups that fail (extrapolation, out-of-range)
+   are counted in the summary.
 
 ### Output: TUM format
 
@@ -99,32 +69,33 @@ timestamp tx ty tz qx qy qz qw
 ```
 
 `timestamp` is in seconds (with fractional nanoseconds). The file is
-sorted by timestamp using a stable sort, so adjacent samples with equal
-stamps preserve the bag's read order. Empty trajectories (zero messages
-on the topic) are written as an empty file with a warning.
+sorted by timestamp.
 
 ### Examples
 
 ```bash
-# Stamped pose, defaults.
-bagwiz traj export capture.mcap traj.tum /localization/pose
+# Trajectory of base_link in map, using /tf as the dynamic source.
+bagwiz traj export capture.mcap traj.tum /tf --from map --to base_link
 
-# Odometry expressed in a different reference frame (requires TF in the bag).
-bagwiz traj export capture.mcap traj.tum /odom --from map
-
-# Track a different child frame.
-bagwiz traj export capture.mcap traj.tum /odom --from map --to base_footprint
-
-# Extract a single edge from /tf, keep its native frames.
-bagwiz traj export capture.mcap map_to_base.tum /tf --edge map:base_link
-
-# Extract a /tf edge, then re-anchor to a different reference frame.
-bagwiz traj export capture.mcap traj.tum /tf --edge map:base_link --from world
+# Trajectory of an IMU mounted on base_link, in map. The sensor offset
+# (base_link → imu_link) typically lives on /tf_static; it is composed
+# automatically.
+bagwiz traj export capture.mcap imu.tum /tf --from map --to imu_link
 ```
+
+### Errors
+
+| Situation                                                                        | Result                                                                       |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `--from` and `--to` are equal                                                    | Error.                                                                       |
+| Topic absent / wrong type / static topic given as `<topic>`                      | Error.                                                                       |
+| No path between `--from` and `--to` in the TF tree                               | Error.                                                                       |
+| Path exists but no chain edge is published on `<topic>` (e.g. fully-static path) | Error: traj export needs at least one dynamic chain edge on the input topic. |
+| Some sample lookups fail (extrapolation, etc.)                                   | Skipped and counted in the summary; remaining poses are written.             |
 
 ### Exit status
 
-| Code | Meaning                                                                                                                                                                                                                                                                       |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | At least one pose was written, or the topic was empty (in which case an empty file is produced and a warning is logged).                                                                                                                                                      |
-| `1`  | Bag could not be opened, the topic is absent, the type is unsupported, the flag combination is invalid, the decoder failed, the TF buffer could not be loaded, all messages were skipped because none composed to (`--from`, `--to`), or the output file could not be opened. |
+| Code | Meaning                                               |
+| ---- | ----------------------------------------------------- |
+| `0`  | At least one pose was written to the output file.     |
+| `1`  | Any of the error conditions above, or an I/O failure. |
