@@ -186,6 +186,65 @@ TEST(MsgSchemaParser, DefaultValuesParsedAsRawText)
   EXPECT_EQ(schema.root()->fields[2].default_value->raw, "[1.0, 2.0, 3.0]");
 }
 
+TEST(MsgSchemaParser, DefaultStringWithHashIsNotTruncated)
+{
+  // A '#' inside a string-literal default value must NOT be treated as a
+  // comment delimiter. Otherwise the captured raw_value silently loses
+  // everything after the '#' (including the closing quote), which both
+  // corrupts the parsed default and breaks downstream warning messages.
+  const std::string text = "string color \"red # the color\"\n";
+  const auto result = ms::parse_message("test", "Foo", text);
+  const auto & schema = expect_ok(result);
+
+  ASSERT_EQ(schema.root()->fields.size(), 1U);
+  ASSERT_TRUE(schema.root()->fields[0].default_value.has_value());
+  EXPECT_EQ(schema.root()->fields[0].default_value->raw, "\"red # the color\"");
+}
+
+TEST(MsgSchemaParser, EscapedQuoteInsideDefaultStringDoesNotEndLiteral)
+{
+  // An escaped quote `\"` keeps the literal open, so a '#' that follows
+  // the escape but precedes the real closing quote must still be treated
+  // as part of the literal.
+  const std::string text = "string label \"a\\\" # still inside\"\n";
+  const auto result = ms::parse_message("test", "Foo", text);
+  const auto & schema = expect_ok(result);
+
+  ASSERT_EQ(schema.root()->fields.size(), 1U);
+  ASSERT_TRUE(schema.root()->fields[0].default_value.has_value());
+  EXPECT_EQ(schema.root()->fields[0].default_value->raw, "\"a\\\" # still inside\"");
+}
+
+TEST(MsgSchemaParser, BareHeaderResolvesToStdMsgsHeader)
+{
+  // A field declared as `Header header` (no package qualifier) must
+  // resolve to `std_msgs/Header`, even when the surrounding package is
+  // not std_msgs. The qualified form `std_msgs/Header header` is more
+  // common in modern .msg, but unqualified `Header` appears in older
+  // and hand-written types, and rosbags handles it.
+  //
+  // Use parse_schema with a concatenated form so cross-reference
+  // validation has a Header definition to resolve against; the
+  // assertion is on where `Header` ends up pointing inside the root.
+  const std::string text =
+    "Header header\n"
+    "uint32 value\n"
+    "================================================================================\n"
+    "MSG: std_msgs/Header\n"
+    "uint32 seq\n"
+    "builtin_interfaces/Time stamp\n"
+    "string frame_id\n";
+  const auto result = ms::parse_schema("test/msg/Foo", text);
+  const auto & schema = expect_ok(result);
+
+  const auto * root = schema.root();
+  ASSERT_NE(root, nullptr);
+  ASSERT_GE(root->fields.size(), 1U);
+  ASSERT_TRUE(root->fields[0].type.is_nested());
+  EXPECT_EQ(std::get<std::string>(root->fields[0].type.base), "std_msgs/Header")
+    << "bare `Header` must resolve to std_msgs/Header, not test/Header";
+}
+
 // --- Comments and blank lines -------------------------------------------
 
 TEST(MsgSchemaParser, CommentsAndBlankLines)

@@ -331,12 +331,21 @@ FieldType parse_base_type(std::string_view base, std::string_view context_pkg)
     }
   }
   if (slash_count == 0) {
-    if (context_pkg.empty()) {
+    // Special case: bare `Header` always means `std_msgs/Header`,
+    // independently of the surrounding package. ROS 2 .msg files
+    // typically write the qualified form, but some hand-written and
+    // older types use the unqualified shortcut. Mirrors rosbags'
+    // `if name == 'Header': name = 'std_msgs/msg/Header'`.
+    if (base == "Header") {
+      pkg = "std_msgs";
+      type = "Header";
+    } else if (context_pkg.empty()) {
       throw std::runtime_error(
         "nested type '" + std::string(base) + "' has no package and no context package");
+    } else {
+      pkg = std::string(context_pkg);
+      type = std::string(base);
     }
-    pkg = std::string(context_pkg);
-    type = std::string(base);
   } else if (slash_count == 1) {
     auto [a, b] = partition(base, '/');
     pkg = std::string(a);
@@ -379,12 +388,40 @@ FieldType parse_field_type(std::string_view type_str, std::string_view context_p
 // --- Line dispatch -------------------------------------------------------
 
 // Strip an inline `# comment` from `line` and return the surviving prefix.
-// Anything after the first '#' is discarded. The returned view is rtrimmed.
+// Anything after the first '#' that is OUTSIDE a string literal is discarded.
+// The returned view is rtrimmed.
+//
+// String-literal awareness matters because ROS 2 .msg fields can carry a
+// quoted default value (`string color "red # not a comment"`). Treating the
+// first '#' as the comment delimiter would silently truncate that default.
+// Default values are wire-irrelevant so md5 / message_definition output is
+// unaffected, but the captured raw_value (used in warning messages and any
+// future tooling that reads it back) would be wrong.
 std::string_view strip_comment(std::string_view line)
 {
-  const auto hash = line.find('#');
-  if (hash != std::string_view::npos) {
-    line = line.substr(0, hash);
+  char quote = '\0';
+  for (std::size_t i = 0; i < line.size(); ++i) {
+    const char c = line[i];
+    if (quote != '\0') {
+      if (c == '\\' && i + 1 < line.size()) {
+        // Skip the escaped char so an escaped quote (\" or \') does not close
+        // the literal.
+        ++i;
+        continue;
+      }
+      if (c == quote) {
+        quote = '\0';
+      }
+      continue;
+    }
+    if (c == '"' || c == '\'') {
+      quote = c;
+      continue;
+    }
+    if (c == '#') {
+      line = line.substr(0, i);
+      break;
+    }
   }
   return rtrim(line);
 }
