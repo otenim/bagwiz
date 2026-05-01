@@ -11,6 +11,7 @@
 #include "bagwiz/core/cdr_to_ros1.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/msg_definition_resolver.hpp"
+#include "bagwiz/core/ros1_message_definitions.hpp"
 #include "bagwiz/core/ros1_meta_synthesizer.hpp"
 #include "bagwiz/core/ros1_to_cdr.hpp"
 #include "bagwiz/core/schema_resolver.hpp"
@@ -770,14 +771,44 @@ private:
         continue;
       }
 
+      // Crosscheck against the pinned ROS 1 reference table for known
+      // canonical types. The synthesizer's input is the resolved ROS 2
+      // schema text, and the introspection fallback can't recover
+      // `<type> NAME=value` constant declarations (they are not exposed
+      // on the rosidl introspection metadata). For constant-bearing
+      // types (sensor_msgs/NavSatStatus, diagnostic_msgs/DiagnosticStatus,
+      // ...) this drops constant lines from the synthesized text, which
+      // shifts the canonical md5. Writing that mis-md5 into the ROS 1
+      // connection record is silent corruption: receivers reject the
+      // connection at read time. Prefer the pinned canonical metadata
+      // whenever it disagrees with the synthesized form so the output
+      // bag stays compatible with stock ROS 1 readers.
+      std::string md5_to_write = meta.meta.md5sum;
+      std::string msgdef_to_write = meta.meta.message_definition;
+      const char * md5_origin_label = "synthesised";
+      const auto * pinned = core::find_ros1_meta(state.ros1_type);
+      if (pinned != nullptr && pinned->md5sum != meta.meta.md5sum) {
+        BAGWIZ_LOG_WARN(
+          kLogger,
+          "Synthesised md5 for '%s' (%s -> %s) differs from pinned canonical (%s vs %s, "
+          "source=%s); using pinned canonical so the ROS 1 connection record stays "
+          "compatible with stock ROS 1 readers.",
+          state.topic.c_str(), state.ros2_type.c_str(), state.ros1_type.c_str(),
+          meta.meta.md5sum.c_str(), pinned->md5sum.c_str(),
+          std::string(core::to_string(resolved.source)).c_str());
+        md5_to_write = pinned->md5sum;
+        msgdef_to_write = pinned->message_definition;
+        md5_origin_label = "pinned-canonical";
+      }
+
       try {
-        state.conn_id = writer->declare_connection(
-          state.topic, state.ros1_type, meta.meta.md5sum, meta.meta.message_definition);
+        state.conn_id =
+          writer->declare_connection(state.topic, state.ros1_type, md5_to_write, msgdef_to_write);
         state.keep = true;
         ++synthesised_defs;
         BAGWIZ_LOG_INFO(
-          kLogger, "Mapped '%s': %s -> %s [md5 synthesised via %s]", state.topic.c_str(),
-          state.ros2_type.c_str(), state.ros1_type.c_str(),
+          kLogger, "Mapped '%s': %s -> %s [md5 %s via %s]", state.topic.c_str(),
+          state.ros2_type.c_str(), state.ros1_type.c_str(), md5_origin_label,
           std::string(core::to_string(resolved.source)).c_str());
       } catch (const std::exception & e) {
         record_skip_2to1(state, TopicSkipReason::WriterDeclareFailed, e.what());
