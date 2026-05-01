@@ -3,18 +3,18 @@
 Trajectory-shaped operations on a ROS 2 rosbag. Currently ships a single
 subcommand:
 
-| Subcommand                      | Purpose                                                           |
-| ------------------------------- | ----------------------------------------------------------------- |
-| [`export`](#bagwiz-traj-export) | Export the `--to → --from` trajectory from a TF stream as a file. |
+| Subcommand                  | Purpose                                                         |
+| --------------------------- | --------------------------------------------------------------- |
+| [`dump`](#bagwiz-traj-dump) | Dump the `--to → --from` trajectory from a TF stream as a file. |
 
 ROS 1 `*.bag` inputs are not supported — convert them first with
 [`bagwiz convert 1to2`](convert.md#bagwiz-convert-1to2).
 
 ---
 
-## `bagwiz traj export`
+## `bagwiz traj dump`
 
-Export the trajectory of frame `--to` expressed in frame `--from`,
+Dump the trajectory of frame `--to` expressed in frame `--from`,
 sampled at every TF update on the chain between them that arrives on
 the input topic.
 
@@ -25,7 +25,7 @@ counterpart in the same bag (any topic whose name ends with
 ### Usage
 
 ```text
-bagwiz traj export [OPTIONS] <input> <output> <topic> --from <FRAME> --to <FRAME>
+bagwiz traj dump [OPTIONS] <input> <output> <topic> --from <FRAME> --to <FRAME>
 ```
 
 ### Positional arguments
@@ -75,23 +75,23 @@ sorted by timestamp.
 
 ```bash
 # Trajectory of base_link in map, using /tf as the dynamic source.
-bagwiz traj export capture.mcap traj.tum /tf --from map --to base_link
+bagwiz traj dump capture.mcap traj.tum /tf --from map --to base_link
 
 # Trajectory of an IMU mounted on base_link, in map. The sensor offset
 # (base_link → imu_link) typically lives on /tf_static; it is composed
 # automatically.
-bagwiz traj export capture.mcap imu.tum /tf --from map --to imu_link
+bagwiz traj dump capture.mcap imu.tum /tf --from map --to imu_link
 ```
 
 ### Errors
 
-| Situation                                                                        | Result                                                                       |
-| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `--from` and `--to` are equal                                                    | Error.                                                                       |
-| Topic absent / wrong type / static topic given as `<topic>`                      | Error.                                                                       |
-| No path between `--from` and `--to` in the TF tree                               | Error.                                                                       |
-| Path exists but no chain edge is published on `<topic>` (e.g. fully-static path) | Error: traj export needs at least one dynamic chain edge on the input topic. |
-| Some sample lookups fail (extrapolation, etc.)                                   | Skipped and counted in the summary; remaining poses are written.             |
+| Situation                                                                        | Result                                                                     |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `--from` and `--to` are equal                                                    | Error.                                                                     |
+| Topic absent / wrong type / static topic given as `<topic>`                      | Error.                                                                     |
+| No path between `--from` and `--to` in the TF tree                               | Error.                                                                     |
+| Path exists but no chain edge is published on `<topic>` (e.g. fully-static path) | Error: traj dump needs at least one dynamic chain edge on the input topic. |
+| Some sample lookups fail (extrapolation, etc.)                                   | Skipped and counted in the summary; remaining poses are written.           |
 
 ### Exit status
 

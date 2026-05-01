@@ -156,7 +156,7 @@ void load_tf_buffer_and_input_edges(
 //
 // Subcommands
 // -----------
-//   export    Export the trajectory of `--to` expressed in `--from`
+//   dump      Dump the trajectory of `--to` expressed in `--from`
 //             from a tf2_msgs/msg/TFMessage topic. Sample timestamps
 //             come from updates of any chain edge between --from and
 //             --to that arrive on the input topic; each sample is the
@@ -171,14 +171,14 @@ public:
   void configure(CLI::App & app) override
   {
     app.require_subcommand(1);
-    configure_export(app);
+    configure_dump(app);
   }
 
   int run() override
   {
     switch (selected_) {
-      case Subcommand::kExport:
-        return run_export();
+      case Subcommand::kDump:
+        return run_dump();
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
@@ -187,10 +187,10 @@ public:
   }
 
 private:
-  enum class Subcommand { kNone, kExport };
+  enum class Subcommand { kNone, kDump };
   Subcommand selected_ = Subcommand::kNone;
 
-  struct ExportArgs
+  struct DumpArgs
   {
     std::filesystem::path input_path;
     std::string topic;
@@ -198,40 +198,40 @@ private:
     std::string format;
     std::string from_frame;
     std::string to_frame;
-  } export_args_;
+  } dump_args_;
 
-  void configure_export(CLI::App & app)
+  void configure_dump(CLI::App & app)
   {
     auto * sub = app.add_subcommand(
-      "export", "Export the --to → --from trajectory from a tf2_msgs/msg/TFMessage topic");
-    sub->add_option("input", export_args_.input_path, "Bag path (file or directory)")
+      "dump", "Dump the --to → --from trajectory from a tf2_msgs/msg/TFMessage topic");
+    sub->add_option("input", dump_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option("output", export_args_.output_path, "Output file path")->required();
+    sub->add_option("output", dump_args_.output_path, "Output file path")->required();
     sub
       ->add_option(
-        "topic", export_args_.topic,
+        "topic", dump_args_.topic,
         "Dynamic tf2_msgs/msg/TFMessage topic (e.g. /tf). Static counterparts "
         "(*tf_static) in the same bag are picked up automatically.")
       ->required();
-    sub->add_option("-f,--format", export_args_.format, "Output format")
+    sub->add_option("-f,--format", dump_args_.format, "Output format")
       ->default_val(kFormatTum)
       ->check(CLI::IsMember({kFormatTum}));
     sub
       ->add_option(
-        "--from", export_args_.from_frame,
+        "--from", dump_args_.from_frame,
         "Reference (fixed) frame the output trajectory is expressed in.")
       ->required();
     sub
       ->add_option(
-        "--to", export_args_.to_frame, "Tracked (moving) frame whose pose each sample represents.")
+        "--to", dump_args_.to_frame, "Tracked (moving) frame whose pose each sample represents.")
       ->required();
-    sub->callback([this]() { selected_ = Subcommand::kExport; });
+    sub->callback([this]() { selected_ = Subcommand::kDump; });
   }
 
-  int run_export()
+  int run_dump()
   {
-    const auto & args = export_args_;
+    const auto & args = dump_args_;
 
     if (args.from_frame == args.to_frame) {
       BAGWIZ_LOG_ERROR(
@@ -262,7 +262,7 @@ private:
     }
     if (topic_info->type != kTfMessageType) {
       BAGWIZ_LOG_ERROR(
-        kLogger, "Topic '%s' has type '%s'; traj export only supports tf2_msgs/msg/TFMessage.",
+        kLogger, "Topic '%s' has type '%s'; traj dump only supports tf2_msgs/msg/TFMessage.",
         args.topic.c_str(), topic_info->type.c_str());
       return 1;
     }
@@ -280,7 +280,7 @@ private:
 
     const auto tf_topics = collect_tf_topics(*reader);
     if (tf_topics.empty()) {
-      BAGWIZ_LOG_ERROR(kLogger, "Bag has no tf2_msgs/msg/TFMessage topics; nothing to export.");
+      BAGWIZ_LOG_ERROR(kLogger, "Bag has no tf2_msgs/msg/TFMessage topics; nothing to dump.");
       return 1;
     }
 
@@ -303,7 +303,7 @@ private:
 
     if (input_edges.empty()) {
       BAGWIZ_LOG_ERROR(
-        kLogger, "Topic '%s' carried no TransformStamped entries; nothing to export.",
+        kLogger, "Topic '%s' carried no TransformStamped entries; nothing to dump.",
         args.topic.c_str());
       return 1;
     }
@@ -344,7 +344,7 @@ private:
         kLogger,
         "No chain edges between '%s' and '%s' are published on '%s'. "
         "The whole chain may live on /tf_static (a fully-static path is rejected by "
-        "traj export — there is no time axis to sample), or the input topic does not "
+        "traj dump — there is no time axis to sample), or the input topic does not "
         "carry the relevant edge.",
         args.from_frame.c_str(), args.to_frame.c_str(), args.topic.c_str());
       return 1;

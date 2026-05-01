@@ -32,7 +32,7 @@ find_package(rosidl_runtime_c REQUIRED)
 find_package(rosidl_runtime_cpp REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 # tf2 supplies BufferCore + math helpers used by `tf walk` and
-# `traj export --in/--of`. geometry_msgs is needed for the
+# `traj dump --in/--of`. geometry_msgs is needed for the
 # header-only TransformStamped struct we hand to BufferCore::setTransform
 # from tf_value_extract; tf2_msgs is no longer linked because the tf
 # subcommand decodes TFMessage through the schema-driven path instead
