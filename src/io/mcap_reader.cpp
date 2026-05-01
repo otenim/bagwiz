@@ -184,6 +184,17 @@ private:
       };
     }
 
+    // Prefer the indexed (log-time-ordered) reader when the bag carries
+    // both a summary and chunk indexes: it lets mcap_cpp's
+    // IndexedMessageReader prune whole chunks that do not contain any
+    // matching channel, which is a large speedup for sparse topics like
+    // /tf_static. Fall back to FileOrder when those preconditions are
+    // missing (truncated/unchunked bags, or summary-via-fallback-scan
+    // recoveries that produced statistics but no ChunkIndex records).
+    const bool indexed_ok = reader_.statistics().has_value() && !reader_.chunkIndexes().empty();
+    opts.readOrder = indexed_ok ? mcap::ReadMessageOptions::ReadOrder::LogTimeOrder
+                                : mcap::ReadMessageOptions::ReadOrder::FileOrder;
+
     // mcap requires a problem callback alongside options; surface problems
     // as warnings and continue.
     auto problem_cb = [](const mcap::Status & s) {
