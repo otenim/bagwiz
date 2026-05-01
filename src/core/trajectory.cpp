@@ -10,6 +10,7 @@
 
 #include "bagwiz/core/cdr_walker/value.hpp"
 
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <ios>
@@ -282,10 +283,10 @@ void write_tum(std::ostream & os, std::span<const TrajectoryPose> poses)
     // around year-2026 magnitudes (~1.77e18 ns) the double ULP is ~256,
     // so 9-digit output silently drifts from the source header.stamp.
     const std::int64_t ns = p.timestamp_ns;
-    const long long sec = static_cast<long long>(ns / 1'000'000'000LL);
-    const long long nsec = static_cast<long long>(ns % 1'000'000'000LL);
+    const std::int64_t sec = ns / 1'000'000'000LL;
+    const std::int64_t nsec = ns % 1'000'000'000LL;
     char ts_buf[32];
-    std::snprintf(ts_buf, sizeof(ts_buf), "%lld.%09lld", sec, nsec);
+    std::snprintf(ts_buf, sizeof(ts_buf), "%" PRId64 ".%09" PRId64, sec, nsec);
     os << ts_buf << ' ' << p.tx << ' ' << p.ty << ' ' << p.tz << ' ' << p.qx << ' ' << p.qy << ' '
        << p.qz << ' ' << p.qw << '\n';
   }
