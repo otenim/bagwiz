@@ -285,6 +285,18 @@ void walk_field(
   const ts::MessageMember & f, CdrReader & r, Ros1Writer & w,
   std::vector<TimeOverflowEvent> & overflows)
 {
+  // Empty-message placeholder: ROS 2 codegen inserts a single
+  // `uint8 structure_needs_at_least_one_member` field for messages
+  // whose .msg text has zero fields (std_msgs/Empty, std_srvs/Empty,
+  // etc.). The CDR wire carries that placeholder byte, but the ROS 1
+  // wire format has no equivalent — empty ROS 1 messages serialise to
+  // 0 bytes. Skip the placeholder on the CDR side without writing
+  // anything to the ROS 1 output.
+  if (f.name_ != nullptr && std::strcmp(f.name_, "structure_needs_at_least_one_member") == 0) {
+    (void)r.read_bytes(1);
+    return;
+  }
+
   if (!f.is_array_) {
     walk_scalar(f, r, w, overflows);
     return;
@@ -352,6 +364,15 @@ void walk_message(
     // ROS 2 `Duration` (int32 sec, uint32 nanosec) ⇒ ROS 1 `duration`
     // (int32 sec, int32 nsec). Sec passes through (int32 both sides);
     // nsec switches from uint32 to int32, so flag values > INT32_MAX.
+    //
+    // Align before reading sec: int32 in CDR is 4-aligned, and entry
+    // into a nested message does NOT pre-align. The Time branch above
+    // gets the same alignment for free via walk_signflip_u32's internal
+    // `r.read_u32_le()` (which calls align(4)), but Duration reads sec
+    // as raw bytes, so we have to align explicitly. Without this, a
+    // Duration following a 1-3 byte field in the parent message reads
+    // sec from the padding instead of the real bytes.
+    r.align(4);
     const auto sec_bytes = r.read_bytes(4);
     w.write_bytes(sec_bytes);
     walk_signflip_u32(r, w, overflows, "builtin_interfaces/Duration", "nanosec");
