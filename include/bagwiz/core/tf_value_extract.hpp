@@ -33,8 +33,8 @@ namespace bagwiz::core
 //
 // Tolerant of writer quirks: accepts float32 or float64 for translation
 // / rotation components, and accepts either int32 or uint32 for the
-// header.stamp.sec field (matching the tolerance bagwiz already gives
-// extract_pose).
+// header.stamp.sec field (matching the Python mcap-ros2-support
+// reference, which inadvertently emits sec as uint32).
 std::vector<geometry_msgs::msg::TransformStamped> extract_tf_message(
   const cdr_walker::Value & message);
 

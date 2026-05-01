@@ -9,14 +9,9 @@
 #ifndef BAGWIZ__CORE__TRAJECTORY_HPP_
 #define BAGWIZ__CORE__TRAJECTORY_HPP_
 
-#include "bagwiz/core/cdr_walker/value.hpp"
-
 #include <cstdint>
-#include <optional>
 #include <ostream>
 #include <span>
-#include <string>
-#include <vector>
 
 namespace bagwiz::core
 {
@@ -35,80 +30,13 @@ struct TrajectoryPose
   double qw = 0.0;
 };
 
-// Outcome of a pose extraction.
-//   * `used_header_stamp` is true when the timestamp came from the
-//     message's `header.stamp`; false when the message had no header
-//     and the caller-supplied fallback was used. The CLI uses this to
-//     emit a one-shot warning for unstamped types so users know the
-//     timestamps in the TUM file come from bag log time rather than
-//     from the sensor clock.
-//   * `frame_id` is the reference (fixed) frame the pose is expressed
-//     in (from `header.frame_id`). Empty for unstamped types.
-//   * `child_frame_id` is the tracked frame -- the moving thing the
-//     pose describes. Only Odometry and TransformStamped carry a
-//     top-level `child_frame_id`; it is empty for the other shapes.
-struct PoseExtraction
-{
-  TrajectoryPose pose;
-  std::string frame_id;
-  std::string child_frame_id;
-  bool used_header_stamp = false;
-};
-
-// Extract a pose sample from a decoded message, regardless of which
-// decoder backend (schema-driven or introspection) produced the Value.
-//
-// Supported shapes (no template specialization required):
-//   * `header.stamp` + `pose.{position, orientation}`
-//     (geometry_msgs/msg/PoseStamped, PoseWithCovarianceStamped)
-//   * `header.stamp` + `pose.pose.{position, orientation}`
-//     (nav_msgs/msg/Odometry and its kin)
-//   * `header.stamp` + `transform.{translation, rotation}`
-//     (geometry_msgs/msg/TransformStamped)
-//   * `position` + `orientation` (no header)
-//     (geometry_msgs/msg/Pose)
-//   * `translation` + `rotation` (no header)
-//     (geometry_msgs/msg/Transform)
-//
-// `fallback_timestamp_ns` is used when the message has no header.stamp;
-// callers should pass the bag log time (recorder receive time) so the
-// output trajectory still has a sensible time axis.
-//
-// Returns std::nullopt when the pose fields cannot be located (the
-// message does not look like any supported shape) or when the Value
-// is not a top-level Object.
-std::optional<PoseExtraction> extract_pose(
-  const cdr_walker::Value & message, std::int64_t fallback_timestamp_ns);
-
-// Extract one or more pose candidates from a decoded message.
-//
-// For all the single-shape inputs that `extract_pose` already handles
-// (PoseStamped, Odometry, TransformStamped, Pose, Transform), this
-// returns a vector of size 0 or 1 mirroring the optional from
-// `extract_pose`.
-//
-// For tf2_msgs/msg/TFMessage the message carries N TransformStamped
-// edges per dispatch; this returns one PoseExtraction per contained
-// edge, each populated as if the contained TransformStamped had been
-// `extract_pose`d standalone (its own header.stamp, frame_id from the
-// element's header, child_frame_id from its top-level field). The
-// caller is then responsible for picking the relevant edge — e.g. by
-// composing through a TF buffer to a user-requested (--from, --to)
-// pair and emitting only the first candidate that resolves.
-//
-// Returns an empty vector when the Value is not a top-level Object,
-// when no candidate has the expected shape, or when a TFMessage
-// carries an empty `transforms` sequence.
-std::vector<PoseExtraction> extract_pose_candidates(
-  const cdr_walker::Value & message, std::int64_t fallback_timestamp_ns);
-
 // Write poses in the TUM trajectory format: one sample per line,
 //
 //     timestamp tx ty tz qx qy qz qw
 //
-// with the timestamp in seconds (9 decimal places so nanosecond precision
-// is preserved). No comment header is emitted so the output drops
-// straight into tools like evo without post-processing.
+// with the timestamp in seconds (9 decimal places so nanosecond
+// precision is preserved). No comment header is emitted so the output
+// drops straight into tools like evo without post-processing.
 void write_tum(std::ostream & os, std::span<const TrajectoryPose> poses);
 
 }  // namespace bagwiz::core
