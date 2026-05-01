@@ -315,12 +315,21 @@ private:
       return 1;
     }
 
-    if (timeline.empty()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger,
-        "Bag has TFMessage topics but no dynamic /tf updates (only /tf_static). A walk with one "
-        "step is not interesting; nothing to do.");
-      return 1;
+    // /tf_static-only bags are still walkable: tf2::BufferCore returns
+    // static transforms for any query stamp, so we synthesize a single
+    // step at t=0 and let the existing UI render it. Useful for sensor
+    // calibration bags or any case where the user wants to verify a
+    // fully-static from->to chain.
+    const bool static_only = timeline.empty();
+    if (static_only) {
+      const bool has_static = std::any_of(
+        tf_topics.begin(), tf_topics.end(), [](const TfTopic & t) { return t.is_static; });
+      if (!has_static) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Bag has TFMessage topics but no transforms were decoded; nothing to do.");
+        return 1;
+      }
+      timeline.push_back(0);
     }
 
     // Probe the chain at timeline.front() to (a) fail fast on chain
@@ -340,6 +349,17 @@ private:
       BAGWIZ_LOG_ERROR(kLogger, "TF chain error: %s", e.what());
       return 1;
     } catch (const tf2::ExtrapolationException & e) {
+      if (static_only) {
+        // The chain has at least one segment that needs a dynamic /tf
+        // stamp this bag does not provide; cropping a synthetic timeline
+        // would just leave it empty, so error out with a specific message.
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "TF chain '%s' -> '%s' is not fully static and this bag has no dynamic /tf updates "
+          "to satisfy the missing segment(s): %s",
+          args.from_frame.c_str(), args.to_frame.c_str(), e.what());
+        return 1;
+      }
       const auto info = parse_extrapolation(e.what());
       if (info.past && info.stamp_parsed) {
         const std::int64_t boundary_ns = static_cast<std::int64_t>(info.stamp_s * 1e9);
@@ -371,7 +391,12 @@ private:
     auto render = [&]() {
       fmt::print(stdout, "\x1b[2J\x1b[H");
       const std::int64_t ts = timeline[index];
-      fmt::print(stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
+      if (static_only) {
+        fmt::print(stdout, "[STATIC TF]  (no dynamic /tf in bag)\n");
+      } else {
+        fmt::print(
+          stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
+      }
       fmt::print(stdout, "TF: {}  ->  {}\n\n", args.from_frame, args.to_frame);
 
       try {
