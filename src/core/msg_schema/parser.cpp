@@ -331,12 +331,21 @@ FieldType parse_base_type(std::string_view base, std::string_view context_pkg)
     }
   }
   if (slash_count == 0) {
-    if (context_pkg.empty()) {
+    // Special case: bare `Header` always means `std_msgs/Header`,
+    // independently of the surrounding package. ROS 2 .msg files
+    // typically write the qualified form, but some hand-written and
+    // older types use the unqualified shortcut. Mirrors rosbags'
+    // `if name == 'Header': name = 'std_msgs/msg/Header'`.
+    if (base == "Header") {
+      pkg = "std_msgs";
+      type = "Header";
+    } else if (context_pkg.empty()) {
       throw std::runtime_error(
         "nested type '" + std::string(base) + "' has no package and no context package");
+    } else {
+      pkg = std::string(context_pkg);
+      type = std::string(base);
     }
-    pkg = std::string(context_pkg);
-    type = std::string(base);
   } else if (slash_count == 1) {
     auto [a, b] = partition(base, '/');
     pkg = std::string(a);
