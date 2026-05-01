@@ -5,7 +5,7 @@ subcommand:
 
 | Subcommand                  | Purpose                                                         |
 | --------------------------- | --------------------------------------------------------------- |
-| [`dump`](#bagwiz-traj-dump) | Dump the `--to → --from` trajectory from a TF stream as a file. |
+| [`dump`](#bagwiz-traj-dump) | Dump a sampled trajectory to a TUM file from a supported topic. |
 
 ROS 1 `*.bag` inputs are not supported — convert them first with
 [`bagwiz convert 1to2`](convert.md#bagwiz-convert-1to2).
@@ -14,51 +14,173 @@ ROS 1 `*.bag` inputs are not supported — convert them first with
 
 ## `bagwiz traj dump`
 
-Dump the trajectory of frame `--to` expressed in frame `--from`,
-sampled at every TF update on the chain between them that arrives on
-the input topic.
+Samples poses from one bag topic and writes TUM. Supported message types:
 
-The only supported input is `tf2_msgs/msg/TFMessage`. A static
-counterpart in the same bag (any topic whose name ends with
-`tf_static`) is loaded automatically and used to compose the chain.
+| Message type                                  | `--from` | `--to`                                                                                    |
+| --------------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `tf2_msgs/msg/TFMessage`                      | Required | Required                                                                                  |
+| `geometry_msgs/msg/PoseStamped`               | Optional | Ignored if set (warning)                                                                  |
+| `geometry_msgs/msg/PoseWithCovarianceStamped` | Optional | Ignored if set (warning)                                                                  |
+| `nav_msgs/msg/Odometry`                       | Optional | Optional filter: when set, only messages whose `child_frame_id` equals `--to` are written |
+
+For TF topics, output is the trajectory of frame `--to` expressed in frame
+`--from`, sampled at TF updates on the chain between them that arrive on the
+input topic (same behavior as before).
+
+For `PoseStamped` and `PoseWithCovarianceStamped`, each row uses that
+message’s pose. Every message must have a non-empty `header.frame_id`; if any
+decoded message has an empty `header.frame_id`, the command exits with an error.
+
+With no `--from`, values are written as they appear in the bag (the implicit
+reference frame is each sample’s `header.frame_id`). With `--from <FRAME>`,
+each pose is transformed from `header.frame_id` into `<FRAME>` using all
+`tf2_msgs/msg/TFMessage` topics in the bag (including topics whose name ends
+with `tf_static`). Covariance is not written to TUM.
+
+If `--to` is passed for `PoseStamped` or `PoseWithCovarianceStamped`, it is
+ignored and a warning is logged.
+
+For `nav_msgs/msg/Odometry`, each sample uses `pose.pose` (twist is not written
+to TUM). Every message must have non-empty `header.frame_id` and
+`child_frame_id`; if any decoded message has either empty, the command exits
+with an error. When `--to` is omitted, each row still represents the pose of
+`child_frame_id` in `header.frame_id` (before any `--from` remap). When `--to`
+is set, only messages whose `child_frame_id` equals `--to` are kept.
+
+### Frames and options (`--from` / `--to`)
+
+The flags are not interchangeable across topic types. See the **Options cheat
+sheet** at the end of this block for a short summary, then the subsections and
+diagrams for each message kind.
+
+#### Quick mental model
+
+- **`--from`**: For TF topics, the **reference frame** used in
+  `lookupTransform(--from, --to, t)`. For pose and odometry topics, the **output
+  reference frame** when you ask for a TF remap; if you omit it, numeric values
+  stay expressed in each message’s `header.frame_id`.
+- **`--to`**: For TF topics, the **tracked frame** whose trajectory you want. For
+  pure pose topics, **unused** (warning if set). For odometry, an optional
+  **filter on `child_frame_id`** (not a TF lookup).
+
+#### TF topic (`tf2_msgs/msg/TFMessage`)
+
+Both `--from` and `--to` are **required**. All `TFMessage` topics in the bag are
+loaded into one buffer; sample times come from the chosen `<topic>` (typically
+dynamic `/tf`). Each output row is the result of `lookupTransform(--from, --to,
+t)` at that time: the pose of frame `--to` expressed in frame `--from`.
+
+```mermaid
+flowchart LR
+  From["--from reference frame"]
+  To["--to tracked frame"]
+  From <-->|"TF chain built from the bag"| To
+```
+
+```text
+TUM row at time t  ≍  pose of `--to`  expressed in  `--from`
+                   (same convention as lookupTransform(--from, --to, t))
+```
+
+#### Pose topics (`PoseStamped`, `PoseWithCovarianceStamped`)
+
+Each message carries **one** pose. Its reference frame is **`header.frame_id`**.
+There is no separate child-frame field, so **`--to` is ignored** (a warning is
+logged if you set it).
+
+```mermaid
+flowchart TB
+  subgraph message["Each message"]
+    H["header.frame_id"]
+    P["pose position & orientation"]
+  end
+  subgraph no_from["No --from"]
+    O1["TUM numbers stay in header.frame_id"]
+  end
+  subgraph with_from["With --from"]
+    O2["TF in bag: header.frame_id → --from"]
+  end
+  message --> no_from
+  message --> with_from
+```
+
+#### Odometry (`nav_msgs/msg/Odometry`)
+
+The pose is **of `child_frame_id`** expressed **in `header.frame_id`**. That
+matches the usual TF intuition (parent / reference vs child / body).
+
+- **`--from`** (optional): same TF remap as pose topics: express the pose in
+  `--from` instead of `header.frame_id`.
+- **`--to`** (optional): if set, **keep only** messages whose `child_frame_id`
+  string equals `--to`. If omitted, no filtering; each row still describes the
+  pose of this message’s `child_frame_id`.
+
+```mermaid
+flowchart LR
+  subgraph odom["Each Odometry message"]
+    HF["header.frame_id parent / reference"]
+    CF["child_frame_id body"]
+  end
+  HF -->|"pose.pose is CF in HF"| CF
+```
+
+```text
+Optional filter:  --to base_link   →   keep messages with child_frame_id == base_link
+Optional remap:    --from map      →   rewrite pose into map using TF from the bag
+```
+
+#### Options cheat sheet
+
+| Topic type         | `--from`                         | `--to`                                      |
+| ------------------ | -------------------------------- | ------------------------------------------- |
+| `TFMessage`        | Required: output reference frame | Required: tracked frame for the trajectory  |
+| Pose (Stamped/PWC) | Optional: TF remap target        | Ignored (warning)                           |
+| `Odometry`         | Optional: TF remap target        | Optional: filter by `child_frame_id` string |
 
 ### Usage
 
 ```text
-bagwiz traj dump [OPTIONS] <input> <output> <topic> --from <FRAME> --to <FRAME>
+bagwiz traj dump [OPTIONS] <input> <output> <topic>
 ```
 
 ### Positional arguments
 
-| Name     | Description                                                                                                                       |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `input`  | ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`).                                                                         |
-| `output` | Output file path. Will be truncated if it already exists.                                                                         |
-| `topic`  | The dynamic `tf2_msgs/msg/TFMessage` topic (typically `/tf`). The topic determines the sampling cadence of the output trajectory. |
+| Name     | Description                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------- |
+| `input`  | ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`).                                                     |
+| `output` | Output file path. Will be truncated if it already exists.                                                     |
+| `topic`  | Topic whose type selects processing (`TFMessage`, `PoseStamped`, `PoseWithCovarianceStamped`, or `Odometry`). |
 
 ### Options
 
-| Flag                 | Default      | Description                                                    |
-| -------------------- | ------------ | -------------------------------------------------------------- |
-| `--from <FRAME>`     | _(required)_ | Reference (fixed) frame the output trajectory is expressed in. |
-| `--to <FRAME>`       | _(required)_ | Tracked (moving) frame whose pose each sample represents.      |
-| `-f`, `--format <F>` | `tum`        | Output format. Currently only `tum` is supported.              |
+| Flag                 | Default      | Description                                                                                                                                                     |
+| -------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--from <FRAME>`     | _(optional)_ | TF topics: required reference frame. Pose and Odometry topics: optional; omit to keep each sample in `header.frame_id`, or set to remap into this frame via TF. |
+| `--to <FRAME>`       | _(optional)_ | TF topics: required tracked frame. Odometry: optional `child_frame_id` filter. PoseStamped / PoseWithCovarianceStamped: ignored (warning if set).               |
+| `-f`, `--format <F>` | `tum`        | Output format. Currently only `tum` is supported.                                                                                                               |
 
-### How sampling works
+### TF topic: how sampling works
 
-1. The bag is scanned once. Every `tf2_msgs/msg/TFMessage` topic is
-   loaded into a single TF buffer; topics whose name ends with
-   `tf_static` are inserted as static transforms, the rest as dynamic.
-2. The chain `--from → … → --to` is resolved against the buffer (a
-   stable topology is assumed; resolution happens once).
+1. The bag is scanned once. Every `tf2_msgs/msg/TFMessage` topic is loaded into
+   a single TF buffer; topics whose name ends with `tf_static` are inserted as
+   static transforms, the rest as dynamic.
+2. The chain `--from → … → --to` is resolved against the buffer (a stable
+   topology is assumed; resolution happens once).
 3. While reading the input topic, every `TransformStamped` whose
    `(frame_id, child_frame_id)` lies on the chain contributes its
    `header.stamp` to the sample-time set.
 4. Sample times are sorted and de-duplicated.
-5. For each sample time `t`, `lookupTransform(--from, --to, t)` runs
-   against the (static + dynamic) TF buffer and the result is written
-   to the output file. Lookups that fail (extrapolation, out-of-range)
-   are counted in the summary.
+5. For each sample time `t`, `lookupTransform(--from, --to, t)` runs against
+   the buffer and the result is written to the output file.
+
+### Pose and Odometry topics: how sampling works
+
+1. Messages are read from the chosen topic in bag order (one output row per
+   message that decodes successfully, subject to Odometry `--to` filtering).
+2. If `--from` is set, TF messages from the same bag are merged in timestamp
+   order so lookups can resolve before each pose.
+3. For each pose, `lookupTransform(--from, header.frame_id, t)` supplies the
+   remap when `--from` is set.
 
 ### Output: TUM format
 
@@ -68,30 +190,40 @@ A whitespace-separated text file, one pose per line:
 timestamp tx ty tz qx qy qz qw
 ```
 
-`timestamp` is in seconds (with fractional nanoseconds). The file is
-sorted by timestamp.
+`timestamp` is in seconds (with fractional nanoseconds). The file is sorted by
+timestamp only when the TF path sorts sample times; pose streams follow bag
+message order.
 
 ### Examples
 
 ```bash
-# Trajectory of base_link in map, using /tf as the dynamic source.
+# TF: trajectory of base_link in map, using /tf as the dynamic source.
 bagwiz traj dump capture.mcap traj.tum /tf --from map --to base_link
 
-# Trajectory of an IMU mounted on base_link, in map. The sensor offset
-# (base_link → imu_link) typically lives on /tf_static; it is composed
-# automatically.
-bagwiz traj dump capture.mcap imu.tum /tf --from map --to imu_link
+# Pose topic: use poses as stored (reference frame is each header.frame_id).
+bagwiz traj dump capture.mcap pose.tum /localization/pose
+
+# Pose topic: express poses in map using TF from the bag.
+bagwiz traj dump capture.mcap pose_map.tum /localization/pose --from map
+
+# Odometry: only base_link messages, expressed in map via TF.
+bagwiz traj dump capture.mcap odom.tum /odom --from map --to base_link
 ```
 
 ### Errors
 
-| Situation                                                                        | Result                                                                     |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `--from` and `--to` are equal                                                    | Error.                                                                     |
-| Topic absent / wrong type / static topic given as `<topic>`                      | Error.                                                                     |
-| No path between `--from` and `--to` in the TF tree                               | Error.                                                                     |
-| Path exists but no chain edge is published on `<topic>` (e.g. fully-static path) | Error: traj dump needs at least one dynamic chain edge on the input topic. |
-| Some sample lookups fail (extrapolation, etc.)                                   | Skipped and counted in the summary; remaining poses are written.           |
+| Situation                                                                        | Result                                                           |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| TF topic: `--from` or `--to` missing or empty                                    | Error.                                                           |
+| `--from` and `--to` equal (TF topics)                                            | Error.                                                           |
+| Pose / Odometry topic: `--from` set but empty                                    | Error.                                                           |
+| Pose topic: any message with empty `header.frame_id`                             | Error.                                                           |
+| Odometry topic: any message with empty `header.frame_id` or `child_frame_id`     | Error.                                                           |
+| Topic absent / unsupported type / static TF topic given as `<topic>` for TF path | Error.                                                           |
+| TF path: no path between `--from` and `--to`                                     | Error.                                                           |
+| TF path: path exists but no chain edge on `<topic>`                              | Error.                                                           |
+| Pose remap: no TF topics in bag                                                  | Error.                                                           |
+| Some lookups fail                                                                | Skipped and counted; remaining poses are written if any succeed. |
 
 ### Exit status
 
