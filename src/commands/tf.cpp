@@ -34,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -177,6 +178,78 @@ struct ExtrapolationBoundary
   bool stamp_parsed = false;
 };
 
+// Resolve the chain of frames between `from_frame` and `to_frame` at
+// `time` by walking parent links via tf2::BufferCore::_getParent. We
+// use this instead of tf2's `_chainAsVector` because the latter
+// returned empty for static-only buffers in our testing (the chain
+// search starts from a fixed frame and can produce an empty result
+// when source == fixed). _getParent works uniformly for static and
+// dynamic cache entries.
+//
+// The returned vector is ordered to match the human-readable header
+// "TF: from -> to" — i.e. `front() == from_frame, back() == to_frame`.
+// Returns empty when no common ancestor exists in the buffer or when
+// the walk is suspiciously deep (cycle guard).
+std::vector<std::string> resolve_chain(
+  const tf2::BufferCore & buffer, const std::string & from_frame, const std::string & to_frame,
+  tf2::TimePoint time)
+{
+  constexpr std::size_t kMaxDepth = 1024;
+
+  auto walk_to_root = [&](const std::string & start) {
+    std::vector<std::string> path;
+    path.push_back(start);
+    std::string cur = start;
+    while (path.size() < kMaxDepth) {
+      std::string parent;
+      if (!buffer._getParent(cur, time, parent) || parent.empty()) {
+        break;
+      }
+      path.push_back(parent);
+      cur = parent;
+    }
+    return path;
+  };
+
+  const auto path_to = walk_to_root(to_frame);
+
+  // Fast path: from_frame is on path_to (i.e. from is an ancestor of to).
+  for (std::size_t i = 0; i < path_to.size(); ++i) {
+    if (path_to[i] == from_frame) {
+      std::vector<std::string> chain(path_to.begin(), path_to.begin() + i + 1);
+      std::reverse(chain.begin(), chain.end());
+      return chain;
+    }
+  }
+
+  // General case: locate the lowest common ancestor.
+  const auto path_from = walk_to_root(from_frame);
+  std::unordered_set<std::string> to_ancestors(path_to.begin(), path_to.end());
+  std::size_t lca_in_from = path_from.size();
+  for (std::size_t i = 0; i < path_from.size(); ++i) {
+    if (to_ancestors.count(path_from[i]) != 0) {
+      lca_in_from = i;
+      break;
+    }
+  }
+  if (lca_in_from == path_from.size()) {
+    return {};
+  }
+  const std::string & lca = path_from[lca_in_from];
+
+  std::vector<std::string> chain(path_from.begin(), path_from.begin() + lca_in_from + 1);
+  std::size_t lca_in_to = 0;
+  for (; lca_in_to < path_to.size(); ++lca_in_to) {
+    if (path_to[lca_in_to] == lca) {
+      break;
+    }
+  }
+  for (std::size_t i = lca_in_to; i-- > 0;) {
+    chain.push_back(path_to[i]);
+  }
+  return chain;
+}
+
 ExtrapolationBoundary parse_extrapolation(const std::string & what)
 {
   ExtrapolationBoundary out;
@@ -315,12 +388,21 @@ private:
       return 1;
     }
 
-    if (timeline.empty()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger,
-        "Bag has TFMessage topics but no dynamic /tf updates (only /tf_static). A walk with one "
-        "step is not interesting; nothing to do.");
-      return 1;
+    // /tf_static-only bags are still walkable: tf2::BufferCore returns
+    // static transforms for any query stamp, so we synthesize a single
+    // step at t=0 and let the existing UI render it. Useful for sensor
+    // calibration bags or any case where the user wants to verify a
+    // fully-static from->to chain.
+    const bool static_only = timeline.empty();
+    if (static_only) {
+      const bool has_static = std::any_of(
+        tf_topics.begin(), tf_topics.end(), [](const TfTopic & t) { return t.is_static; });
+      if (!has_static) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Bag has TFMessage topics but no transforms were decoded; nothing to do.");
+        return 1;
+      }
+      timeline.push_back(0);
     }
 
     // Probe the chain at timeline.front() to (a) fail fast on chain
@@ -340,6 +422,17 @@ private:
       BAGWIZ_LOG_ERROR(kLogger, "TF chain error: %s", e.what());
       return 1;
     } catch (const tf2::ExtrapolationException & e) {
+      if (static_only) {
+        // The chain has at least one segment that needs a dynamic /tf
+        // stamp this bag does not provide; cropping a synthetic timeline
+        // would just leave it empty, so error out with a specific message.
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "TF chain '%s' -> '%s' is not fully static and this bag has no dynamic /tf updates "
+          "to satisfy the missing segment(s): %s",
+          args.from_frame.c_str(), args.to_frame.c_str(), e.what());
+        return 1;
+      }
       const auto info = parse_extrapolation(e.what());
       if (info.past && info.stamp_parsed) {
         const std::int64_t boundary_ns = static_cast<std::int64_t>(info.stamp_s * 1e9);
@@ -371,12 +464,37 @@ private:
     auto render = [&]() {
       fmt::print(stdout, "\x1b[2J\x1b[H");
       const std::int64_t ts = timeline[index];
-      fmt::print(stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
-      fmt::print(stdout, "TF: {}  ->  {}\n\n", args.from_frame, args.to_frame);
+      if (static_only) {
+        fmt::print(stdout, "[STATIC TF]  (no dynamic /tf in bag)\n");
+      } else {
+        fmt::print(
+          stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
+      }
+      fmt::print(stdout, "TF: {}  ->  {}\n", args.from_frame, args.to_frame);
+
+      // Show the resolved chain so the user can see *how* the composed
+      // transform was computed. resolve_chain walks parent links via
+      // _getParent so it works uniformly for static and dynamic data;
+      // tf2::_chainAsVector returned empty for static-only buffers in
+      // our testing.
+      const auto query_tp = tf2::TimePoint(std::chrono::nanoseconds(ts));
+      const auto chain = resolve_chain(tf_buffer, args.from_frame, args.to_frame, query_tp);
+      if (!chain.empty()) {
+        fmt::print(stdout, "chain: ");
+        for (std::size_t i = 0; i < chain.size(); ++i) {
+          if (i > 0) {
+            fmt::print(stdout, " -> ");
+          }
+          fmt::print(stdout, "{}", chain[i]);
+        }
+        fmt::print(stdout, "\n");
+      } else {
+        fmt::print(stdout, "chain: <unresolved (no common ancestor in buffer)>\n");
+      }
+      fmt::print(stdout, "\n");
 
       try {
-        const auto tf = tf_buffer.lookupTransform(
-          args.from_frame, args.to_frame, tf2::TimePoint(std::chrono::nanoseconds(ts)));
+        const auto tf = tf_buffer.lookupTransform(args.from_frame, args.to_frame, query_tp);
         fmt::print(stdout, "translation:\n");
         fmt::print(stdout, "  x: {:.15g}\n", tf.transform.translation.x);
         fmt::print(stdout, "  y: {:.15g}\n", tf.transform.translation.y);
