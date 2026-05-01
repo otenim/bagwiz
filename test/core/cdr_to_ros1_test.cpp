@@ -155,6 +155,49 @@ namespace
 
 }  // namespace
 
+TEST(CdrToRos1, RoundTripsStdMsgsEmpty)
+{
+  // ROS 2 codegen inserts a `uint8 structure_needs_at_least_one_member`
+  // placeholder for messages whose .msg text is empty. The CDR wire
+  // carries that placeholder byte, but the ROS 1 wire format has no
+  // equivalent (empty ROS 1 messages are 0 bytes). The walker must
+  // skip/inject the placeholder on the appropriate side; otherwise:
+  //   * ros1_to_cdr underflows the empty ROS 1 input (read 1 byte that
+  //     does not exist) and reports a truncation error.
+  //   * cdr_to_ros1 emits an extra byte into the ROS 1 output, which
+  //     corrupts the message stream for any downstream ROS 1 reader.
+  Ros1Builder b;  // intentionally empty: ROS 1 std_msgs/Empty has 0 bytes.
+  EXPECT_TRUE(roundtrip_equal("std_msgs/msg/Empty", b.view()));
+}
+
+TEST(CdrToRos1, ForwardConvertsEmptyMessageToSinglePlaceholderByte)
+{
+  // The CDR encapsulation header is 4 bytes, then the body is exactly
+  // 1 byte (the placeholder, value 0). Anything else means the
+  // placeholder handling regressed.
+  std::vector<std::byte> ros1_in;  // empty
+  const auto fwd = bagwiz::core::convert_ros1_to_cdr("std_msgs/msg/Empty", ros1_in);
+  ASSERT_TRUE(fwd.ok) << fwd.error;
+  ASSERT_EQ(fwd.cdr.size(), 5u) << "expected 4-byte encapsulation header + 1 placeholder byte";
+  EXPECT_EQ(static_cast<std::uint8_t>(fwd.cdr[4]), 0u);
+}
+
+TEST(CdrToRos1, BackwardConvertsSinglePlaceholderByteToEmpty)
+{
+  // CDR-LE for std_msgs/msg/Empty: 4-byte encapsulation header followed
+  // by a single placeholder byte. Backward conversion must drop that
+  // byte so the ROS 1 output is 0-length.
+  std::vector<std::byte> cdr;
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x01});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});  // placeholder
+  const auto back = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/Empty", cdr);
+  ASSERT_TRUE(back.ok) << back.error;
+  EXPECT_EQ(back.ros1.size(), 0u);
+}
+
 TEST(CdrToRos1, RoundTripsStdMsgsString)
 {
   Ros1Builder b;

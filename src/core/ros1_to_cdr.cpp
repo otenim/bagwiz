@@ -243,6 +243,18 @@ void walk_field(
   const ts::MessageMember & f, Ros1Reader & r, CdrWriter & w,
   std::vector<TimeOverflowEvent> & overflows)
 {
+  // Empty-message placeholder: ROS 2 codegen inserts a single
+  // `uint8 structure_needs_at_least_one_member` field for messages
+  // whose .msg text has zero fields (std_msgs/Empty, std_srvs/Empty,
+  // etc.). The ROS 1 wire format has no equivalent — empty ROS 1
+  // messages serialise to 0 bytes. Synthesize the placeholder byte
+  // (zero) on the CDR side without consuming anything from the ROS 1
+  // input.
+  if (f.name_ != nullptr && std::strcmp(f.name_, "structure_needs_at_least_one_member") == 0) {
+    w.write_byte(std::byte{0});
+    return;
+  }
+
   if (!f.is_array_) {
     walk_scalar(f, r, w, overflows);
     return;
