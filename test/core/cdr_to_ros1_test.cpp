@@ -155,6 +155,50 @@ namespace
 
 }  // namespace
 
+TEST(CdrToRos1, RejectsBigEndianEncapsulation)
+{
+  // PLAIN_CDR (BE) — `0x00 0x00`. The walker only knows how to decode
+  // little-endian primitives; accepting a BE payload silently would
+  // produce garbage values for every multibyte field. Verify the
+  // converter explicitly rejects it instead of returning malformed
+  // ROS 1 output.
+  std::vector<std::byte> cdr;
+  cdr.push_back(std::byte{0x00});  // representation_identifier hi
+  cdr.push_back(std::byte{0x00});  // representation_identifier lo (BE)
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  // Body sized to be a valid std_msgs/msg/UInt32 payload (4 bytes).
+  cdr.push_back(std::byte{0xDE});
+  cdr.push_back(std::byte{0xAD});
+  cdr.push_back(std::byte{0xBE});
+  cdr.push_back(std::byte{0xEF});
+
+  const auto result = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/UInt32", cdr);
+  EXPECT_FALSE(result.ok);
+  EXPECT_NE(result.error.find("encapsulation identifier"), std::string::npos)
+    << "expected an explicit encapsulation rejection, got: " << result.error;
+}
+
+TEST(CdrToRos1, RejectsParameterisedEncapsulation)
+{
+  // PL_CDR_LE — `0x00 0x03`. Same reasoning as the BE case: the walker
+  // does not handle parameterised encoding and would mis-decode field
+  // boundaries.
+  std::vector<std::byte> cdr;
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x03});  // PL_CDR_LE
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x42});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+  cdr.push_back(std::byte{0x00});
+
+  const auto result = bagwiz::core::convert_cdr_to_ros1("std_msgs/msg/UInt32", cdr);
+  EXPECT_FALSE(result.ok);
+  EXPECT_NE(result.error.find("encapsulation identifier"), std::string::npos) << result.error;
+}
+
 TEST(CdrToRos1, RoundTripsStdMsgsEmpty)
 {
   // ROS 2 codegen inserts a `uint8 structure_needs_at_least_one_member`

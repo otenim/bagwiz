@@ -15,6 +15,7 @@
 
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <span>
 #include <stdexcept>
@@ -84,15 +85,34 @@ public:
     if (data_.size() < 4) {
       throw std::runtime_error("cdr_to_ros1: CDR payload smaller than 4-byte encapsulation header");
     }
-    // Bytes 0-1 are representation_identifier (encoding kind); bytes 2-3
-    // are representation_options. Per OMG DDS-XTYPES 1.3 §7.6.3.1.2 the
-    // lower two bits of the options field encode the number of padding
-    // bytes (0-3) appended after the body so the total encapsulated size
-    // ends on a 4-byte boundary. We trim that count from the effective
-    // body so the walker's "all bytes consumed" check accepts payloads
-    // produced by FastDDS / CycloneDDS (and rosbag2 storage plugins that
-    // pass the field through). Legacy PLAIN_CDR_LE writers leave
-    // options=0, so this is a no-op for them.
+    // Bytes 0-1 are representation_identifier (encoding kind). The
+    // walker reads numeric primitives little-endian, so accept only
+    // PLAIN_CDR_LE (`0x00 0x01`). Other identifiers (PLAIN_CDR BE,
+    // PL_CDR / PL_CDR_LE parameterised, XCDR variants, ...) need
+    // different decode logic; silently treating them as LE would
+    // produce garbage for every multibyte field. Both Fast-DDS and
+    // Cyclone DDS emit PLAIN_CDR_LE in practice, so this is the only
+    // identifier we have ever seen on real rosbag2 payloads.
+    const auto rid_hi = static_cast<std::uint8_t>(data_[0]);
+    const auto rid_lo = static_cast<std::uint8_t>(data_[1]);
+    if (rid_hi != 0x00U || rid_lo != 0x01U) {
+      char hex_buf[5];
+      std::snprintf(
+        hex_buf, sizeof(hex_buf), "%02X%02X", static_cast<unsigned>(rid_hi),
+        static_cast<unsigned>(rid_lo));
+      throw std::runtime_error(
+        std::string("cdr_to_ros1: unsupported CDR encapsulation identifier 0x") + hex_buf +
+        " (expected 0x0001 PLAIN_CDR_LE)");
+    }
+    // Bytes 2-3 are representation_options. Per OMG DDS-XTYPES 1.3
+    // §7.6.3.1.2 the lower two bits of the options field encode the
+    // number of padding bytes (0-3) appended after the body so the
+    // total encapsulated size ends on a 4-byte boundary. We trim that
+    // count from the effective body so the walker's "all bytes
+    // consumed" check accepts payloads produced by FastDDS / CycloneDDS
+    // (and rosbag2 storage plugins that pass the field through).
+    // Legacy PLAIN_CDR_LE writers leave options=0, so this is a no-op
+    // for them.
     const auto pad = static_cast<std::size_t>(static_cast<std::uint8_t>(data_[3]) & 0x03);
     // Defensive: a malformed tiny payload that happens to have the bits
     // set but no body to trim must not underflow the effective end.
