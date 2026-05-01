@@ -397,11 +397,37 @@ private:
         fmt::print(
           stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
       }
-      fmt::print(stdout, "TF: {}  ->  {}\n\n", args.from_frame, args.to_frame);
+      fmt::print(stdout, "TF: {}  ->  {}\n", args.from_frame, args.to_frame);
+
+      // Show the resolved chain so the user can see *how* the composed
+      // transform was computed. tf2::_chainAsVector populates the path
+      // through the tree between source and target via their common
+      // ancestor; calling it with target=to, source=from yields a vector
+      // ordered as `from -> ... -> to`, matching the header above.
+      // Failures here are silenced because the main lookupTransform
+      // below will surface any chain error in a more useful form.
+      const auto query_tp = tf2::TimePoint(std::chrono::nanoseconds(ts));
+      try {
+        std::vector<std::string> chain;
+        tf_buffer._chainAsVector(
+          args.to_frame, query_tp, args.from_frame, query_tp, args.from_frame, chain);
+        if (!chain.empty()) {
+          fmt::print(stdout, "chain: ");
+          for (std::size_t i = 0; i < chain.size(); ++i) {
+            if (i > 0) {
+              fmt::print(stdout, " -> ");
+            }
+            fmt::print(stdout, "{}", chain[i]);
+          }
+          fmt::print(stdout, "\n");
+        }
+      } catch (const tf2::TransformException &) {
+        // chain extraction failed; fall through and let lookupTransform error
+      }
+      fmt::print(stdout, "\n");
 
       try {
-        const auto tf = tf_buffer.lookupTransform(
-          args.from_frame, args.to_frame, tf2::TimePoint(std::chrono::nanoseconds(ts)));
+        const auto tf = tf_buffer.lookupTransform(args.from_frame, args.to_frame, query_tp);
         fmt::print(stdout, "translation:\n");
         fmt::print(stdout, "  x: {:.15g}\n", tf.transform.translation.x);
         fmt::print(stdout, "  y: {:.15g}\n", tf.transform.translation.y);
