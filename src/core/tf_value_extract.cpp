@@ -10,9 +10,13 @@
 
 #include "bagwiz/core/cdr_walker/value.hpp"
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <std_msgs/msg/header.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -79,19 +83,9 @@ bool read_xyzw(const cdr::Object & obj, double & x, double & y, double & z, doub
 // Convert a single TransformStamped Object into the C++ struct. Returns
 // false on any missing or wrong-shaped field; the caller skips the
 // element in that case.
-bool fill_transform_stamped(const cdr::Object & ts_obj, geometry_msgs::msg::TransformStamped & out)
+bool fill_std_msgs_header(const cdr::Object & header_obj, std_msgs::msg::Header & out)
 {
-  // header { stamp { sec, nanosec }, frame_id }
-  const auto * header_v = find_field(ts_obj, "header");
-  if (header_v == nullptr) {
-    return false;
-  }
-  const auto * header = find_object(*header_v);
-  if (header == nullptr) {
-    return false;
-  }
-
-  const auto * stamp_v = find_field(*header, "stamp");
+  const auto * stamp_v = find_field(header_obj, "stamp");
   if (stamp_v == nullptr) {
     return false;
   }
@@ -104,28 +98,43 @@ bool fill_transform_stamped(const cdr::Object & ts_obj, geometry_msgs::msg::Tran
   if (sec_v == nullptr || nsec_v == nullptr) {
     return false;
   }
-  // builtin_interfaces/Time is canonically int32 sec / uint32 nanosec
-  // but the Python mcap-ros2-support reference emits sec as uint32, so
-  // accept either width on both fields.
   if (const auto * sec_i32 = std::get_if<std::int32_t>(&sec_v->v)) {
-    out.header.stamp.sec = *sec_i32;
+    out.stamp.sec = *sec_i32;
   } else if (const auto * sec_u32 = std::get_if<std::uint32_t>(&sec_v->v)) {
-    out.header.stamp.sec = static_cast<std::int32_t>(*sec_u32);
+    out.stamp.sec = static_cast<std::int32_t>(*sec_u32);
   } else {
     return false;
   }
   if (const auto * nsec_u32 = std::get_if<std::uint32_t>(&nsec_v->v)) {
-    out.header.stamp.nanosec = *nsec_u32;
+    out.stamp.nanosec = *nsec_u32;
   } else if (const auto * nsec_i32 = std::get_if<std::int32_t>(&nsec_v->v)) {
-    out.header.stamp.nanosec = static_cast<std::uint32_t>(*nsec_i32);
+    out.stamp.nanosec = static_cast<std::uint32_t>(*nsec_i32);
   } else {
     return false;
   }
 
-  if (const auto * fid_v = find_field(*header, "frame_id")) {
+  if (const auto * fid_v = find_field(header_obj, "frame_id")) {
     if (const auto * fid = std::get_if<std::string>(&fid_v->v)) {
-      out.header.frame_id = *fid;
+      out.frame_id = *fid;
     }
+  }
+  return true;
+}
+
+bool fill_transform_stamped(const cdr::Object & ts_obj, geometry_msgs::msg::TransformStamped & out)
+{
+  // header { stamp { sec, nanosec }, frame_id }
+  const auto * header_v = find_field(ts_obj, "header");
+  if (header_v == nullptr) {
+    return false;
+  }
+  const auto * header = find_object(*header_v);
+  if (header == nullptr) {
+    return false;
+  }
+
+  if (!fill_std_msgs_header(*header, out.header)) {
+    return false;
   }
 
   if (const auto * cf_v = find_field(ts_obj, "child_frame_id")) {
@@ -163,6 +172,110 @@ bool fill_transform_stamped(const cdr::Object & ts_obj, geometry_msgs::msg::Tran
     out.transform.rotation.w);
 }
 
+bool fill_pose_object(const cdr::Object & pose_obj, geometry_msgs::msg::Pose & out)
+{
+  const auto * pos_v = find_field(pose_obj, "position");
+  const auto * ori_v = find_field(pose_obj, "orientation");
+  if (pos_v == nullptr || ori_v == nullptr) {
+    return false;
+  }
+  const auto * pos_obj = find_object(*pos_v);
+  const auto * ori_obj = find_object(*ori_v);
+  if (pos_obj == nullptr || ori_obj == nullptr) {
+    return false;
+  }
+  if (!read_xyz(*pos_obj, out.position.x, out.position.y, out.position.z)) {
+    return false;
+  }
+  return read_xyzw(
+    *ori_obj, out.orientation.x, out.orientation.y, out.orientation.z, out.orientation.w);
+}
+
+bool fill_pose_stamped_root(const cdr::Object & root, geometry_msgs::msg::PoseStamped & out)
+{
+  const auto * header_v = find_field(root, "header");
+  if (header_v == nullptr) {
+    return false;
+  }
+  const auto * header_obj = find_object(*header_v);
+  if (header_obj == nullptr) {
+    return false;
+  }
+  if (!fill_std_msgs_header(*header_obj, out.header)) {
+    return false;
+  }
+  const auto * pose_v = find_field(root, "pose");
+  if (pose_v == nullptr) {
+    return false;
+  }
+  const auto * pose_obj = find_object(*pose_v);
+  if (pose_obj == nullptr) {
+    return false;
+  }
+  return fill_pose_object(*pose_obj, out.pose);
+}
+
+bool fill_pose_with_covariance_stamped_root(
+  const cdr::Object & root, geometry_msgs::msg::PoseWithCovarianceStamped & out)
+{
+  const auto * header_v = find_field(root, "header");
+  if (header_v == nullptr) {
+    return false;
+  }
+  const auto * header_obj = find_object(*header_v);
+  if (header_obj == nullptr) {
+    return false;
+  }
+  if (!fill_std_msgs_header(*header_obj, out.header)) {
+    return false;
+  }
+  const auto * pwc_v = find_field(root, "pose");
+  if (pwc_v == nullptr) {
+    return false;
+  }
+  const auto * pwc_obj = find_object(*pwc_v);
+  if (pwc_obj == nullptr) {
+    return false;
+  }
+  const auto * inner_pose_v = find_field(*pwc_obj, "pose");
+  if (inner_pose_v == nullptr) {
+    return false;
+  }
+  const auto * inner_pose_obj = find_object(*inner_pose_v);
+  if (inner_pose_obj == nullptr) {
+    return false;
+  }
+  return fill_pose_object(*inner_pose_obj, out.pose.pose);
+}
+
+std::optional<geometry_msgs::msg::PoseStamped> extract_pose_stamped_impl(
+  const cdr_walker::Value & message)
+{
+  const auto * root = find_object(message);
+  if (root == nullptr) {
+    return std::nullopt;
+  }
+  geometry_msgs::msg::PoseStamped out;
+  if (!fill_pose_stamped_root(*root, out)) {
+    return std::nullopt;
+  }
+  return out;
+}
+
+std::optional<geometry_msgs::msg::PoseWithCovarianceStamped>
+extract_pose_with_covariance_stamped_impl(const cdr_walker::Value & message)
+{
+  const auto * root = find_object(message);
+  if (root == nullptr) {
+    return std::nullopt;
+  }
+  geometry_msgs::msg::PoseWithCovarianceStamped out;
+  if (!fill_pose_with_covariance_stamped_root(*root, out)) {
+    return std::nullopt;
+  }
+  return out;
+}
+
 }  // namespace
 
 std::vector<geometry_msgs::msg::TransformStamped> extract_tf_message(
@@ -193,6 +306,18 @@ std::vector<geometry_msgs::msg::TransformStamped> extract_tf_message(
     }
   }
   return out;
+}
+
+std::optional<geometry_msgs::msg::PoseStamped> extract_pose_stamped_message(
+  const cdr_walker::Value & message)
+{
+  return extract_pose_stamped_impl(message);
+}
+
+std::optional<geometry_msgs::msg::PoseWithCovarianceStamped>
+extract_pose_with_covariance_stamped_message(const cdr_walker::Value & message)
+{
+  return extract_pose_with_covariance_stamped_impl(message);
 }
 
 }  // namespace bagwiz::core

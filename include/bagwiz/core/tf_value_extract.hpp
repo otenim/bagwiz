@@ -11,8 +11,11 @@
 
 #include "bagwiz/core/cdr_walker/value.hpp"
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
+#include <optional>
 #include <vector>
 
 // Bridge between the schema-driven decoder (Phases C/D) and tf2's
@@ -37,6 +40,16 @@ namespace bagwiz::core
 // reference, which inadvertently emits sec as uint32).
 std::vector<geometry_msgs::msg::TransformStamped> extract_tf_message(
   const cdr_walker::Value & message);
+
+// Decode a single geometry_msgs/msg/PoseStamped from a schema-decoded
+// message Value. Returns std::nullopt when the tree does not match.
+std::optional<geometry_msgs::msg::PoseStamped> extract_pose_stamped_message(
+  const cdr_walker::Value & message);
+
+// Decode geometry_msgs/msg/PoseWithCovarianceStamped. Only header and
+// pose.pose (inner geometry_msgs/Pose) are required for trajectory use.
+std::optional<geometry_msgs::msg::PoseWithCovarianceStamped>
+extract_pose_with_covariance_stamped_message(const cdr_walker::Value & message);
 
 }  // namespace bagwiz::core
 

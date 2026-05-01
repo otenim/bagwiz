@@ -54,7 +54,18 @@ Guidelines for AI agents contributing to this repository.
   reports an error, fix the underlying issue and re-commit — never
   skip or disable the hook to push work through.
 
-## 5. GitHub Actions / CI
+## 5. Local builds
+
+- Build this package with `./build.sh` from the repository root, after
+  sourcing the ROS 2 underlay (same prerequisite as in `README.md`
+  Installation). The script wraps `colcon` with the expected workspace
+  layout and flags; use `./build.sh --help` for clean rebuilds, build type,
+  and parallelism.
+- Prefer `./build.sh` over ad-hoc `colcon build` invocations when
+  verifying changes, unless you are reproducing a CI or tooling issue that
+  requires a different command line.
+
+## 6. GitHub Actions / CI
 
 - Be mindful of the GitHub Actions workflows configured in this
   repository; ensure changes do not cause them to fail.
@@ -63,7 +74,7 @@ Guidelines for AI agents contributing to this repository.
   the actual logs. Base bug fixes on evidence from those logs, not on
   assumptions.
 
-## 6. Remote Repository Operations
+## 7. Remote Repository Operations
 
 - Always obtain explicit developer approval before making any changes
   to the remote repository — pushing commits, creating/closing pull
@@ -74,7 +85,7 @@ Guidelines for AI agents contributing to this repository.
   concise: cover the problem, the solution, and the test plan without
   unnecessary verbosity.
 
-## 7. Resource Management
+## 8. Resource Management
 
 - When writing code that acquires or releases a resource (memory, file
   handles, sockets, mutex locks, terminal modes, ROS handles, etc.),
