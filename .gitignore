@@ -76,7 +76,7 @@ desktop.ini
 .claude/
 CLAUDE.local.md
 
-# Trajectory outputs (produced by bagwiz traj export)
+# Trajectory outputs (produced by bagwiz traj dump)
 *.tum
 
 # rosbag2 writes a `metadata.yaml` next to each bag's .db3 / .mcap; keep
