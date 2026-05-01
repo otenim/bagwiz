@@ -128,7 +128,7 @@ echo "[build.sh] CMAKE_BUILD_TYPE=${cmake_build_type}"
 echo "[build.sh] parallel workers=${parallel_workers}"
 
 # Discover bundled message packages under dependencies/ so they are built
-# alongside bagwiz. The directory is populated by setup.bash via vcs
+# alongside bagwiz. The directory is populated by setup.sh via vcs
 # import; if it is missing or empty, only bagwiz and its standard deps
 # are built.
 deps_pkgs=()
