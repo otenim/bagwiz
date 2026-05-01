@@ -27,7 +27,7 @@ From the repository root:
 2. Prepare the workspace:
 
    ```bash
-   ./setup.bash
+   ./setup.sh
    ```
 
 3. Build — again with ROS sourced (repeat step 1 if you opened a new terminal):
