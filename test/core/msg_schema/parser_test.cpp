@@ -186,6 +186,35 @@ TEST(MsgSchemaParser, DefaultValuesParsedAsRawText)
   EXPECT_EQ(schema.root()->fields[2].default_value->raw, "[1.0, 2.0, 3.0]");
 }
 
+TEST(MsgSchemaParser, DefaultStringWithHashIsNotTruncated)
+{
+  // A '#' inside a string-literal default value must NOT be treated as a
+  // comment delimiter. Otherwise the captured raw_value silently loses
+  // everything after the '#' (including the closing quote), which both
+  // corrupts the parsed default and breaks downstream warning messages.
+  const std::string text = "string color \"red # the color\"\n";
+  const auto result = ms::parse_message("test", "Foo", text);
+  const auto & schema = expect_ok(result);
+
+  ASSERT_EQ(schema.root()->fields.size(), 1U);
+  ASSERT_TRUE(schema.root()->fields[0].default_value.has_value());
+  EXPECT_EQ(schema.root()->fields[0].default_value->raw, "\"red # the color\"");
+}
+
+TEST(MsgSchemaParser, EscapedQuoteInsideDefaultStringDoesNotEndLiteral)
+{
+  // An escaped quote `\"` keeps the literal open, so a '#' that follows
+  // the escape but precedes the real closing quote must still be treated
+  // as part of the literal.
+  const std::string text = "string label \"a\\\" # still inside\"\n";
+  const auto result = ms::parse_message("test", "Foo", text);
+  const auto & schema = expect_ok(result);
+
+  ASSERT_EQ(schema.root()->fields.size(), 1U);
+  ASSERT_TRUE(schema.root()->fields[0].default_value.has_value());
+  EXPECT_EQ(schema.root()->fields[0].default_value->raw, "\"a\\\" # still inside\"");
+}
+
 // --- Comments and blank lines -------------------------------------------
 
 TEST(MsgSchemaParser, CommentsAndBlankLines)
