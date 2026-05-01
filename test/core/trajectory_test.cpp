@@ -56,6 +56,27 @@ TEST(WriteTum, EmitsExpectedLineLayout)
     << text;
 }
 
+TEST(WriteTum, EmitsBitExactNanosecondsAtModernEpochs)
+{
+  // The double ULP near 1.77e18 (year-2026 magnitudes in ns) is ~256,
+  // so a `static_cast<double>(ns) / 1e9` round trip silently drifts
+  // the last few decimal digits. The formatter must format sec /
+  // nanosec from the integer directly so the TUM timestamp is
+  // bit-exact with the source header.stamp.
+  const std::int64_t sec = 1773211197LL;
+  const std::int64_t nsec = 937418279LL;
+  const std::int64_t ts_ns = sec * 1'000'000'000LL + nsec;
+
+  std::vector<TrajectoryPose> poses;
+  poses.push_back({ts_ns, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0});
+
+  std::ostringstream os;
+  write_tum(os, poses);
+  const std::string text = os.str();
+
+  EXPECT_NE(text.find("1773211197.937418279 "), std::string::npos) << "got:\n" << text;
+}
+
 TEST(WriteTum, EmitsNothingForEmptyTrajectory)
 {
   std::ostringstream os;
