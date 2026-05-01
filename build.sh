@@ -34,11 +34,6 @@ done
 if [[ ${clean} -eq 1 ]]; then
     echo "[build.sh] Clean build: removing install/, build/, log/"
     rm -rf "${SCRIPT_DIR}/install" "${SCRIPT_DIR}/build" "${SCRIPT_DIR}/log"
-    # The current shell may have sourced a previous install/setup.bash, leaving
-    # AMENT/CMAKE/COLCON_PREFIX_PATH pointing at directories we just deleted.
-    # colcon would then emit a flood of "path doesn't exist" warnings. Drop
-    # those entries so the clean build starts from a clean environment.
-    unset AMENT_PREFIX_PATH CMAKE_PREFIX_PATH COLCON_PREFIX_PATH
 fi
 
 # Discover bundled message packages under dependencies/ so they are built
