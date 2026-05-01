@@ -28,6 +28,7 @@
 #include <tf2/time.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cinttypes>
 #include <cstdint>
@@ -72,6 +73,57 @@ bool is_static_tf_topic(std::string_view topic_name)
   return topic_name.compare(
            topic_name.size() - kTfStaticSuffix.size(), kTfStaticSuffix.size(), kTfStaticSuffix) ==
          0;
+}
+
+// Lowercase extension without leading dot, or empty when missing / not usable.
+std::string output_path_extension_lower(const std::filesystem::path & output_path)
+{
+  std::string ext = output_path.extension().string();
+  if (ext.size() <= 1U) {
+    return {};
+  }
+  ext.erase(0, 1);
+  for (char & c : ext) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return ext;
+}
+
+// When `format_opt` is non-empty, it wins (must be a supported id). When empty,
+// `output_path`'s extension selects the format (e.g. ".tum" -> tum).
+bool resolve_dump_format(
+  const std::string & format_opt, const std::filesystem::path & output_path, std::string & out)
+{
+  if (!format_opt.empty()) {
+    if (format_opt != kFormatTum) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "Unsupported output format '%s'. Supported: %s.", format_opt.c_str(), kFormatTum);
+      return false;
+    }
+    out = format_opt;
+    return true;
+  }
+
+  const std::string ext = output_path_extension_lower(output_path);
+  if (ext.empty()) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "Output format is not set (-f/--format) and the output path '%s' has no usable extension; "
+      "use e.g. '*.tum' or pass --format %s.",
+      output_path.c_str(), kFormatTum);
+    return false;
+  }
+  if (ext == kFormatTum) {
+    out = kFormatTum;
+    return true;
+  }
+
+  BAGWIZ_LOG_ERROR(
+    kLogger,
+    "Output format is not set (-f/--format) and extension '.%s' is not recognized; "
+    "use '*.tum' or pass --format %s.",
+    ext.c_str(), kFormatTum);
+  return false;
 }
 
 struct TfTopic
@@ -270,9 +322,9 @@ private:
         "Topic to sample (e.g. /tf, /localization/pose). Type selects processing; "
         "TF message topics pick up *tf_static from the bag automatically.")
       ->required();
-    sub->add_option("-f,--format", dump_args_.format, "Output format")
-      ->default_val(kFormatTum)
-      ->check(CLI::IsMember({kFormatTum}));
+    sub->add_option(
+      "-f,--format", dump_args_.format,
+      "Output format (tum). When omitted, inferred from the output file extension (e.g. .tum).");
     sub->add_option(
       "--from", dump_args_.from_frame,
       "Reference frame for output poses. Required for tf2_msgs/msg/TFMessage. For "
@@ -418,11 +470,6 @@ private:
         kLogger, "All %zu sample stamps failed to resolve via lookupTransform. Last reason: %s",
         sample_stamps.size(),
         last_skip_reason.empty() ? "(none recorded)" : last_skip_reason.c_str());
-      return 1;
-    }
-
-    if (args.format != kFormatTum) {
-      BAGWIZ_LOG_ERROR(kLogger, "Unsupported format '%s'", args.format.c_str());
       return 1;
     }
 
@@ -643,11 +690,6 @@ private:
       return 1;
     }
 
-    if (args.format != kFormatTum) {
-      BAGWIZ_LOG_ERROR(kLogger, "Unsupported format '%s'", args.format.c_str());
-      return 1;
-    }
-
     std::ofstream out(args.output_path, std::ios::out | std::ios::trunc);
     if (!out) {
       BAGWIZ_LOG_ERROR(
@@ -665,6 +707,12 @@ private:
 
   int run_dump()
   {
+    std::string resolved_format;
+    if (!resolve_dump_format(dump_args_.format, dump_args_.output_path, resolved_format)) {
+      return 1;
+    }
+    dump_args_.format = std::move(resolved_format);
+
     const auto & args = dump_args_;
 
     std::unique_ptr<io::BagReader> reader;

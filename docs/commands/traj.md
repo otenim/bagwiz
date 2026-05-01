@@ -145,19 +145,19 @@ bagwiz traj dump [OPTIONS] <input> <output> <topic>
 
 ### Positional arguments
 
-| Name     | Description                                                                                                   |
-| -------- | ------------------------------------------------------------------------------------------------------------- |
-| `input`  | ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`).                                                     |
-| `output` | Output file path. Will be truncated if it already exists.                                                     |
-| `topic`  | Topic whose type selects processing (`TFMessage`, `PoseStamped`, `PoseWithCovarianceStamped`, or `Odometry`). |
+| Name     | Description                                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `input`  | ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`).                                                                             |
+| `output` | Output file path. Will be truncated if it already exists. With no `-f/--format`, the extension must be recognized (currently `.tum`). |
+| `topic`  | Topic whose type selects processing (`TFMessage`, `PoseStamped`, `PoseWithCovarianceStamped`, or `Odometry`).                         |
 
 ### Options
 
-| Flag                 | Default      | Description                                                                                                                                                     |
-| -------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--from <FRAME>`     | _(optional)_ | TF topics: required reference frame. Pose and Odometry topics: optional; omit to keep each sample in `header.frame_id`, or set to remap into this frame via TF. |
-| `--to <FRAME>`       | _(optional)_ | TF topics: required tracked frame. Odometry: optional `child_frame_id` filter. PoseStamped / PoseWithCovarianceStamped: ignored (warning if set).               |
-| `-f`, `--format <F>` | `tum`        | Output format. Currently only `tum` is supported.                                                                                                               |
+| Flag                 | Default      | Description                                                                                                                                                                |
+| -------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--from <FRAME>`     | _(optional)_ | TF topics: required reference frame. Pose and Odometry topics: optional; omit to keep each sample in `header.frame_id`, or set to remap into this frame via TF.            |
+| `--to <FRAME>`       | _(optional)_ | TF topics: required tracked frame. Odometry: optional `child_frame_id` filter. PoseStamped / PoseWithCovarianceStamped: ignored (warning if set).                          |
+| `-f`, `--format <F>` | _(empty)_    | Output format id (`tum`). When omitted, the format is inferred from the output path extension (for example `*.tum` → `tum`). If you pass `-f`, it overrides the extension. |
 
 ### TF topic: how sampling works
 
@@ -212,18 +212,19 @@ bagwiz traj dump capture.mcap odom.tum /odom --from map --to base_link
 
 ### Errors
 
-| Situation                                                                        | Result                                                           |
-| -------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| TF topic: `--from` or `--to` missing or empty                                    | Error.                                                           |
-| `--from` and `--to` equal (TF topics)                                            | Error.                                                           |
-| Pose / Odometry topic: `--from` set but empty                                    | Error.                                                           |
-| Pose topic: any message with empty `header.frame_id`                             | Error.                                                           |
-| Odometry topic: any message with empty `header.frame_id` or `child_frame_id`     | Error.                                                           |
-| Topic absent / unsupported type / static TF topic given as `<topic>` for TF path | Error.                                                           |
-| TF path: no path between `--from` and `--to`                                     | Error.                                                           |
-| TF path: path exists but no chain edge on `<topic>`                              | Error.                                                           |
-| Pose remap: no TF topics in bag                                                  | Error.                                                           |
-| Some lookups fail                                                                | Skipped and counted; remaining poses are written if any succeed. |
+| Situation                                                                             | Result                                                           |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| TF topic: `--from` or `--to` missing or empty                                         | Error.                                                           |
+| `--from` and `--to` equal (TF topics)                                                 | Error.                                                           |
+| Pose / Odometry topic: `--from` set but empty                                         | Error.                                                           |
+| Pose topic: any message with empty `header.frame_id`                                  | Error.                                                           |
+| Odometry topic: any message with empty `header.frame_id` or `child_frame_id`          | Error.                                                           |
+| No `-f` / `--format` and output path has no extension, or extension is not recognized | Error (use `*.tum` or pass `-f tum`).                            |
+| Topic absent / unsupported type / static TF topic given as `<topic>` for TF path      | Error.                                                           |
+| TF path: no path between `--from` and `--to`                                          | Error.                                                           |
+| TF path: path exists but no chain edge on `<topic>`                                   | Error.                                                           |
+| Pose remap: no TF topics in bag                                                       | Error.                                                           |
+| Some lookups fail                                                                     | Skipped and counted; remaining poses are written if any succeed. |
 
 ### Exit status
 
