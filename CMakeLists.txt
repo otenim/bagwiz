@@ -65,7 +65,13 @@ set(FMT_TEST OFF CACHE BOOL "" FORCE)
 set(FMT_DOC OFF CACHE BOOL "" FORCE)
 set(FMT_INSTALL OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(cli11 fmt)
+FetchContent_Declare(
+  rang
+  GIT_REPOSITORY https://github.com/agauniyal/rang.git
+  GIT_TAG v3.2
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(cli11 fmt rang)
 
 # ---------------------------------------------------------------------------
 # bagwiz_core: shared library with logging, command registry, and IO
@@ -140,7 +146,7 @@ add_executable(bagwiz
   src/commands/traj.cpp
   src/commands/tf.cpp
 )
-target_link_libraries(bagwiz PRIVATE bagwiz_core CLI11::CLI11 fmt::fmt)
+target_link_libraries(bagwiz PRIVATE bagwiz_core CLI11::CLI11 fmt::fmt rang)
 
 install(TARGETS bagwiz RUNTIME DESTINATION bin)
 install(TARGETS bagwiz_core
