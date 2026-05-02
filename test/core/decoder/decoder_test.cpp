@@ -129,8 +129,8 @@ TEST(MessageView, NestedAndSequence)
   t2.fields.emplace_back("frame_id", cdr::Value{std::string{"odom"}});
 
   cdr::Sequence seq;
-  seq.elements.emplace_back(cdr::Value{std::move(t1)});
-  seq.elements.emplace_back(cdr::Value{std::move(t2)});
+  seq.elements.emplace_back(std::move(t1));
+  seq.elements.emplace_back(std::move(t2));
 
   cdr::Object root;
   root.fields.emplace_back("stamp", cdr::Value{std::move(stamp)});

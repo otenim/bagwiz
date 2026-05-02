@@ -128,9 +128,9 @@ Value decode_array_field(
       const bool signed_kind = kind == ms::PrimitiveKind::Int8 || kind == ms::PrimitiveKind::Char;
       for (std::size_t i = 0; i < length; ++i) {
         if (signed_kind) {
-          seq.elements.emplace_back(Value{static_cast<std::int8_t>(bytes[i])});
+          seq.elements.emplace_back(static_cast<std::int8_t>(bytes[i]));
         } else {
-          seq.elements.emplace_back(Value{static_cast<std::uint8_t>(bytes[i])});
+          seq.elements.emplace_back(static_cast<std::uint8_t>(bytes[i]));
         }
       }
       return Value{std::move(seq)};

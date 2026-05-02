@@ -104,9 +104,9 @@ TEST(MessageFormatter, RendersNestedObject)
 TEST(MessageFormatter, RendersPrimitiveArrayInline)
 {
   cdr::Sequence seq;
-  seq.elements.emplace_back(cdr::Value{std::uint8_t{1}});
-  seq.elements.emplace_back(cdr::Value{std::uint8_t{2}});
-  seq.elements.emplace_back(cdr::Value{std::uint8_t{3}});
+  seq.elements.emplace_back(std::uint8_t{1});
+  seq.elements.emplace_back(std::uint8_t{2});
+  seq.elements.emplace_back(std::uint8_t{3});
 
   cdr::Object root;
   root.fields.emplace_back("data", cdr::Value{std::move(seq)});
@@ -120,7 +120,7 @@ TEST(MessageFormatter, SummarizesLargePrimitiveArray)
 {
   cdr::Sequence seq;
   for (int i = 0; i < 100; ++i) {
-    seq.elements.emplace_back(cdr::Value{std::uint8_t{0}});
+    seq.elements.emplace_back(std::uint8_t{0});
   }
   cdr::Object root;
   root.fields.emplace_back("data", cdr::Value{std::move(seq)});
@@ -152,8 +152,8 @@ TEST(MessageFormatter, RendersSequenceOfNestedMessages)
   t2.fields.emplace_back("x", cdr::Value{2.0});
 
   cdr::Sequence seq;
-  seq.elements.emplace_back(cdr::Value{std::move(t1)});
-  seq.elements.emplace_back(cdr::Value{std::move(t2)});
+  seq.elements.emplace_back(std::move(t1));
+  seq.elements.emplace_back(std::move(t2));
 
   cdr::Object root;
   root.fields.emplace_back("transforms", cdr::Value{std::move(seq)});

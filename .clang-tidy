@@ -204,10 +204,10 @@ WarningsAsErrors: "
   readability-misplaced-array-index,
   readability-string-compare"
 
-HeaderFilterRegex: ^(?!\/usr)(?!\/opt)
+HeaderFilterRegex: include/bagwiz/
 
 ExtraArgs:
-  - -std=c++17
+  - -std=c++20
 
 FormatStyle: none
 
@@ -447,11 +447,19 @@ CheckOptions:
   - key: readability-identifier-naming.VariableCase
     value: lower_case
   - key: readability-identifier-naming.GlobalConstantCase
-    value: lower_case
+    value: CamelCase
   - key: readability-identifier-naming.GlobalConstantPrefix
-    value: g_
+    value: k
   - key: readability-identifier-naming.ConstexprVariableCase
-    value: lower_case
+    value: CamelCase
+  - key: readability-identifier-naming.ConstexprVariablePrefix
+    value: k
+  - key: readability-identifier-naming.StaticConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.StaticConstantPrefix
+    value: k
+  - key: readability-identifier-naming.LocalConstantIgnoredRegexp
+    value: .*
   - key: readability-inconsistent-declaration-parameter-name.IgnoreMacros
     value: "1"
   - key: readability-inconsistent-declaration-parameter-name.Strict

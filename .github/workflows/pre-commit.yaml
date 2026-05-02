@@ -9,23 +9,39 @@ on:
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
+    container:
+      image: ros:humble-ros-base
     steps:
+      - name: Install system tooling
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git gnupg python3-pip
+          # Node.js 20 is needed for prettier / markdownlint-cli hooks.
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y --no-install-recommends nodejs
+          pip install pre-commit
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Install rosdep dependencies
+        shell: bash
+        run: |
+          rosdep update --rosdistro humble
+          rosdep install --from-paths . --ignore-src -y --rosdistro humble
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+      - name: Build (generates compile_commands.json for clang-tidy)
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          ./build.sh --build-type release
 
       - name: Run pre-commit
-        uses: pre-commit/action@v3.0.1
-        with:
-          extra_args: --all-files --show-diff-on-failure
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          pre-commit run --all-files --show-diff-on-failure
