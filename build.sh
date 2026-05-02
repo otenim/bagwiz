@@ -127,25 +127,12 @@ fi
 echo "[build.sh] CMAKE_BUILD_TYPE=${cmake_build_type}"
 echo "[build.sh] parallel workers=${parallel_workers}"
 
-# Discover bundled message packages under dependencies/ so they are built
-# alongside bagwiz. The directory is populated by setup.sh via vcs
-# import; if it is missing or empty, only bagwiz and its standard deps
-# are built.
-deps_pkgs=()
-if [[ -d "${SCRIPT_DIR}/dependencies" ]]; then
-    while IFS= read -r pkg; do
-        [[ -n ${pkg} ]] && deps_pkgs+=("${pkg}")
-    done < <(colcon list --names-only --base-paths "${SCRIPT_DIR}/dependencies" 2>/dev/null || true)
-fi
-
 # bagwiz keeps its package.xml at the workspace root rather than under
-# src/. colcon stops recursing once it identifies a package, so a default
-# `--base-paths .` only finds bagwiz and ignores anything under
-# dependencies/. Pass the dependency tree as a separate base path so its
-# packages get discovered and become eligible for --packages-up-to.
+# src/. colcon stops recursing once it identifies a package, so
+# --base-paths is limited to this directory.
 colcon build \
     --symlink-install \
     --parallel-workers "${parallel_workers}" \
-    --base-paths "${SCRIPT_DIR}" "${SCRIPT_DIR}/dependencies" \
-    --packages-up-to bagwiz ${deps_pkgs[@]+"${deps_pkgs[@]}"} \
+    --base-paths "${SCRIPT_DIR}" \
+    --packages-up-to bagwiz \
     --cmake-args "-DCMAKE_BUILD_TYPE=${cmake_build_type}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON

@@ -1,3 +1,6 @@
+# Optional local workspace (formerly populated by vcs import); not tracked
+dependencies/
+
 # ROS2 build artifacts
 build/
 install/

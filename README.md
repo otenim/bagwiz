@@ -10,9 +10,8 @@ All of this happens without spinning up a ROS graph.
 ## Installation
 
 You need ROS 2 installed (Ubuntu packages under `/opt/ros/<distro>` are
-typical). Install [vcstool](https://github.com/dirk-thomas/vcstool) and
-[rosdep](https://docs.ros.org/en/independent/api/rosdep/html/) if you do not
-have them yet (`sudo apt install python3-vcstool python3-rosdep`). Run
+typical). Install [rosdep](https://docs.ros.org/en/independent/api/rosdep/html/)
+if you do not have it yet (`sudo apt install python3-rosdep`). Run
 `sudo rosdep init && rosdep update` once if rosdep has never been set up on
 the machine.
 
@@ -24,11 +23,16 @@ From the repository root:
    source /opt/ros/humble/setup.bash
    ```
 
-2. Prepare the workspace:
+2. Install build dependencies declared in `package.xml` (run from the repo root):
 
    ```bash
    ./setup.sh
    ```
+
+   Optional message packages (e.g. for bags that use types beyond the
+   standard stack) are not vendored in this repository: install them with
+   `apt` or build them in a separate workspace and `source` that install
+   space so they appear on `AMENT_PREFIX_PATH` when you run bagwiz.
 
 3. Build — again with ROS sourced (repeat step 1 if you opened a new terminal):
 
