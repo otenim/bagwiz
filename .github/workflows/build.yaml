@@ -34,7 +34,7 @@ jobs:
           source /opt/ros/${{ matrix.distro }}/setup.bash
           colcon build \
             --event-handlers console_direct+ \
-            --cmake-args -DCMAKE_BUILD_TYPE=Release
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
       - name: colcon test
         shell: bash
@@ -43,3 +43,23 @@ jobs:
           source install/setup.bash
           colcon test --event-handlers console_direct+
           colcon test-result --verbose
+
+      - name: Install cppcheck and pre-commit (jazzy)
+        if: matrix.distro == 'jazzy'
+        shell: bash
+        run: |
+          apt-get install -y --no-install-recommends cppcheck python3-pip git
+          pip install --break-system-packages pre-commit
+
+      - name: Run cppcheck and clang-tidy via pre-commit (jazzy)
+        if: matrix.distro == 'jazzy'
+        shell: bash
+        working-directory: src/bagwiz
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          # The pre-commit hook expects build/compile_commands.json relative to
+          # the repo root. colcon places it at the workspace root, so expose it
+          # under the package's expected path via a symlink.
+          ln -s "$GITHUB_WORKSPACE/build" build
+          pre-commit run cppcheck --all-files --show-diff-on-failure
+          pre-commit run clang-tidy --all-files --show-diff-on-failure

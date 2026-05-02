@@ -61,7 +61,7 @@ bool split_ros2_type(std::string_view full, std::string & package, std::string &
       start = i + 1;
     }
   }
-  parts.emplace_back(std::string(full.substr(start)));
+  parts.emplace_back(full.substr(start));
   if (parts.size() == 3 && parts[1] == "msg") {
     package = parts[0];
     type = parts[2];

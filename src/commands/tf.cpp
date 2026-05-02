@@ -535,7 +535,7 @@ std::string format_merged_union_forest(
   if (roots.empty()) {
     std::vector<std::pair<std::string, std::string>> sorted_edges(edges.begin(), edges.end());
     std::vector<std::string> err_lines;
-    err_lines.push_back("# Internal error: no tree root after validation. Edges:");
+    err_lines.emplace_back("# Internal error: no tree root after validation. Edges:");
     for (const auto & pr : sorted_edges) {
       err_lines.push_back(fmt::format("  {} -> {}", pr.first, pr.second));
     }

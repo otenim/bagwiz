@@ -104,6 +104,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: clang-tidy
+        name: clang-tidy
+        description: Run clang-tidy on this package's C++ sources.
+        entry: clang-tidy
+        language: python
+        additional_dependencies: [clang-tidy==21.1.6]
+        args: [-p=build, --quiet]
+        files: ^(src|test)/.*\.(c|cc|cpp|cxx)$
       - id: prettier-svg
         name: prettier svg
         description: Apply Prettier with plugin-xml to svg.

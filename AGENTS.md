@@ -53,6 +53,12 @@ Guidelines for AI agents contributing to this repository.
 - Do not bypass pre-commit hooks (e.g. `--no-verify`). When a hook
   reports an error, fix the underlying issue and re-commit — never
   skip or disable the hook to push work through.
+- Before committing, fix every pre-commit error that is not a false
+  positive. If an error is a genuine false positive, suppress it
+  narrowly at the offending site (e.g. an inline `// NOLINT(...)`,
+  `// cppcheck-suppress`, or equivalent hook-specific directive
+  scoped to the smallest unit possible) rather than disabling the
+  check globally.
 
 ## 5. Local builds
 

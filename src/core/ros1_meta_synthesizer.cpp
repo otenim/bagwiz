@@ -96,19 +96,17 @@ public:
     update(tail.data(), pad_len + 8U);
 
     std::array<std::uint8_t, 16> digest{};
-    for (int i = 0; i < 4; ++i) {
-      for (int j = 0; j < 4; ++j) {
-        digest[static_cast<std::size_t>(i * 4 + j)] =
-          static_cast<std::uint8_t>((state_[static_cast<std::size_t>(i)] >> (j * 8)) & 0xFFU);
+    for (std::size_t i = 0; i < 4; ++i) {
+      for (std::size_t j = 0; j < 4; ++j) {
+        digest[(i * 4) + j] = static_cast<std::uint8_t>((state_[i] >> (j * 8U)) & 0xFFU);
       }
     }
 
     static constexpr char kHex[] = "0123456789abcdef";
     std::string out(32, '0');
-    for (int i = 0; i < 16; ++i) {
-      out[static_cast<std::size_t>(2 * i + 0)] =
-        kHex[(digest[static_cast<std::size_t>(i)] >> 4) & 0x0FU];
-      out[static_cast<std::size_t>(2 * i + 1)] = kHex[digest[static_cast<std::size_t>(i)] & 0x0FU];
+    for (std::size_t i = 0; i < 16; ++i) {
+      out[2 * i] = kHex[(digest[i] >> 4U) & 0x0FU];
+      out[(2 * i) + 1] = kHex[digest[i] & 0x0FU];
     }
     return out;
   }
