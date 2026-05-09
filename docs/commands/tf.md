@@ -113,9 +113,9 @@ bagwiz tf tree capture.mcap
 
 ## `bagwiz tf walk`
 
-Step one-at-a-time through the TF chain between `<from>` and `<to>` at
-every dynamic `/tf` update in the bag. Each step renders the lookup result
-at that exact stamp, so you can scrub a recorded TF tree the same way
+Advance one-at-a-time through the TF chain between `<from>` and `<to>` at
+every dynamic `/tf` update in the bag. Each timeline index renders the lookup
+result at that exact stamp, so you can scrub a recorded TF tree the same way
 you would scrub a YAML message stream with `bagwiz walk`.
 
 ### Usage
@@ -157,15 +157,20 @@ bagwiz tf walk [OPTIONS] <input> <from> <to>
   - If the chain is never queryable for any timeline stamp, the command
     exits non-zero.
 - Bags with **no** dynamic `/tf` updates (only static TF topics, or no dynamic
-  timestamps) still run a walk: bagwiz inserts a single timeline step at `t=0`.
-  The UI shows `[STATIC TF] (no dynamic /tf in bag)` instead of step timestamps.
+  timestamps) still run a walk: bagwiz inserts a single timeline slot at `t=0`.
+  The UI shows `[0 / 0]` plus `[STATIC TF] (no dynamic /tf in bag)` instead of
+  dynamic timestamps (same `[index / last]` convention as `bagwiz walk`).
   If `<from>`→`<to>` requires a dynamic segment that never appears in the bag,
   lookup fails with an error (same idea as a broken chain).
 
-### Header per step
+### Header
+
+The bracket line matches `bagwiz walk`: `<index>` is zero-based and `<last>`
+is the highest timeline index (count of stamps minus one). Dynamic bags show
+the query timestamp on that same line after the brackets.
 
 ```text
-[STEP <i> / <N>]  YYYY-MM-DD HH:MM:SS.nnnnnnnnn UTC (<seconds>.<nanos> s)
+[<index> / <last>]  YYYY-MM-DD HH:MM:SS.nnnnnnnnn UTC (<seconds>.<nanos> s)
 TF: <from>  ->  <to>
 
 translation:
@@ -176,10 +181,10 @@ rotation (...):
   ...
 ```
 
-The body shows the lookup result at the current step. If a mid-bag gap
+The body shows the lookup result at the current index. If a mid-bag gap
 or a chain that ceases to publish before the bag ends causes a lookup to
 fail, `tf2`'s error text is shown inline (`⚠  Lookup failed at this
-step: …`) instead of crashing the walk.
+index: …`) instead of crashing the walk.
 
 ### Rotation formats
 
@@ -191,13 +196,13 @@ step: …`) instead of crashing the walk.
 
 ### Keys
 
-| Key            | Action                                     |
-| -------------- | ------------------------------------------ |
-| `→` / `Space`  | Next step (wraps from last back to first). |
-| `←` / `b`      | Previous step.                             |
-| `g`            | Jump to the first step.                    |
-| `G`            | Jump to the last step.                     |
-| `q` / `Ctrl-C` | Quit.                                      |
+| Key            | Action                                               |
+| -------------- | ---------------------------------------------------- |
+| `→` / `Space`  | Next timeline index (wraps from last back to first). |
+| `←` / `b`      | Previous timeline index.                             |
+| `g`            | Jump to the first timeline index.                    |
+| `G`            | Jump to the last timeline index.                     |
+| `q` / `Ctrl-C` | Quit.                                                |
 
 Scroll keys (`↑`/`↓`/`Home`/`End`) are accepted but ignored — the body
 fits in a normal-sized terminal.

@@ -40,20 +40,23 @@ bagwiz walk <input> <topic>
   line to write under the process current working directory using the name
   `<topic>_<index>.yaml`, where `<topic>` is the ROS topic with each `/`
   replaced by `__`, and `<index>` is the same **zero-based** message index
-  as the first number in the header line `[<index> / <total>[+]]`.
+  as the first number in the header line `[<index> / <last>[+]]` (see the
+  Header section for `<last>`).
 
 ## Header
 
 Each redraw shows a three-line header:
 
 ```text
-[<index> / <total>[+]]  <topic>  <type>
+[<index> / <last>[+]]  <topic>  <type>
 timestamp: YYYY-MM-DD HH:MM:SS.nnnnnnnnn UTC (<seconds>.<nanos>)
 size:      <bytes> bytes
 ```
 
-The trailing `+` after `<total>` means more messages remain that have not
-been loaded into the cache yet (they get pulled in on demand).
+`<last>` is the index of the last message currently loaded in the cache
+(equivalently, the count of loaded messages minus one). The trailing `+`
+after `<last>` means the bag has more messages after that index that have
+not been read into the cache yet (they get pulled in on demand).
 
 ## Keys
 

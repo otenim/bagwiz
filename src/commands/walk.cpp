@@ -285,8 +285,10 @@ public:
       fmt::print(stdout, "\x1b[2J\x1b[H");
       const auto & msg = cache[index];
       const char * total_suffix = exhausted ? "" : "+";
+      const std::size_t last_loaded_index = cache.size() - 1;
       fmt::print(
-        stdout, "[{} / {}{}]  {}  {}\n", index, cache.size(), total_suffix, topic_name, type_name);
+        stdout, "[{} / {}{}]  {}  {}\n", index, last_loaded_index, total_suffix, topic_name,
+        type_name);
       fmt::print(stdout, "timestamp: {}\n", format_timestamp(msg.timestamp_ns));
       fmt::print(stdout, "size:      {} bytes\n\n", msg.payload.size());
 
@@ -320,7 +322,7 @@ public:
       // Footer: repeated index so it stays visible on long messages, a
       // scroll indicator when applicable, the key legend, and any
       // transient status from the last action.
-      fmt::print(stdout, "\n  [{} / {}{}]  {}", index, cache.size(), total_suffix, topic_name);
+      fmt::print(stdout, "\n  [{} / {}{}]  {}", index, last_loaded_index, total_suffix, topic_name);
       if (!scroll_hint.empty()) {
         fmt::print(stdout, "    {}", scroll_hint);
       }
