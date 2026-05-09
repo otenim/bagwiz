@@ -88,7 +88,5 @@ CLAUDE.local.md
 # Tool caches (clang-tidy/clangd, etc.)
 .cache/
 
-# rosbag2 writes a `metadata.yaml` next to each bag's .db3 / .mcap; keep
-# it out of the repo. Only this specific filename is matched so project
-# config YAMLs (.pre-commit-config.yaml, workflows, ...) are unaffected.
-metadata.yaml
+# YAML files (bag dumps, local configs, metadata, etc.)
+*.yaml
