@@ -28,6 +28,7 @@ enum class KeyEvent {
   kScrollDown,  // scroll the current message's rendered body down by one line
   kScrollHead,  // jump to the top of the current message's body
   kScrollTail,  // jump to the bottom of the current message's body
+  kSaveYaml,    // save current message body as YAML (walk command)
   kQuit,        // exit the interactive loop
   kUnknown,     // unrecognized input; caller should ignore or beep
 };
@@ -38,8 +39,8 @@ enum class KeyEvent {
 // Accepted input:
 //   * single bytes: Space (next), 'b' (prev), 'g' (first), 'G' (last),
 //     'k' (scroll up), 'j' (scroll down), 'H' (scroll head), 'T' (scroll
-//     tail), 'q'/'Q' (quit), plus control chars (^C, ^D) and a lone ESC
-//     (0x1B) for quit
+//     tail), 's' (save as yaml — walk), 'q'/'Q' (quit), plus control chars
+//     (^C, ^D) and a lone ESC (0x1B) for quit
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"
 //     (Left -> prev), "ESC [ A" (Up -> scroll up), "ESC [ B" (Down ->
 //     scroll down), "ESC [ H" (Home -> scroll head), "ESC [ F" (End ->
@@ -63,6 +64,13 @@ public:
   TerminalRawMode & operator=(TerminalRawMode &&) = delete;
 
   bool active() const { return active_; }
+
+  // Temporarily restore canonical stdin so callers can use line-oriented
+  // reads (e.g. std::getline). Pair every call with resume_after_line_input()
+  // when raw mode should resume; otherwise the destructor still restores
+  // the saved (cooked) settings safely.
+  void suspend_for_line_input();
+  void resume_after_line_input();
 
 private:
   bool active_ = false;

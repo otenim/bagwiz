@@ -25,6 +25,8 @@
 #include <ctime>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <string>
@@ -93,6 +95,60 @@ std::vector<std::string_view> split_lines(const std::string & s)
   return out;
 }
 
+// ROS topic names use `/`; replace each `/` with `__` so path separators do
+// not collide with underscores that appear inside topic name segments.
+std::string topic_for_filename(std::string_view topic)
+{
+  std::string out;
+  out.reserve(topic.size() * 2);
+  for (unsigned char uc : topic) {
+    const char c = static_cast<char>(uc);
+    if (c == '/') {
+      out += "__";
+    } else {
+      out.push_back(c);
+    }
+  }
+  return out;
+}
+
+std::filesystem::path resolve_yaml_save_path(
+  const std::string & line_from_stdin, const std::filesystem::path & cwd,
+  const std::string & default_filename)
+{
+  std::string trimmed = line_from_stdin;
+  while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t')) {
+    trimmed.pop_back();
+  }
+  if (trimmed.empty()) {
+    return cwd / default_filename;
+  }
+
+  std::filesystem::path user_path(trimmed);
+  std::error_code ec;
+  if (std::filesystem::exists(user_path, ec) && std::filesystem::is_directory(user_path, ec)) {
+    return user_path / default_filename;
+  }
+  const char last = trimmed.back();
+  if (last == '/' || last == '\\') {
+    return std::filesystem::path(trimmed) / default_filename;
+  }
+  return user_path;
+}
+
+struct TerminalLineInputRestore
+{
+  core::TerminalRawMode & raw_;
+  explicit TerminalLineInputRestore(core::TerminalRawMode & raw) : raw_(raw)
+  {
+    raw_.suspend_for_line_input();
+  }
+  ~TerminalLineInputRestore() { raw_.resume_after_line_input(); }
+
+  TerminalLineInputRestore(const TerminalLineInputRestore &) = delete;
+  TerminalLineInputRestore & operator=(const TerminalLineInputRestore &) = delete;
+};
+
 }  // namespace
 
 // `bagwiz walk <input> <topic>` walks the messages of a single topic one
@@ -111,6 +167,7 @@ std::vector<std::string_view> split_lines(const std::string & s)
 //   Home / H      : jump body scroll to the head
 //   End / T       : jump body scroll to the tail
 //   g / G         : jump to first / last message (G forces a full scan)
+//   s             : save current message as yaml (prompts for output path)
 //   q / Ctrl-C    : quit
 // Messages are cached lazily so `prev` stays O(1) for anything already
 // seen and `G` is the only key that can trigger a full-remaining scan.
@@ -229,8 +286,7 @@ public:
       const auto & msg = cache[index];
       const char * total_suffix = exhausted ? "" : "+";
       fmt::print(
-        stdout, "[{} / {}{}]  {}  {}\n", index + 1, cache.size(), total_suffix, topic_name,
-        type_name);
+        stdout, "[{} / {}{}]  {}  {}\n", index, cache.size(), total_suffix, topic_name, type_name);
       fmt::print(stdout, "timestamp: {}\n", format_timestamp(msg.timestamp_ns));
       fmt::print(stdout, "size:      {} bytes\n\n", msg.payload.size());
 
@@ -264,7 +320,7 @@ public:
       // Footer: repeated index so it stays visible on long messages, a
       // scroll indicator when applicable, the key legend, and any
       // transient status from the last action.
-      fmt::print(stdout, "\n  [{} / {}{}]  {}", index + 1, cache.size(), total_suffix, topic_name);
+      fmt::print(stdout, "\n  [{} / {}{}]  {}", index, cache.size(), total_suffix, topic_name);
       if (!scroll_hint.empty()) {
         fmt::print(stdout, "    {}", scroll_hint);
       }
@@ -272,7 +328,8 @@ public:
       fmt::print(
         stdout,
         "  [→/Space] next   [←/b] prev   [↑/k] up   [↓/j] down   "
-        "[Home/H] head   [End/T] tail   [g] first   [G] last   [q] quit\n");
+        "[Home/H] head   [End/T] tail   [g] first   [G] last   [s] save as yaml   "
+        "[q] quit\n");
       if (!status.empty()) {
         fmt::print(stdout, "  {}\n", status);
       }
@@ -342,6 +399,54 @@ public:
           // current message's last possible scroll offset on the next draw.
           scroll = std::numeric_limits<std::size_t>::max();
           break;
+        case core::KeyEvent::kSaveYaml: {
+          const auto & cur = cache[index];
+          const auto decoded = decoder.decode(cur.payload);
+          const auto formatted = decoded.ok() ? core::format_message(*decoded.value)
+                                              : core::FormatResult{"", decoded.error};
+          if (!formatted.ok()) {
+            status = fmt::format("cannot save: {}", formatted.error);
+            break;
+          }
+          const std::string default_base =
+            fmt::format("{}_{}.yaml", topic_for_filename(topic_name), index);
+          std::filesystem::path cwd;
+          try {
+            cwd = std::filesystem::current_path();
+          } catch (const std::exception & e) {
+            status = fmt::format("cannot resolve working directory: {}", e.what());
+            break;
+          }
+          const std::filesystem::path default_full = cwd / default_base;
+          {
+            TerminalLineInputRestore line_scope(raw_mode);
+            fmt::print(stdout, "\n\nSave YAML path (Enter for {}):\n", default_full.string());
+            std::fflush(stdout);
+            std::string line;
+            if (!std::getline(std::cin, line)) {
+              status = "(save cancelled)";
+              break;
+            }
+            const std::filesystem::path out_path = resolve_yaml_save_path(line, cwd, default_base);
+            std::error_code mk_ec;
+            const auto parent = out_path.parent_path();
+            if (!parent.empty()) {
+              std::filesystem::create_directories(parent, mk_ec);
+            }
+            std::ofstream out(out_path, std::ios::binary);
+            if (!out) {
+              status = fmt::format("could not open {} for writing", out_path.string());
+              break;
+            }
+            out << formatted.text;
+            if (!out.good()) {
+              status = fmt::format("write failed: {}", out_path.string());
+              break;
+            }
+            status = fmt::format("saved {}", out_path.string());
+          }
+          break;
+        }
         case core::KeyEvent::kQuit:
           fmt::print(stdout, "\n");
           return 0;
