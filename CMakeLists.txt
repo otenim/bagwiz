@@ -97,6 +97,9 @@ add_library(bagwiz_core
   src/core/ros1_meta_synthesizer.cpp
   src/core/ros1_to_cdr.cpp
   src/core/schema_resolver.cpp
+  src/core/ros2_yaml_to_cdr.cpp
+  src/core/yaml_msg_stamp_sync.cpp
+  src/core/yaml_msg_validate.cpp
   src/core/terminal_input.cpp
   src/core/tf_chain.cpp
   src/core/tf_value_extract.cpp
@@ -141,6 +144,7 @@ target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIB
 add_executable(bagwiz
   src/main.cpp
   src/commands/convert.cpp
+  src/commands/join.cpp
   src/commands/ls.cpp
   src/commands/walk.cpp
   src/commands/traj.cpp
@@ -188,6 +192,12 @@ if(BUILD_TESTING)
   find_package(builtin_interfaces REQUIRED)
 
   ament_add_gtest(bagwiz_smoke_test test/smoke_test.cpp)
+  ament_add_gtest(bagwiz_yaml_msg_validate_test test/core/yaml_msg_validate_test.cpp)
+  target_link_libraries(bagwiz_yaml_msg_validate_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_yaml_msg_stamp_sync_test test/core/yaml_msg_stamp_sync_test.cpp)
+  target_link_libraries(bagwiz_yaml_msg_stamp_sync_test bagwiz_core)
+
   target_link_libraries(bagwiz_smoke_test bagwiz_core)
 
   ament_add_gtest(bagwiz_message_formatter_test test/core/message_formatter_test.cpp)
