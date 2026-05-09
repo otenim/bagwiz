@@ -164,17 +164,18 @@ private:
     }
     // Sequence of nested objects: block style with `- ` markers.
     out_ += '\n';
-    const std::string item_indent = indent + "  ";
+    const std::string list_indent = indent + "  ";
+    const std::string item_indent = indent + "    ";
     for (const auto & elem : seq.elements) {
       const auto * obj = std::get_if<cdr::Object>(&elem.v);
       if (obj == nullptr) {
         // Non-primitive, non-object element (e.g. a nested sequence).
         // ROS 2 does not allow this in the wire format but render
         // defensively.
-        out_ += indent + "  - <unsupported nested element>\n";
+        out_ += list_indent + "- <unsupported nested element>\n";
         continue;
       }
-      emit_message_list_item(*obj, indent, item_indent, depth + 1);
+      emit_message_list_item(*obj, list_indent, item_indent, depth + 1);
     }
   }
 
@@ -218,7 +219,7 @@ private:
     for (std::size_t i = 0; i < obj.fields.size(); ++i) {
       const auto & entry = obj.fields[i];
       out_ += (i == 0) ? list_indent : item_indent;
-      out_ += (i == 0) ? "- " : "  ";
+      out_ += (i == 0) ? "- " : "";
       out_ += entry.first;
       out_ += ':';
       emit_list_item_child_value(entry.second, item_indent, depth);
@@ -230,7 +231,7 @@ private:
   {
     if (const auto * obj = std::get_if<cdr::Object>(&value.v)) {
       out_ += '\n';
-      emit_object(*obj, item_indent + "    ", depth + 1);
+      emit_object(*obj, item_indent + "  ", depth + 1);
       return;
     }
     if (const auto * seq = std::get_if<cdr::Sequence>(&value.v)) {

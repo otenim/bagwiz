@@ -11,6 +11,7 @@
 #include "bagwiz/core/cdr_walker/value.hpp"
 
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include <cstdint>
 #include <string>
@@ -166,10 +167,38 @@ TEST(MessageFormatter, RendersSequenceOfNestedMessages)
   EXPECT_EQ(
     result.text,
     "transforms:\n"
-    "- frame_id: 'map'\n"
+    "  - frame_id: 'map'\n"
     "    x: 1\n"
-    "- frame_id: 'odom'\n"
+    "  - frame_id: 'odom'\n"
     "    x: 2\n");
+}
+
+TEST(MessageFormatter, SequenceOfNestedMessagesIsYamlParsable)
+{
+  cdr::Object stamp;
+  stamp.fields.emplace_back("sec", cdr::Value{std::int32_t{1}});
+  stamp.fields.emplace_back("nanosec", cdr::Value{std::uint32_t{2}});
+
+  cdr::Object header;
+  header.fields.emplace_back("stamp", cdr::Value{std::move(stamp)});
+  header.fields.emplace_back("frame_id", cdr::Value{std::string{"base_link"}});
+
+  cdr::Object transform;
+  transform.fields.emplace_back("header", cdr::Value{std::move(header)});
+  transform.fields.emplace_back("child_frame_id", cdr::Value{std::string{"camera_link"}});
+
+  cdr::Sequence transforms;
+  transforms.elements.emplace_back(std::move(transform));
+
+  cdr::Object root;
+  root.fields.emplace_back("transforms", cdr::Value{std::move(transforms)});
+
+  const auto result = bw::format_message(cdr::Value{root});
+  ASSERT_TRUE(result.ok()) << result.error;
+  YAML::Node parsed;
+  EXPECT_NO_THROW(parsed = YAML::Load(result.text));
+  ASSERT_TRUE(parsed["transforms"].IsSequence());
+  ASSERT_EQ(parsed["transforms"].size(), 1U);
 }
 
 TEST(MessageFormatter, EscapesProblematicStringChars)
