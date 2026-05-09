@@ -874,11 +874,13 @@ private:
     auto render = [&]() {
       fmt::print(stdout, "\x1b[2J\x1b[H");
       const std::int64_t ts = timeline[index];
+      const std::size_t last_timeline_index = timeline.size() - 1;
       if (static_only) {
+        // Align with `bagwiz walk`: `[index / last]` is zero-based; static bags use one slot.
+        fmt::print(stdout, "[{} / {}]\n", index, last_timeline_index);
         fmt::print(stdout, "[STATIC TF]  (no dynamic /tf in bag)\n");
       } else {
-        fmt::print(
-          stdout, "[STEP {} / {}]  {}\n", index + 1, timeline.size(), format_timestamp(ts));
+        fmt::print(stdout, "[{} / {}]  {}\n", index, last_timeline_index, format_timestamp(ts));
       }
       fmt::print(stdout, "TF: {}  ->  {}\n", args.from_frame, args.to_frame);
 
@@ -934,10 +936,13 @@ private:
         // ceasing to publish before the bag ends. Surface tf2's
         // text directly; rare enough that we do not need
         // hand-formatted versions.
-        fmt::print(stdout, "⚠  Lookup failed at this step: {}\n", e.what());
+        fmt::print(stdout, "⚠  Lookup failed at this index: {}\n", e.what());
       }
 
-      fmt::print(stdout, "\n  [→/Space] next   [←/b] prev   [g] first   [G] last   [q] quit\n");
+      fmt::print(
+        stdout, "\n  [{} / {}]  {} -> {}\n", index, last_timeline_index, args.from_frame,
+        args.to_frame);
+      fmt::print(stdout, "  [→/Space] next   [←/b] prev   [g] first   [G] last   [q] quit\n");
       if (!status.empty()) {
         fmt::print(stdout, "  {}\n", status);
       }
@@ -962,7 +967,7 @@ private:
           if (index > 0) {
             --index;
           } else {
-            status = "(at first step)";
+            status = "(at first message)";
           }
           break;
         case core::KeyEvent::kFirst:
