@@ -61,6 +61,11 @@ TEST(ClassifyKey, QuitBindings)
   EXPECT_EQ(classify_key(std::string_view("\x04", 1)), KeyEvent::kQuit);  // Ctrl-D
 }
 
+TEST(ClassifyKey, SaveYamlBinding)
+{
+  EXPECT_EQ(classify_key("s"), KeyEvent::kSaveYaml);
+}
+
 TEST(ClassifyKey, ScrollBindings)
 {
   EXPECT_EQ(classify_key("k"), KeyEvent::kScrollUp);

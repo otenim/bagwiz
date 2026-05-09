@@ -22,6 +22,15 @@ namespace bagwiz::core
 namespace
 {
 
+termios make_raw_settings(const termios & saved)
+{
+  termios raw = saved;
+  raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO | ISIG);
+  raw.c_cc[VMIN] = 1;
+  raw.c_cc[VTIME] = 0;
+  return raw;
+}
+
 // Milliseconds to wait for a continuation byte after reading ESC. Short
 // enough that a lone ESC press feels immediate, long enough that a
 // terminal-emitted "ESC [ C" arrives as one sequence on a slow TTY.
@@ -85,6 +94,8 @@ KeyEvent classify_key(std::string_view bytes)
         return KeyEvent::kScrollHead;
       case 'T':
         return KeyEvent::kScrollTail;
+      case 's':
+        return KeyEvent::kSaveYaml;
       default:
         return KeyEvent::kUnknown;
     }
@@ -121,18 +132,32 @@ TerminalRawMode::TerminalRawMode()
   if (::tcgetattr(STDIN_FILENO, &saved_) != 0) {
     return;
   }
-  termios raw = saved_;
   // Disable canonical mode, echo, and signal generation. With ISIG off,
   // Ctrl-C arrives as byte 0x03 which classify_key() maps to kQuit; the
   // RAII restore runs on scope exit instead of the process being killed
   // mid-render.
-  raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO | ISIG);
-  raw.c_cc[VMIN] = 1;
-  raw.c_cc[VTIME] = 0;
+  const termios raw = make_raw_settings(saved_);
   if (::tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
     return;
   }
   active_ = true;
+}
+
+void TerminalRawMode::suspend_for_line_input()
+{
+  if (!active_) {
+    return;
+  }
+  ::tcsetattr(STDIN_FILENO, TCSANOW, &saved_);
+}
+
+void TerminalRawMode::resume_after_line_input()
+{
+  if (!active_) {
+    return;
+  }
+  const termios raw = make_raw_settings(saved_);
+  ::tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 }
 
 TerminalRawMode::~TerminalRawMode()

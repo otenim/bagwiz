@@ -975,7 +975,9 @@ private:
         case core::KeyEvent::kScrollDown:
         case core::KeyEvent::kScrollHead:
         case core::KeyEvent::kScrollTail:
-          // Body fits on a normal terminal; ignore scroll keys.
+        case core::KeyEvent::kSaveYaml:
+          // Body fits on a normal terminal; ignore scroll keys and walk-only
+          // save binding.
           continue;
         case core::KeyEvent::kQuit:
           fmt::print(stdout, "\n");

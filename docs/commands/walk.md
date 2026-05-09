@@ -34,6 +34,13 @@ bagwiz walk <input> <topic>
   last) can trigger a full-remaining scan.
 - Pressing `→` / `Space` past the last message wraps back to the first
   with a `(wrapped to first)` status hint.
+- Pressing `s` saves the **currently displayed** message body (the same
+  YAML string shown in the pager, not including the header lines) to a
+  file. The command prompts for an output path; press Enter with an empty
+  line to write under the process current working directory using the name
+  `<topic>_<index>.yaml`, where `<topic>` is the ROS topic with each `/`
+  replaced by `__`, and `<index>` is the same **zero-based** message index
+  as the first number in the header line `[<index> / <total>[+]]`.
 
 ## Header
 
@@ -50,17 +57,18 @@ been loaded into the cache yet (they get pulled in on demand).
 
 ## Keys
 
-| Key            | Action                                                   |
-| -------------- | -------------------------------------------------------- |
-| `→` / `Space`  | Next message (wraps from last back to first).            |
-| `←` / `b`      | Previous message.                                        |
-| `↑` / `k`      | Scroll body up one line.                                 |
-| `↓` / `j`      | Scroll body down one line.                               |
-| `Home` / `H`   | Jump body scroll to the head.                            |
-| `End` / `T`    | Jump body scroll to the tail.                            |
-| `g`            | Jump to the first message.                               |
-| `G`            | Jump to the last message (forces a full-remaining scan). |
-| `q` / `Ctrl-C` | Quit.                                                    |
+| Key            | Action                                                             |
+| -------------- | ------------------------------------------------------------------ |
+| `→` / `Space`  | Next message (wraps from last back to first).                      |
+| `←` / `b`      | Previous message.                                                  |
+| `↑` / `k`      | Scroll body up one line.                                           |
+| `↓` / `j`      | Scroll body down one line.                                         |
+| `Home` / `H`   | Jump body scroll to the head.                                      |
+| `End` / `T`    | Jump body scroll to the tail.                                      |
+| `g`            | Jump to the first message.                                         |
+| `G`            | Jump to the last message (forces a full-remaining scan).           |
+| `s`            | Save as yaml - writes the current message body (prompts for path). |
+| `q` / `Ctrl-C` | Quit.                                                              |
 
 When the body is taller than the visible window, a `lines X-Y of N`
 indicator is shown above the key legend.
