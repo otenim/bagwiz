@@ -88,5 +88,9 @@ CLAUDE.local.md
 # Tool caches (clang-tidy/clangd, etc.)
 .cache/
 
+# Generated codemaps and analysis reports
+/docs/CODEMAPS/
+/.reports/
+
 # YAML files (bag dumps, local configs, metadata, etc.)
 *.yaml
