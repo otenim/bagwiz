@@ -310,7 +310,8 @@ private:
   {
     auto * sub = app.add_subcommand(
       "dump",
-      "Dump a trajectory to TUM: TF topics require --from/--to; pose topics use optional frames "
+      "Dump a trajectory in the format specified by --format (inferred from the output file "
+      "extension when omitted): TF topics require --from/--to; pose topics use optional frames "
       "(see --help).");
     sub->add_option("input", dump_args_.input_path, "Bag path (file or directory)")
       ->required()
