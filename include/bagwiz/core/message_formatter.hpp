@@ -17,14 +17,19 @@
 namespace bagwiz::core
 {
 
-// Options controlling how format_message renders large values. Defaults
-// keep single-message output reasonable for a terminal screen: primitive
-// arrays wider than `max_inline_array` are summarized, deeper nested
-// messages beyond `max_depth` become "<truncated>".
+// Options controlling how format_message renders large values. By default,
+// primitive arrays with up to `max_inline_array` elements are rendered
+// inline as `[a, b, c]`; longer arrays are summarized as `[<N items>]` to
+// keep terminal output scannable.
+//
+// When `expand_long_arrays` is set, the same long arrays are instead
+// rendered as a YAML block sequence (one element per line, with `- `
+// markers) so every value is visible without flowing past the right edge
+// of the terminal.
 struct FormatOptions
 {
   std::size_t max_inline_array = 32;
-  std::size_t max_depth = 16;
+  bool expand_long_arrays = false;
 };
 
 // Outcome of a format_message() call. On success `text` holds the rendered

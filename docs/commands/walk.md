@@ -42,6 +42,17 @@ bagwiz walk <input> <topic>
   replaced by `__`, and `<index>` is the same **zero-based** message index
   as the first number in the header line `[<index> / <last>[+]]` (see the
   Header section for `<last>`).
+- By default, primitive arrays with more than 32 elements (e.g. the byte
+  buffer behind `sensor_msgs/Image.data` or `sensor_msgs/PointCloud2.data`)
+  are summarized as `[<N items>]` to keep the pager view scannable. Pressing
+  `a` toggles **full array expansion** for the rest of the walk session.
+  When expanded, long arrays render as a YAML block sequence (one element
+  per line under a `-` marker) so the output stays within the terminal
+  width and remains valid YAML. Short arrays (≤ 32 elements) keep their
+  inline `[a, b, c]` form either way. The toggle affects both on-screen
+  rendering and the YAML written by `s`, so saving while expanded produces
+  a full-fidelity dump of every element. Press `a` again to return to the
+  summarized view.
 
 ## Header
 
@@ -71,6 +82,7 @@ not been read into the cache yet (they get pulled in on demand).
 | `g`            | Jump to the first message.                                         |
 | `G`            | Jump to the last message (forces a full-remaining scan).           |
 | `s`            | Save as yaml - writes the current message body (prompts for path). |
+| `a`            | Toggle full expansion of long primitive arrays (default off).      |
 | `q` / `Ctrl-C` | Quit.                                                              |
 
 When the body is taller than the visible window, a `lines X-Y of N`

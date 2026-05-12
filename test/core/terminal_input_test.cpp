@@ -66,6 +66,11 @@ TEST(ClassifyKey, SaveYamlBinding)
   EXPECT_EQ(classify_key("s"), KeyEvent::kSaveYaml);
 }
 
+TEST(ClassifyKey, ToggleArrayExpandBinding)
+{
+  EXPECT_EQ(classify_key("a"), KeyEvent::kToggleArrayExpand);
+}
+
 TEST(ClassifyKey, ScrollBindings)
 {
   EXPECT_EQ(classify_key("k"), KeyEvent::kScrollUp);

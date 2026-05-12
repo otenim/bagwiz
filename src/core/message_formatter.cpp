@@ -115,22 +115,15 @@ public:
   Emitter(std::string & out, const FormatOptions & opts) : out_(out), opts_(opts) {}
 
   // Top-level entry: emit each field of the root Object at no indent.
-  void emit_object(const cdr::Object & obj, const std::string & indent, std::size_t depth)
+  void emit_object(const cdr::Object & obj, const std::string & indent)
   {
-    if (depth > opts_.max_depth) {
-      out_ += indent;
-      out_ += "<max depth reached>\n";
-      return;
-    }
     for (const auto & [name, value] : obj.fields) {
-      emit_field(name, value, indent, depth);
+      emit_field(name, value, indent);
     }
   }
 
 private:
-  void emit_field(
-    const std::string & name, const cdr::Value & value, const std::string & indent,
-    std::size_t depth)
+  void emit_field(const std::string & name, const cdr::Value & value, const std::string & indent)
   {
     out_ += indent;
     out_ += name;
@@ -138,11 +131,11 @@ private:
 
     if (const auto * obj = std::get_if<cdr::Object>(&value.v)) {
       out_ += '\n';
-      emit_object(*obj, indent + "  ", depth + 1);
+      emit_object(*obj, indent + "  ");
       return;
     }
     if (const auto * seq = std::get_if<cdr::Sequence>(&value.v)) {
-      emit_sequence(*seq, indent, depth);
+      emit_sequence(*seq, indent);
       return;
     }
     out_ += ' ';
@@ -150,7 +143,7 @@ private:
     out_ += '\n';
   }
 
-  void emit_sequence(const cdr::Sequence & seq, const std::string & indent, std::size_t depth)
+  void emit_sequence(const cdr::Sequence & seq, const std::string & indent)
   {
     if (seq.elements.empty()) {
       out_ += " []\n";
@@ -159,7 +152,7 @@ private:
     // Treat as primitive-array if first element is primitive. Sequences
     // are homogeneous in ROS 2 so checking element 0 is sufficient.
     if (is_primitive(seq.elements.front())) {
-      emit_primitive_array(seq);
+      emit_primitive_array(seq, indent);
       return;
     }
     // Sequence of nested objects: block style with `- ` markers.
@@ -175,14 +168,31 @@ private:
         out_ += list_indent + "- <unsupported nested element>\n";
         continue;
       }
-      emit_message_list_item(*obj, list_indent, item_indent, depth + 1);
+      emit_message_list_item(*obj, list_indent, item_indent);
     }
   }
 
-  void emit_primitive_array(const cdr::Sequence & seq)
+  // `indent` is the indent of the parent field's line (the column where
+  // the key was emitted). When the array is too long for inline rendering
+  // and expand_long_arrays is set, each element is emitted on its own line
+  // as a block-sequence item indented by two more spaces — matching the
+  // style used for sequences of nested messages, so downstream YAML
+  // parsers see a uniform shape.
+  void emit_primitive_array(const cdr::Sequence & seq, const std::string & indent)
   {
     const std::size_t count = seq.elements.size();
     if (count > opts_.max_inline_array) {
+      if (opts_.expand_long_arrays) {
+        out_ += '\n';
+        const std::string list_indent = indent + "  ";
+        for (const auto & elem : seq.elements) {
+          out_ += list_indent;
+          out_ += "- ";
+          out_ += primitive_to_string(elem);
+          out_ += '\n';
+        }
+        return;
+      }
       out_ += " [<";
       out_ += std::to_string(count);
       out_ += " items>]\n";
@@ -203,14 +213,8 @@ private:
   // YAML-ish style the legacy formatter emitted so reviewers can diff
   // outputs verbatim against the previous formatter output.
   void emit_message_list_item(
-    const cdr::Object & obj, const std::string & list_indent, const std::string & item_indent,
-    std::size_t depth)
+    const cdr::Object & obj, const std::string & list_indent, const std::string & item_indent)
   {
-    if (depth > opts_.max_depth) {
-      out_ += list_indent;
-      out_ += "- <max depth reached>\n";
-      return;
-    }
     if (obj.fields.empty()) {
       out_ += list_indent;
       out_ += "- {}\n";
@@ -222,16 +226,15 @@ private:
       out_ += (i == 0) ? "- " : "";
       out_ += entry.first;
       out_ += ':';
-      emit_list_item_child_value(entry.second, item_indent, depth);
+      emit_list_item_child_value(entry.second, item_indent);
     }
   }
 
-  void emit_list_item_child_value(
-    const cdr::Value & value, const std::string & item_indent, std::size_t depth)
+  void emit_list_item_child_value(const cdr::Value & value, const std::string & item_indent)
   {
     if (const auto * obj = std::get_if<cdr::Object>(&value.v)) {
       out_ += '\n';
-      emit_object(*obj, item_indent + "  ", depth + 1);
+      emit_object(*obj, item_indent + "  ");
       return;
     }
     if (const auto * seq = std::get_if<cdr::Sequence>(&value.v)) {
@@ -240,7 +243,7 @@ private:
         return;
       }
       if (is_primitive(seq->elements.front())) {
-        emit_primitive_array(*seq);
+        emit_primitive_array(*seq, item_indent);
         return;
       }
       out_ += '\n';
@@ -252,7 +255,7 @@ private:
           out_ += inner_list_indent + "- <unsupported nested element>\n";
           continue;
         }
-        emit_message_list_item(*inner_obj, inner_list_indent, inner_item_indent, depth + 1);
+        emit_message_list_item(*inner_obj, inner_list_indent, inner_item_indent);
       }
       return;
     }
@@ -276,7 +279,7 @@ FormatResult format_message(const cdr_walker::Value & root, const FormatOptions 
     return result;
   }
   Emitter emitter(result.text, options);
-  emitter.emit_object(*obj, "", 0);
+  emitter.emit_object(*obj, "");
   return result;
 }
 
