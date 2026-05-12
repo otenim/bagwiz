@@ -50,14 +50,14 @@ automatically when you build; no extra install step for those.
 `bagwiz` is a single executable that dispatches to one subcommand per
 invocation. Click through for full usage, options, and examples:
 
-| Command                                      | What it does                                                               |
-| -------------------------------------------- | -------------------------------------------------------------------------- |
-| [`bagwiz ls`](docs/commands/ls.md)           | List topics in a ROS 2 rosbag with counts and average frequencies.         |
-| [`bagwiz walk`](docs/commands/walk.md)       | Interactively walk a ROS 2 topic's messages as decoded YAML.               |
-| [`bagwiz convert`](docs/commands/convert.md) | Convert between ROS 1 and ROS 2, or repack ROS 2 between MCAP / SQLite3.   |
-| [`bagwiz join`](docs/commands/join.md)       | Copy a ROS 2 rosbag and insert one message from YAML on an existing topic. |
-| [`bagwiz traj`](docs/commands/traj.md)       | Extract a ROS 2 topic's pose trajectory (TUM format).                      |
-| [`bagwiz tf`](docs/commands/tf.md)           | Inspect TF in a ROS 2 rosbag (frame tree or interactive walk).             |
+| Command                                      | What it does                                                                                                   |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [`bagwiz ls`](docs/commands/ls.md)           | List topics in a ROS 2 rosbag with counts and average frequencies.                                             |
+| [`bagwiz walk`](docs/commands/walk.md)       | Interactively walk a ROS 2 topic's messages as decoded YAML.                                                   |
+| [`bagwiz convert`](docs/commands/convert.md) | Convert between ROS 1 and ROS 2, or repack ROS 2 between MCAP / SQLite3.                                       |
+| [`bagwiz join`](docs/commands/join.md)       | Insert one YAML-encoded message into a ROS 2 rosbag on an existing topic (in place, or into a copy with `-o`). |
+| [`bagwiz traj`](docs/commands/traj.md)       | Extract a ROS 2 topic's pose trajectory (TUM format).                                                          |
+| [`bagwiz tf`](docs/commands/tf.md)           | Inspect TF in a ROS 2 rosbag (frame tree or interactive walk).                                                 |
 
 `bagwiz <subcommand> --help` is always available and reflects the same
 options documented in the per-command pages.

@@ -15,12 +15,15 @@
 #include "bagwiz/core/schema_resolver.hpp"
 #include "bagwiz/core/yaml_msg_stamp_sync.hpp"
 #include "bagwiz/core/yaml_msg_validate.hpp"
+#include "bagwiz/io/atomic_replace.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <fmt/core.h>
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -33,6 +36,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace bagwiz::commands
@@ -95,6 +99,55 @@ std::optional<int64_t> parse_join_stamp_ns(
   return static_cast<int64_t>(sec * 1e9);
 }
 
+// Choose a sibling path next to `target` that does not yet exist, so the
+// in-place flow can stage the rewritten bag before swapping it over the
+// original. Uses pid + steady_clock nanos to avoid collisions across
+// concurrent invocations on the same input.
+std::filesystem::path make_staging_path(const std::filesystem::path & target)
+{
+  std::filesystem::path parent = target.parent_path();
+  if (parent.empty()) {
+    parent = std::filesystem::current_path();
+  }
+  const auto stem = target.filename().string();
+  const auto pid = static_cast<int64_t>(::getpid());
+  for (int attempt = 0; attempt < 16; ++attempt) {
+    const auto ts = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count();
+    auto leaf = fmt::format(".{}.bagwiz-staged-{}-{}-{}", stem, pid, ts, attempt);
+    auto candidate = parent / leaf;
+    std::error_code ec;
+    if (!std::filesystem::exists(candidate, ec)) {
+      return candidate;
+    }
+  }
+  throw std::runtime_error(
+    "join: could not allocate a unique staging path next to " + target.string());
+}
+
+// RAII guard that removes the staged path if the in-place swap never
+// happens. Clear `path` to disarm after a successful swap.
+struct StagedCleanup
+{
+  std::filesystem::path path;
+
+  StagedCleanup() = default;
+  StagedCleanup(const StagedCleanup &) = delete;
+  StagedCleanup & operator=(const StagedCleanup &) = delete;
+  StagedCleanup(StagedCleanup &&) = delete;
+  StagedCleanup & operator=(StagedCleanup &&) = delete;
+
+  ~StagedCleanup()
+  {
+    if (path.empty()) {
+      return;
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+  }
+};
+
 }  // namespace
 
 class JoinCommand : public Command
@@ -103,7 +156,8 @@ public:
   std::string_view name() const override { return "join"; }
   std::string_view description() const override
   {
-    return "Insert a YAML-encoded message into a copy of an existing rosbag";
+    return "Insert a YAML-encoded message into an existing rosbag (in place by default, "
+           "or into a copy when -o is given)";
   }
 
   void configure(CLI::App & app) override
@@ -111,9 +165,13 @@ public:
     app.add_option("input", input_path_, "Source bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    app.add_option("output", output_path_, "Destination bag path (must not exist yet)")
-      ->required()
-      ->check([](std::string p) -> std::string {
+    app
+      .add_option(
+        "-o,--output", output_path_,
+        "Destination bag path. When given, <input> is left untouched and the modified bag is "
+        "written here (must not exist yet). When omitted, <input> is edited in place "
+        "(written to a sibling temp path, then atomically swapped over <input>).")
+      ->check([](const std::string & p) -> std::string {
         if (std::filesystem::exists(std::filesystem::path(p))) {
           return std::string("output path already exists: ") + p;
         }
@@ -238,12 +296,24 @@ public:
     wc.format = io::detect_format(input_path_);
     wc.layout = io::Layout::Auto;
 
+    const bool inplace = output_path_.empty();
+    StagedCleanup staged;
+    std::filesystem::path write_path;
+    try {
+      write_path = inplace ? make_staging_path(input_path_) : output_path_;
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", e.what());
+      return 1;
+    }
+    if (inplace) {
+      staged.path = write_path;
+    }
+
     std::unique_ptr<io::BagWriter> writer;
     try {
-      writer = io::open_write(output_path_, wc);
+      writer = io::open_write(write_path, wc);
     } catch (const std::exception & e) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "failed to create output bag %s: %s", output_path_.c_str(), e.what());
+      BAGWIZ_LOG_ERROR(kLogger, "failed to create output bag %s: %s", write_path.c_str(), e.what());
       return 1;
     }
 
@@ -312,8 +382,26 @@ public:
       BAGWIZ_LOG_ERROR(kLogger, "writer->close failed: %s", e.what());
       return 1;
     }
+    writer.reset();
+    // Release the input reader before swapping in-place: on some platforms
+    // an open handle on a path being replaced is a hazard. The reader holds
+    // no further messages we need after the write loop.
+    reader.reset();
 
-    fmt::print(stdout, "joined 1 message on '{}' -> {}\n", topic_, output_path_.string());
+    if (inplace) {
+      try {
+        io::atomic_replace(write_path, input_path_);
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "failed to swap staged bag into place at %s: %s", input_path_.c_str(), e.what());
+        return 1;
+      }
+      staged.path.clear();
+      fmt::print(
+        stdout, "joined 1 message on '{}' -> {} (in place)\n", topic_, input_path_.string());
+    } else {
+      fmt::print(stdout, "joined 1 message on '{}' -> {}\n", topic_, output_path_.string());
+    }
     return 0;
   }
 

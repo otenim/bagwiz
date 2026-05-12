@@ -1,7 +1,9 @@
 # `bagwiz join`
 
-Copy an existing ROS 2 rosbag to a new path and insert a single message,
-read from a YAML file, onto a topic that already exists in the source bag.
+Insert a single message, read from a YAML file, onto a topic that already
+exists in a ROS 2 rosbag. By default the input bag is edited **in place**;
+pass `-o <output>` to write the result to a new bag and leave the input
+untouched.
 
 The YAML is checked against that topic's message type before any bytes are
 written. Serialization uses the same introspection-backed path as other
@@ -10,23 +12,52 @@ bagwiz tooling and the active RMW implementation.
 ## Usage
 
 ```text
-bagwiz join [OPTIONS] <input> <output> <topic> <msg> <at>
+bagwiz join [OPTIONS] <input> <topic> <msg> <at>
 ```
 
 ## Positional arguments
 
 - `input`: Source rosbag: rosbag2 directory or single-file `*.mcap` / `*.db3` (must exist).
-- `output`: Destination path (must not exist yet). Storage format follows the extension / layout inferred from `input` (same rules as other bagwiz writers).
 - `topic`: Fully qualified topic name; must appear in the input bag's topic list so the message type is known.
 - `msg`: Path to a YAML mapping describing the payload (similar shape to ROS 2 `ros2 topic echo -f yaml`).
 - `at`: Receive-time selector (`head`, `tail`, or POSIX epoch seconds); see [At](#at).
 
 ## Options
 
+- `-o, --output <path>`: Destination bag path. When given, `<input>` is left
+  untouched and the modified bag is written here; the path must not exist
+  yet. When omitted, `<input>` is edited in place: bagwiz writes the
+  rewritten bag to a sibling staging path and, on success, atomically
+  swaps it over `<input>`. If the operation fails, the staging path is
+  removed and `<input>` is left unchanged.
 - `--sync-msg-stamp`: Overwrite top-level `header.stamp` in the input YAML
   so it matches resolved `<at>` before validation and serialization.
   Current scope is only top-level `header.stamp` (not nested arrays such as
   `transforms[].header.stamp`).
+
+## In-place semantics
+
+When `-o` is omitted, `<input>` is replaced atomically:
+
+1. The rewritten bag is staged at a sibling path of `<input>`
+   (e.g. `.<name>.bagwiz-staged-<pid>-<nanos>`), on the same filesystem.
+2. After the writer closes cleanly, bagwiz renames `<input>` aside,
+   renames the staging path into `<input>`'s name, and removes the
+   aside copy.
+3. If anything fails before the swap, the staging path is removed and
+   `<input>` is left untouched. If the swap itself fails partway, the
+   original `<input>` is restored.
+
+Practical implications:
+
+- Disk space: peak usage is roughly twice the size of `<input>` during
+  the operation.
+- The input and staging path must live on the same filesystem (they do
+  by construction, since bagwiz places the staging path next to
+  `<input>`).
+- Other readers that have `<input>` open at the moment of the swap will
+  continue to see the pre-swap bytes on POSIX; new opens see the new
+  bag.
 
 ## At
 
@@ -61,14 +92,17 @@ filled from the message-definition resolver where possible before writing.
 ## Examples
 
 ```bash
-# Append after natural order using the bag's last sample time.
-bagwiz join in.mcap out.mcap /chatter msg.yaml tail
+# In-place: edit the bag at in.mcap and leave the result at in.mcap.
+bagwiz join in.mcap /chatter msg.yaml tail
 
-# Fixed wall time (whole seconds).
-bagwiz join ./bag_dir ./bag_dir_copy /gps/fix odom.yaml 1700000000
+# Write a copy to out.mcap, leaving in.mcap untouched.
+bagwiz join in.mcap /chatter msg.yaml tail -o out.mcap
 
-# Fractional POSIX time.
-bagwiz join a.db3 b.db3 /tf static_tf.yaml 1700000000.5
+# In-place edit on a directory bag, using a fixed wall time.
+bagwiz join ./bag_dir /gps/fix odom.yaml 1700000000
+
+# Copy on a SQLite3 bag, using fractional POSIX time.
+bagwiz join a.db3 /tf static_tf.yaml 1700000000.5 -o b.db3
 ```
 
 ## Exit status
@@ -83,5 +117,6 @@ YAML parse/type mismatch, stamp-sync shape/type failures when
 `--sync-msg-stamp` is enabled, serialization failures, and unrecoverable
 read/write/close errors.
 
-When code `1` happens mid-copy, partial output may exist; remove the
-output path and retry.
+In-place mode is crash-safe at the swap boundary: a failure before the
+swap leaves `<input>` untouched. With `-o`, a failure mid-write may
+leave a partial bag at the output path; remove it and retry.
