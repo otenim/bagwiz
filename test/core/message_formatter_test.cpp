@@ -13,7 +13,9 @@
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -220,22 +222,62 @@ TEST(MessageFormatter, RejectsNonObjectRoot)
   EXPECT_NE(result.error.find("not an Object"), std::string::npos) << result.error;
 }
 
-TEST(MessageFormatter, RespectsMaxDepth)
+TEST(MessageFormatter, ExpandsLargeArrayAsBlockSequence)
 {
-  // Construct nested objects deeper than the limit and check the truncation
-  // marker appears.
-  cdr::Object inner3;
-  inner3.fields.emplace_back("x", cdr::Value{std::int32_t{1}});
-  cdr::Object inner2;
-  inner2.fields.emplace_back("a", cdr::Value{std::move(inner3)});
-  cdr::Object inner1;
-  inner1.fields.emplace_back("a", cdr::Value{std::move(inner2)});
+  // Walk's `[a] expand arrays` toggle sets expand_long_arrays. Long
+  // primitive arrays must render as a YAML block sequence (one element
+  // per line) instead of the `[<N items>]` summary — staying within the
+  // terminal width and producing output that PyYAML can parse verbatim.
+  cdr::Sequence seq;
+  for (int i = 0; i < 100; ++i) {
+    seq.elements.emplace_back(std::uint8_t{0});
+  }
   cdr::Object root;
-  root.fields.emplace_back("a", cdr::Value{std::move(inner1)});
+  root.fields.emplace_back("data", cdr::Value{std::move(seq)});
 
   bw::FormatOptions opts;
-  opts.max_depth = 2;
+  opts.expand_long_arrays = true;
   const auto result = bw::format_message(cdr::Value{root}, opts);
-  ASSERT_TRUE(result.ok());
-  EXPECT_NE(result.text.find("<max depth reached>"), std::string::npos) << result.text;
+  ASSERT_TRUE(result.ok()) << result.error;
+  std::string expected = "data:\n";
+  for (int i = 0; i < 100; ++i) {
+    expected += "  - 0\n";
+  }
+  EXPECT_EQ(result.text, expected);
+  EXPECT_EQ(result.text.find("items>]"), std::string::npos) << "must not be summarized";
+}
+
+TEST(MessageFormatter, ExpandsLongArrayInsideListItem)
+{
+  // Guard the indent calculation in emit_list_item_child_value: a long
+  // primitive array under a list item must align under the list item's
+  // field key, two spaces deeper than that key. Threshold is set to 2
+  // so a 3-element array trips the block-expand path without needing a
+  // large corpus.
+  cdr::Sequence data;
+  data.elements.emplace_back(std::uint8_t{1});
+  data.elements.emplace_back(std::uint8_t{2});
+  data.elements.emplace_back(std::uint8_t{3});
+
+  cdr::Object item;
+  item.fields.emplace_back("data", cdr::Value{std::move(data)});
+
+  cdr::Sequence items;
+  items.elements.emplace_back(std::move(item));
+
+  cdr::Object root;
+  root.fields.emplace_back("items", cdr::Value{std::move(items)});
+
+  bw::FormatOptions opts;
+  opts.max_inline_array = 2;
+  opts.expand_long_arrays = true;
+  const auto result = bw::format_message(cdr::Value{root}, opts);
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_EQ(
+    result.text,
+    "items:\n"
+    "  - data:\n"
+    "      - 1\n"
+    "      - 2\n"
+    "      - 3\n");
 }

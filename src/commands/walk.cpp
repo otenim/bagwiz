@@ -275,6 +275,12 @@ public:
 
     std::size_t index = 0;
     std::size_t scroll = 0;
+    // When true, format_message() is invoked with max_inline_array set to
+    // its max so every primitive array is rendered in full. Toggled at
+    // runtime via the `a` key; affects both on-screen rendering and the
+    // YAML written by `s`, so saving while expanded produces a full-fidelity
+    // dump without a separate save flag.
+    bool expand_arrays = false;
     std::string status;
     // Reserve rows for: 3-line header + blank + blank + 2 footer lines
     // (+1 status). 7 covers the worst case; min of 1 keeps tiny terminals
@@ -292,9 +298,11 @@ public:
       fmt::print(stdout, "timestamp: {}\n", format_timestamp(msg.timestamp_ns));
       fmt::print(stdout, "size:      {} bytes\n\n", msg.payload.size());
 
+      core::FormatOptions fmt_opts;
+      fmt_opts.expand_long_arrays = expand_arrays;
       const auto decoded = decoder.decode(msg.payload);
-      const auto formatted =
-        decoded.ok() ? core::format_message(*decoded.value) : core::FormatResult{"", decoded.error};
+      const auto formatted = decoded.ok() ? core::format_message(*decoded.value, fmt_opts)
+                                          : core::FormatResult{"", decoded.error};
 
       const int rows = std::max(1, terminal_rows() - kOverheadRows);
       std::string scroll_hint;
@@ -331,7 +339,7 @@ public:
         stdout,
         "  [→/Space] next   [←/b] prev   [↑/k] up   [↓/j] down   "
         "[Home/H] head   [End/T] tail   [g] first   [G] last   [s] save as yaml   "
-        "[q] quit\n");
+        "[a] expand arrays   [q] quit\n");
       if (!status.empty()) {
         fmt::print(stdout, "  {}\n", status);
       }
@@ -403,8 +411,10 @@ public:
           break;
         case core::KeyEvent::kSaveYaml: {
           const auto & cur = cache[index];
+          core::FormatOptions save_opts;
+          save_opts.expand_long_arrays = expand_arrays;
           const auto decoded = decoder.decode(cur.payload);
-          const auto formatted = decoded.ok() ? core::format_message(*decoded.value)
+          const auto formatted = decoded.ok() ? core::format_message(*decoded.value, save_opts)
                                               : core::FormatResult{"", decoded.error};
           if (!formatted.ok()) {
             status = fmt::format("cannot save: {}", formatted.error);
@@ -449,6 +459,18 @@ public:
           }
           break;
         }
+        case core::KeyEvent::kToggleArrayExpand:
+          expand_arrays = !expand_arrays;
+          // render() clamps any scroll offset that becomes out of range
+          // once the body re-flows, so leaving `scroll` alone is fine and
+          // keeps the user's vertical position when the rendered length
+          // does not change. Only show a status hint on the expanded side
+          // — summarized is the default and the inline `[<N items>]`
+          // markers themselves make the state obvious.
+          if (expand_arrays) {
+            status = "(arrays: expanded)";
+          }
+          break;
         case core::KeyEvent::kQuit:
           fmt::print(stdout, "\n");
           return 0;

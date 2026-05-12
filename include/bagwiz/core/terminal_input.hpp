@@ -20,17 +20,18 @@ namespace bagwiz::core
 // chars or escape sequences) are collapsed into these buckets by
 // classify_key().
 enum class KeyEvent {
-  kNext,        // next message
-  kPrev,        // previous message
-  kFirst,       // jump to first
-  kLast,        // jump to last (may force a full scan in the caller)
-  kScrollUp,    // scroll the current message's rendered body up by one line
-  kScrollDown,  // scroll the current message's rendered body down by one line
-  kScrollHead,  // jump to the top of the current message's body
-  kScrollTail,  // jump to the bottom of the current message's body
-  kSaveYaml,    // save current message body as YAML (walk command)
-  kQuit,        // exit the interactive loop
-  kUnknown,     // unrecognized input; caller should ignore or beep
+  kNext,               // next message
+  kPrev,               // previous message
+  kFirst,              // jump to first
+  kLast,               // jump to last (may force a full scan in the caller)
+  kScrollUp,           // scroll the current message's rendered body up by one line
+  kScrollDown,         // scroll the current message's rendered body down by one line
+  kScrollHead,         // jump to the top of the current message's body
+  kScrollTail,         // jump to the bottom of the current message's body
+  kSaveYaml,           // save current message body as YAML (walk command)
+  kToggleArrayExpand,  // toggle full-expansion of long primitive arrays (walk command)
+  kQuit,               // exit the interactive loop
+  kUnknown,            // unrecognized input; caller should ignore or beep
 };
 
 // Pure classifier for an already-captured byte sequence. Exposed so unit
@@ -39,8 +40,9 @@ enum class KeyEvent {
 // Accepted input:
 //   * single bytes: Space (next), 'b' (prev), 'g' (first), 'G' (last),
 //     'k' (scroll up), 'j' (scroll down), 'H' (scroll head), 'T' (scroll
-//     tail), 's' (save as yaml — walk), 'q'/'Q' (quit), plus control chars
-//     (^C, ^D) and a lone ESC (0x1B) for quit
+//     tail), 's' (save as yaml — walk), 'a' (toggle array expand — walk),
+//     'q'/'Q' (quit), plus control chars (^C, ^D) and a lone ESC (0x1B)
+//     for quit
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"
 //     (Left -> prev), "ESC [ A" (Up -> scroll up), "ESC [ B" (Down ->
 //     scroll down), "ESC [ H" (Home -> scroll head), "ESC [ F" (End ->

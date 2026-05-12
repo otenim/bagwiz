@@ -96,6 +96,8 @@ KeyEvent classify_key(std::string_view bytes)
         return KeyEvent::kScrollTail;
       case 's':
         return KeyEvent::kSaveYaml;
+      case 'a':
+        return KeyEvent::kToggleArrayExpand;
       default:
         return KeyEvent::kUnknown;
     }
