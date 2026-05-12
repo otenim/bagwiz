@@ -164,6 +164,42 @@ if [[ ${clean} -eq 1 ]]; then
     rm -rf "${SCRIPT_DIR}/install" "${SCRIPT_DIR}/build" "${SCRIPT_DIR}/log"
 fi
 
+# Strip stale references to this workspace's install/ tree from
+# colon-separated env vars. If a previous `source install/setup.bash`
+# left `${SCRIPT_DIR}/install/<pkg>` in AMENT_PREFIX_PATH or
+# CMAKE_PREFIX_PATH and then `-c` removed the directory, colcon emits
+# a "path doesn't exist" warning on every subsequent build. Filtering
+# those entries here resolves the warning at its source without
+# requiring the user to open a fresh shell.
+strip_workspace_install_paths() {
+    local var_name="$1"
+    local current="${!var_name:-}"
+    if [[ -z ${current} ]]; then
+        return
+    fi
+    local prefix="${SCRIPT_DIR}/install"
+    local filtered=""
+    local entry
+    local IFS=:
+    for entry in ${current}; do
+        if [[ ${entry} == "${prefix}" || ${entry} == "${prefix}/"* ]]; then
+            continue
+        fi
+        if [[ -z ${filtered} ]]; then
+            filtered="${entry}"
+        else
+            filtered="${filtered}:${entry}"
+        fi
+    done
+    if [[ ${filtered} != "${current}" ]]; then
+        export "${var_name}=${filtered}"
+    fi
+}
+
+strip_workspace_install_paths AMENT_PREFIX_PATH
+strip_workspace_install_paths CMAKE_PREFIX_PATH
+strip_workspace_install_paths COLCON_PREFIX_PATH
+
 echo "[build.sh] CMAKE_BUILD_TYPE=${cmake_build_type}"
 echo "[build.sh] CMake generator=${cmake_generator}"
 echo "[build.sh] parallel workers=${parallel_workers}"
