@@ -93,4 +93,15 @@ TEST(ClassifyKey, UnknownSequences)
   EXPECT_EQ(classify_key(std::string_view("\x1B[", 2)), KeyEvent::kUnknown);
 }
 
+TEST(ClassifyKey, ResizeIsNeverProducedByClassify)
+{
+  // kResize is synthesised by read_key_event() from a SIGWINCH flag,
+  // never returned from byte classification. Pin this so a future
+  // refactor that conflates the two paths is caught.
+  for (int b = 0; b < 256; ++b) {
+    const auto ch = static_cast<char>(b);
+    EXPECT_NE(classify_key(std::string_view(&ch, 1)), KeyEvent::kResize);
+  }
+}
+
 }  // namespace
