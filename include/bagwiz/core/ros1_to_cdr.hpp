@@ -10,6 +10,7 @@
 #define BAGWIZ__CORE__ROS1_TO_CDR_HPP_
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
