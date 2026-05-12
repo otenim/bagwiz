@@ -31,6 +31,9 @@ enum class KeyEvent {
   kSaveYaml,           // save current message body as YAML (walk command)
   kToggleArrayExpand,  // toggle full-expansion of long primitive arrays (walk command)
   kQuit,               // exit the interactive loop
+  kResize,             // terminal was resized (synthesised by read_key_event
+                       // from a SIGWINCH flag set by tui::internal; never
+                       // produced by classify_key)
   kUnknown,            // unrecognized input; caller should ignore or beep
 };
 

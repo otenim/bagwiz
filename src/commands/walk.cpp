@@ -12,23 +12,25 @@
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/message_formatter.hpp"
 #include "bagwiz/core/terminal_input.hpp"
+#include "bagwiz/core/tui/pager.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <fmt/core.h>
-#include <sys/ioctl.h>
+#include <fmt/ostream.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <ctime>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
+#include <istream>
 #include <memory>
+#include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,6 +42,12 @@ namespace
 {
 
 constexpr const char * kLogger = "bagwiz.cmd.walk";
+
+// header: 2 content lines (timestamp, size) + 1 blank separator.
+constexpr int kHeaderRows = 3;
+// footer: 1 blank separator above + (index/scroll-hint, key legend,
+// status row reserved even when empty).
+constexpr int kFooterRows = 4;
 
 // Cached owning copy of a single bag message. RawMessage's span is
 // invalidated by the next BagReader::next() call, so walk must take a
@@ -66,22 +74,12 @@ std::vector<std::byte> copy_payload(std::span<const std::byte> src)
   return std::vector<std::byte>(src.begin(), src.end());
 }
 
-// Query the terminal's current row count. Falls back to a sane default so
-// the pager still works on pipes or ioctl-hostile environments.
-int terminal_rows()
+// Split a '\n'-delimited string into owned lines so the body vector
+// can outlive the source string. A trailing '\n' does not produce an
+// empty final element; a missing trailing '\n' keeps the tail.
+std::vector<std::string> split_lines(const std::string & s)
 {
-  struct winsize ws{};
-  if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) {
-    return static_cast<int>(ws.ws_row);
-  }
-  return 24;
-}
-
-// Split a '\n'-delimited string into line views. A trailing '\n' does not
-// produce an empty final element; a missing trailing '\n' keeps the tail.
-std::vector<std::string_view> split_lines(const std::string & s)
-{
-  std::vector<std::string_view> out;
+  std::vector<std::string> out;
   std::size_t start = 0;
   for (std::size_t i = 0; i < s.size(); ++i) {
     if (s[i] == '\n') {
@@ -95,8 +93,8 @@ std::vector<std::string_view> split_lines(const std::string & s)
   return out;
 }
 
-// ROS topic names use `/`; replace each `/` with `__` so path separators do
-// not collide with underscores that appear inside topic name segments.
+// ROS topic names use `/`; replace each `/` with `__` so path separators
+// do not collide with underscores that appear inside topic name segments.
 std::string topic_for_filename(std::string_view topic)
 {
   std::string out;
@@ -136,29 +134,19 @@ std::filesystem::path resolve_yaml_save_path(
   return user_path;
 }
 
-struct TerminalLineInputRestore
-{
-  core::TerminalRawMode & raw_;
-  explicit TerminalLineInputRestore(core::TerminalRawMode & raw) : raw_(raw)
-  {
-    raw_.suspend_for_line_input();
-  }
-  ~TerminalLineInputRestore() { raw_.resume_after_line_input(); }
-
-  TerminalLineInputRestore(const TerminalLineInputRestore &) = delete;
-  TerminalLineInputRestore & operator=(const TerminalLineInputRestore &) = delete;
-};
-
 }  // namespace
 
-// `bagwiz walk <input> <topic>` walks the messages of a single topic one
-// at a time and renders each payload as YAML, mirroring what `ros2 topic
-// echo` produces. Decoding relies on the rosidl introspection typesupport
-// library for the topic's message type; if that library is not installed
-// the command exits with a pointer to the missing package.
+// `bagwiz walk <input> <topic>` walks the messages of a single topic
+// one at a time and renders each payload as YAML, mirroring what
+// `ros2 topic echo` produces. Decoding relies on the rosidl
+// introspection typesupport library (or the schema-driven path when
+// the MCAP carries a `ros2msg` schema).
 //
-// The view is a pager: long messages stay anchored at the top and the
-// body can be scrolled within the current terminal window.
+// The view is a pager driven by `bagwiz::core::tui::ScrollablePager`:
+// the header (`[i/n+] topic type`, timestamp, size) and footer
+// (index + scroll hint, key legend, status row) are pinned in place,
+// and only the body region scrolls.
+//
 // Keys:
 //   right / Space : next message (wraps from last back to first)
 //   left / b      : previous message
@@ -168,6 +156,7 @@ struct TerminalLineInputRestore
 //   End / T       : jump body scroll to the tail
 //   g / G         : jump to first / last message (G forces a full scan)
 //   s             : save current message as yaml (prompts for output path)
+//   a             : toggle full-expansion of long primitive arrays
 //   q / Ctrl-C    : quit
 // Messages are cached lazily so `prev` stays O(1) for anything already
 // seen and `G` is the only key that can trigger a full-remaining scan.
@@ -220,18 +209,9 @@ public:
     read_filter.topics.push_back(topic_);
     reader->set_filter(read_filter);
 
-    // Copy the fields we need off of the TopicInfo before iteration; its
-    // backing span lives as long as the reader but referencing it via
-    // pointer alongside owned state is easy to get wrong.
     const std::string topic_name = topic_info->name;
     const std::string type_name = topic_info->type;
 
-    // Open a decoder for this topic. The factory picks the schema-driven
-    // path when the MCAP shard carries a non-empty `ros2msg` schema for
-    // the type and falls back to the introspection typesupport otherwise.
-    // For schema-only inputs (or with `BAGWIZ_DECODER=introspection`) the
-    // user must still source a workspace that provides the package — the
-    // factory surfaces both attempts in the error string.
     auto open_decoder = core::decoder::open_decoder(*topic_info);
     if (!open_decoder.ok()) {
       BAGWIZ_LOG_ERROR(kLogger, "Failed to open decoder: %s", open_decoder.error.c_str());
@@ -267,148 +247,119 @@ public:
       return 0;
     }
 
-    core::TerminalRawMode raw_mode;
-    if (!raw_mode.active()) {
-      BAGWIZ_LOG_ERROR(kLogger, "failed to enter raw terminal mode");
-      return 1;
-    }
-
     std::size_t index = 0;
-    std::size_t scroll = 0;
-    // When true, format_message() is invoked with max_inline_array set to
-    // its max so every primitive array is rendered in full. Toggled at
-    // runtime via the `a` key; affects both on-screen rendering and the
-    // YAML written by `s`, so saving while expanded produces a full-fidelity
-    // dump without a separate save flag.
     bool expand_arrays = false;
     std::string status;
-    // Reserve rows for: 3-line header + blank + blank + 2 footer lines
-    // (+1 status). 7 covers the worst case; min of 1 keeps tiny terminals
-    // showing at least one body line rather than zero.
-    constexpr int kOverheadRows = 7;
 
-    auto render = [&]() {
-      fmt::print(stdout, "\x1b[2J\x1b[H");
+    core::tui::PagerConfig pager_cfg;
+    core::tui::ScrollablePager pager(pager_cfg);
+    pager.set_layout(kHeaderRows, kFooterRows);
+
+    // Cache the most recently rendered body so the scroll-hint in the
+    // footer can reflect the visible lines without re-running the
+    // formatter for every footer redraw.
+    std::size_t last_body_size = 0;
+    int last_body_rows = 0;
+
+    auto build_frame = [&](std::size_t scroll, int body_rows) -> core::tui::Frame {
+      core::tui::Frame frame;
+      frame.header.reserve(kHeaderRows);
+      frame.footer.reserve(kFooterRows);
+
       const auto & msg = cache[index];
       const char * total_suffix = exhausted ? "" : "+";
       const std::size_t last_loaded_index = cache.size() - 1;
-      fmt::print(
-        stdout, "[{} / {}{}]  {}  {}\n", index, last_loaded_index, total_suffix, topic_name,
-        type_name);
-      fmt::print(stdout, "timestamp: {}\n", format_timestamp(msg.timestamp_ns));
-      fmt::print(stdout, "size:      {} bytes\n\n", msg.payload.size());
+      frame.header.push_back(fmt::format("timestamp: {}", format_timestamp(msg.timestamp_ns)));
+      frame.header.push_back(fmt::format("size:      {} bytes", msg.payload.size()));
+      frame.header.emplace_back();  // blank separator
 
       core::FormatOptions fmt_opts;
       fmt_opts.expand_long_arrays = expand_arrays;
       const auto decoded = decoder.decode(msg.payload);
       const auto formatted = decoded.ok() ? core::format_message(*decoded.value, fmt_opts)
                                           : core::FormatResult{"", decoded.error};
-
-      const int rows = std::max(1, terminal_rows() - kOverheadRows);
-      std::string scroll_hint;
-
       if (formatted.ok()) {
-        const auto lines = split_lines(formatted.text);
-        const std::size_t total_body_lines = lines.size();
-        const std::size_t max_scroll = total_body_lines > static_cast<std::size_t>(rows)
-                                         ? total_body_lines - static_cast<std::size_t>(rows)
-                                         : 0;
-        if (scroll > max_scroll) {
-          scroll = max_scroll;
-        }
-        const std::size_t end = std::min(scroll + static_cast<std::size_t>(rows), total_body_lines);
-        for (std::size_t i = scroll; i < end; ++i) {
-          fmt::print(stdout, "{}\n", lines[i]);
-        }
-        if (total_body_lines > static_cast<std::size_t>(rows)) {
-          scroll_hint = fmt::format("lines {}-{} of {}", scroll + 1, end, total_body_lines);
-        }
+        frame.body = split_lines(formatted.text);
       } else {
-        fmt::print(stdout, "⚠  Could not decode this message: {}\n", formatted.error);
+        frame.body.push_back(fmt::format("⚠  Could not decode this message: {}", formatted.error));
+      }
+      last_body_size = frame.body.size();
+      last_body_rows = body_rows;
+
+      std::string scroll_hint;
+      if (last_body_size > static_cast<std::size_t>(body_rows)) {
+        const std::size_t end =
+          std::min(scroll + static_cast<std::size_t>(body_rows), last_body_size);
+        scroll_hint = fmt::format("    lines {}-{} of {}", scroll + 1, end, last_body_size);
       }
 
-      // Footer: repeated index so it stays visible on long messages, a
-      // scroll indicator when applicable, the key legend, and any
-      // transient status from the last action.
-      fmt::print(stdout, "\n  [{} / {}{}]  {}", index, last_loaded_index, total_suffix, topic_name);
-      if (!scroll_hint.empty()) {
-        fmt::print(stdout, "    {}", scroll_hint);
-      }
-      fmt::print(stdout, "\n");
-      fmt::print(
-        stdout,
+      frame.footer.emplace_back();  // blank separator
+      frame.footer.push_back(
+        fmt::format(
+          "  [{} / {}{}]  {}  {}{}", index, last_loaded_index, total_suffix, topic_name, type_name,
+          scroll_hint));
+      frame.footer.emplace_back(
         "  [→/Space] next   [←/b] prev   [↑/k] up   [↓/j] down   "
         "[Home/H] head   [End/T] tail   [g] first   [G] last   [s] save as yaml   "
-        "[a] expand arrays   [q] quit\n");
-      if (!status.empty()) {
-        fmt::print(stdout, "  {}\n", status);
-      }
-      std::fflush(stdout);
+        "[a] expand arrays   [q] quit");
+      frame.footer.push_back(status.empty() ? std::string{} : fmt::format("  {}", status));
+      return frame;
     };
 
-    status.clear();
-    render();
-
-    while (true) {
-      const core::KeyEvent ev = core::read_key_event();
+    auto on_nav = [&](core::tui::NavKey nav) -> core::tui::AppKeyResult {
       status.clear();
-      switch (ev) {
-        case core::KeyEvent::kNext:
+      switch (nav) {
+        case core::tui::NavKey::kNext:
           if (index + 1 < cache.size()) {
             ++index;
           } else if (load_next()) {
             index = cache.size() - 1;
           } else {
-            // Past the last message: wrap back to the top. cache is
-            // always non-empty here because we required >= 1 message
-            // before entering the TUI.
             index = 0;
             status = "(wrapped to first)";
           }
-          scroll = 0;
-          break;
-        case core::KeyEvent::kPrev:
+          pager.set_scroll_offset(0);
+          return core::tui::AppKeyResult::kHandled;
+        case core::tui::NavKey::kPrev:
           if (index > 0) {
             --index;
-            scroll = 0;
+            pager.set_scroll_offset(0);
           } else {
             status = "(at first message)";
           }
-          break;
-        case core::KeyEvent::kFirst:
+          return core::tui::AppKeyResult::kHandled;
+        case core::tui::NavKey::kFirst:
           index = 0;
-          scroll = 0;
-          break;
-        case core::KeyEvent::kLast: {
+          pager.set_scroll_offset(0);
+          return core::tui::AppKeyResult::kHandled;
+        case core::tui::NavKey::kLast: {
           std::size_t loaded = 0;
           while (load_next()) {
             ++loaded;
           }
           index = cache.size() - 1;
-          scroll = 0;
+          pager.set_scroll_offset(0);
           if (loaded == 0 && exhausted) {
             status = "(already at last message)";
           }
-          break;
+          return core::tui::AppKeyResult::kHandled;
         }
-        case core::KeyEvent::kScrollUp:
-          if (scroll > 0) {
-            --scroll;
+        case core::tui::NavKey::kResize:
+          return core::tui::AppKeyResult::kHandled;
+        default:
+          return core::tui::AppKeyResult::kIgnored;
+      }
+    };
+
+    auto on_app_key = [&](core::KeyEvent ev) -> core::tui::AppKeyResult {
+      status.clear();
+      switch (ev) {
+        case core::KeyEvent::kToggleArrayExpand:
+          expand_arrays = !expand_arrays;
+          if (expand_arrays) {
+            status = "(arrays: expanded)";
           }
-          break;
-        case core::KeyEvent::kScrollDown:
-          // render() clamps scroll against the message's line count, so
-          // blindly incrementing here is safe.
-          ++scroll;
-          break;
-        case core::KeyEvent::kScrollHead:
-          scroll = 0;
-          break;
-        case core::KeyEvent::kScrollTail:
-          // Saturate to the maximum value; render() clamps it down to the
-          // current message's last possible scroll offset on the next draw.
-          scroll = std::numeric_limits<std::size_t>::max();
-          break;
+          return core::tui::AppKeyResult::kHandled;
         case core::KeyEvent::kSaveYaml: {
           const auto & cur = cache[index];
           core::FormatOptions save_opts;
@@ -418,7 +369,7 @@ public:
                                               : core::FormatResult{"", decoded.error};
           if (!formatted.ok()) {
             status = fmt::format("cannot save: {}", formatted.error);
-            break;
+            return core::tui::AppKeyResult::kHandled;
           }
           const std::string default_base =
             fmt::format("{}_{}.yaml", topic_for_filename(topic_name), index);
@@ -427,58 +378,52 @@ public:
             cwd = std::filesystem::current_path();
           } catch (const std::exception & e) {
             status = fmt::format("cannot resolve working directory: {}", e.what());
-            break;
+            return core::tui::AppKeyResult::kHandled;
           }
           const std::filesystem::path default_full = cwd / default_base;
-          {
-            TerminalLineInputRestore line_scope(raw_mode);
-            fmt::print(stdout, "\n\nSave YAML path (Enter for {}):\n", default_full.string());
-            std::fflush(stdout);
+
+          std::filesystem::path out_path;
+          bool save_ok = false;
+          std::string failure_status;
+          pager.with_line_input([&](std::istream & in, std::ostream & out) {
+            out << fmt::format("Save YAML path (Enter for {}):\n", default_full.string());
+            out.flush();
             std::string line;
-            if (!std::getline(std::cin, line)) {
-              status = "(save cancelled)";
-              break;
+            if (!std::getline(in, line)) {
+              failure_status = "(save cancelled)";
+              return;
             }
-            const std::filesystem::path out_path = resolve_yaml_save_path(line, cwd, default_base);
+            out_path = resolve_yaml_save_path(line, cwd, default_base);
             std::error_code mk_ec;
             const auto parent = out_path.parent_path();
             if (!parent.empty()) {
               std::filesystem::create_directories(parent, mk_ec);
             }
-            std::ofstream out(out_path, std::ios::binary);
-            if (!out) {
-              status = fmt::format("could not open {} for writing", out_path.string());
-              break;
+            std::ofstream of(out_path, std::ios::binary);
+            if (!of) {
+              failure_status = fmt::format("could not open {} for writing", out_path.string());
+              return;
             }
-            out << formatted.text;
-            if (!out.good()) {
-              status = fmt::format("write failed: {}", out_path.string());
-              break;
+            of << formatted.text;
+            if (!of.good()) {
+              failure_status = fmt::format("write failed: {}", out_path.string());
+              return;
             }
+            save_ok = true;
+          });
+          if (save_ok) {
             status = fmt::format("saved {}", out_path.string());
+          } else {
+            status = failure_status;
           }
-          break;
+          return core::tui::AppKeyResult::kHandled;
         }
-        case core::KeyEvent::kToggleArrayExpand:
-          expand_arrays = !expand_arrays;
-          // render() clamps any scroll offset that becomes out of range
-          // once the body re-flows, so leaving `scroll` alone is fine and
-          // keeps the user's vertical position when the rendered length
-          // does not change. Only show a status hint on the expanded side
-          // — summarized is the default and the inline `[<N items>]`
-          // markers themselves make the state obvious.
-          if (expand_arrays) {
-            status = "(arrays: expanded)";
-          }
-          break;
-        case core::KeyEvent::kQuit:
-          fmt::print(stdout, "\n");
-          return 0;
-        case core::KeyEvent::kUnknown:
-          continue;  // ignore without redraw
+        default:
+          return core::tui::AppKeyResult::kIgnored;
       }
-      render();
-    }
+    };
+
+    return pager.run(build_frame, on_nav, on_app_key);
   }
 
 private:

@@ -105,6 +105,12 @@ add_library(bagwiz_core
   src/core/tf_value_extract.cpp
   src/core/topic_pattern.cpp
   src/core/trajectory.cpp
+  src/core/tui/layout.cpp
+  src/core/tui/pager.cpp
+  src/core/tui/renderer.cpp
+  src/core/tui/screen_scope.cpp
+  src/core/tui/signal_handler.cpp
+  src/core/tui/width.cpp
   src/commands/registry.cpp
   src/io/bag_factory.cpp
   src/io/mcap_reader.cpp
@@ -136,6 +142,11 @@ ament_target_dependencies(bagwiz_core PUBLIC
   tf2
 )
 target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIBS})
+# fmt is used header-only inside bagwiz_core (renderer.cpp). Linking fmt::fmt
+# would force it into the bagwiz_core export set, which fails because fmt is
+# fetched via FetchContent and not installable.
+target_compile_definitions(bagwiz_core PRIVATE FMT_HEADER_ONLY)
+target_include_directories(bagwiz_core PRIVATE $<TARGET_PROPERTY:fmt::fmt,INTERFACE_INCLUDE_DIRECTORIES>)
 
 # ---------------------------------------------------------------------------
 # bagwiz: CLI executable. Installs to bin/ so users run it directly after
@@ -216,6 +227,18 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_terminal_input_test test/core/terminal_input_test.cpp)
   target_link_libraries(bagwiz_terminal_input_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_tui_width_test test/core/tui/width_test.cpp)
+  target_link_libraries(bagwiz_tui_width_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_tui_layout_test test/core/tui/layout_test.cpp)
+  target_link_libraries(bagwiz_tui_layout_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_tui_renderer_test test/core/tui/renderer_test.cpp)
+  target_link_libraries(bagwiz_tui_renderer_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_tui_pager_test test/core/tui/pager_test.cpp)
+  target_link_libraries(bagwiz_tui_pager_test bagwiz_core)
 
   ament_add_gtest(bagwiz_topic_pattern_test test/core/topic_pattern_test.cpp)
   target_link_libraries(bagwiz_topic_pattern_test bagwiz_core)

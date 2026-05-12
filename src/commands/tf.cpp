@@ -985,6 +985,10 @@ private:
           // Body fits on a normal terminal; ignore scroll keys and walk-only
           // bindings (save, expand-arrays).
           continue;
+        case core::KeyEvent::kResize:
+          // Terminal resize is handled by the TUI SDK; tf renders inline
+          // without a pinned viewport, so a redraw is sufficient.
+          break;
         case core::KeyEvent::kQuit:
           fmt::print(stdout, "\n");
           return 0;

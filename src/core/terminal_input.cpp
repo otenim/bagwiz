@@ -8,6 +8,8 @@
 
 #include "bagwiz/core/terminal_input.hpp"
 
+#include "bagwiz/core/tui/internal/signal_handler.hpp"
+
 #include <poll.h>
 #include <termios.h>
 #include <unistd.h>
@@ -36,15 +38,32 @@ termios make_raw_settings(const termios & saved)
 // terminal-emitted "ESC [ C" arrives as one sequence on a slow TTY.
 constexpr int kEscFollowupPollMs = 50;
 
-// Blocking read of a single byte from stdin. Returns -1 on EOF or error.
+// Blocking read of a single byte from stdin. Returns -1 on EOF or
+// genuine error; returns -2 when a resize was observed via SIGWINCH so
+// the caller can surface kResize instead of treating it as quit.
+constexpr int kReadEofOrError = -1;
+constexpr int kReadResizeInterrupt = -2;
+
 int read_byte()
 {
-  char c = 0;
-  const ssize_t n = ::read(STDIN_FILENO, &c, 1);
-  if (n <= 0) {
-    return -1;
+  while (true) {
+    char c = 0;
+    const ssize_t n = ::read(STDIN_FILENO, &c, 1);
+    if (n > 0) {
+      return static_cast<unsigned char>(c);
+    }
+    if (n == 0) {
+      return kReadEofOrError;  // EOF
+    }
+    // n < 0
+    if (errno == EINTR) {
+      if (tui::internal::consume_resize_flag()) {
+        return kReadResizeInterrupt;
+      }
+      continue;  // unrelated signal: retry the read
+    }
+    return kReadEofOrError;
   }
-  return static_cast<unsigned char>(c);
 }
 
 // Non-blocking read of up to n bytes with a poll() timeout. Returns the
@@ -172,7 +191,10 @@ TerminalRawMode::~TerminalRawMode()
 KeyEvent read_key_event()
 {
   const int first = read_byte();
-  if (first < 0) {
+  if (first == kReadResizeInterrupt) {
+    return KeyEvent::kResize;
+  }
+  if (first == kReadEofOrError) {
     return KeyEvent::kQuit;
   }
 
