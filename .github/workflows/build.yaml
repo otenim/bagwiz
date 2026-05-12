@@ -38,6 +38,8 @@ jobs:
 
       - name: colcon test
         shell: bash
+        env:
+          RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
         run: |
           source /opt/ros/${{ matrix.distro }}/setup.bash
           source install/setup.bash
@@ -57,6 +59,7 @@ jobs:
         working-directory: src/bagwiz
         run: |
           source /opt/ros/${{ matrix.distro }}/setup.bash
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/src/bagwiz"
           # The pre-commit hook expects build/compile_commands.json relative to
           # the repo root. colcon places it at the workspace root, so expose it
           # under the package's expected path via a symlink.

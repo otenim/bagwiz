@@ -10,4 +10,5 @@ missingInclude
 missingIncludeSystem
 unmatchedSuppression
 unusedFunction
+unusedStructMember
 useStlAlgorithm
