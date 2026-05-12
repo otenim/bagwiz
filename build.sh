@@ -23,16 +23,29 @@ Options:
   -c, --clean              Remove install/, build/, log/ before building (clean build).
       --build-type <T>     CMake configuration: release (default), info, or debug.
                            Maps to Release, RelWithDebInfo, or Debug respectively.
+      --builder <B>        Underlying CMake generator: make (default) or ninja.
+                           If ninja is requested but not installed, the script
+                           exits with a message asking you to install it.
   -j, --parallel <N>       Number of parallel colcon workers (positive integer).
                            Default: half of the CPU count from nproc(1) (minimum 1).
   -h, --help               Show this help message and exit.
 
-With no options, performs an incremental colcon build with build type release.
+With no options, performs an incremental colcon build with build type release
+using GNU Make as the CMake generator.
 EOF
+}
+
+ensure_ninja_installed() {
+    if command -v ninja >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "[build.sh] 'ninja' is not installed. Please install it and re-run, or use --builder make." >&2
+    exit 1
 }
 
 clean=0
 build_type="release"
+builder="make"
 parallel_workers=""
 
 while [[ $# -gt 0 ]]; do
@@ -52,6 +65,19 @@ while [[ $# -gt 0 ]]; do
         ;;
     --build-type=*)
         build_type="${1#*=}"
+        shift
+        ;;
+    --builder)
+        shift
+        if [[ $# -eq 0 ]]; then
+            echo "[build.sh] --builder requires a value (make or ninja)." >&2
+            exit 1
+        fi
+        builder="${1}"
+        shift
+        ;;
+    --builder=*)
+        builder="${1#*=}"
         shift
         ;;
     -j | --parallel)
@@ -110,6 +136,20 @@ debug)
     ;;
 esac
 
+case "${builder}" in
+make)
+    cmake_generator="Unix Makefiles"
+    ;;
+ninja)
+    cmake_generator="Ninja"
+    ensure_ninja_installed
+    ;;
+*)
+    echo "[build.sh] Invalid --builder '${builder}'. Use make or ninja." >&2
+    exit 1
+    ;;
+esac
+
 if [[ -z ${parallel_workers} ]]; then
     parallel_workers="$(default_parallel_workers)"
 fi
@@ -125,6 +165,7 @@ if [[ ${clean} -eq 1 ]]; then
 fi
 
 echo "[build.sh] CMAKE_BUILD_TYPE=${cmake_build_type}"
+echo "[build.sh] CMake generator=${cmake_generator}"
 echo "[build.sh] parallel workers=${parallel_workers}"
 
 # bagwiz keeps its package.xml at the workspace root rather than under
@@ -135,4 +176,4 @@ colcon build \
     --parallel-workers "${parallel_workers}" \
     --base-paths "${SCRIPT_DIR}" \
     --packages-up-to bagwiz \
-    --cmake-args "-DCMAKE_BUILD_TYPE=${cmake_build_type}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    --cmake-args -G "${cmake_generator}" "-DCMAKE_BUILD_TYPE=${cmake_build_type}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
