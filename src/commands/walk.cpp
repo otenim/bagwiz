@@ -43,8 +43,8 @@ namespace
 
 constexpr const char * kLogger = "bagwiz.cmd.walk";
 
-// header: 3 content lines + 1 blank separator below the size row.
-constexpr int kHeaderRows = 4;
+// header: 2 content lines (timestamp, size) + 1 blank separator.
+constexpr int kHeaderRows = 3;
 // footer: 1 blank separator above + (index/scroll-hint, key legend,
 // status row reserved even when empty).
 constexpr int kFooterRows = 4;
@@ -269,9 +269,6 @@ public:
       const auto & msg = cache[index];
       const char * total_suffix = exhausted ? "" : "+";
       const std::size_t last_loaded_index = cache.size() - 1;
-      frame.header.push_back(
-        fmt::format(
-          "[{} / {}{}]  {}  {}", index, last_loaded_index, total_suffix, topic_name, type_name));
       frame.header.push_back(fmt::format("timestamp: {}", format_timestamp(msg.timestamp_ns)));
       frame.header.push_back(fmt::format("size:      {} bytes", msg.payload.size()));
       frame.header.emplace_back();  // blank separator
@@ -299,7 +296,8 @@ public:
       frame.footer.emplace_back();  // blank separator
       frame.footer.push_back(
         fmt::format(
-          "  [{} / {}{}]  {}{}", index, last_loaded_index, total_suffix, topic_name, scroll_hint));
+          "  [{} / {}{}]  {}  {}{}", index, last_loaded_index, total_suffix, topic_name, type_name,
+          scroll_hint));
       frame.footer.emplace_back(
         "  [→/Space] next   [←/b] prev   [↑/k] up   [↓/j] down   "
         "[Home/H] head   [End/T] tail   [g] first   [G] last   [s] save as yaml   "

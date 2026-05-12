@@ -62,18 +62,17 @@ bagwiz walk <input> <topic>
 The visible viewport is split into three pinned regions:
 
 ```text
-┌─────────────────────────────────────────┐
-│ [i / n+]  /topic  Type                  │ ← header (pinned, 4 rows)
-│ timestamp: ...                          │
-│ size:      N bytes                      │
-│                                         │
-│ <decoded YAML body — scrolls>           │ ← body
-│ ...                                     │
-│                                         │
-│   [i / n+]  /topic    lines X-Y of M    │ ← footer (pinned, 4 rows)
-│   [keys legend ...]                     │
-│   <status hint or blank>                │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│ timestamp: ...                                  │ ← header (pinned, 3 rows)
+│ size:      N bytes                              │
+│                                                 │
+│ <decoded YAML body — scrolls>                   │ ← body
+│ ...                                             │
+│                                                 │
+│   [i / n+]  /topic  Type    lines X-Y of M      │ ← footer (pinned, 4 rows)
+│   [keys legend ...]                             │
+│   <status hint or blank>                        │
+└─────────────────────────────────────────────────┘
 ```
 
 The status row is always reserved (blank when there is no message) so
@@ -82,12 +81,23 @@ the body never grows or shrinks underfoot when transient messages like
 
 ## Header
 
-Each redraw shows a three-line header:
+Each redraw shows a two-line header (plus a blank separator before the
+body):
 
 ```text
-[<index> / <last>[+]]  <topic>  <type>
 timestamp: YYYY-MM-DD HH:MM:SS.nnnnnnnnn UTC (<seconds>.<nanos>)
 size:      <bytes> bytes
+```
+
+## Footer
+
+The footer carries the message index, the topic, the type, the scroll
+hint, the key legend, and a status row:
+
+```text
+  [<index> / <last>[+]]  <topic>  <type>    lines <X>-<Y> of <M>
+  [→/Space] next   [←/b] prev   ...   [q] quit
+  <status hint or blank>
 ```
 
 `<last>` is the index of the last message currently loaded in the cache
