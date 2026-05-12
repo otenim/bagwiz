@@ -106,7 +106,6 @@ add_library(bagwiz_core
   src/core/topic_pattern.cpp
   src/core/trajectory.cpp
   src/commands/registry.cpp
-  src/io/atomic_replace.cpp
   src/io/bag_factory.cpp
   src/io/mcap_reader.cpp
   src/io/mcap_writer.cpp
@@ -145,7 +144,6 @@ target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIB
 add_executable(bagwiz
   src/main.cpp
   src/commands/convert.cpp
-  src/commands/join.cpp
   src/commands/ls.cpp
   src/commands/walk.cpp
   src/commands/traj.cpp
@@ -242,9 +240,6 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_detect_format_test test/io/detect_format_test.cpp)
   target_link_libraries(bagwiz_detect_format_test bagwiz_core)
-
-  ament_add_gtest(bagwiz_atomic_replace_test test/io/atomic_replace_test.cpp)
-  target_link_libraries(bagwiz_atomic_replace_test bagwiz_core)
 
   ament_add_gtest(bagwiz_ros1_to_cdr_test test/core/ros1_to_cdr_test.cpp)
   target_link_libraries(bagwiz_ros1_to_cdr_test bagwiz_core)
