@@ -177,7 +177,11 @@ public:
         }
         return {};
       });
-    app.add_option("topic", topic_, "Topic name (must appear in input bag)")->required();
+    app
+      .add_option(
+        "topic", topic_,
+        "Topic name. If absent from the input bag, pass -t <ros2_type> to create it.")
+      ->required();
     app.add_option("msg", msg_path_, "YAML file describing the inserted message")
       ->required()
       ->check(CLI::ExistingPath);
@@ -186,6 +190,11 @@ public:
         "at", stamp_arg_,
         "Receive-time at: head | tail | or POSIX epoch seconds (optionally fractional)")
       ->required();
+    app.add_option(
+      "-t,--type", type_arg_,
+      "ROS 2 message type (e.g. std_msgs/msg/String) used to create <topic> when it is not "
+      "already present in the input bag. Ignored when the topic already exists, except that a "
+      "mismatch with the bag's recorded type is reported.");
     app.add_flag(
       "--sync-msg-stamp", sync_msg_stamp_,
       "Sync top-level header.stamp in YAML to the resolved receive-time <at>");
@@ -208,10 +217,31 @@ public:
         break;
       }
     }
-    if (topic_info == nullptr) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "topic '%s' is not listed in bag %s", topic_.c_str(), input_path_.c_str());
-      return 1;
+
+    // When the topic does not exist in the input bag, create it on the fly
+    // from -t/--type. The synthetic TopicInfo carries only the bare minimum
+    // (name + type + cdr); the schema text is filled below by the same
+    // resolver chain used for existing topics, and the writer's declare_topic
+    // copies are also routed through that chain.
+    io::TopicInfo synthetic_topic;
+    const bool created_topic = (topic_info == nullptr);
+    if (created_topic) {
+      if (type_arg_.empty()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "topic '%s' is not present in bag %s; pass -t <ros2_type> to create it (e.g. "
+          "-t std_msgs/msg/String)",
+          topic_.c_str(), input_path_.c_str());
+        return 1;
+      }
+      synthetic_topic.name = topic_;
+      synthetic_topic.type = type_arg_;
+      synthetic_topic.serialization_format = "cdr";
+      topic_info = &synthetic_topic;
+    } else if (!type_arg_.empty() && type_arg_ != topic_info->type) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "ignoring -t '%s': topic '%s' already exists in bag with type '%s'",
+        type_arg_.c_str(), topic_.c_str(), topic_info->type.c_str());
     }
 
     reader->populate_schemas();
@@ -335,6 +365,26 @@ public:
       }
     }
 
+    // The synthetic topic is not in reader->topics(), so it needs its own
+    // declare. Schema text reuses the one resolved above for validation /
+    // serialization — by this point it is non-empty (an empty schema bails
+    // out earlier with a clear error).
+    if (created_topic) {
+      io::TopicInfo declared = synthetic_topic;
+      declared.schema_text = schema_text;
+      if (declared.schema_encoding.empty()) {
+        declared.schema_encoding = "ros2msg";
+      }
+      try {
+        writer->declare_topic(declared);
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "declare_topic failed for new topic '%s' (type '%s'): %s", topic_.c_str(),
+          type_arg_.c_str(), e.what());
+        return 1;
+      }
+    }
+
     const std::span<const std::byte> payload(
       reinterpret_cast<const std::byte *>(ser.cdr.data()), ser.cdr.size());
 
@@ -398,9 +448,14 @@ public:
       }
       staged.path.clear();
       fmt::print(
-        stdout, "joined 1 message on '{}' -> {} (in place)\n", topic_, input_path_.string());
+        stdout, "joined 1 message on '{}'{} -> {} (in place)\n", topic_,
+        created_topic ? fmt::format(" (new topic of type {})", type_arg_) : std::string{},
+        input_path_.string());
     } else {
-      fmt::print(stdout, "joined 1 message on '{}' -> {}\n", topic_, output_path_.string());
+      fmt::print(
+        stdout, "joined 1 message on '{}'{} -> {}\n", topic_,
+        created_topic ? fmt::format(" (new topic of type {})", type_arg_) : std::string{},
+        output_path_.string());
     }
     return 0;
   }
@@ -411,6 +466,7 @@ private:
   std::string topic_;
   std::string msg_path_;
   std::string stamp_arg_;
+  std::string type_arg_;
   bool sync_msg_stamp_ = false;
 };
 

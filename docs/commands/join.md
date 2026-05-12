@@ -18,7 +18,8 @@ bagwiz join [OPTIONS] <input> <topic> <msg> <at>
 ## Positional arguments
 
 - `input`: Source rosbag: rosbag2 directory or single-file `*.mcap` / `*.db3` (must exist).
-- `topic`: Fully qualified topic name; must appear in the input bag's topic list so the message type is known.
+- `topic`: Fully qualified topic name. If the topic does not already exist
+  in the input bag, pass `-t <ros2_type>` to create it as a new topic.
 - `msg`: Path to a YAML mapping describing the payload (similar shape to ROS 2 `ros2 topic echo -f yaml`).
 - `at`: Receive-time selector (`head`, `tail`, or POSIX epoch seconds); see [At](#at).
 
@@ -30,10 +31,39 @@ bagwiz join [OPTIONS] <input> <topic> <msg> <at>
   rewritten bag to a sibling staging path and, on success, atomically
   swaps it over `<input>`. If the operation fails, the staging path is
   removed and `<input>` is left unchanged.
+- `-t, --type <ros2_type>`: ROS 2 message type (e.g. `std_msgs/msg/String`)
+  used to **create `<topic>` when it does not already exist** in the input
+  bag. Without `-t`, a missing topic is a fatal error and bagwiz prints the
+  required flag in the message. When `<topic>` already exists in the bag,
+  `-t` is ignored except that a mismatch with the bag's recorded type is
+  reported as a warning. See [Creating a new topic](#creating-a-new-topic).
 - `--sync-msg-stamp`: Overwrite top-level `header.stamp` in the input YAML
   so it matches resolved `<at>` before validation and serialization.
   Current scope is only top-level `header.stamp` (not nested arrays such as
   `transforms[].header.stamp`).
+
+## Creating a new topic
+
+When `<topic>` is not present in the input bag, bagwiz can register it on
+the fly using the type provided via `-t/--type`. The flow is:
+
+1. The `.msg` schema for `<ros2_type>` is resolved from
+   `$AMENT_PREFIX_PATH/share/<pkg>/msg/<Type>.msg` (the same lookup used
+   for existing topics with missing schema text).
+2. The YAML payload is validated against that schema and serialized to
+   CDR.
+3. A new topic entry with name `<topic>`, type `<ros2_type>`, and
+   `serialization_format = "cdr"` is declared in the output bag. For
+   MCAP, the resolved schema text is embedded; for SQLite3, the topic
+   row is inserted with empty QoS / type-description-hash (both are
+   optional fields).
+
+Requirements:
+
+- The package providing `<ros2_type>` must be installed and visible via
+  `AMENT_PREFIX_PATH` so the schema text can be resolved.
+- If the topic already exists and `-t` is given with a different type,
+  bagwiz keeps using the bag's recorded type and emits a warning.
 
 ## In-place semantics
 
@@ -103,6 +133,12 @@ bagwiz join ./bag_dir /gps/fix odom.yaml 1700000000
 
 # Copy on a SQLite3 bag, using fractional POSIX time.
 bagwiz join a.db3 /tf static_tf.yaml 1700000000.5 -o b.db3
+
+# Create a brand-new topic in the bag (in place).
+bagwiz join in.mcap /new_topic hello.yaml head -t std_msgs/msg/String
+
+# Same idea but produce a copy at out.mcap.
+bagwiz join in.mcap /new_topic hello.yaml head -t std_msgs/msg/String -o out.mcap
 ```
 
 ## Exit status
