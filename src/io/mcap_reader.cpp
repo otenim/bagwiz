@@ -253,7 +253,7 @@ public:
     // Last-resort fallback: derive topics from the first shard. Cached
     // into topics_ so subsequent calls stay O(1).
     if (!shard_rel_paths_.empty()) {
-      auto & first = ensure_shard(0);
+      const auto & first = ensure_shard(0);
       auto shard_topics = first.topics();
       topics_.assign(shard_topics.begin(), shard_topics.end());
     }
