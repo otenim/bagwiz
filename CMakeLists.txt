@@ -34,13 +34,15 @@ find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 # tf2 supplies BufferCore + math helpers used by `tf walk` and
 # `traj dump --in/--of`. geometry_msgs is needed for the
 # header-only TransformStamped struct we hand to BufferCore::setTransform
-# from tf_value_extract; tf2_msgs is no longer linked because the tf
-# subcommand decodes TFMessage through the schema-driven path instead
-# of reinterpret_cast'ing the typesupport buffer.
+# from tf_value_extract. tf2_msgs is pulled in for `tf inject-static`,
+# which constructs a tf2_msgs::msg::TFMessage in-memory and serialises
+# it via the introspection typesupport — only the header-only struct is
+# needed at build time (the typesupport `.so` is dlopen'd at runtime).
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_msgs REQUIRED)
 
 # CLI11 and fmt are not available as rosdep keys on all supported distros, so
 # fetch them at configure time. Both are small, header-light libraries.
@@ -102,6 +104,7 @@ add_library(bagwiz_core
   src/core/yaml_msg_validate.cpp
   src/core/terminal_input.cpp
   src/core/tf_chain.cpp
+  src/core/tf_static_injector.cpp
   src/core/tf_value_extract.cpp
   src/core/topic_pattern.cpp
   src/core/trajectory.cpp
@@ -140,6 +143,7 @@ ament_target_dependencies(bagwiz_core PUBLIC
   nav_msgs
   std_msgs
   tf2
+  tf2_msgs
 )
 target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 ${CMAKE_DL_LIBS})
 # fmt is used header-only inside bagwiz_core (renderer.cpp). Linking fmt::fmt
@@ -185,6 +189,7 @@ ament_export_dependencies(
   nav_msgs
   std_msgs
   tf2
+  tf2_msgs
 )
 
 if(BUILD_TESTING)
@@ -248,6 +253,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_tf_chain_test test/core/tf_chain_test.cpp)
   target_link_libraries(bagwiz_tf_chain_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_tf_static_injector_test test/core/tf_static_injector_test.cpp)
+  target_link_libraries(bagwiz_tf_static_injector_test bagwiz_core)
 
   ament_add_gtest(bagwiz_tf_rotation_test test/core/tf_rotation_test.cpp)
   target_link_libraries(bagwiz_tf_rotation_test bagwiz_core)
