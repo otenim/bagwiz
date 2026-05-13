@@ -13,6 +13,7 @@
 #include "bagwiz/core/terminal_input.hpp"
 #include "bagwiz/core/tf_chain.hpp"
 #include "bagwiz/core/tf_rotation.hpp"
+#include "bagwiz/core/tf_static_injector.hpp"
 #include "bagwiz/core/tf_value_extract.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -37,6 +39,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -577,6 +580,7 @@ public:
     app.require_subcommand(1);
     configure_tree(app);
     configure_walk(app);
+    configure_inject_static(app);
   }
 
   int run() override
@@ -586,6 +590,8 @@ public:
         return run_tree();
       case Subcommand::kWalk:
         return run_walk();
+      case Subcommand::kInjectStatic:
+        return run_inject_static();
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
@@ -594,7 +600,7 @@ public:
   }
 
 private:
-  enum class Subcommand { kNone, kTree, kWalk };
+  enum class Subcommand { kNone, kTree, kWalk, kInjectStatic };
   Subcommand selected_ = Subcommand::kNone;
 
   enum class RotationFormat { kQuaternion, kEulerRad, kEulerDeg };
@@ -611,6 +617,14 @@ private:
     std::string to_frame;
     RotationFormat rot = RotationFormat::kQuaternion;
   } walk_args_;
+
+  struct InjectStaticArgs
+  {
+    std::filesystem::path from_path;
+    std::filesystem::path to_path;
+    std::filesystem::path output_path;
+    bool force = false;
+  } inject_static_args_;
 
   void configure_tree(CLI::App & app)
   {
@@ -651,6 +665,33 @@ private:
           },
           CLI::ignore_case));
     sub->callback([this]() { selected_ = Subcommand::kWalk; });
+  }
+
+  void configure_inject_static(CLI::App & app)
+  {
+    auto * sub = app.add_subcommand(
+      "inject-static",
+      "Copy <to> to <output> with /tf_static from <from> injected as a single message "
+      "at <to>'s start time. Source header.stamp values are rewritten to that same time.");
+    sub->add_option("from", inject_static_args_.from_path, "Source bag (provides /tf_static)")
+      ->required()
+      ->check(CLI::ExistingPath);
+    sub
+      ->add_option(
+        "to", inject_static_args_.to_path,
+        "Destination bag (copied unchanged except for static TF)")
+      ->required()
+      ->check(CLI::ExistingPath);
+    sub
+      ->add_option(
+        "-o,--output", inject_static_args_.output_path, "Output bag path (file or directory)")
+      ->required();
+    sub
+      ->add_flag(
+        "--force", inject_static_args_.force,
+        "Overwrite per-topic when <to> already has messages on a *tf_static topic.")
+      ->default_val(false);
+    sub->callback([this]() { selected_ = Subcommand::kInjectStatic; });
   }
 
   int run_tree()
@@ -997,6 +1038,232 @@ private:
       }
       render();
     }
+  }
+
+  int run_inject_static()
+  {
+    const auto & args = inject_static_args_;
+
+    // Step 1: Scan <from> and collect deduped TransformStamped[] per
+    // *tf_static topic.
+    core::CollectedTfStatic collected;
+    try {
+      collected = core::collect_tf_static_from_bag(args.from_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "Failed to collect /tf_static from %s: %s", args.from_path.c_str(), e.what());
+      return 1;
+    }
+    if (collected.by_topic.empty()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "Source bag %s has no tf2_msgs/msg/TFMessage *tf_static topic; nothing to inject.",
+        args.from_path.c_str());
+      return 1;
+    }
+
+    // Step 2: Open <to>, learn its topic list, schemas, start_ns, and
+    // per-topic counts.
+    std::unique_ptr<io::BagReader> to_reader;
+    try {
+      to_reader = io::open_read(args.to_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open %s: %s", args.to_path.c_str(), e.what());
+      return 1;
+    }
+    to_reader->populate_schemas();
+
+    io::BagReader::Stats to_stats;
+    try {
+      to_stats = to_reader->compute_stats();
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "Failed to compute stats on %s: %s", args.to_path.c_str(), e.what());
+      return 1;
+    }
+    if (to_stats.start_ns <= 0) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "Destination bag %s has non-positive start time (%" PRId64
+        " ns); cannot derive an injection timestamp.",
+        args.to_path.c_str(), static_cast<std::int64_t>(to_stats.start_ns));
+      return 1;
+    }
+    const std::int64_t start_ns = to_stats.start_ns;
+
+    // Snapshot <to>'s topic list. The reader's span is invalidated by
+    // close/reopen, and we will close this reader before opening the
+    // copy pass — so make owning copies up-front.
+    std::vector<io::TopicInfo> to_topics(to_reader->topics().begin(), to_reader->topics().end());
+    const auto to_count_for = [&](const std::string & name) -> std::int64_t {
+      auto it = to_stats.per_topic.find(name);
+      return it == to_stats.per_topic.end() ? 0 : it->second;
+    };
+    const auto find_to_topic = [&](const std::string & name) -> const io::TopicInfo * {
+      for (const auto & t : to_topics) {
+        if (t.name == name) {
+          return &t;
+        }
+      }
+      return nullptr;
+    };
+
+    // Step 3: Enforce the conflict policy *before* opening the writer.
+    // The decision per <from> static topic:
+    //   * not present in <to>            -> declare-new (schema from <from>)
+    //   * present, count == 0           -> declare-keep (schema from <to>)
+    //   * present, count > 0, !force    -> conflict; report and abort
+    //   * present, count > 0, force     -> drop-and-replace (suppress <to>'s
+    //                                       messages on this topic during copy)
+    std::unordered_map<std::string, bool> suppress_topic_on_copy;  // topic -> drop existing
+    std::unordered_map<std::string, io::TopicInfo>
+      declare_for_new;  // topic -> TopicInfo to declare (only when missing from <to>)
+    bool had_conflict = false;
+    for (const auto & [topic, _transforms] : collected.by_topic) {
+      const auto * existing = find_to_topic(topic);
+      if (existing == nullptr) {
+        // New topic in output; carry over the source's schema info.
+        declare_for_new.emplace(topic, collected.source_topic_info.at(topic));
+        continue;
+      }
+      if (existing->type != kTfMessageType) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "Topic '%s' exists in <to> with type '%s', but <from> declares it as %s; refusing to "
+          "inject incompatible payloads.",
+          topic.c_str(), existing->type.c_str(), kTfMessageType);
+        return 1;
+      }
+      const std::int64_t cnt = to_count_for(topic);
+      if (cnt == 0) {
+        continue;
+      }
+      if (!args.force) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "Destination already has %" PRId64
+          " message(s) on '%s'. Pass --force to overwrite (existing messages will be dropped).",
+          cnt, topic.c_str());
+        had_conflict = true;
+        continue;
+      }
+      suppress_topic_on_copy[topic] = true;
+      BAGWIZ_LOG_WARN(
+        kLogger, "--force: dropping %" PRId64 " message(s) on '%s' in output.", cnt, topic.c_str());
+    }
+    if (had_conflict) {
+      return 1;
+    }
+
+    // Step 4: Build the injected payload per topic. Rewrite every
+    // TransformStamped.header.stamp to <to>.start_ns so the static
+    // transforms appear consistent with the destination's timeline.
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = static_cast<std::int32_t>(start_ns / 1'000'000'000LL);
+    stamp.nanosec = static_cast<std::uint32_t>(start_ns % 1'000'000'000LL);
+
+    std::map<std::string, std::vector<std::byte>> payload_by_topic;
+    for (auto & [topic, transforms] : collected.by_topic) {
+      if (transforms.empty()) {
+        // No edges to inject; skip silently so we do not emit an empty
+        // /tf_static message on a topic with no actual content.
+        continue;
+      }
+      for (auto & t : transforms) {
+        t.header.stamp = stamp;
+      }
+      try {
+        payload_by_topic[topic] = core::serialize_tf_message(transforms);
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Failed to serialize merged TFMessage for '%s': %s", topic.c_str(), e.what());
+        return 1;
+      }
+    }
+    if (payload_by_topic.empty()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "Source bag has *tf_static topics but no valid TransformStamped entries to inject.");
+      return 1;
+    }
+
+    // Step 5: Open the writer, declare topics, stream-copy <to>, then
+    // emit the injected payloads.
+    io::CreateOptions copts;
+    copts.format = io::Format::Auto;
+    copts.layout = io::Layout::Auto;
+    copts.mcap_compression = "none";
+
+    std::unique_ptr<io::BagWriter> writer;
+    try {
+      writer = io::open_write(args.output_path, copts);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "Failed to open output %s: %s", args.output_path.c_str(), e.what());
+      return 1;
+    }
+
+    for (const auto & t : to_topics) {
+      try {
+        writer->declare_topic(t);
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(kLogger, "declare_topic failed for '%s': %s", t.name.c_str(), e.what());
+        return 1;
+      }
+    }
+    for (const auto & [topic, info] : declare_for_new) {
+      try {
+        writer->declare_topic(info);
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "declare_topic failed for new topic '%s': %s", topic.c_str(), e.what());
+        return 1;
+      }
+    }
+
+    // Stream copy. Suppress messages on topics where --force will replace
+    // the existing payload with the injected one.
+    io::RawMessage raw;
+    std::uint64_t copied = 0;
+    std::uint64_t suppressed = 0;
+    try {
+      while (to_reader->next(raw)) {
+        if (suppress_topic_on_copy.count(raw.topic->name) != 0) {
+          ++suppressed;
+          continue;
+        }
+        writer->write(raw.topic->name, raw.timestamp_ns, raw.payload);
+        ++copied;
+      }
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "Copy from <to> failed: %s", e.what());
+      return 1;
+    }
+
+    // Step 6: Inject one merged TFMessage per topic at <to>.start_ns.
+    std::uint64_t injected = 0;
+    for (const auto & [topic, payload] : payload_by_topic) {
+      try {
+        writer->write(topic, start_ns, std::span<const std::byte>(payload.data(), payload.size()));
+        ++injected;
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Failed to write injected /tf_static on '%s': %s", topic.c_str(), e.what());
+        return 1;
+      }
+    }
+
+    try {
+      writer->close();
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(kLogger, "Writer close() failed: %s", e.what());
+      return 1;
+    }
+
+    BAGWIZ_LOG_INFO(
+      kLogger,
+      "tf inject-static: copied %" PRIu64 " message(s), suppressed %" PRIu64
+      " on --force, injected %" PRIu64 " merged TFMessage(s) at start_ns=%" PRId64 ".",
+      copied, suppressed, injected, start_ns);
+    return 0;
   }
 };
 

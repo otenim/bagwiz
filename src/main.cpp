@@ -48,7 +48,9 @@ std::optional<std::vector<std::string>> build_forced_help_argv(
     top_level_names.insert(std::string(cmd->name()));
   }
   const std::unordered_map<std::string, std::unordered_set<std::string>> nested = {
-    {"convert", {"1to2", "2to1", "storage"}}, {"traj", {"dump"}}, {"tf", {"tree", "walk"}}};
+    {"convert", {"1to2", "2to1", "storage"}},
+    {"traj", {"dump"}},
+    {"tf", {"tree", "walk", "inject-static"}}};
 
   std::vector<std::string> out;
   out.reserve(4);
