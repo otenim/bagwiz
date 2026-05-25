@@ -1265,9 +1265,14 @@ private:
 
     // Step 5: Open the writer, declare topics, stream-copy <to>, then
     // emit the injected payloads.
-    io::CreateOptions copts;
-    copts.format = io::Format::Auto;
-    copts.layout = io::Layout::Auto;
+    //
+    // Storage choice: inherit <to>'s format whenever the user's -o
+    // doesn't name a single-file format via its extension. Without
+    // this, a sqlite3 <to> (single-file or directory) with a -o like
+    // "out_dir" or "out" would silently produce an mcap directory
+    // because io::open_write's Auto resolution falls through to
+    // Directory + Mcap when the extension isn't .mcap / .db3.
+    io::CreateOptions copts = io::create_options_inheriting_format(args.to_path, args.output_path);
     copts.mcap_compression = "none";
 
     std::unique_ptr<io::BagWriter> writer;
