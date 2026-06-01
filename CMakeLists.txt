@@ -19,10 +19,16 @@ find_package(mcap_vendor REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(SQLite3 REQUIRED)
-# zstd_vendor wires up CMAKE_MODULE_PATH so the inner find_package(zstd) can
-# locate the imported `zstd::zstd` target. Used by message_decompressor.cpp
-# to handle rosbag2 MESSAGE-mode (per-message zstd) bags transparently.
-find_package(zstd_vendor REQUIRED)
+# zstd is used by message_decompressor.cpp to handle rosbag2 MESSAGE-mode
+# (per-message zstd) bags transparently. The vendor/module package below wires
+# up CMAKE_MODULE_PATH so the inner find_package(zstd) can locate the imported
+# `zstd::zstd` target. Humble/Jazzy ship zstd_vendor; Lyrical and newer replaced
+# it with zstd_cmake_module (a thin module over the system libzstd). Both expose
+# the same zstd::zstd target, so try zstd_vendor first and fall back.
+find_package(zstd_vendor QUIET)
+if(NOT zstd_vendor_FOUND)
+  find_package(zstd_cmake_module REQUIRED)
+endif()
 find_package(zstd REQUIRED)
 # Introspection fallback path: rmw_deserialize plus the per-package
 # typesupport `.so`s loaded at runtime via dlopen. Still required
@@ -81,7 +87,13 @@ FetchContent_Declare(
   GIT_TAG v3.2
   GIT_SHALLOW TRUE
 )
+# rang (and older CLI11) declare cmake_minimum_required below the floor CMake
+# 4.0 still accepts, which is a hard error on newer toolchains such as the ROS 2
+# Lyrical image. Give the fetched subprojects a compatibility floor. Older CMake
+# (Humble/Jazzy) does not know this variable and simply ignores it.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_MakeAvailable(cli11 fmt rang)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
 
 # ---------------------------------------------------------------------------
 # Embedded joke data: read the single source-of-truth JSON at configure time
@@ -156,7 +168,12 @@ target_include_directories(bagwiz_core
     # Generated, build-only: holds the embedded joke data (jokes_data.hpp).
     "${BAGWIZ_GENERATED_INCLUDE_DIR}"
 )
-ament_target_dependencies(bagwiz_core PUBLIC
+# ROS package dependencies of bagwiz_core. ament_target_dependencies links each
+# package's include dirs and libraries, but it was removed in Lyrical (rolling)
+# in favour of the per-package modern CMake targets. Humble/Jazzy still provide
+# the macro and keep using it; on Lyrical and newer, link the exported
+# ${pkg}_TARGETS instead (each was found via find_package above).
+set(bagwiz_core_ros_deps
   ament_index_cpp
   rcutils
   mcap_vendor
@@ -172,6 +189,13 @@ ament_target_dependencies(bagwiz_core PUBLIC
   tf2
   tf2_msgs
 )
+if(COMMAND ament_target_dependencies)
+  ament_target_dependencies(bagwiz_core PUBLIC ${bagwiz_core_ros_deps})
+else()
+  foreach(bagwiz_dep IN LISTS bagwiz_core_ros_deps)
+    target_link_libraries(bagwiz_core PUBLIC ${${bagwiz_dep}_TARGETS})
+  endforeach()
+endif()
 target_link_libraries(bagwiz_core PUBLIC yaml-cpp SQLite::SQLite3 zstd::zstd ${CMAKE_DL_LIBS})
 # nlohmann_json is an implementation detail of tf_transform_format.cpp (the
 # public header returns std::string), so keep it PRIVATE and out of the
