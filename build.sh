@@ -132,10 +132,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z ${ROS_DISTRO:-} ]]; then
-    echo "[build.sh] ROS_DISTRO is not set. Source your ROS environment first." >&2
-    # shellcheck disable=SC2016  # show literal ${ROS_DISTRO} in the suggested command
-    echo '[build.sh] Example: source /opt/ros/${ROS_DISTRO}/setup.bash' >&2
+# Require a sourced ROS 2 environment. ROS_DISTRO alone is not enough (it can be
+# exported without sourcing); AMENT_PREFIX_PATH is set when a distro's
+# setup.bash is sourced, so require both. If not sourced, print the exact source
+# command for each ROS 2 distro installed under /opt/ros (or, when none is
+# found, tell the user to install ROS 2) and exit. Done after argument parsing
+# so --help works without ROS sourced.
+ros_install_root="${ROS_INSTALL_ROOT:-/opt/ros}"
+if [[ -n ${ROS_DISTRO:-} && -n ${AMENT_PREFIX_PATH:-} ]]; then
+    echo "[build.sh] Using sourced ROS 2 distro: ${ROS_DISTRO}"
+else
+    installed_distros=()
+    for entry in "${ros_install_root}"/*/; do
+        [[ -f "${entry}setup.bash" ]] && installed_distros+=("$(basename "${entry}")")
+    done
+    if [[ ${#installed_distros[@]} -eq 0 ]]; then
+        echo "[build.sh] ROS 2 is not sourced and no installation was found under ${ros_install_root}." >&2
+        echo "[build.sh] Install ROS 2 first: https://docs.ros.org/en/rolling/Installation.html" >&2
+        exit 1
+    fi
+    echo "[build.sh] ROS 2 is not sourced. Source an installed distro, then re-run this command:" >&2
+    for distro in "${installed_distros[@]}"; do
+        echo "[build.sh]     source ${ros_install_root}/${distro}/setup.bash" >&2
+    done
     exit 1
 fi
 
