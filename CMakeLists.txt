@@ -216,6 +216,8 @@ add_library(bagwiz_core
   src/core/pointcloud/color_mapper.cpp
   src/core/pointcloud/projector.cpp
   src/core/slam/lidar_scan.cpp
+  src/core/slam/point_cloud_io.cpp
+  src/core/slam/cloud_filters.cpp
   src/core/video/frame_rate.cpp
   src/core/video/video_encoder.cpp
   src/core/tui/layout.cpp
@@ -339,6 +341,7 @@ if(BAGWIZ_WITH_SLAM)
   find_package(gtsam_points CONFIG REQUIRED)
   target_sources(bagwiz PRIVATE
     src/core/slam/cloud_odometry.cpp
+    src/core/slam/cloud_mapper.cpp
     src/commands/slam.cpp)
   target_link_libraries(bagwiz PRIVATE glim::glim gtsam_points::gtsam_points)
   target_compile_definitions(bagwiz PRIVATE BAGWIZ_WITH_SLAM)
@@ -418,6 +421,12 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_slam_lidar_scan_test test/core/slam/lidar_scan_test.cpp)
   target_link_libraries(bagwiz_slam_lidar_scan_test bagwiz_core)
 
+  ament_add_gtest(bagwiz_slam_point_cloud_io_test test/core/slam/point_cloud_io_test.cpp)
+  target_link_libraries(bagwiz_slam_point_cloud_io_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_slam_cloud_filters_test test/core/slam/cloud_filters_test.cpp)
+  target_link_libraries(bagwiz_slam_cloud_filters_test bagwiz_core)
+
   # GLIM-linked integration test for the odometry wrapper; only when SLAM is on
   # (find_package(glim) ran in the BAGWIZ_WITH_SLAM block above).
   if(BAGWIZ_WITH_SLAM)
@@ -425,6 +434,12 @@ if(BUILD_TESTING)
       test/core/slam/cloud_odometry_test.cpp
       src/core/slam/cloud_odometry.cpp)
     target_link_libraries(bagwiz_slam_cloud_odometry_test
+      bagwiz_core glim::glim gtsam_points::gtsam_points)
+
+    ament_add_gtest(bagwiz_slam_cloud_mapper_test
+      test/core/slam/cloud_mapper_test.cpp
+      src/core/slam/cloud_mapper.cpp)
+    target_link_libraries(bagwiz_slam_cloud_mapper_test
       bagwiz_core glim::glim gtsam_points::gtsam_points)
   endif()
 
