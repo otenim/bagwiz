@@ -98,6 +98,18 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
   libavcodec libavformat libavutil libswscale)
 
+# libsixel (conda-forge `libsixel`) backs the Sixel backend of `bagwiz walk`'s
+# image preview (src/core/tui/image/terminal_image_renderer.cpp). Its pkg-config
+# file lists optional Requires.private integrations (libcurl, libjpeg, libpng,
+# gdk-pixbuf-2.0) whose .pc files are not installed in the env, so
+# `pkg_check_modules(... REQUIRED)` would fail dependency resolution even though
+# `-lsixel` itself links and loads fine (the libsixel runtime .so deps are
+# present). Locate the library and header directly instead. Consumed PRIVATE
+# (every libsixel symbol stays inside the renderer .cpp) so it never enters
+# bagwiz_core's export set.
+find_library(SIXEL_LIBRARY NAMES sixel REQUIRED)
+find_path(SIXEL_INCLUDE_DIR NAMES sixel.h REQUIRED)
+
 # CLI11 and fmt are not available as rosdep keys on all supported distros, so
 # fetch them at configure time. Both are small, header-light libraries.
 include(FetchContent)
@@ -199,6 +211,7 @@ add_library(bagwiz_core
   src/core/image/compressed_image.cpp
   src/core/image/image_decoder.cpp
   src/core/image/camera_info.cpp
+  src/core/image/packed_raster.cpp
   src/core/pointcloud/pointcloud2.cpp
   src/core/pointcloud/color_mapper.cpp
   src/core/pointcloud/projector.cpp
@@ -210,6 +223,8 @@ add_library(bagwiz_core
   src/core/tui/screen_scope.cpp
   src/core/tui/signal_handler.cpp
   src/core/tui/width.cpp
+  src/core/tui/image/terminal_image_caps.cpp
+  src/core/tui/image/terminal_image_renderer.cpp
   src/commands/registry.cpp
   src/io/bag_factory.cpp
   src/io/file_decompressor.cpp
@@ -271,6 +286,10 @@ target_link_libraries(bagwiz_core PRIVATE nlohmann_json::nlohmann_json)
 # header returns only std types behind a pimpl), so keep it PRIVATE and out of
 # the export set.
 target_link_libraries(bagwiz_core PRIVATE PkgConfig::LIBAV)
+# libsixel is an implementation detail of terminal_image_renderer.cpp (the public
+# header returns only std types), so keep it PRIVATE and out of the export set.
+target_link_libraries(bagwiz_core PRIVATE ${SIXEL_LIBRARY})
+target_include_directories(bagwiz_core PRIVATE ${SIXEL_INCLUDE_DIR})
 # OpenCV is an implementation detail of the `generate video --undistort` path
 # (camera_info parsing + cv::undistort). Keep it PRIVATE so it does not leak
 # into bagwiz_core's export set.
@@ -406,6 +425,14 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_tui_pager_test test/core/tui/pager_test.cpp)
   target_link_libraries(bagwiz_tui_pager_test bagwiz_core)
 
+  ament_add_gtest(
+    bagwiz_terminal_image_caps_test test/core/tui/image/terminal_image_caps_test.cpp)
+  target_link_libraries(bagwiz_terminal_image_caps_test bagwiz_core)
+
+  ament_add_gtest(
+    bagwiz_terminal_image_renderer_test test/core/tui/image/terminal_image_renderer_test.cpp)
+  target_link_libraries(bagwiz_terminal_image_renderer_test bagwiz_core)
+
   ament_add_gtest(bagwiz_trajectory_test test/core/trajectory_test.cpp)
   target_link_libraries(bagwiz_trajectory_test bagwiz_core)
 
@@ -463,6 +490,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_raw_image_test test/core/image/raw_image_test.cpp)
   target_link_libraries(bagwiz_raw_image_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_packed_raster_test test/core/image/packed_raster_test.cpp)
+  target_link_libraries(bagwiz_packed_raster_test bagwiz_core)
 
   ament_add_gtest(bagwiz_camera_info_test test/core/image/camera_info_test.cpp)
   target_link_libraries(bagwiz_camera_info_test bagwiz_core)

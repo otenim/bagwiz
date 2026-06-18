@@ -10,9 +10,7 @@
 
 #include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/image/camera_info.hpp"
-#include "bagwiz/core/image/compressed_image.hpp"
-#include "bagwiz/core/image/image_decoder.hpp"
-#include "bagwiz/core/image/raw_image.hpp"
+#include "bagwiz/core/image/packed_raster.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/output_path.hpp"
 #include "bagwiz/core/pointcloud/color_mapper.hpp"
@@ -979,14 +977,14 @@ int run_generate_video(const GenerateVideoArgs & args)
   filter.topics.push_back(args.topic);
   reader->set_filter(filter);
 
-  // A CompressedImage topic carries a JPEG/PNG bitstream per message; decode it
-  // to packed BGR before encoding. A raw Image topic is fed straight through.
-  const bool is_compressed = (check.topic_type == kCompressedImageType);
-
+  // Each message (raw Image or CompressedImage) is normalized to a canonical
+  // packed BGR24 raster by core::image::to_packed_raster before encoding.
   std::unique_ptr<core::video::VideoEncoder> encoder;
   std::unique_ptr<UndistortHelper> undistort_helper;
   std::uint32_t enc_w = 0;
   std::uint32_t enc_h = 0;
+  // to_packed_raster yields canonical BGR24, so every frame's encoding is "bgr8";
+  // the encoder still tracks it to guard against a mid-run geometry change.
   std::string enc_encoding;
   std::uint64_t written = 0;
   const bool use_rectified = args.undistort || pointcloud_topic.has_value();
@@ -1008,48 +1006,22 @@ int run_generate_video(const GenerateVideoArgs & args)
   auto decode_to_buffer = [&](
                             std::int64_t timestamp_ns,
                             std::span<const std::byte> payload) -> std::optional<FrameBuffer> {
+    // Normalize either message type to a canonical packed BGR24 raster via the
+    // shared core::image::to_packed_raster seam; rgb8 inputs are swapped so
+    // every frame the encoder sees is BGR24.
+    auto pr = core::image::to_packed_raster(check.topic_type, payload);
+    if (!pr.ok()) {
+      BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", written, pr.error.c_str());
+      return std::nullopt;
+    }
     FrameBuffer frame;
     frame.timestamp_ns = timestamp_ns;
-    if (is_compressed) {
-      const auto cimg = core::image::extract_compressed_image(payload);
-      if (!cimg.ok()) {
-        BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", written, cimg.error.c_str());
-        return std::nullopt;
-      }
-      auto dec = core::image::decode_compressed_image(cimg.image->data, cimg.image->format);
-      if (!dec.ok()) {
-        BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", written, dec.error.c_str());
-        return std::nullopt;
-      }
-      frame.width = dec.image->width;
-      frame.height = dec.image->height;
-      frame.step = dec.image->width * 3U;
-      frame.pixel_format = core::video::SourcePixelFormat::kBgr8;
-      frame.encoding = "bgr8";
-      frame.data = std::move(dec.image->bgr);
-    } else {
-      const auto img = core::image::extract_raw_image(payload);
-      if (!img.ok()) {
-        BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", written, img.error.c_str());
-        return std::nullopt;
-      }
-      const auto & v = *img.image;
-      if (v.encoding == "bgr8") {
-        frame.pixel_format = core::video::SourcePixelFormat::kBgr8;
-      } else if (v.encoding == "rgb8") {
-        frame.pixel_format = core::video::SourcePixelFormat::kRgb8;
-      } else {
-        BAGWIZ_LOG_ERROR(
-          kLogger, "image encoding '%s' is not supported in this release; only bgr8 and rgb8.",
-          v.encoding.c_str());
-        return std::nullopt;
-      }
-      frame.width = v.width;
-      frame.height = v.height;
-      frame.step = v.step;
-      frame.encoding = v.encoding;
-      frame.data.assign(v.data.begin(), v.data.end());
-    }
+    frame.width = pr.raster->width;
+    frame.height = pr.raster->height;
+    frame.step = pr.raster->width * 3U;
+    frame.pixel_format = core::video::SourcePixelFormat::kBgr8;
+    frame.encoding = "bgr8";
+    frame.data = std::move(pr.raster->bgr);
     return frame;
   };
 
@@ -1326,8 +1298,8 @@ int run_generate_video(const GenerateVideoArgs & args)
 
   const double fps_value = static_cast<double>(fps.num) / static_cast<double>(fps.den);
   BAGWIZ_LOG_INFO(
-    kLogger, "generate video: wrote %" PRIu64 " frame(s) to %s (%ux%u %s @ %.3g fps).", written,
-    args.output_path.string().c_str(), enc_w, enc_h, enc_encoding.c_str(), fps_value);
+    kLogger, "generate video: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).", written,
+    args.output_path.string().c_str(), enc_w, enc_h, fps_value);
 
   if (is_h264_extension(args.output_path)) {
     if (is_vlc_available()) {
