@@ -34,6 +34,7 @@
 #include <fstream>
 #include <iostream>
 #include <istream>
+#include <iterator>
 #include <memory>
 #include <ostream>
 #include <span>
@@ -52,7 +53,9 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 
 // Message-cursor moves shared by the YAML view and the image preview, so
 // wrap-around, "at first message", and G's full-scan behave identically in both.
-enum class MsgNav { kNext, kPrev, kFirst, kLast };
+enum class MsgNav { kNext, kPrev, kFirst, kLast, kStepForward1s, kStepBackward1s };
+
+constexpr int64_t kOneSecondNs = 1'000'000'000;
 
 // Cached owning copy of a single bag message. RawMessage's span is
 // invalidated by the next BagReader::next() call, so walk must take a
@@ -139,6 +142,25 @@ std::filesystem::path resolve_yaml_save_path(
   return user_path;
 }
 
+// Paint `text` as a rainbow by assigning each character a standard ANSI
+// foreground color in sequence. The returned string contains the SGR escapes
+// and a trailing reset; width-aware code treats those escapes as zero-width,
+// so wrapping/layout is unaffected.
+std::string rainbow_text(std::string_view text)
+{
+  // Red, yellow, green, cyan, blue, magenta — a classic 6-step rainbow.
+  constexpr const char * kColors[] = {"\x1B[31m", "\x1B[33m", "\x1B[32m",
+                                      "\x1B[36m", "\x1B[34m", "\x1B[35m"};
+  std::string out;
+  out.reserve(text.size() * 6);
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    out += kColors[i % std::size(kColors)];
+    out.push_back(text[i]);
+  }
+  out += "\x1B[0m";
+  return out;
+}
+
 }  // namespace
 
 // `bagwiz walk <input> <topic>` walks the messages of a single topic
@@ -155,6 +177,8 @@ std::filesystem::path resolve_yaml_save_path(
 // Keys:
 //   right / Space : next message (wraps from last back to first)
 //   left / b      : previous message
+//   .             : jump forward ~1 second in time
+//   ,             : jump backward ~1 second in time
 //   up / k        : scroll body up one line
 //   down / j      : scroll body down one line
 //   Home / H      : jump body scroll to the head
@@ -328,11 +352,12 @@ public:
       // visible body window.
       footer_logical.emplace_back();
       std::string legend =
-        "  [→/Space] next   [←/b] prev   [↑/k] up   [↓/j] down   "
-        "[Home/H] head   [End/T] tail   [g] first   [G] last   [s] save as yaml   "
+        "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [↑ / k] up   [↓ / j] down   "
+        "[Home / H] head   [End / T] tail   [g] first   [G] last   [s] save as yaml   "
         "[a] expand arrays   ";
       if (preview_available) {
-        legend += "[i] image preview   ";
+        legend += rainbow_text("[i] preview");
+        legend += "   ";
       }
       legend += "[q] quit";
       footer_logical.emplace_back(std::move(legend));
@@ -433,6 +458,50 @@ public:
           }
           break;
         }
+        case MsgNav::kStepForward1s: {
+          const int64_t target_ns = cache[index].timestamp_ns + kOneSecondNs;
+          if (exhausted && cache.back().timestamp_ns < target_ns) {
+            if (index == cache.size() - 1) {
+              status = "(already at last message)";
+            } else {
+              index = cache.size() - 1;
+              status = "(reached end)";
+            }
+            break;
+          }
+          while (!exhausted && cache.back().timestamp_ns < target_ns) {
+            load_next();
+          }
+          auto it = std::lower_bound(
+            cache.begin(), cache.end(), target_ns,
+            [](const OwnedMessage & m, int64_t t) { return m.timestamp_ns < t; });
+          if (it != cache.end()) {
+            index = static_cast<std::size_t>(std::distance(cache.begin(), it));
+          } else {
+            index = cache.size() - 1;
+            status = "(reached end)";
+          }
+          break;
+        }
+        case MsgNav::kStepBackward1s: {
+          const int64_t target_ns = cache[index].timestamp_ns - kOneSecondNs;
+          if (target_ns <= cache.front().timestamp_ns) {
+            if (index == 0) {
+              status = "(at first message)";
+            } else {
+              index = 0;
+            }
+            break;
+          }
+          auto it = std::upper_bound(
+            cache.begin(), cache.end(), target_ns,
+            [](int64_t t, const OwnedMessage & m) { return t < m.timestamp_ns; });
+          // it is the first message strictly after target_ns; step back one
+          // to land on the last message at or before target_ns.
+          --it;
+          index = static_cast<std::size_t>(std::distance(cache.begin(), it));
+          break;
+        }
       }
       return index != before;
     };
@@ -459,6 +528,16 @@ public:
         case core::tui::NavKey::kLast:
           navigate(MsgNav::kLast);
           pager.set_scroll_offset(0);
+          return core::tui::AppKeyResult::kHandled;
+        case core::tui::NavKey::kStepForward1s:
+          navigate(MsgNav::kStepForward1s);
+          pager.set_scroll_offset(0);
+          return core::tui::AppKeyResult::kHandled;
+        case core::tui::NavKey::kStepBackward1s:
+          // Like prev, preserve body scroll when already at the boundary.
+          if (navigate(MsgNav::kStepBackward1s)) {
+            pager.set_scroll_offset(0);
+          }
           return core::tui::AppKeyResult::kHandled;
         case core::tui::NavKey::kResize:
           return core::tui::AppKeyResult::kHandled;
@@ -525,7 +604,9 @@ public:
       }
 
       core::tui::draw_line(
-        out, rows, "  [→/Space] next   [←/b] prev   [g] first   [G] last   [i] back   [q] quit",
+        out, rows,
+        "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [g] first   [G] last   [i] back   "
+        "[q] quit",
         cols);
       // Close the synchronized update: the terminal now reveals the fully
       // assembled frame in one atomic swap.
@@ -559,6 +640,12 @@ public:
             break;
           case core::KeyEvent::kLast:
             needs_render = navigate(MsgNav::kLast);
+            break;
+          case core::KeyEvent::kStepForward1s:
+            needs_render = navigate(MsgNav::kStepForward1s);
+            break;
+          case core::KeyEvent::kStepBackward1s:
+            needs_render = navigate(MsgNav::kStepBackward1s);
             break;
           case core::KeyEvent::kResize:
             needs_render = true;  // geometry changed: re-fit and re-render
