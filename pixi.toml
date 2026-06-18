@@ -59,6 +59,11 @@ opencv = "*"
 # (src/core/tui/image/terminal_image_renderer.cpp). Linked PRIVATE behind the
 # renderer .cpp so it never enters bagwiz_core's export set, matching libav.
 libsixel = "*"
+# libboost-devel (conda-forge) supplies Boost for the GLIM SLAM stack built by
+# `pixi run build-glim`. System Boost is unusable here: conda's gcc excludes
+# /usr/include, so Boost must come from the env. Consumed only by the opt-in
+# SLAM build (`build-slam`), but cheap enough to keep in the shared base.
+libboost-devel = "*"
 
 # Activation applies to every environment: select Cyclone DDS (bagwiz depends on
 # rmw_cyclonedds_cpp; Fast DDS is the distro default since Jazzy) and source the
@@ -81,6 +86,19 @@ scripts = ["scripts/pixi-activate.sh"]
 args = [{ arg = "build_type", default = "Release" }]
 cmd = 'colcon build --symlink-install --packages-up-to bagwiz --build-base "build/$PIXI_ENVIRONMENT_NAME" --install-base "install/$PIXI_ENVIRONMENT_NAME" --cmake-args -DCMAKE_BUILD_TYPE={{ build_type }} -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ln -sfn "$PIXI_ENVIRONMENT_NAME/compile_commands.json" build/compile_commands.json'
 inputs = ["src", "include", "test", "CMakeLists.txt", "package.xml"]
+
+# Build the GLIM SLAM dependency stack (GTSAM + gtsam_points + glim) once into
+# install/<distro>/glim-deps. The script is idempotent: it no-ops when the
+# prefix already holds the pinned versions. Needed only for the SLAM build.
+[tasks.build-glim]
+cmd = 'bash scripts/build-glim-deps.sh'
+inputs = ["scripts/build-glim-deps.sh"]
+
+# Build bagwiz with the opt-in `bagwiz slam` command. Ensures the GLIM prefix
+# exists, then turns on BAGWIZ_WITH_SLAM and points CMake at the prefix.
+[tasks.build-slam]
+depends-on = ["build-glim"]
+cmd = 'colcon build --symlink-install --packages-up-to bagwiz --build-base "build/$PIXI_ENVIRONMENT_NAME" --install-base "install/$PIXI_ENVIRONMENT_NAME" --cmake-args -DCMAKE_BUILD_TYPE=Release -DBAGWIZ_WITH_SLAM=ON "-DCMAKE_PREFIX_PATH=$PIXI_PROJECT_ROOT/install/$PIXI_ENVIRONMENT_NAME/glim-deps" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ln -sfn "$PIXI_ENVIRONMENT_NAME/compile_commands.json" build/compile_commands.json'
 
 [tasks.test]
 cmd = 'colcon test --packages-select bagwiz --build-base "build/$PIXI_ENVIRONMENT_NAME" --install-base "install/$PIXI_ENVIRONMENT_NAME" --event-handlers console_direct+ && colcon test-result --test-result-base "build/$PIXI_ENVIRONMENT_NAME" --verbose'
@@ -165,6 +183,11 @@ ros-jazzy-ament-cmake-gtest = "*"
 ros-jazzy-sensor-msgs = "*"
 ros-jazzy-diagnostic-msgs = "*"
 ros-jazzy-builtin-interfaces = "*"
+# Jazzy's default Eigen (5.0.x) breaks the GLIM/GTSAM source build (cascading
+# -Werror / missing-include); pin to 3.4 so `build-glim` works and bagwiz's SLAM
+# translation units share one Eigen with the vendored prefix. Humble already
+# ships 3.4, so it needs no pin.
+eigen = "3.4.*"
 
 [feature.lyrical]
 channels = [{ channel = "https://prefix.dev/robostack-lyrical", priority = 1 }]
@@ -192,6 +215,11 @@ ros-lyrical-ament-cmake-gtest = "*"
 ros-lyrical-sensor-msgs = "*"
 ros-lyrical-diagnostic-msgs = "*"
 ros-lyrical-builtin-interfaces = "*"
+# NOTE: SLAM is not wired for lyrical. Unlike jazzy, lyrical cannot pin Eigen to
+# 3.4 — ros-lyrical-tf2-eigen-kdl hard-requires eigen-abi 5.0.1, so `eigen=3.4`
+# is unsatisfiable here. SLAM on lyrical would need a vendored Eigen 3.4 fed only
+# to the GLIM build + bagwiz's SLAM units (the Milestone-0 approach); deferred.
+# `build-slam` is supported on humble + jazzy.
 
 # ---------------------------------------------------------------------------
 # One environment per distro. Each solves independently against its own
