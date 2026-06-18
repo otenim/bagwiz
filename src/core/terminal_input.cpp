@@ -105,6 +105,10 @@ KeyEvent classify_key(std::string_view bytes)
         return KeyEvent::kFirst;
       case 'G':
         return KeyEvent::kLast;
+      case '.':
+        return KeyEvent::kStepForward1s;
+      case ',':
+        return KeyEvent::kStepBackward1s;
       case 'k':
         return KeyEvent::kScrollUp;
       case 'j':

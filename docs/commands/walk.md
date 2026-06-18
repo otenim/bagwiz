@@ -66,9 +66,9 @@ bagwiz walk <input> <topic>
 
 Pressing `i` on an image topic switches to a dedicated preview that decodes the
 current message and draws the real image in the terminal. Navigation stays live
-in the preview — `→`/`Space` (next), `←`/`b` (prev), `g` (first), `G` (last)
-re-decode and re-render the new frame — and the view redraws on resize. Press
-`i` again or `q` to return to the YAML view.
+in the preview — `→`/`Space` (next), `←`/`b` (prev), `.` (+1s), `,` (-1s), `g`
+(first), `G` (last) re-decode and re-render the new frame — and the view redraws
+on resize. Press `i` again or `q` to return to the YAML view.
 
 - **Supported encodings mirror `bagwiz generate video`:** raw
   `sensor_msgs/msg/Image` in `bgr8`/`rgb8`, and `sensor_msgs/msg/CompressedImage`
@@ -147,6 +147,8 @@ not been read into the cache yet (they get pulled in on demand).
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `→` / `Space`  | Next message (wraps from last back to first).                                                                                                 |
 | `←` / `b`      | Previous message.                                                                                                                             |
+| `.`            | Jump forward to the next message at least one second after the current one.                                                                   |
+| `,`            | Jump backward to the previous message at least one second before the current one.                                                             |
 | `↑` / `k`      | Scroll body up one line.                                                                                                                      |
 | `↓` / `j`      | Scroll body down one line.                                                                                                                    |
 | `Home` / `H`   | Jump body scroll to the head.                                                                                                                 |
