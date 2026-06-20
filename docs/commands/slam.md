@@ -48,13 +48,14 @@ bagwiz slam run [OPTIONS] <input> <pcd_topic> <output_root>
 
 ### Options
 
-| Flag                     | Description                                                                                                                                                                                                                |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--imu <topic>`          | `sensor_msgs/msg/Imu` topic. Switches odometry to LiDAR-IMU (GLIM's `OdometryEstimationCPU`). The LiDAR←IMU extrinsic is resolved from the bag's static TF (`…tf_static`) using the cloud's and IMU's header `frame_id`s.  |
-| `--map-resolution <m>`   | Exported map voxel size in meters (default `0.2`; must be positive). Controls only the exported map's density, never the optimization or trajectory. The LiDAR preprocessor's ~0.15 m input voxel bounds the real density. |
-| `--without-global-optim` | Skip global mapping and write only the raw odometry trajectory (`traj.tum`). No point-cloud map is produced.                                                                                                               |
-| `--vis`                  | After writing `map.ply`, serve it over a loopback HTTP server and open the default browser to a Three.js point-cloud viewer. Blocks until interrupted (`Ctrl-C`). Cannot be combined with `--without-global-optim`.        |
-| `-w`, `--overwrite`      | Overwrite the output file(s) if they already exist. Without it, an existing output file stops the run.                                                                                                                     |
+| Flag                     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--imu <topic>`          | `sensor_msgs/msg/Imu` topic. Switches odometry to LiDAR-IMU (GLIM's `OdometryEstimationCPU`). The LiDAR←IMU extrinsic is resolved from the bag's static TF (`…tf_static`) using the cloud's and IMU's header `frame_id`s.                                                                                                                                                                                                                                                                               |
+| `--gnss <topic>`         | `sensor_msgs/msg/NavSatFix` topic. Adds GNSS global constraints (horizontal translation priors on submap poses) during global mapping to pin the world frame to GNSS and curb drift. Fixes are projected to a local ENU frame internally; the antenna lever-arm is resolved from the bag's static TF (cloud ← NavSatFix `frame_id`) and removed so the prior constrains the sensor origin, not the antenna (a missing TF only warns). Requires global mapping — rejected with `--without-global-optim`. |
+| `--map-resolution <m>`   | Exported map voxel size in meters (default `0.2`; must be positive). Controls only the exported map's density, never the optimization or trajectory. The LiDAR preprocessor's ~0.15 m input voxel bounds the real density.                                                                                                                                                                                                                                                                              |
+| `--without-global-optim` | Skip global mapping and write only the raw odometry trajectory (`traj.tum`). No point-cloud map is produced.                                                                                                                                                                                                                                                                                                                                                                                            |
+| `--vis`                  | After writing `map.ply`, serve it over a loopback HTTP server and open the default browser to a Three.js point-cloud viewer. Blocks until interrupted (`Ctrl-C`). Cannot be combined with `--without-global-optim`.                                                                                                                                                                                                                                                                                     |
+| `-w`, `--overwrite`      | Overwrite the output file(s) if they already exist. Without it, an existing output file stops the run.                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ### Outputs
 
@@ -81,6 +82,22 @@ Written under `<output_root>`:
   - Otherwise it is looked up across the static-TF tree. The run aborts (before
     writing anything) if the bag has no static TF topic, if either frame is
     absent from the static tree, or if no static chain connects them.
+- **GNSS (`--gnss`).** Each `NavSatFix` fix is projected to a local ENU frame
+  (origin = first valid fix; `STATUS_NO_FIX` samples are dropped), interpolated at
+  each submap's mid-timestamp, and — once the SLAM baseline exceeds ~10 m — turned
+  into a horizontal translation prior on that submap's pose via a 2-D rigid
+  world↔GNSS alignment. This curbs global drift but keeps the output in the SLAM
+  world frame (it is not georeferenced). The antenna lever-arm is resolved from the
+  bag's static TF (cloud ← `NavSatFix` `frame_id`) and removed, so the prior
+  constrains the sensor origin rather than the antenna; when that TF is absent the
+  run still succeeds (warned) using the raw antenna position. Each prior is
+  weighted by that fix's reported `position_covariance` — rotated into the world
+  frame, inflated, floored, and wrapped in a Huber robust kernel — so a meter-level
+  SBAS fix is trusted less than a centimeter-level RTK fix; a fix whose covariance
+  type is `UNKNOWN` falls back to a fixed per-axis precision. Height stays
+  effectively unconstrained (GNSS's weakest axis). With too little motion or no
+  temporal overlap, no constraints are added and the run warns but still succeeds.
+  Requires global mapping (rejected with `--without-global-optim`).
 - **Deskewing.** Clouds with a per-point time field are deskewed by GLIM; clouds
   without one are treated as already motion-undistorted (all points
   simultaneous).
@@ -113,6 +130,10 @@ bagwiz slam run drive.mcap /sensing/lidar/concatenated/pointcloud out/
 bagwiz slam run drive.mcap /sensing/lidar/concatenated/pointcloud out/ \
   --imu /sensing/imu/imu_data
 
+# LiDAR-IMU SLAM with GNSS global constraints to curb drift.
+bagwiz slam run drive.mcap /sensing/lidar/concatenated/pointcloud out/ \
+  --imu /sensing/imu/imu_data --gnss /sensing/gnss/nav_sat_fix
+
 # Trajectory only, no map (skip global optimization).
 bagwiz slam run drive_dir/ /points out/ --without-global-optim
 
@@ -125,7 +146,7 @@ bagwiz slam run drive.mcap /points out/ --vis
 
 ## Exit status
 
-| Code | Meaning                                                                                                                                                                                                                                                                                                                                                        |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | SLAM completed and the output(s) were written.                                                                                                                                                                                                                                                                                                                 |
-| `1`  | The input could not be opened; `<pcd_topic>` (or `--imu`) was absent or had the wrong type; `<output_root>` was a file or could not be created; an output file collided without `-w`/`--overwrite`; in IMU mode the LiDAR←IMU static-TF chain (or a frame) was absent; no PointCloud2 message decoded; SLAM produced no poses; or a read/write error occurred. |
+| Code | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | SLAM completed and the output(s) were written.                                                                                                                                                                                                                                                                                                                                                                               |
+| `1`  | The input could not be opened; `<pcd_topic>` (or `--imu`/`--gnss`) was absent or had the wrong type; `--gnss` was combined with `--without-global-optim`; `<output_root>` was a file or could not be created; an output file collided without `-w`/`--overwrite`; in IMU mode the LiDAR←IMU static-TF chain (or a frame) was absent; no PointCloud2 message decoded; SLAM produced no poses; or a read/write error occurred. |

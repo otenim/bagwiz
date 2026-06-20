@@ -15,6 +15,8 @@
 #include "bagwiz/core/trajectory.hpp"
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -57,6 +59,79 @@ struct CloudMapperConfig
   // extrinsic, and IMU enabled in sub/global mapping; feed IMU via insert_imu().
   // Convention is GLIM's T_lidar_imu (p_lidar = T_lidar_imu * p_imu).
   std::optional<SensorTransform> t_lidar_imu;
+
+  // GNSS global constraint (ported from glim_ext's gnss_global). When true, GNSS
+  // points fed via insert_gnss() add horizontal translation priors on the submap
+  // poses during the final global optimization, pinning the world frame to GNSS
+  // and curbing drift. Defaults below mirror glim_ext's config_gnss_global.json.
+  bool enable_gnss = false;
+
+  // Minimum SLAM-estimated baseline [m] (distance between the first and last
+  // GNSS-associated submap origins) before the world<-GNSS alignment is
+  // estimated. Too little motion makes the planar rotation ill-conditioned, so
+  // no GNSS factors are added until this is exceeded. Defaults to 10.0 to match
+  // glim_ext's shipped config_gnss_global.json (its in-code fallback is 5.0).
+  double gnss_min_baseline = 10.0;
+
+  // Per-axis information (precision) of each GNSS translation prior, in the
+  // GNSS-aligned world frame {x, y, z}. Used as the FALLBACK when a fix carries no
+  // usable covariance (covariance_type UNKNOWN) or gnss_use_covariance is false.
+  // The default leaves z at 0 so only the horizontal position is constrained (GNSS
+  // height is typically the weakest axis); x/y at 1e3 pulls the submaps onto the
+  // GNSS track. Mirrors prior_inf_scale.
+  std::array<double, 3> gnss_prior_inf_scale{1e3, 1e3, 0.0};
+
+  // When true (default), a fix carrying a KNOWN position covariance weights its
+  // prior by that covariance (rotated into the world frame, inflated, floored)
+  // instead of the fixed gnss_prior_inf_scale precision. NavSatFix covariance is
+  // ~metre-level for SBAS/standalone fixes and cm-level for RTK, so this keeps a
+  // fixed cm-tight prior from over-trusting a metre-level fix (and vice versa).
+  // Falls back to gnss_prior_inf_scale per fix when the covariance is unavailable.
+  bool gnss_use_covariance = true;
+
+  // Lower bound [m] on each horizontal stddev of a covariance-derived prior, added
+  // as an isotropic floor (sigma_floor^2 on each horizontal diagonal). Guards
+  // against an over-optimistic receiver covariance dominating the graph. Unused by
+  // the fixed-precision fallback.
+  double gnss_horizontal_sigma_floor = 0.05;
+
+  // Multiplicative inflation (>=1) on a covariance-derived stddev. GNSS formal
+  // covariance is optimistic and consecutive fixes are time-correlated, so the
+  // independent-prior model double-counts; inflate to compensate. 1.0 applies the
+  // covariance as reported.
+  double gnss_covariance_inflation = 1.0;
+
+  // Huber robust-kernel threshold (whitened-residual / sigma units) wrapping each
+  // GNSS prior so one multipath outlier cannot dominate; 0 disables the kernel.
+  // 1.345 is the classic 95%-efficiency value.
+  double gnss_robust_huber_k = 1.345;
+
+  // GNSS antenna lever-arm: the antenna phase-center position expressed in the
+  // cloud (LiDAR) frame, i.e. T_cloud_gnss.translation(). A NavSatFix reports the
+  // ANTENNA position, but the GNSS prior constrains the submap-origin sensor pose,
+  // so without this offset a non-trivial antenna mount biases every prior by a
+  // heading-dependent amount that the rigid world<-GNSS fit cannot absorb. The
+  // command layer resolves it from the bag's static TF (cloud frame <- NavSatFix
+  // frame_id); {0,0,0} (the default) disables the correction and reproduces the
+  // raw-antenna behavior. For the LiDAR-IMU backend the submap origin is the IMU
+  // pose, so this LiDAR-frame offset is re-expressed in the IMU frame internally
+  // using t_lidar_imu.
+  std::array<double, 3> gnss_antenna_offset{0.0, 0.0, 0.0};
+};
+
+// One GNSS fix already projected into the local metric (ENU) frame the mapper
+// aligns to. GLIM-free plain data; produced by the command layer (NavSatFix ->
+// gnss_projector) and consumed by CloudMapper::insert_gnss.
+struct GnssPoint
+{
+  std::int64_t stamp_ns = 0;         // fix timestamp, nanoseconds since epoch
+  std::array<double, 3> position{};  // local metric meters {east, north, up}
+
+  // Position covariance (m^2), row-major 3x3, in the SAME local ENU frame as
+  // `position` (the projector preserves ENU axes over the local trajectory area).
+  // Used to weight the prior; ignored when covariance_type is UNKNOWN.
+  std::array<double, 9> covariance{};
+  std::uint8_t covariance_type = 0;  // sensor_msgs/NavSatFix: 0 UNKNOWN .. 3 KNOWN
 };
 
 // Result of CloudMapper::finish(). All fields are GLIM-free plain data so the
@@ -72,6 +147,11 @@ struct CloudMap
   // Per-point intensity, parallel to `points`. Empty unless every submap
   // carried intensities (mirrors GLIM's all-or-nothing export).
   std::vector<float> intensities;
+
+  // Number of GNSS translation-prior factors applied during global
+  // optimization. 0 when GNSS was disabled or could not initialize (no fixes
+  // overlapping the submap timespan, or baseline below gnss_min_baseline).
+  std::size_t gnss_factor_count = 0;
 };
 
 class CloudMapper
@@ -92,6 +172,12 @@ public:
   // buffer it for their own preintegration. Samples must arrive in
   // non-decreasing timestamp order, interleaved with scans.
   void insert_imu(const ImuSample & imu);
+
+  // Feed one GNSS fix, already projected to the local metric frame (see
+  // GnssPoint). A no-op unless config.enable_gnss is set. Points are buffered
+  // and turned into submap translation priors in finish(); they should arrive
+  // in non-decreasing timestamp order.
+  void insert_gnss(const GnssPoint & gnss);
 
   // Feed one scan. Scans must arrive in non-decreasing timestamp order. A scan
   // with no per-point time is fed with explicit zero per-point times (treated
