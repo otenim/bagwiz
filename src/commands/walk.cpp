@@ -9,6 +9,7 @@
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/core/decoder/decoder.hpp"
+#include "bagwiz/core/image/image_encoder.hpp"
 #include "bagwiz/core/image/packed_raster.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/message_formatter.hpp"
@@ -118,7 +119,7 @@ std::string topic_for_filename(std::string_view topic)
   return out;
 }
 
-std::filesystem::path resolve_yaml_save_path(
+std::filesystem::path resolve_save_path(
   const std::string & line_from_stdin, const std::filesystem::path & cwd,
   const std::string & default_filename)
 {
@@ -184,7 +185,8 @@ std::string rainbow_text(std::string_view text)
 //   Home / H      : jump body scroll to the head
 //   End / T       : jump body scroll to the tail
 //   g / G         : jump to first / last message (G forces a full scan)
-//   s             : save current message as yaml (prompts for output path)
+//   s             : save current message as yaml; inside the image preview,
+//                   save the displayed frame as a PNG (both prompt for a path)
 //   a             : toggle full-expansion of long primitive arrays
 //   i             : toggle in-terminal image preview (image topics on a
 //                   Kitty/Sixel-capable terminal; absent otherwise)
@@ -582,11 +584,28 @@ public:
       } else {
         info = fmt::format("  [{} / {}{}]", index, last_loaded_index, total_suffix);
       }
+      // Surface the save outcome (or any transient message) on the info row;
+      // navigate() clears `status` on a cursor move, so it disappears as soon as
+      // the user pages to another frame.
+      if (!status.empty()) {
+        info += fmt::format("   {}", status);
+      }
       core::tui::draw_line(out, 2, info, cols);
 
-      // Image region: from row 3 down to the row above the key hint (row `rows`).
+      // Wrap the key legend the way the YAML footer (build_frame) does, so a
+      // narrow terminal shows every key on continuation lines instead of
+      // truncating the row. The wrapped legend is pinned to the bottom and the
+      // image region above shrinks to make room, mirroring how build_frame
+      // derives its body height from the wrapped footer.
+      const std::vector<std::string> legend_lines = core::tui::wrap_to_width(
+        "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [g] first   [G] last   [s] save   "
+        "[i] back   [q] quit",
+        cols);
+      const int legend_top = std::max(1, rows - static_cast<int>(legend_lines.size()) + 1);
+
+      // Image region: from row 3 down to the row above the first legend line.
       const int region_row = 3;
-      const int region_rows = std::max(1, rows - region_row);
+      const int region_rows = std::max(1, legend_top - region_row);
       if (pr.ok()) {
         core::tui::image::CellRegion region;
         region.row = region_row;
@@ -603,15 +622,94 @@ public:
           out, region_row, fmt::format("  cannot decode this message: {}", pr.error), cols);
       }
 
-      core::tui::draw_line(
-        out, rows,
-        "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [g] first   [G] last   [i] back   "
-        "[q] quit",
-        cols);
+      for (std::size_t i = 0; i < legend_lines.size(); ++i) {
+        core::tui::draw_line(out, legend_top + static_cast<int>(i), legend_lines[i], cols);
+      }
       // Close the synchronized update: the terminal now reveals the fully
       // assembled frame in one atomic swap.
       core::tui::end_synchronized_update(out);
       out.flush();
+    };
+
+    // Save the frame currently shown in the preview as a PNG. Mirrors the YAML
+    // save handler (kSaveYaml): decode the message, prompt for a path via the
+    // pager's cooked-mode line input, and write the bytes. The result is left in
+    // `status`, which render_preview surfaces on the next repaint.
+    auto save_preview_image = [&]() {
+      status.clear();
+      const auto & cur = cache[index];
+      const auto pr = core::image::to_packed_raster(type_name, cur.payload);
+      if (!pr.ok()) {
+        status = fmt::format("cannot save: {}", pr.error);
+        return;
+      }
+      const auto encoded = core::image::encode_png(*pr.raster);
+      if (!encoded.ok()) {
+        status = fmt::format("cannot save: {}", encoded.error);
+        return;
+      }
+
+      const std::string default_base =
+        fmt::format("{}_{}.png", topic_for_filename(topic_name), index);
+      std::filesystem::path cwd;
+      try {
+        cwd = std::filesystem::current_path();
+      } catch (const std::exception & e) {
+        status = fmt::format("cannot resolve working directory: {}", e.what());
+        return;
+      }
+      const std::filesystem::path default_full = cwd / default_base;
+
+      // Drop the on-screen graphic before switching to cooked-mode line input so
+      // the prompt is not drawn over a kitty placement; run_preview repaints the
+      // frame afterward.
+      core::tui::image::clear_image(std::cout, image_caps.backend);
+      std::cout << "\x1B[2J";
+      std::cout.flush();
+
+      std::filesystem::path out_path;
+      bool save_ok = false;
+      std::string failure_status;
+      pager.with_line_input([&](std::istream & in, std::ostream & out) {
+        out << fmt::format("Save image path (Enter for {}):\n", default_full.string());
+        out.flush();
+        std::string line;
+        if (!std::getline(in, line)) {
+          failure_status = "(save cancelled)";
+          return;
+        }
+        out_path = resolve_save_path(line, cwd, default_base);
+        std::error_code mk_ec;
+        const auto parent = out_path.parent_path();
+        if (!parent.empty()) {
+          std::filesystem::create_directories(parent, mk_ec);
+          if (mk_ec) {
+            failure_status =
+              fmt::format("could not create directory {}: {}", parent.string(), mk_ec.message());
+            return;
+          }
+        }
+        std::ofstream of(out_path, std::ios::binary);
+        if (!of) {
+          failure_status = fmt::format("could not open {} for writing", out_path.string());
+          return;
+        }
+        const auto & bytes = *encoded.png;
+        of.write(
+          reinterpret_cast<const char *>(  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+            bytes.data()),
+          static_cast<std::streamsize>(bytes.size()));
+        if (!of.good()) {
+          failure_status = fmt::format("write failed: {}", out_path.string());
+          return;
+        }
+        save_ok = true;
+      });
+      if (save_ok) {
+        status = fmt::format("saved {}", out_path.string());
+      } else {
+        status = failure_status;
+      }
     };
 
     // Image-preview sub-loop. Runs inside on_app_key, reusing the raw-mode +
@@ -650,12 +748,19 @@ public:
           case core::KeyEvent::kResize:
             needs_render = true;  // geometry changed: re-fit and re-render
             break;
+          case core::KeyEvent::kSaveYaml:
+            // In the preview, [s] saves the displayed frame as a PNG (the YAML
+            // view's [s] still saves YAML). Always repaint so the save status is
+            // shown and the prompt's screen clear is undone.
+            save_preview_image();
+            needs_render = true;
+            break;
           case core::KeyEvent::kTogglePreview:
           case core::KeyEvent::kQuit:
             running = false;
             break;
           default:
-            break;  // scroll / save / expand keys are inert in the preview
+            break;  // scroll / expand keys are inert in the preview
         }
       }
       // Hand a clean screen back to the pager for the YAML repaint.
@@ -706,11 +811,16 @@ public:
               failure_status = "(save cancelled)";
               return;
             }
-            out_path = resolve_yaml_save_path(line, cwd, default_base);
+            out_path = resolve_save_path(line, cwd, default_base);
             std::error_code mk_ec;
             const auto parent = out_path.parent_path();
             if (!parent.empty()) {
               std::filesystem::create_directories(parent, mk_ec);
+              if (mk_ec) {
+                failure_status = fmt::format(
+                  "could not create directory {}: {}", parent.string(), mk_ec.message());
+                return;
+              }
             }
             std::ofstream of(out_path, std::ios::binary);
             if (!of) {
