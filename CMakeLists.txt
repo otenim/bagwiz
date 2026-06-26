@@ -199,6 +199,7 @@ add_library(bagwiz_core
   src/core/pipeline/pipelined_backend.cpp
   src/core/pipeline/backend_select.cpp
   src/core/topic_match.cpp
+  src/core/camera_info_resolver.cpp
   src/core/broken_bag.cpp
   src/core/tf_chain.cpp
   src/core/tf_merge_check.cpp
@@ -215,6 +216,7 @@ add_library(bagwiz_core
   src/core/image/camera_info.cpp
   src/core/image/camera_calibration_yaml.cpp
   src/core/image/packed_raster.cpp
+  src/core/image/undistort.cpp
   src/core/pointcloud/pointcloud2.cpp
   src/core/pointcloud/color_mapper.cpp
   src/core/pointcloud/projector.cpp
@@ -301,9 +303,9 @@ target_link_libraries(bagwiz_core PRIVATE PkgConfig::LIBAV)
 # header returns only std types), so keep it PRIVATE and out of the export set.
 target_link_libraries(bagwiz_core PRIVATE ${SIXEL_LIBRARY})
 target_include_directories(bagwiz_core PRIVATE ${SIXEL_INCLUDE_DIR})
-# OpenCV is an implementation detail of the `generate video --undistort` path
-# (camera_info parsing + cv::undistort). Keep it PRIVATE so it does not leak
-# into bagwiz_core's export set.
+# OpenCV is an implementation detail of the shared undistortion helper and the
+# `generate video --undistort` / point-cloud overlay paths. Keep it PRIVATE so
+# it does not leak into bagwiz_core's export set.
 find_package(OpenCV REQUIRED)
 target_link_libraries(bagwiz_core PRIVATE ${OpenCV_LIBS})
 # fmt is used header-only inside bagwiz_core (renderer.cpp). Linking fmt::fmt
@@ -672,6 +674,9 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_topic_match_test test/core/topic_match_test.cpp)
   target_link_libraries(bagwiz_topic_match_test bagwiz_core)
 
+  ament_add_gtest(bagwiz_camera_info_resolver_test test/core/camera_info_resolver_test.cpp)
+  target_link_libraries(bagwiz_camera_info_resolver_test bagwiz_core)
+
   ament_add_gtest(bagwiz_topic_drop_test
     test/commands/topic_drop_test.cpp
     src/commands/topic_drop.cpp)
@@ -700,6 +705,9 @@ if(BUILD_TESTING)
     bagwiz_camera_calibration_yaml_test
     test/core/image/camera_calibration_yaml_test.cpp)
   target_link_libraries(bagwiz_camera_calibration_yaml_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_image_undistort_test test/core/image/undistort_test.cpp)
+  target_link_libraries(bagwiz_image_undistort_test bagwiz_core ${OpenCV_LIBS})
 
   ament_add_gtest(bagwiz_compressed_image_test test/core/image/compressed_image_test.cpp)
   target_link_libraries(bagwiz_compressed_image_test bagwiz_core)

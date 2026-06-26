@@ -8,9 +8,12 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/core/camera_info_resolver.hpp"
 #include "bagwiz/core/decoder/decoder.hpp"
+#include "bagwiz/core/image/camera_info.hpp"
 #include "bagwiz/core/image/image_encoder.hpp"
 #include "bagwiz/core/image/packed_raster.hpp"
+#include "bagwiz/core/image/undistort.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/message_formatter.hpp"
 #include "bagwiz/core/terminal_input.hpp"
@@ -208,6 +211,8 @@ public:
       ->required()
       ->check(CLI::ExistingPath);
     app.add_option("topic", topic_, "Topic name to inspect")->required();
+    app.add_option(
+      "--cam-info", camera_info_topic_, "Explicit CameraInfo topic for undistort preview");
   }
 
   int run() override
@@ -236,6 +241,36 @@ public:
       BAGWIZ_LOG_ERROR(
         kLogger, "Topic '%s' is not present in %s", topic_.c_str(), input_path_.c_str());
       return 1;
+    }
+
+    std::optional<std::string> camera_info_topic;
+    std::optional<core::image::CameraInfo> camera_info;
+    std::string camera_info_error;
+
+    if (camera_info_topic_.has_value()) {
+      if (const auto err =
+            core::camera_info::validate_camera_info_topic(input_path_, *camera_info_topic_);
+          err.has_value()) {
+        camera_info_error = *err;
+      } else {
+        camera_info_topic = *camera_info_topic_;
+      }
+    } else {
+      const auto resolution =
+        core::camera_info::resolve_camera_info_topic(topic_, reader->topics());
+      camera_info_topic = resolution.topic;
+      if (resolution.error.has_value()) {
+        camera_info_error = *resolution.error;
+      }
+    }
+
+    if (camera_info_topic.has_value()) {
+      const auto ci = core::camera_info::load_camera_info(input_path_, *camera_info_topic);
+      if (ci.ok()) {
+        camera_info = *ci.info;
+      } else {
+        camera_info_error = ci.error;
+      }
     }
 
     io::ReadFilter read_filter;
@@ -548,6 +583,38 @@ public:
       }
     };
 
+    std::unique_ptr<core::image::UndistortHelper> undistort_helper;
+    std::uint32_t undistort_helper_w = 0;
+    std::uint32_t undistort_helper_h = 0;
+
+    auto ensure_undistort_helper =
+      [&](std::uint32_t w, std::uint32_t h) -> core::image::UndistortHelper * {
+      if (!camera_info.has_value()) {
+        return nullptr;
+      }
+      if (!undistort_helper || undistort_helper_w != w || undistort_helper_h != h) {
+        undistort_helper = std::make_unique<core::image::UndistortHelper>(*camera_info, w, h);
+        undistort_helper_w = w;
+        undistort_helper_h = h;
+      }
+      return undistort_helper.get();
+    };
+
+    auto maybe_undistort = [&](core::image::PackedRaster * raster) {
+      if (raster == nullptr) {
+        return;
+      }
+      auto * helper = ensure_undistort_helper(raster->width, raster->height);
+      if (helper == nullptr) {
+        return;
+      }
+      const auto remapped = helper->remap(raster->bgr, raster->width * 3);
+      raster->bgr.assign(remapped.begin(), remapped.end());
+      raster->encoding = "bgr8";
+    };
+
+    bool undistort_enabled = false;
+
     // Paint one preview frame: a two-line caption, the decoded image centred in
     // the region between caption and key hint, and the key hint on the last row.
     // Graphics escapes bypass the pager (they have no display width), so this
@@ -572,7 +639,10 @@ public:
       const auto & msg = cache[index];
       const char * total_suffix = exhausted ? "" : "+";
       const std::size_t last_loaded_index = cache.size() - 1;
-      const auto pr = core::image::to_packed_raster(type_name, msg.payload);
+      auto pr = core::image::to_packed_raster(type_name, msg.payload);
+      if (undistort_enabled && pr.ok()) {
+        maybe_undistort(&*pr.raster);
+      }
 
       core::tui::draw_line(out, 1, fmt::format("  {}  {}", topic_name, type_name), cols);
       std::string info;
@@ -590,6 +660,7 @@ public:
       if (!status.empty()) {
         info += fmt::format("   {}", status);
       }
+      info += fmt::format("   undistort: {}", undistort_enabled ? "on" : "off");
       core::tui::draw_line(out, 2, info, cols);
 
       // Wrap the key legend the way the YAML footer (build_frame) does, so a
@@ -599,7 +670,7 @@ public:
       // derives its body height from the wrapped footer.
       const std::vector<std::string> legend_lines = core::tui::wrap_to_width(
         "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [g] first   [G] last   [s] save   "
-        "[i] back   [q] quit",
+        "[u] undistort   [i] back   [q] quit",
         cols);
       const int legend_top = std::max(1, rows - static_cast<int>(legend_lines.size()) + 1);
 
@@ -638,10 +709,13 @@ public:
     auto save_preview_image = [&]() {
       status.clear();
       const auto & cur = cache[index];
-      const auto pr = core::image::to_packed_raster(type_name, cur.payload);
+      auto pr = core::image::to_packed_raster(type_name, cur.payload);
       if (!pr.ok()) {
         status = fmt::format("cannot save: {}", pr.error);
         return;
+      }
+      if (undistort_enabled) {
+        maybe_undistort(&*pr.raster);
       }
       const auto encoded = core::image::encode_png(*pr.raster);
       if (!encoded.ok()) {
@@ -755,6 +829,15 @@ public:
             save_preview_image();
             needs_render = true;
             break;
+          case core::KeyEvent::kToggleUndistort:
+            if (!camera_info.has_value()) {
+              status = camera_info_error.empty() ? "undistort: no camera_info"
+                                                 : "undistort: " + camera_info_error;
+            } else {
+              undistort_enabled = !undistort_enabled;
+            }
+            needs_render = true;
+            break;
           case core::KeyEvent::kTogglePreview:
           case core::KeyEvent::kQuit:
             running = false;
@@ -863,6 +946,7 @@ public:
 private:
   std::filesystem::path input_path_;
   std::string topic_;
+  std::optional<std::string> camera_info_topic_;
 };
 
 BAGWIZ_REGISTER_COMMAND(WalkCommand)
