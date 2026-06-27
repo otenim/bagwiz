@@ -128,10 +128,10 @@ constexpr std::array<TopicArgBinding, 9> kTopicBindings{{
   // <output> are paths that fall through to the shell's file completion.
   {"generate", "video", kSecondCommandArgWord, kThirdCommandArgWord, kGenerateVideoSupportedTypes,
    false},
-  // `slam run <input> <pcd_topic> <output_root>`: complete the single <pcd_topic>
+  // `map slam <input> <pcd_topic> <output_root>`: complete the single <pcd_topic>
   // slot from the bag's PointCloud2 topics. <input> and <output_root> are paths
   // that fall through to the shell's file completion.
-  {"slam", "run", kSecondCommandArgWord, kThirdCommandArgWord, kPointCloud2Type, false},
+  {"map", "slam", kSecondCommandArgWord, kThirdCommandArgWord, kPointCloud2Type, false},
 }};
 
 enum class CompletionShell { Bash, Zsh, Fish };
@@ -969,59 +969,56 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
   return {};
 }
 
-// `slam` is a command group with two action verbs, `run` and `viewer`. The verb
-// adds one positional slot, shifting every argument one word to the right of a
-// flat command:
+// `map` is a command group for map generation and post-processing. Its action
+// verbs are `slam`, `viewer`, and `filter`. The verb adds one positional slot,
+// shifting every argument one word to the right of a flat command.
 //
-//   run:    `slam`(0) `run`(1) `<input>`(2) `<pcd_topic>`(3) `<output_root>`(4)
+//   slam:   `map`(0) `slam`(1) `<input>`(2) `<pcd_topic>`(3) `<output_root>`(4)
 //           [--imu <topic>] [--gnss <topic>] [--map-resolution <m>] [--upsample-traj <spec>]
-//           [--removert] [--removert-vfov <deg>] [--removert-hfov <deg>]
-//           [--removert-remove-resolutions <list>] [--removert-revert]
-//           [--removert-revert-resolutions <list>] [--removert-adaptive-coeff <c>]
-//           [--removert-valid-diff-max <m>] [--viewer] [-w|--overwrite]
-//   viewer: `slam`(0) `viewer`(1) `<map>`(2)
+//           [--viewer] [-w|--overwrite] [--no-progress]
+//   viewer: `map`(0) `viewer`(1) `<map>`(2)
+//   filter: `map`(0) `filter`(1) `<action>`(2) ...
 //
-// At the action slot (word 1) the candidates are `run` and `viewer` (or the help
-// flags for a `-` word). Past it, the positional <pcd_topic> slot is completed
-// earlier by try_topic_completion via kTopicBindings (PointCloud2 topics only);
-// here we surface `run`'s flags for any `-` word and complete the value of
-// `--imu` from the bag's sensor_msgs/msg/Imu topics. `viewer` has no value-bearing
-// flags and its single <map> positional is a path that falls through to the
-// shell's file completion, as do `run`'s <input> and <output_root>.
-std::vector<std::string> complete_slam(const CompletionRequest & request)
+// At the action slot (word 1) the candidates are `slam`, `viewer`, and `filter`
+// (or the help flags for a `-` word). Past it, the positional <pcd_topic> slot
+// for `map slam` is completed earlier by try_topic_completion via kTopicBindings
+// (PointCloud2 topics only); here we surface `slam`'s flags for any `-` word and
+// complete the value of `--imu` from the bag's sensor_msgs/msg/Imu topics.
+// `viewer` has no value-bearing flags and its single <map> positional is a path.
+// `filter` is handled by complete_map_filter.
+std::vector<std::string> complete_map_filter(const CompletionRequest & request);
+
+std::vector<std::string> complete_map(const CompletionRequest & request)
 {
   const auto current = current_word(request);
   if (request.cursor_word == kFirstCommandArgWord) {
     if (current.starts_with("-")) {
       return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
     }
-    return matching({"run", "viewer"}, current);
+    return matching({"filter", "slam", "viewer"}, current);
   }
 
-  // Reaching here implies cursor_word >= kSecondCommandArgWord (cursor_word == 0
-  // is handled by the caller and == kFirstCommandArgWord above), so words[1]
-  // exists (parse_request clamps cursor_word to words.size()).
-  //
-  // `viewer` only takes a <map> path: offer the implicit help flags for a `-`
-  // word, otherwise leave the path to the shell's file completion.
-  if (request.words[kFirstCommandArgWord] == "viewer") {
+  // Reaching here implies cursor_word >= kSecondCommandArgWord, so words[1] exists.
+  const auto & verb = request.words[kFirstCommandArgWord];
+  if (verb == "viewer") {
     if (current.starts_with("-")) {
       return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
     }
     return {};
   }
-  // Only `run` has flags or a bag to complete from.
-  if (request.words[kFirstCommandArgWord] != "run") {
+  if (verb == "filter") {
+    return complete_map_filter(request);
+  }
+  // Only `slam` has flags or a bag to complete from.
+  if (verb != "slam") {
     return {};
   }
 
   if (current.starts_with("-")) {
     return matching(
       with_help(
-        {"--gnss", "--imu", "--map-resolution", "--overwrite", "--removert",
-         "--removert-adaptive-coeff", "--removert-hfov", "--removert-remove-resolutions",
-         "--removert-revert", "--removert-revert-resolutions", "--removert-vfov",
-         "--removert-valid-diff-max", "--upsample-traj", "--viewer", "-w"}),
+        {"--gnss", "--imu", "--map-resolution", "--no-progress", "--overwrite", "--upsample-traj",
+         "--viewer", "-w"}),
       current);
   }
 
@@ -1036,6 +1033,55 @@ std::vector<std::string> complete_slam(const CompletionRequest & request)
     return {};
   }
   return complete_topics(expand_current_user_home(bag_arg), current, kImuType);
+}
+
+// `map filter` is a command group for post-SLAM map filters. The first action is
+// `removert`:
+//
+//   removert: `map`(0) `filter`(1) `removert`(2) `<map>`(3) `<input>`(4)
+//             `<pcd_topic>`(5) `<traj.tum>`(6) `<output>`(7)
+//             [--revert/--no-revert] [--vfov <deg>] [--hfov <deg>]
+//             [--remove-resolutions <list>] [--revert-resolutions <list>]
+//             [--adaptive-coeff <c>] [--valid-diff-max <m>] [-w|--overwrite] [--no-progress]
+//
+// At the action slot (word 2) the candidates are `removert` (or help flags for a
+// `-` word). Past it we surface the removert flags for any `-` word and complete
+// the <pcd_topic> positional from the bag at word 4.
+std::vector<std::string> complete_map_filter(const CompletionRequest & request)
+{
+  const auto current = current_word(request);
+  if (request.cursor_word == kSecondCommandArgWord) {
+    if (current.starts_with("-")) {
+      return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
+    }
+    return matching({"removert"}, current);
+  }
+
+  if (request.words.size() <= kSecondCommandArgWord) {
+    return {};
+  }
+  const auto & action = request.words[kSecondCommandArgWord];
+  if (action != "removert") {
+    return {};
+  }
+
+  if (current.starts_with("-")) {
+    return matching(
+      with_help(
+        {"--adaptive-coeff", "--hfov", "--no-progress", "--no-revert", "--overwrite",
+         "--remove-resolutions", "--revert", "--revert-resolutions", "--valid-diff-max", "--vfov",
+         "-w"}),
+      current);
+  }
+
+  // Complete the <pcd_topic> slot from the bag at word 4.
+  if (request.cursor_word == kFifthCommandArgWord && request.words.size() > kFourthCommandArgWord) {
+    const auto & bag_arg = request.words[kFourthCommandArgWord];
+    if (!bag_arg.empty() && !bag_arg.starts_with("-")) {
+      return complete_topics(expand_current_user_home(bag_arg), current, kPointCloud2Type);
+    }
+  }
+  return {};
 }
 
 std::vector<std::string> complete_request(const CompletionRequest & request)
@@ -1068,8 +1114,8 @@ std::vector<std::string> complete_request(const CompletionRequest & request)
   if (command == "generate") {
     return complete_generate(request);
   }
-  if (command == "slam") {
-    return complete_slam(request);
+  if (command == "map") {
+    return complete_map(request);
   }
   if (command == "ls" || command == "walk") {
     return complete_help_only(request);

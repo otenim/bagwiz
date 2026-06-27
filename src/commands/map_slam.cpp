@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/commands/slam_run.hpp"
+#include "bagwiz/commands/map_slam.hpp"
 
 #include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/logging.hpp"
@@ -55,7 +55,7 @@ namespace bagwiz::commands
 {
 namespace
 {
-constexpr const char * kLogger = "bagwiz.cmd.slam";
+constexpr const char * kLogger = "bagwiz.cmd.map";
 constexpr const char * kPointCloud2Type = "sensor_msgs/msg/PointCloud2";
 constexpr const char * kImuType = "sensor_msgs/msg/Imu";
 constexpr const char * kNavSatFixType = "sensor_msgs/msg/NavSatFix";
@@ -88,13 +88,13 @@ core::slam::SensorTransform to_sensor_transform(const geometry_msgs::msg::Transf
   return out;
 }
 
-// Drives a single `bagwiz slam run` invocation. Holds the parsed arguments plus
+// Drives a single `bagwiz map slam` invocation. Holds the parsed arguments plus
 // the output paths derived from output_root, and owns the bag reading + GLIM
 // feeding. One instance per run().
-class SlamRunner
+class MapSlamRunner
 {
 public:
-  explicit SlamRunner(const SlamRunArgs & args) : args_(args) {}
+  explicit MapSlamRunner(const MapSlamArgs & args) : args_(args) {}
 
   int run()
   {
@@ -643,14 +643,6 @@ private:
   {
     core::slam::CloudMapperConfig config;
     config.map_resolution = args_.map_resolution;
-    config.enable_removert = args_.removert;
-    config.removert_revert = args_.removert_revert;
-    config.removert_vertical_fov_deg = args_.removert_vertical_fov_deg;
-    config.removert_horizontal_fov_deg = args_.removert_horizontal_fov_deg;
-    config.removert_remove_resolutions = args_.removert_remove_resolutions;
-    config.removert_revert_resolutions = args_.removert_revert_resolutions;
-    config.removert_adaptive_coeff = args_.removert_adaptive_coeff;
-    config.removert_valid_diff_upper_bound = args_.removert_valid_diff_upper_bound;
     config.t_lidar_imu = t_lidar_imu;
     config.enable_gnss = !args_.gnss_topic.empty();
     // Resolve the antenna lever-arm (T_cloud_gnss) from static TF so the GNSS prior
@@ -725,16 +717,6 @@ private:
       std::chrono::duration<double>(std::chrono::steady_clock::now() - optimize_start).count();
     fmt::print(stdout, "Global optimization took {:.1f}s\n", optimize_seconds);
 
-    if (args_.removert) {
-      const auto removert_start = std::chrono::steady_clock::now();
-      {
-        core::slam::FinalizeSpinner spinner("Removing dynamic points", progress_on);
-        mapper.apply_removert_filter(map);
-      }
-      const double removert_seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - removert_start).count();
-      fmt::print(stdout, "Removert filter took {:.1f}s\n", removert_seconds);
-    }
     if (map.trajectory.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger, "SLAM produced no trajectory poses from %s scans", std::to_string(scans).c_str());
@@ -783,17 +765,6 @@ private:
       out_traj->size(), map.points.size(), scans, imu_suffix(imu_count), skipped,
       output_path_.string(), map_path_.string());
 
-    if (args_.removert) {
-      fmt::print(
-        stdout, "Removed {} dynamic point(s) from the map (Removert filter)\n",
-        map.removert_removed_count);
-      if (map.removert_reverted_count > 0) {
-        fmt::print(
-          stdout, "Reverted {} false-negative static point(s) (Removert coarse revert)\n",
-          map.removert_reverted_count);
-      }
-    }
-
     if (!args_.gnss_topic.empty()) {
       if (map.gnss_factor_count > 0) {
         fmt::print(
@@ -834,7 +805,7 @@ private:
     return fmt::format(" + {} IMU samples", imu_count);
   }
 
-  const SlamRunArgs & args_;
+  const MapSlamArgs & args_;
   std::filesystem::path output_path_;  // <output_root>/traj.tum
   std::filesystem::path map_path_;     // <output_root>/map.pcd (mapping mode only)
   // Parsed --upsample-traj spec; std::nullopt leaves up-sampling disabled.
@@ -843,9 +814,9 @@ private:
 
 }  // namespace
 
-int run_slam_run(const SlamRunArgs & args)
+int run_map_slam(const MapSlamArgs & args)
 {
-  return SlamRunner(args).run();
+  return MapSlamRunner(args).run();
 }
 
 }  // namespace bagwiz::commands

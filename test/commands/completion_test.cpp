@@ -298,6 +298,29 @@ std::filesystem::path write_camera_info_fixture(const std::filesystem::path & pa
   return path;
 }
 
+// MCAP carrying one PointCloud2 topic (/points) and one non-PointCloud2 topic
+// (/image). Used to verify that `map slam` and `map filter removert` complete
+// the <pcd_topic> slot with only sensor_msgs/msg/PointCloud2 topics.
+std::filesystem::path write_pointcloud2_fixture(const std::filesystem::path & path)
+{
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "none";
+
+  constexpr std::array<std::byte, 4> kPayload{
+    std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
+  const auto bytes = std::span<const std::byte>(kPayload.data(), kPayload.size());
+
+  auto writer = bagwiz::io::open_write(path, options);
+  writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+  writer->declare_topic(make_topic("/image", "sensor_msgs/msg/Image"));
+  writer->write("/points", 1'000'000'000, bytes);
+  writer->write("/image", 2'000'000'000, bytes);
+  writer->close();
+  return path;
+}
+
 std::string run_completion(std::vector<std::string> args)
 {
   std::vector<char *> argv;
@@ -995,45 +1018,92 @@ TEST(FlagCompletionTest, TopicSubcommandListsDropKeepAndRename)
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "topic", ""}), "drop\nkeep\nrename\n");
 }
 
-// `bagwiz slam <TAB>` lists the command group's action verbs (run, viewer),
-// sorted.
-TEST(FlagCompletionTest, SlamSubcommandListsRunAndViewer)
+// `bagwiz map <TAB>` lists the command group's action verbs (filter, slam,
+// viewer), sorted.
+TEST(FlagCompletionTest, MapSubcommandListsFilterSlamAndViewer)
 {
-  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "slam", ""}), "run\nviewer\n");
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "2", "bagwiz", "map", ""}), "filter\nslam\nviewer\n");
 }
 
 // A partial verb narrows the candidates.
-TEST(FlagCompletionTest, SlamSubcommandPrefixNarrowsToViewer)
+TEST(FlagCompletionTest, MapSubcommandPrefixNarrowsToViewer)
 {
-  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "slam", "v"}), "viewer\n");
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "map", "v"}), "viewer\n");
 }
 
-// `slam viewer <TAB>`: the <map> positional is a path, left to shell file
+// `map viewer <TAB>`: the <map> positional is a path, left to shell file
 // completion, so no candidates are emitted.
-TEST(FlagCompletionTest, SlamViewerMapSlotDefersToShell)
+TEST(FlagCompletionTest, MapViewerMapSlotDefersToShell)
 {
-  EXPECT_EQ(run_completion({"bagwiz", "__complete", "3", "bagwiz", "slam", "viewer", ""}), "");
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "3", "bagwiz", "map", "viewer", ""}), "");
 }
 
-// `slam viewer -` surfaces only the implicit help flags (viewer has no other
+// `map viewer -` surfaces only the implicit help flags (viewer has no other
 // flags).
-TEST(FlagCompletionTest, SlamViewerDashListsHelpFlags)
+TEST(FlagCompletionTest, MapViewerDashListsHelpFlags)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "slam", "viewer", "-"}), "--help\n-h\n");
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "map", "viewer", "-"}), "--help\n-h\n");
 }
 
-// `slam run -` surfaces the run action's flags plus the implicit help flags,
-// sorted. Value-bearing flags (--gnss/--imu/--upsample-traj/--removert-*) appear
-// by name.
-TEST(FlagCompletionTest, SlamRunDashListsRunFlags)
+// `map slam -` surfaces the slam action's flags plus the implicit help flags,
+// sorted.
+TEST(FlagCompletionTest, MapSlamDashListsSlamFlags)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "slam", "run", "-"}),
-    "--gnss\n--help\n--imu\n--map-resolution\n--overwrite\n--removert\n--removert-adaptive-coeff\n"
-    "--removert-hfov\n--removert-remove-resolutions\n--removert-revert\n"
-    "--removert-revert-resolutions\n--removert-valid-diff-max\n--removert-vfov\n"
-    "--upsample-traj\n--viewer\n-h\n-w\n");
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "map", "slam", "-"}),
+    "--gnss\n--help\n--imu\n--map-resolution\n--no-progress\n--overwrite\n--upsample-traj\n"
+    "--viewer\n-h\n-w\n");
+}
+
+// `map filter <TAB>` lists the filter group's action verbs.
+TEST(FlagCompletionTest, MapFilterSubcommandListsRemovert)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "map", "filter", ""}), "removert\n");
+}
+
+// `map filter -` at the group slot shows only help flags.
+TEST(FlagCompletionTest, MapFilterGroupDashListsHelpFlagsOnly)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "map", "filter", "-"}), "--help\n-h\n");
+}
+
+// `map filter removert -` lists the removert flags plus help, sorted.
+TEST(FlagCompletionTest, MapFilterRemovertDashListsRemovertFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "map", "filter", "removert", "-"}),
+    "--adaptive-coeff\n--help\n--hfov\n--no-progress\n--no-revert\n--overwrite\n"
+    "--remove-resolutions\n--revert\n--revert-resolutions\n--valid-diff-max\n--vfov\n-h\n-w\n");
+}
+
+// `map slam <input> <pcd_topic>` completes the topic slot from the bag's
+// PointCloud2 topics, excluding other types.
+TEST_F(CompletionTest, MapSlamTopicCompletionListsOnlyPointCloud2)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_pointcloud2_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "map", "slam", "~/fixture.mcap"}),
+    "/points\n");
+}
+
+// `map filter removert <map> <input> <pcd_topic>` completes the topic slot
+// from the input bag's PointCloud2 topics, excluding other types.
+TEST_F(CompletionTest, MapFilterRemovertTopicCompletionListsOnlyPointCloud2)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_pointcloud2_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "map", "filter", "removert", "~/map.pcd",
+       "~/fixture.mcap"}),
+    "/points\n");
 }
 
 // `bagwiz topic -` is the command-group slot; only the implicit help flags

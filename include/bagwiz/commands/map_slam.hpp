@@ -6,8 +6,8 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef BAGWIZ__COMMANDS__SLAM_RUN_HPP_
-#define BAGWIZ__COMMANDS__SLAM_RUN_HPP_
+#ifndef BAGWIZ__COMMANDS__MAP_SLAM_HPP_
+#define BAGWIZ__COMMANDS__MAP_SLAM_HPP_
 
 #include <filesystem>
 #include <string>
@@ -16,11 +16,11 @@
 namespace bagwiz::commands
 {
 
-// Arguments for `bagwiz slam run`. Populated by SlamCommand's CLI wiring
-// (src/commands/slam.cpp) and consumed by run_slam_run. Kept in a header so the
+// Arguments for `bagwiz map slam`. Populated by MapCommand's CLI wiring
+// (src/commands/map.cpp) and consumed by run_map_slam. Kept in a header so the
 // run function can be exercised directly from tests without driving the CLI
 // parser.
-struct SlamRunArgs
+struct MapSlamArgs
 {
   std::filesystem::path input_path;
   // PointCloud2 topic to run SLAM on.
@@ -42,24 +42,6 @@ struct SlamRunArgs
   // Exported-map voxel size in meters. Controls only the exported map's density,
   // never the optimization or trajectory.
   double map_resolution = 0.2;
-  // Remove dynamic (moving-object) points from the exported map with an
-  // original Removert-style filter. Affects only map.pcd contents, never the
-  // optimization or trajectory. The remaining removert_* fields tune the filter
-  // and are consulted only when this is set.
-  bool removert = false;
-  // Enable the multi-resolution consensus revert pass.
-  bool removert_revert = true;
-  // Vertical and horizontal field of view for the Removert range images (deg).
-  double removert_vertical_fov_deg = 50.0;
-  double removert_horizontal_fov_deg = 360.0;
-  // Resolution magnifier lists (pixels per degree) for the remove and revert
-  // passes. Processed in order. Defaults use a single resolution each to keep
-  // the filter fast; add finer/coarser values for more aggressive cleaning.
-  std::vector<double> removert_remove_resolutions = {2.0};
-  std::vector<double> removert_revert_resolutions = {1.0};
-  // Adaptive discrepancy coefficient and upper-bound for valid pixel differences.
-  double removert_adaptive_coeff = 0.05;
-  double removert_valid_diff_upper_bound = 200.0;
   // Overwrite the output file(s) if they already exist.
   bool overwrite = false;
   // After writing map.pcd, serve it over a loopback HTTP server and open the
@@ -91,8 +73,8 @@ struct SlamRunArgs
 // Returns a process exit code: 0 on success, 1 on any error (input open
 // failure, topic/type mismatch, an absent LiDAR<-IMU static-TF chain, output
 // collision, or a read/write error).
-int run_slam_run(const SlamRunArgs & args);
+int run_map_slam(const MapSlamArgs & args);
 
 }  // namespace bagwiz::commands
 
-#endif  // BAGWIZ__COMMANDS__SLAM_RUN_HPP_
+#endif  // BAGWIZ__COMMANDS__MAP_SLAM_HPP_

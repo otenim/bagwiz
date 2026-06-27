@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/commands/slam_viewer.hpp"
+#include "bagwiz/commands/map_viewer.hpp"
 
 #include "bagwiz/core/logging.hpp"
 #ifdef BAGWIZ_WITH_MAP_VIEWER
@@ -20,17 +20,17 @@ namespace bagwiz::commands
 {
 namespace
 {
-constexpr const char * kLogger = "bagwiz.cmd.slam";
+constexpr const char * kLogger = "bagwiz.cmd.map";
 constexpr const char * kMapFileName = "map.pcd";
 }  // namespace
 
-int run_slam_viewer(const SlamViewerArgs & args)
+int run_map_viewer(const MapViewerArgs & args)
 {
 #ifdef BAGWIZ_WITH_MAP_VIEWER
   std::filesystem::path map_path = args.map_path;
   std::error_code ec;
   // Accept either the map.pcd file directly or the output directory that holds
-  // it, so `slam viewer <output_root>` mirrors `slam run … <output_root>`.
+  // it, so `map viewer <output_root>` mirrors `map slam … <output_root>`.
   if (std::filesystem::is_directory(map_path, ec)) {
     map_path /= kMapFileName;
   }
@@ -42,7 +42,7 @@ int run_slam_viewer(const SlamViewerArgs & args)
 #else
   (void)args;
   BAGWIZ_LOG_ERROR(
-    kLogger, "slam viewer is unavailable: this binary was built without the map viewer");
+    kLogger, "map viewer is unavailable: this binary was built without the map viewer");
   return 1;
 #endif
 }
