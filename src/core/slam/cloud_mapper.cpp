@@ -526,82 +526,6 @@ struct CloudMapper::Impl
     result.points = grid.points();
     result.intensities = grid.intensities();
   }
-
-  // Removert-style dynamic-point removal over the merged map. First runs a fine
-  // range-image filter (remove step); then, if enabled, re-evaluates the removed
-  // points at progressively coarser range-image resolutions to recover false-
-  // negative static structure (revert step). Points and parallel intensities are
-  // filtered together. A no-op for an empty map.
-  void apply_removert_filter(CloudMap & result, bool with_intensity) const
-  {
-    if (result.points.empty()) {
-      return;
-    }
-
-    RemovertConfig rc;
-    rc.vertical_fov_deg = config.removert_vertical_fov_deg;
-    rc.horizontal_fov_deg = config.removert_horizontal_fov_deg;
-    rc.remove_resolutions = config.removert_remove_resolutions;
-    rc.revert_resolutions = config.removert_revert_resolutions;
-    rc.adaptive_coeff = config.removert_adaptive_coeff;
-    rc.valid_diff_upper_bound = config.removert_valid_diff_upper_bound;
-    rc.enable_revert = config.removert_revert;
-
-    // Transform every frame's full points into world-frame scan views and feed
-    // them directly into RemovertFilter. Using the move overload avoids keeping
-    // an intermediate copy of all scan points.
-    RemovertFilter filter(rc, result.points);
-    for (const auto & entry : entries) {
-      if (!entry.submap) {
-        continue;
-      }
-      const Eigen::Isometry3d & T_world_origin = entry.submap->T_world_origin;
-      for (const auto & ref : entry.frames) {
-        if (ref.points.empty()) {
-          continue;
-        }
-        const Eigen::Isometry3d T_world_frame = T_world_origin * ref.T_origin_frame;
-        const Eigen::Vector3d origin = T_world_frame.translation();
-        std::vector<std::array<float, 3>> world_points;
-        world_points.reserve(ref.points.size());
-        for (const auto & p : ref.points) {
-          const Eigen::Vector3d local(p[0], p[1], p[2]);
-          const Eigen::Vector3d world = T_world_frame * local;
-          world_points.push_back(
-            {static_cast<float>(world.x()), static_cast<float>(world.y()),
-             static_cast<float>(world.z())});
-        }
-        filter.add_scan({origin.x(), origin.y(), origin.z()}, std::move(world_points));
-      }
-    }
-
-    std::vector<char> keep = filter.filter();
-    const std::size_t reverted_count = filter.reverted_count();
-
-    // Apply the final keep mask in place, compacting points (and intensities,
-    // when present) to the survivors while preserving order.
-    std::vector<std::array<float, 3>> kept_points;
-    std::vector<float> kept_intensities;
-    kept_points.reserve(result.points.size());
-    if (with_intensity) {
-      kept_intensities.reserve(result.intensities.size());
-    }
-    std::size_t removed = 0;
-    for (std::size_t i = 0; i < result.points.size(); ++i) {
-      if (keep[i] != 0) {
-        kept_points.push_back(result.points[i]);
-        if (with_intensity) {
-          kept_intensities.push_back(result.intensities[i]);
-        }
-      } else {
-        ++removed;
-      }
-    }
-    result.points = std::move(kept_points);
-    result.intensities = std::move(kept_intensities);
-    result.removert_removed_count = removed;
-    result.removert_reverted_count = reverted_count;
-  }
 };
 
 CloudMapper::CloudMapper(CloudMapperConfig config)
@@ -760,16 +684,6 @@ CloudMap CloudMapper::finish()
   impl_->fill_trajectory(result);
   impl_->fill_map(result);
   return result;
-}
-
-void CloudMapper::apply_removert_filter(CloudMap & map)
-{
-  if (!impl_->config.enable_removert || map.points.empty()) {
-    return;
-  }
-  const bool with_intensity =
-    !map.intensities.empty() && map.intensities.size() == map.points.size();
-  impl_->apply_removert_filter(map, with_intensity);
 }
 
 }  // namespace bagwiz::core::slam

@@ -54,26 +54,6 @@ struct CloudMapperConfig
   // grids of overlapping frames (at the cost of a much larger map). Must be > 0.
   double map_resolution = 0.2;
 
-  // Remove dynamic ("see-through") points from the exported map. When true, the
-  // map rebuilt in fill_map is passed through a RemovertFilter: each optimized
-  // scan and the merged map are projected into dense range images using the
-  // configured FOV, and a merged map point is dropped when abs(scan_range -
-  // map_range) exceeds the adaptive coefficient times scan_range (and is below
-  // valid_diff_upper_bound), the signature of a moving object's ghost trail. Off
-  // by default; the trajectory is never affected — only the exported map's
-  // contents. Tuned by the fields below (defaults mirror RemovertConfig).
-  bool enable_removert = false;
-
-  // Tunables for the Removert-style filter; only consulted when enable_removert
-  // is true. See RemovertConfig for the meaning of each field.
-  double removert_vertical_fov_deg = 50.0;
-  double removert_horizontal_fov_deg = 360.0;
-  std::vector<double> removert_remove_resolutions = {2.5, 2.0, 1.5};
-  std::vector<double> removert_revert_resolutions = {1.0, 0.9, 0.8, 0.7};
-  double removert_adaptive_coeff = 0.05;
-  double removert_valid_diff_upper_bound = 200.0;
-  bool removert_revert = true;
-
   // LiDAR↔IMU extrinsic. nullopt → LiDAR-only CT odometry (the M2 behavior; IMU
   // disabled in sub/global mapping). A value → LiDAR-IMU CPU odometry with that
   // extrinsic, and IMU enabled in sub/global mapping; feed IMU via insert_imu().
@@ -172,14 +152,6 @@ struct CloudMap
   // optimization. 0 when GNSS was disabled or could not initialize (no fixes
   // overlapping the submap timespan, or baseline below gnss_min_baseline).
   std::size_t gnss_factor_count = 0;
-
-  // Number of map points dropped by the Removert-style filter. 0 when
-  // enable_removert was off (or nothing was judged dynamic).
-  std::size_t removert_removed_count = 0;
-
-  // Number of points recovered by the coarse revert pass. 0 when revert was
-  // disabled or no false-negative static points were recovered.
-  std::size_t removert_reverted_count = 0;
 };
 
 class CloudMapper
@@ -214,16 +186,8 @@ public:
 
   // Flush the remaining in-flight frames, run the global optimization, and
   // return the optimized map + trajectory. Heavy: the global matching-based
-  // iSAM2 optimization runs here. Removert filtering is NOT applied here; call
-  // apply_removert_filter() afterwards when config.enable_removert is true.
+  // iSAM2 optimization runs here.
   [[nodiscard]] CloudMap finish();
-
-  // Apply the Removert-style dynamic-point filter to an already-built map.
-  // Uses the optimized scan views captured during insert()/finish(). This is a
-  // separate step so callers can show distinct progress for global optimization
-  // and Removert processing. No-op if the map has no points or Removert is not
-  // configured.
-  void apply_removert_filter(CloudMap & map);
 
 private:
   struct Impl;

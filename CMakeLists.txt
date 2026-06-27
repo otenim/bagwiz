@@ -345,13 +345,13 @@ add_executable(bagwiz
 # It is not a bagwiz_core dependency, so link it on the executable directly.
 target_link_libraries(bagwiz PRIVATE bagwiz_core CLI11::CLI11 fmt::fmt rang ${OpenCV_LIBS} ${sensor_msgs_TARGETS})
 
-# --- Optional in-process GLIM SLAM command (`bagwiz slam`) --------------------
+# --- Optional in-process GLIM SLAM command (`bagwiz map slam`) ----------------
 # OFF by default so normal builds need no GLIM. Enable with `pixi run build-slam`
 # (which builds the GLIM stack into install/<distro>/glim-deps via build-glim
 # and passes -DBAGWIZ_WITH_SLAM=ON plus that prefix on CMAKE_PREFIX_PATH). The
 # GLIM types stay confined to cloud_mapper.cpp (pimpl); the
-# `slam` command group (slam.cpp) and its `run` action (slam_run.cpp) are GLIM-free.
-option(BAGWIZ_WITH_SLAM "Build the in-process GLIM `bagwiz slam` command" OFF)
+# `map` command group (map.cpp) and its `slam` action (map_slam.cpp) are GLIM-free.
+option(BAGWIZ_WITH_SLAM "Build the in-process GLIM `bagwiz map slam` command" OFF)
 if(BAGWIZ_WITH_SLAM)
   find_package(glim CONFIG REQUIRED)
   find_package(gtsam_points CONFIG REQUIRED)
@@ -360,7 +360,7 @@ if(BAGWIZ_WITH_SLAM)
   # so depend on it explicitly for its headers and the `gtsam` link target.
   find_package(GTSAM CONFIG REQUIRED)
 
-  # Header-only progress bar for `slam run` (p-ranav/indicators). indicators
+  # Header-only progress bar for `map slam` (p-ranav/indicators). indicators
   # auto-detects it is a subproject (PROJECT_NAME already set) and skips its own
   # install()/export rules, so unlike cpp-httplib below it needs no install
   # toggle and links cleanly into the (non-exported) bagwiz executable.
@@ -380,9 +380,10 @@ if(BAGWIZ_WITH_SLAM)
   target_sources(bagwiz PRIVATE
     src/core/slam/cloud_mapper.cpp
     src/core/slam/progress_bar.cpp
-    src/commands/slam.cpp
-    src/commands/slam_run.cpp
-    src/commands/slam_viewer.cpp)
+    src/commands/map.cpp
+    src/commands/map_filter.cpp
+    src/commands/map_slam.cpp
+    src/commands/map_viewer.cpp)
   target_link_libraries(bagwiz PRIVATE glim::glim gtsam_points::gtsam_points gtsam)
   # Header-only: pull indicators' include dir as SYSTEM (not a link) so its own
   # -Wshadow chatter stays out of our build, mirroring httplib below.
@@ -391,14 +392,14 @@ if(BAGWIZ_WITH_SLAM)
   target_compile_definitions(bagwiz PRIVATE BAGWIZ_WITH_SLAM)
 endif()
 
-# --- Optional browser map viewer for `bagwiz slam run --viewer` ---------------
+# --- Optional browser map viewer for `bagwiz map slam --viewer` ---------------
 # The viewer (a cpp-httplib loopback server + embedded Three.js assets + a
 # browser launch) is entirely GLIM-free, so it gets its own option that simply
 # DEFAULTS to BAGWIZ_WITH_SLAM: a normal build pulls in neither cpp-httplib nor
 # this code, a `build-slam` build gains the viewer, and the viewer can be built
 # and tested on its own with -DBAGWIZ_WITH_MAP_VIEWER=ON (no GLIM needed).
 option(BAGWIZ_WITH_MAP_VIEWER
-  "Build the `slam run --viewer` browser map viewer (fetches cpp-httplib)"
+  "Build the `map slam --viewer` browser map viewer (fetches cpp-httplib)"
   ${BAGWIZ_WITH_SLAM})
 if(BAGWIZ_WITH_MAP_VIEWER)
   FetchContent_Declare(
@@ -468,7 +469,7 @@ if(BAGWIZ_WITH_MAP_VIEWER)
   target_include_directories(bagwiz_core PRIVATE
     $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
   target_compile_definitions(bagwiz_core PRIVATE BAGWIZ_WITH_MAP_VIEWER)
-  # slam_run.cpp lives on the bagwiz executable and guards its --viewer call on this.
+  # map_slam.cpp lives on the bagwiz executable and guards its --viewer call on this.
   target_compile_definitions(bagwiz PRIVATE BAGWIZ_WITH_MAP_VIEWER)
 endif()
 
