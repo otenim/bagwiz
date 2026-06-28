@@ -96,6 +96,16 @@ glim::GlobalMappingParams make_global_mapping_params(bool enable_imu)
   return params;
 }
 
+// Build preprocessor params. A non-positive num_threads falls back to the
+// default (4) so both stages share the same baseline; otherwise they share
+// the requested thread budget because they run sequentially.
+glim::CloudPreprocessorParams make_preprocessor_params(int num_threads)
+{
+  glim::CloudPreprocessorParams params;
+  params.num_threads = num_threads > 0 ? num_threads : 4;
+  return params;
+}
+
 }  // namespace
 
 struct CloudMapper::Impl
@@ -160,7 +170,8 @@ struct CloudMapper::Impl
 
   explicit Impl(const CloudMapperConfig & cfg)
   : config(cfg),
-    odometry(detail::make_odometry_estimator(cfg.t_lidar_imu)),
+    preprocessor(make_preprocessor_params(cfg.num_threads)),
+    odometry(detail::make_odometry_estimator(cfg.t_lidar_imu, cfg.num_threads)),
     sub_mapping(
       std::make_unique<glim::SubMapping>(make_sub_mapping_params(cfg.t_lidar_imu.has_value()))),
     global_mapping(
