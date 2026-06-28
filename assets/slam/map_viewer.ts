@@ -70,7 +70,44 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
+controls.enableDamping = false;
+
+// Default arrow-style world-axis triad shown at the anchor point in 3D mode.
+// Uses unlit default colors (red/green/blue) so it matches the conventional
+// axis style without extra scene lights.
+let axesHelper: THREE.Group | null = null;
+
+function createArrowAxes(length: number): THREE.Group {
+  const group = new THREE.Group();
+  const headLength = length * 0.15;
+  const shaftLength = length - headLength;
+  const shaftRadius = length * 0.015;
+  const headRadius = length * 0.04;
+  const up = new THREE.Vector3(0, 1, 0);
+
+  const addAxis = (color: number, dir: THREE.Vector3): void => {
+    const material = new THREE.MeshBasicMaterial({ color });
+    const q = new THREE.Quaternion().setFromUnitVectors(up, dir);
+
+    const shaftGeom = new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 12);
+    shaftGeom.translate(0, shaftLength / 2, 0);
+    const shaft = new THREE.Mesh(shaftGeom, material);
+    shaft.setRotationFromQuaternion(q);
+
+    const headGeom = new THREE.ConeGeometry(headRadius, headLength, 12);
+    headGeom.translate(0, shaftLength + headLength / 2, 0);
+    const head = new THREE.Mesh(headGeom, material);
+    head.setRotationFromQuaternion(q);
+
+    group.add(shaft, head);
+  };
+
+  addAxis(0xff0000, new THREE.Vector3(1, 0, 0));
+  addAxis(0x00ff00, new THREE.Vector3(0, 1, 0));
+  addAxis(0x0000ff, new THREE.Vector3(0, 0, 1));
+
+  return group;
+}
 
 // ---------------------------------------------------------------------------
 // On-demand rendering
@@ -78,8 +115,7 @@ controls.enableDamping = true;
 // The scene only repaints when something changes — the camera moved, a control
 // was touched, or the window resized. This keeps the GPU idle while the view is
 // still, which matters because the glass panels' backdrop-filter would otherwise
-// recomposite on every frame. OrbitControls' damping is honored by re-scheduling
-// while `update()` reports the camera is still easing toward its target.
+// recomposite on every frame.
 let frameQueued = false;
 
 function renderFrame(): void {
@@ -300,7 +336,10 @@ function activeCamera(): THREE.PerspectiveCamera | THREE.OrthographicCamera {
 function applyView(): void {
   camera = activeCamera();
   controls.object = camera;
-  controls.enableRotate = true;
+  controls.enableRotate = state.viewMode !== "2d";
+  if (axesHelper) {
+    axesHelper.visible = state.viewMode === "3d";
+  }
   controls.update();
   syncToolbar();
   requestFrame();
@@ -314,6 +353,13 @@ function frameView(): void {
   }
   const { center, radius } = sphere;
   controls.target.copy(center);
+
+  if (!axesHelper) {
+    axesHelper = createArrowAxes(3.0);
+    scene.add(axesHelper);
+  }
+  axesHelper.position.copy(center);
+  axesHelper.visible = state.viewMode === "3d";
 
   if (state.viewMode === "3d") {
     setNearFar(perspCamera, radius);
@@ -408,6 +454,16 @@ function syncToolbar(): void {
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
+// World-space pick radius that corresponds to a few screen pixels at the
+// current camera distance. This keeps double-click anchoring precise even when
+// zoomed in close to the ground.
+function pickThreshold(): number {
+  const distance = camera.position.distanceTo(controls.target);
+  const worldPerPixel = (2 * distance * Math.tan((PERSP_FOV * DEG2RAD) / 2)) / window.innerHeight;
+  const minThreshold = state.boundingSphere ? state.boundingSphere.radius * 0.001 : 0.05;
+  return Math.max(worldPerPixel * 4, minThreshold);
+}
+
 function onDoubleClick(event: MouseEvent): void {
   if (!state.points || !state.boundingSphere) {
     return;
@@ -416,9 +472,9 @@ function onDoubleClick(event: MouseEvent): void {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  // World-space radius around the pick ray; scaled to the cloud so it stays a
-  // few pixels on screen at the default framing.
-  raycaster.params.Points = { threshold: state.boundingSphere.radius * 0.02 };
+  // Use an adaptive, pixel-scale threshold so the anchor lands on the point
+  // actually under the cursor rather than a neighbor up to ~1 m away.
+  raycaster.params.Points = { threshold: pickThreshold() };
   const hits = raycaster.intersectObject(state.points, false);
   if (hits.length === 0) {
     setStatus("No point under cursor — double-click directly on the cloud.");
@@ -429,6 +485,9 @@ function onDoubleClick(event: MouseEvent): void {
   // delta as the target so the framing is preserved.
   camera.position.add(p.clone().sub(controls.target));
   controls.target.copy(p);
+  if (axesHelper) {
+    axesHelper.position.copy(p);
+  }
   controls.update();
   setStatus(`Anchored at (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})`);
 }
