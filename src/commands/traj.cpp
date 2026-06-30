@@ -1003,28 +1003,27 @@ private:
       BAGWIZ_LOG_ERROR(kLogger, "Failed to open %s: %s", args.input_path.c_str(), e.what());
       return 1;
     }
-    reader->populate_schemas();
 
-    io::BagReader::Stats stats;
+    // Snapshot the input's topic list for conflict detection; the reader's
+    // span is invalidated by subsequent operations.
+    const std::vector<io::TopicInfo> input_topics_pre(
+      reader->topics().begin(), reader->topics().end());
+
+    std::int64_t existing_count = 0;
     try {
-      stats = reader->compute_stats();
+      const std::vector<std::string> count_topics{args.topic};
+      const auto topic_counts = reader->compute_topic_counts(count_topics);
+      if (auto it = topic_counts.find(args.topic); it != topic_counts.end()) {
+        existing_count = it->second;
+      }
     } catch (const std::exception & e) {
       BAGWIZ_LOG_ERROR(
-        kLogger, "Failed to compute stats on %s: %s", args.input_path.c_str(), e.what());
+        kLogger, "Failed to compute topic count on %s: %s", args.input_path.c_str(), e.what());
       return 1;
     }
 
-    // Snapshot the input's topic list; the reader's span is invalidated
-    // by subsequent operations.
-    const std::vector<io::TopicInfo> input_topics(reader->topics().begin(), reader->topics().end());
-
-    std::int64_t existing_count = 0;
-    if (auto it = stats.per_topic.find(args.topic); it != stats.per_topic.end()) {
-      existing_count = it->second;
-    }
-
-    const auto decision =
-      core::decide_topic_write(input_topics, args.topic, kExpectedType, existing_count, args.force);
+    const auto decision = core::decide_topic_write(
+      input_topics_pre, args.topic, kExpectedType, existing_count, args.force);
     switch (decision.action) {
       case core::TopicWriteAction::kConflictAbort:
       case core::TopicWriteAction::kTypeMismatch:
@@ -1046,6 +1045,14 @@ private:
       BAGWIZ_LOG_ERROR(kLogger, "Failed to open output writer: %s", e.what());
       return 1;
     }
+
+    // Schemas are only needed once we start streaming messages. Deferring
+    // avoids opening shard 0 for bags that abort early due to a topic conflict.
+    reader->populate_schemas();
+
+    // Snapshot the input's topic list after schema backfill so the output
+    // writer receives embedded schemas.
+    const std::vector<io::TopicInfo> input_topics(reader->topics().begin(), reader->topics().end());
 
     // Declare every existing topic from the input. When the action is
     // kDeclareNew, also declare a freshly-synthesised TopicInfo for

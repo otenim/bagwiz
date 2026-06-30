@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -140,6 +141,50 @@ public:
       BAGWIZ_LOG_WARN(kLogger, "Statistics unavailable for %s; stats will be zero", path_.c_str());
     }
     return stats;
+  }
+
+  std::unordered_map<std::string, int64_t> compute_topic_counts(
+    std::span<const std::string> topics) override
+  {
+    std::unordered_map<std::string, int64_t> result;
+    if (topics.empty()) {
+      return result;
+    }
+
+    const auto & statistics = reader_.statistics();
+    if (!statistics) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "Statistics unavailable for %s; topic counts will be zero", path_.c_str());
+      return result;
+    }
+
+    const std::unordered_set<std::string> requested(topics.begin(), topics.end());
+    for (const auto & [channel_id, count] : statistics->channelMessageCounts) {
+      auto idx_it = channel_to_topic_idx_.find(channel_id);
+      if (idx_it == channel_to_topic_idx_.end()) {
+        continue;
+      }
+      const std::string & name = topics_[idx_it->second].name;
+      if (requested.count(name) != 0U) {
+        result[name] = static_cast<int64_t>(count);
+      }
+    }
+    return result;
+  }
+
+  TimeExtent compute_time_extent() override
+  {
+    TimeExtent extent;
+    const auto & statistics = reader_.statistics();
+    if (statistics) {
+      extent.start_ns = static_cast<int64_t>(statistics->messageStartTime);
+      extent.end_ns = static_cast<int64_t>(statistics->messageEndTime);
+      extent.has_data = statistics->messageCount > 0;
+    } else {
+      BAGWIZ_LOG_WARN(
+        kLogger, "Statistics unavailable for %s; time extent will be zero", path_.c_str());
+    }
+    return extent;
   }
 
 private:
@@ -356,6 +401,60 @@ public:
       }
     }
     return combined;
+  }
+
+  std::unordered_map<std::string, int64_t> compute_topic_counts(
+    std::span<const std::string> topics) override
+  {
+    std::unordered_map<std::string, int64_t> result;
+    if (topics.empty()) {
+      return result;
+    }
+
+    if (metadata_.has_summary) {
+      for (const auto & topic : topics) {
+        if (auto it = metadata_.per_topic_counts.find(topic);
+            it != metadata_.per_topic_counts.end()) {
+          result[topic] = it->second;
+        }
+      }
+      return result;
+    }
+
+    for (std::size_t i = 0; i < shard_rel_paths_.size(); ++i) {
+      auto shard_counts = ensure_shard(i).compute_topic_counts(topics);
+      // cppcheck-suppress unassignedVariable
+      for (const auto & [k, v] : shard_counts) {
+        result[k] += v;
+      }
+    }
+    return result;
+  }
+
+  TimeExtent compute_time_extent() override
+  {
+    TimeExtent extent;
+    if (metadata_.has_summary) {
+      extent.start_ns = metadata_.start_ns;
+      extent.end_ns = metadata_.end_ns;
+      extent.has_data = true;
+      return extent;
+    }
+
+    for (std::size_t i = 0; i < shard_rel_paths_.size(); ++i) {
+      auto shard_extent = ensure_shard(i).compute_time_extent();
+      if (!shard_extent.has_data) {
+        continue;
+      }
+      if (!extent.has_data || shard_extent.start_ns < extent.start_ns) {
+        extent.start_ns = shard_extent.start_ns;
+      }
+      if (!extent.has_data || shard_extent.end_ns > extent.end_ns) {
+        extent.end_ns = shard_extent.end_ns;
+      }
+      extent.has_data = true;
+    }
+    return extent;
   }
 
   void populate_schemas() override

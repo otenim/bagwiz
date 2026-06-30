@@ -115,6 +115,28 @@ public:
   // scan when unavoidable.
   virtual Stats compute_stats() = 0;
 
+  // Compute message counts for a subset of topics.
+  //
+  // Implementations should prefer summary/index data (MCAP summary,
+  // metadata.yaml per-topic counts, SQLite covering index) and only scan
+  // the requested topics when unavoidable. Topics that are absent or have
+  // zero messages are omitted from the result.
+  virtual std::unordered_map<std::string, int64_t> compute_topic_counts(
+    std::span<const std::string> topics) = 0;
+
+  // Lightweight bag-level time extent. Implementations prefer
+  // summary/index data (MCAP summary, metadata.yaml, SQLite timestamp index).
+  // When no summary is available, the returned extent is zero and has_data is
+  // false; a full scan is not performed automatically.
+  struct TimeExtent
+  {
+    int64_t start_ns = 0;
+    int64_t end_ns = 0;
+    bool has_data = false;
+  };
+
+  virtual TimeExtent compute_time_extent() = 0;
+
   // Backfill TopicInfo::schema_text / schema_encoding for all topics when the
   // storage embeds schemas but the cheap topics() path did not load them.
   //
