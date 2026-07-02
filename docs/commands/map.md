@@ -125,7 +125,9 @@ Written under `<output_root>`:
   directory is accepted and the directory is created when absent. Each output
   file is guarded independently — an existing `traj.tum`/`map.pcd` stops the run
   unless `-w`/`--overwrite` is given.
-- **`--viewer`.** See the viewer section below.
+- **`--viewer`.** See the viewer section below. Since `traj.tum` is always
+  written alongside `map.pcd`, the viewer's Trajectory toggle is available
+  here too (off by default).
 - **Progress bar.** On an interactive terminal, a progress bar is drawn on stderr.
 - **CPU backend.** SLAM runs on GLIM's CPU backend.
 
@@ -192,6 +194,17 @@ bagwiz map viewer <map>
 - **Same viewer as `--viewer`.** Serves the map over a loopback-only HTTP server
   and opens the host's default browser. The command **blocks until you interrupt
   it** (`Ctrl-C`).
+- **Trajectory overlay.** When a `traj.tum` file sits next to the served
+  `map.pcd` (as written by `bagwiz map slam`), the viewer's inspector gains a
+  Trajectory panel with a "Show trajectory" toggle (off by default). Enabling it
+  draws each pose as an X/Y/Z axis triad — oriented by the pose's quaternion and
+  colored to match the corner orientation gizmo (X red, Y green, Z blue) — with
+  the triads' origins joined by a neutral backbone line. Triads sit at actual
+  poses spaced evenly along the path; **Axis length** and **Axis spacing**
+  sliders tune their size and density. The vehicle's forward axis is X, and a
+  teal ring / blue node mark the first and last pose, so direction of travel and
+  both ends of the path read at a glance. No `traj.tum` next to the map means no
+  panel is shown.
 - **Requires the map-viewer build.** Available only when bagwiz is built with the
   map viewer.
 
