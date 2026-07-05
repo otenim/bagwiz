@@ -767,6 +767,10 @@ public:
 
     std::optional<tf2::BufferCore> tf_buffer;
     std::vector<core::pointcloud::PointCloudFetcher> pcd_fetchers;
+    // Parallel to pcd_fetchers: whether each topic can be matched by capture time
+    // (every cloud carried a header.stamp). Topics that can't are matched by
+    // record time on both sides so the overlay stays in one clock.
+    std::vector<bool> pcd_topic_has_stamps;
 
     auto property_name = [](core::pointcloud::PointCloudProperty prop) -> std::string_view {
       switch (prop) {
@@ -925,6 +929,7 @@ public:
       core::pointcloud::PropertyRanges merged_ranges;
       std::vector<std::string> initialized_topics;
       std::vector<core::pointcloud::PointCloudFetcher> new_fetchers;
+      std::vector<bool> new_topic_has_stamps;
 
       for (const auto & topic : topics) {
         std::string error;
@@ -934,6 +939,7 @@ public:
           return false;
         }
         merged_ranges.merge(scan->ranges);
+        new_topic_has_stamps.push_back(scan->header_stamps_present);
         initialized_topics.push_back(topic);
         new_fetchers.emplace_back(input_path_, topic, std::move(scan->entries));
       }
@@ -945,6 +951,7 @@ public:
       pcd.computed_min = range.first;
       pcd.computed_max = range.second;
       pcd_fetchers = std::move(new_fetchers);
+      pcd_topic_has_stamps = std::move(new_topic_has_stamps);
       return true;
     };
 
@@ -967,9 +974,18 @@ public:
 
       std::vector<core::pointcloud::ProjectedPoint> all_points;
       std::string last_error;
-      for (auto & fetcher : pcd_fetchers) {
+      for (std::size_t i = 0; i < pcd_fetchers.size(); ++i) {
+        // Pair the frame with the point cloud nearest in time. Use capture time
+        // (header.stamp) only when both the image and this topic carry header
+        // stamps; otherwise match by bag record time on both sides so the compare
+        // stays in one clock. The chosen target is also the TF-lookup time.
+        const bool use_capture = img.header_stamp_ns > 0 && pcd_topic_has_stamps[i];
+        const std::int64_t match_ns = use_capture ? img.header_stamp_ns : cache[index].timestamp_ns;
+        const auto match_key = use_capture ? core::pointcloud::PointCloudMatchKey::kHeaderStamp
+                                           : core::pointcloud::PointCloudMatchKey::kRecordTime;
+
         std::string error;
-        const auto * cloud = fetcher.fetch(cache[index].timestamp_ns, error);
+        const auto * cloud = pcd_fetchers[i].fetch(match_ns, match_key, error);
         if (cloud == nullptr) {
           last_error = std::move(error);
           continue;
@@ -977,7 +993,7 @@ public:
 
         const auto projected = core::pointcloud::project_cloud_for_frame(
           *cloud, effective_ci, *tf_buffer, img.width, img.height, pcd.property,
-          /*use_rectified=*/undistort_enabled, cache[index].timestamp_ns);
+          /*use_rectified=*/undistort_enabled, match_ns);
         if (!projected.ok()) {
           last_error = std::move(projected.error);
           continue;

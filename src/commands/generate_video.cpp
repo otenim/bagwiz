@@ -179,15 +179,37 @@ struct ProjectionWorkResult
   [[nodiscard]] bool ok() const noexcept { return error.empty(); }
 };
 
-// Fetch, parse, transform, and project the point clouds nearest to `target_ns`
-// for every listed topic. Each call opens its own BagReader(s) so the work can
-// safely run on a background thread; the caller supplies the read-only camera
-// info and TF buffer.
+// The clock a camera frame is matched against for one cloud topic: capture time
+// (header.stamp) when both the frame and that topic carry header stamps, else
+// bag record time so the comparison stays within a single clock.
+struct FrameMatch
+{
+  std::int64_t target_ns;
+  core::pointcloud::PointCloudMatchKey key;
+};
+
+FrameMatch choose_frame_match(
+  std::int64_t header_stamp_ns, std::int64_t record_ns, bool topic_has_stamps)
+{
+  if (header_stamp_ns > 0 && topic_has_stamps) {
+    return {header_stamp_ns, core::pointcloud::PointCloudMatchKey::kHeaderStamp};
+  }
+  return {record_ns, core::pointcloud::PointCloudMatchKey::kRecordTime};
+}
+
+// Fetch, parse, transform, and project the point cloud nearest the frame for
+// every listed topic. Each topic is matched in its own clock (see
+// choose_frame_match): `frame_header_stamp_ns` (0 if unset) and `frame_record_ns`
+// are the frame's two clocks, and `topic_has_stamps[i]` says whether topic i can
+// be matched by capture time. Each call opens its own BagReader(s) so the work
+// can safely run on a background thread; the caller supplies the read-only
+// camera info and TF buffer.
 ProjectionWorkResult run_projection_work(
   const std::filesystem::path & input, const std::vector<std::string> & pointcloud_topics,
-  const std::vector<std::vector<PointCloudIndexEntry>> & entries_per_topic, std::int64_t target_ns,
-  const core::image::CameraInfo & camera_info, tf2::BufferCore & tf_buffer,
-  std::uint32_t image_width, std::uint32_t image_height,
+  const std::vector<std::vector<PointCloudIndexEntry>> & entries_per_topic,
+  const std::vector<bool> & topic_has_stamps, std::int64_t frame_header_stamp_ns,
+  std::int64_t frame_record_ns, const core::image::CameraInfo & camera_info,
+  tf2::BufferCore & tf_buffer, std::uint32_t image_width, std::uint32_t image_height,
   core::pointcloud::PointCloudProperty property, bool use_rectified)
 {
   try {
@@ -195,7 +217,9 @@ ProjectionWorkResult run_projection_work(
     for (std::size_t i = 0; i < pointcloud_topics.size(); ++i) {
       PointCloudFetcher fetcher(input, pointcloud_topics[i], entries_per_topic[i]);
       std::string error;
-      const auto * cloud = fetcher.fetch(target_ns, error);
+      const auto match =
+        choose_frame_match(frame_header_stamp_ns, frame_record_ns, topic_has_stamps[i]);
+      const auto * cloud = fetcher.fetch(match.target_ns, match.key, error);
       if (cloud == nullptr) {
         return {{}, std::move(error)};
       }
@@ -376,8 +400,13 @@ int run_generate_video(const GenerateVideoArgs & args)
   std::vector<PointCloudSpan> pcd_spans;
   double global_property_min = 0.0;
   double global_property_max = 0.0;
+  // Per topic: whether it can be matched by capture time (every cloud carried a
+  // header.stamp). Topics that fall back to record time are matched by record
+  // time on both sides so the overlay stays in one clock.
+  std::vector<bool> pcd_topic_has_stamps;
   if (!args.pointcloud_topics.empty()) {
     pcd_spans.resize(args.pointcloud_topics.size());
+    pcd_topic_has_stamps.resize(args.pointcloud_topics.size());
     double running_min = std::numeric_limits<double>::infinity();
     double running_max = -std::numeric_limits<double>::infinity();
     for (std::size_t i = 0; i < args.pointcloud_topics.size(); ++i) {
@@ -387,6 +416,7 @@ int run_generate_video(const GenerateVideoArgs & args)
           args.property_max, pcd_spans[i]) != 0) {
         return 1;
       }
+      pcd_topic_has_stamps[i] = pcd_spans[i].header_stamps_present;
       if (!args.property_min.has_value()) {
         running_min = std::min(running_min, pcd_spans[i].property_min);
       }
@@ -464,7 +494,8 @@ int run_generate_video(const GenerateVideoArgs & args)
   // point-cloud overlay paths.
   struct FrameBuffer
   {
-    std::int64_t timestamp_ns = 0;
+    std::int64_t timestamp_ns = 0;     // bag record time
+    std::int64_t header_stamp_ns = 0;  // image header.stamp (0 if unset)
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t step = 0;
@@ -486,6 +517,7 @@ int run_generate_video(const GenerateVideoArgs & args)
     }
     FrameBuffer frame;
     frame.timestamp_ns = timestamp_ns;
+    frame.header_stamp_ns = pr.raster->header_stamp_ns;
     frame.width = pr.raster->width;
     frame.height = pr.raster->height;
     frame.step = pr.raster->width * 3U;
@@ -631,13 +663,15 @@ int run_generate_video(const GenerateVideoArgs & args)
       // Async path: keep one frame of projection work running ahead so that
       // fetch/parse/project for frame N+1 overlaps with encoding frame N.
       auto launch_projection = [&](
-                                 std::int64_t target_ns, std::uint32_t w,
+                                 std::int64_t header_stamp_ns, std::int64_t record_ns,
+                                 std::uint32_t w,
                                  std::uint32_t h) -> std::future<ProjectionWorkResult> {
-        return std::async(std::launch::async, [&, target_ns, w, h, rectified = use_rectified]() {
-          return run_projection_work(
-            args.input_path, args.pointcloud_topics, entries_per_topic, target_ns, *camera_info,
-            *tf_buffer, w, h, args.property, rectified);
-        });
+        return std::async(
+          std::launch::async, [&, header_stamp_ns, record_ns, w, h, rectified = use_rectified]() {
+            return run_projection_work(
+              args.input_path, args.pointcloud_topics, entries_per_topic, pcd_topic_has_stamps,
+              header_stamp_ns, record_ns, *camera_info, *tf_buffer, w, h, args.property, rectified);
+          });
       };
 
       if (!reader->next(raw)) {
@@ -655,8 +689,8 @@ int run_generate_video(const GenerateVideoArgs & args)
         cleanup_tmp();
         return 1;
       }
-      auto pending_projection =
-        launch_projection(current->timestamp_ns, current->width, current->height);
+      auto pending_projection = launch_projection(
+        current->header_stamp_ns, current->timestamp_ns, current->width, current->height);
 
       while (true) {
         auto projected = pending_projection.get();
@@ -683,8 +717,9 @@ int run_generate_video(const GenerateVideoArgs & args)
             cleanup_tmp();
             return 1;
           }
-          next_projection =
-            launch_projection(next_frame->timestamp_ns, next_frame->width, next_frame->height);
+          next_projection = launch_projection(
+            next_frame->header_stamp_ns, next_frame->timestamp_ns, next_frame->width,
+            next_frame->height);
         }
 
         if (!encode_frame(*current, &projected.points)) {
@@ -721,7 +756,9 @@ int run_generate_video(const GenerateVideoArgs & args)
         if (!pcd_fetchers.empty()) {
           for (std::size_t i = 0; i < pcd_fetchers.size(); ++i) {
             std::string pcd_error;
-            const auto * cloud = pcd_fetchers[i].fetch(raw.timestamp_ns, pcd_error);
+            const auto match = choose_frame_match(
+              frame->header_stamp_ns, frame->timestamp_ns, pcd_topic_has_stamps[i]);
+            const auto * cloud = pcd_fetchers[i].fetch(match.target_ns, match.key, pcd_error);
             if (cloud == nullptr) {
               BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", written, pcd_error.c_str());
               encoder.reset();
