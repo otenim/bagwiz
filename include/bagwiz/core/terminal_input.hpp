@@ -26,6 +26,8 @@ enum class KeyEvent {
   kLast,               // jump to last (may force a full scan in the caller)
   kStepForward1s,      // jump to the next message at least one second ahead
   kStepBackward1s,     // jump to the previous message at least one second behind
+  kStepForward10s,     // jump ~10 seconds ahead ('>')
+  kStepBackward10s,    // jump ~10 seconds behind ('<')
   kScrollUp,           // scroll the current message's rendered body up by one line
   kScrollDown,         // scroll the current message's rendered body down by one line
   kScrollHead,         // jump to the top of the current message's body
@@ -57,6 +59,7 @@ enum class KeyEvent {
 // Accepted input:
 //   * single bytes: Space (next), 'b' (prev), 'g' (first), 'G' (last),
 //     '.' (step forward one second), ',' (step backward one second),
+//     '>' (step forward ~10 seconds), '<' (step backward ~10 seconds),
 //     'k' (scroll up), 'j' (scroll down), 'H' (scroll head), 'T' (scroll
 //     tail), 's' (save as yaml — walk), 'a' (toggle array expand — walk),
 //     'i' (toggle image preview — walk), 'u' (toggle undistort — walk),

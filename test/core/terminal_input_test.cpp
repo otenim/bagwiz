@@ -57,6 +57,12 @@ TEST(ClassifyKey, StepForwardAndBackward1s)
   EXPECT_EQ(classify_key(","), KeyEvent::kStepBackward1s);
 }
 
+TEST(ClassifyKey, StepForwardAndBackward10s)
+{
+  EXPECT_EQ(classify_key(">"), KeyEvent::kStepForward10s);
+  EXPECT_EQ(classify_key("<"), KeyEvent::kStepBackward10s);
+}
+
 TEST(ClassifyKey, QuitBindings)
 {
   EXPECT_EQ(classify_key("q"), KeyEvent::kQuit);
