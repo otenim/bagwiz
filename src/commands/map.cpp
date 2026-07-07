@@ -8,7 +8,6 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
-#include "bagwiz/commands/map_filter.hpp"
 #include "bagwiz/commands/map_slam.hpp"
 #include "bagwiz/commands/map_viewer.hpp"
 #include "bagwiz/core/logging.hpp"
@@ -28,14 +27,13 @@ constexpr const char * kLogger = "bagwiz.cmd.map";
 // Its actions are:
 //   slam    - in-process LiDAR SLAM over a rosbag (estimate trajectory + map)
 //   viewer  - open the browser map viewer for an existing map.pcd
-//   filter  - post-process an existing map (e.g. Removert dynamic-point removal)
 class MapCommand : public Command
 {
 public:
   [[nodiscard]] std::string_view name() const override { return "map"; }
   [[nodiscard]] std::string_view description() const override
   {
-    return "LiDAR map generation and filtering";
+    return "LiDAR map generation and viewing";
   }
 
   void configure(CLI::App & app) override
@@ -43,7 +41,6 @@ public:
     app.require_subcommand(1);
     configure_slam(app);
     configure_viewer(app);
-    configure_filter(app);
   }
 
   int run() override
@@ -53,8 +50,6 @@ public:
         return run_map_slam(slam_args_);
       case Subcommand::kViewer:
         return run_map_viewer(viewer_args_);
-      case Subcommand::kFilterRemovert:
-        return run_map_filter_removert(filter_removert_args_);
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
@@ -63,12 +58,11 @@ public:
   }
 
 private:
-  enum class Subcommand { kNone, kSlam, kViewer, kFilterRemovert };
+  enum class Subcommand { kNone, kSlam, kViewer };
   Subcommand selected_ = Subcommand::kNone;
 
   MapSlamArgs slam_args_;
   MapViewerArgs viewer_args_;
-  MapFilterRemovertArgs filter_removert_args_;
 
   void configure_slam(CLI::App & app)
   {
@@ -196,95 +190,6 @@ private:
       ->required()
       ->check(CLI::ExistingPath);
     sub->callback([this]() { selected_ = Subcommand::kViewer; });
-  }
-
-  void configure_filter(CLI::App & app)
-  {
-    auto * group = app.add_subcommand("filter", "Post-process an existing point-cloud map");
-    group->require_subcommand(1);
-    configure_filter_removert(*group);
-  }
-
-  void configure_filter_removert(CLI::App & group)
-  {
-    auto * sub = group.add_subcommand(
-      "removert",
-      "Remove dynamic (moving-object) points from a map using an original Removert-style "
-      "filter. The optimized trajectory is used to reproject each raw scan into the world "
-      "frame so map points can be classified against the scan views.");
-    sub
-      ->add_option(
-        "map", filter_removert_args_.map_path,
-        "Map to filter: a map.pcd file or a directory containing map.pcd")
-      ->required()
-      ->check(CLI::ExistingPath);
-    sub->add_option("input", filter_removert_args_.input_path, "Bag path (file or directory)")
-      ->required()
-      ->check(CLI::ExistingPath);
-    sub
-      ->add_option(
-        "pcd_topic", filter_removert_args_.cloud_topic,
-        "PointCloud2 topic whose scans will be reprojected into the world frame")
-      ->required();
-    sub
-      ->add_option(
-        "traj", filter_removert_args_.traj_path,
-        "TUM trajectory produced by `bagwiz map slam` (one pose per scan)")
-      ->required()
-      ->check(CLI::ExistingPath);
-    sub
-      ->add_option(
-        "output", filter_removert_args_.output_path,
-        "Output map path (.pcd) or directory (receives map.pcd)")
-      ->required();
-    sub->add_flag(
-      "--revert/--no-revert", filter_removert_args_.enable_revert,
-      "Enable the multi-resolution consensus revert pass (default on). Removed points are "
-      "re-checked at coarser resolutions and recovered if they are not dynamic at any of them. "
-      "Use --no-revert to disable.");
-    sub
-      ->add_option(
-        "--vfov", filter_removert_args_.vertical_fov_deg,
-        "Total vertical field of view in degrees for the Removert range image (default 50.0)")
-      ->check(CLI::PositiveNumber);
-    sub
-      ->add_option(
-        "--hfov", filter_removert_args_.horizontal_fov_deg,
-        "Horizontal field of view in degrees for the Removert range image (default 360.0)")
-      ->check(CLI::PositiveNumber);
-    sub
-      ->add_option(
-        "--remove-resolutions", filter_removert_args_.remove_resolutions,
-        "Comma-separated magnifier ratios for the remove pass (default 2.0). Processed in "
-        "order; each resolution operates on the map left by the previous one.")
-      ->delimiter(',')
-      ->check(CLI::Range(0.01, 10.0));
-    sub
-      ->add_option(
-        "--revert-resolutions", filter_removert_args_.revert_resolutions,
-        "Comma-separated magnifier ratios for the consensus revert pass (default 1.0)")
-      ->delimiter(',')
-      ->check(CLI::Range(0.01, 10.0));
-    sub
-      ->add_option(
-        "--adaptive-coeff", filter_removert_args_.adaptive_coeff,
-        "Adaptive discrepancy coefficient: a map point is dynamic when abs(scan_range - "
-        "map_range) > coeff * scan_range (default 0.05)")
-      ->check(CLI::PositiveNumber);
-    sub
-      ->add_option(
-        "--valid-diff-max", filter_removert_args_.valid_diff_upper_bound,
-        "Upper bound on range difference for a valid pixel comparison (default 200.0). "
-        "Pixels with larger differences are treated as no-point pixels.")
-      ->check(CLI::PositiveNumber);
-    sub->add_flag(
-      "-w,--overwrite", filter_removert_args_.overwrite,
-      "Overwrite the output file(s) if they already exist");
-    sub->add_flag(
-      "--no-progress", filter_removert_args_.no_progress,
-      "Disable the live progress bar. The bar is also auto-suppressed when stderr is not a "
-      "terminal or NO_COLOR is set, so this is only needed to silence them interactively.");
-    sub->callback([this]() { selected_ = Subcommand::kFilterRemovert; });
   }
 };
 

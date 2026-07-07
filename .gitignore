@@ -110,7 +110,7 @@ CLAUDE.local.md
 # Trajectory outputs (produced by bagwiz traj dump / map slam)
 *.tum
 
-# Point-cloud map exports (produced by bagwiz map slam / map filter)
+# Point-cloud map exports (produced by bagwiz map slam)
 *.pcd
 
 # Log files

@@ -142,9 +142,9 @@ source ~/.config/fish/completions/bagwiz.fish
     `walk -<TAB>` also surfaces `--cam-info`
   - `bagwiz <cmd> <subcommand> -<TAB>` for every nested subcommand
     (`cam-info replace`, `check broken`, `convert format`, `convert msg`,
-    `convert msg geo`, `generate video`, `map filter removert`, `map slam`,
-    `map viewer`, `tf static calc`, `tf static cp`, `tf tree`, `tf walk`,
-    `topic drop`, `topic keep`, `topic rename`, `traj dump`, `traj join`);
+    `convert msg geo`, `generate video`, `map slam`, `map viewer`,
+    `tf static calc`, `tf static cp`, `tf tree`, `tf walk`, `topic drop`,
+    `topic keep`, `topic rename`, `traj dump`, `traj join`);
     `cam-info replace -<TAB>` surfaces `--frame-id`, `--output`/`-o`, and
     `-w`/`--overwrite`; `check broken -<TAB>` surfaces `--rm` and `--deep`;
     `tf static calc -<TAB>` also surfaces `--json`, and `tf static cp -<TAB>`
@@ -154,8 +154,7 @@ source ~/.config/fish/completions/bagwiz.fish
     `cam-info`, `check`, `generate`, `map`, and `topic` are likewise command
     groups: `cam-info <TAB>` completes `replace`, `check <TAB>` completes
     `broken`, `generate <TAB>` completes `video`, `map <TAB>` completes
-    `filter`, `slam`, `viewer`, and `topic <TAB>` completes `drop`, `keep`,
-    `rename`
+    `slam`, `viewer`, and `topic <TAB>` completes `drop`, `keep`, `rename`
 - Selected option values are completed where bagwiz has a closed set, such as
   `--storage <mcap|sqlite3>`.
 - Flag values that name a bag topic of a specific type are completed by opening
@@ -194,9 +193,6 @@ source ~/.config/fish/completions/bagwiz.fish
   - `bagwiz map slam <input> <pcd_topic> <output_root>` — restricted to
     `sensor_msgs/msg/PointCloud2` topics (the only type `map slam` ingests);
     topics of any other type are omitted
-  - `bagwiz map filter removert <map> <input> <pcd_topic> <traj> <output>` —
-    restricted to `sensor_msgs/msg/PointCloud2` topics; topics of any other type
-    are omitted
   - `bagwiz cam-info replace <input> <calib_yaml> <topic>...` — restricted to
     `sensor_msgs/msg/CameraInfo` topics (the only type `cam-info replace`
     rewrites); topics of any other type are omitted. The `<topic>...` operand is

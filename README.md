@@ -86,7 +86,7 @@ invocation. Click through for full usage, options, and examples:
 | [`bagwiz traj`](docs/commands/traj.md)         | Dump a topic's pose trajectory to TUM, or join a trajectory file back into a bag.                                                                                                  |
 | [`bagwiz tf`](docs/commands/tf.md)             | Inspect the TF frame tree in a ROS 2 rosbag.                                                                                                                                       |
 | [`bagwiz pcd`](docs/commands/pcd.md)           | PointCloud2 topic processing: concatenate multiple LiDAR topics into one (`concat`) via static TF + time sync, or motion-deskew a topic from an external pose topic (`undistort`). |
-| [`bagwiz map`](docs/commands/map.md)           | LiDAR map generation and filtering: `map slam`, `map viewer`, `map filter`. Optional build.                                                                                        |
+| [`bagwiz map`](docs/commands/map.md)           | LiDAR map generation and viewing: `map slam`, `map viewer`. Optional build.                                                                                                        |
 | [`bagwiz check`](docs/commands/check.md)       | Find rosbags whose storage is corrupt / unreadable, and optionally delete them.                                                                                                    |
 | [`bagwiz complete`](docs/commands/complete.md) | Generate a shell completion script (`bash`, `zsh`, `fish`).                                                                                                                        |
 

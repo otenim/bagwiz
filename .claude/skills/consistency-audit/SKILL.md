@@ -64,7 +64,7 @@ Registered commands: `cam-info`, `check`, `complete`, `convert`, `generate`,
 | convert  | `convert.cpp`, `convert_msg_geo.cpp`                                      | `docs/commands/convert.md`  |
 | generate | `generate.cpp`, `generate_video.cpp`                                      | `docs/commands/generate.md` |
 | ls       | `ls.cpp`                                                                  | `docs/commands/ls.md`       |
-| map      | `map.cpp`, `map_slam.cpp`, `map_filter.cpp`, `map_viewer.cpp`             | `docs/commands/map.md`      |
+| map      | `map.cpp`, `map_slam.cpp`, `map_viewer.cpp`                               | `docs/commands/map.md`      |
 | tf       | `tf.cpp`, `tf_walk.cpp`, `tf_static_cp.cpp`, `core/tf_*.cpp`              | `docs/commands/tf.md`       |
 | topic    | `topic.cpp`, `topic_drop/keep/rename.cpp`, `core/topic_match`, `bag_copy` | `docs/commands/topic.md`    |
 | traj     | `traj.cpp`                                                                | `docs/commands/traj.md`     |
