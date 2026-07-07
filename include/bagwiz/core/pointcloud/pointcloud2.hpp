@@ -9,6 +9,7 @@
 #ifndef BAGWIZ__CORE__POINTCLOUD__POINTCLOUD2_HPP_
 #define BAGWIZ__CORE__POINTCLOUD__POINTCLOUD2_HPP_
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -36,6 +37,9 @@ struct PointField
   PointFieldType datatype = PointFieldType::kFloat32;
   std::uint32_t count = 1;
 };
+
+// Size in bytes of one element of a `PointFieldType`.
+[[nodiscard]] std::size_t datatype_size(PointFieldType datatype);
 
 // The PointCloud2 metadata that precedes the point payload on the wire: the
 // header stamp plus the field layout. Parsing this alone skips the (potentially
@@ -92,6 +96,14 @@ struct PointCloud2Result
 [[nodiscard]] PointCloud2HeaderResult parse_pointcloud2_header(std::span<const std::byte> payload);
 
 [[nodiscard]] PointCloud2Result parse_pointcloud2(std::span<const std::byte> payload);
+
+// Serialize a PointCloud2 back to a plain little-endian CDR-1 payload (the
+// inverse of parse_pointcloud2). The result round-trips through
+// parse_pointcloud2 field-for-field and byte-for-byte for the point data. The
+// output always uses little-endian encapsulation regardless of the host, so it
+// is deterministic; `cloud.is_bigendian` is written as the field value but the
+// point bytes are emitted verbatim (callers must ensure they are little-endian).
+[[nodiscard]] std::vector<std::byte> serialize_pointcloud2(const PointCloud2 & cloud);
 
 }  // namespace bagwiz::core::pointcloud
 
