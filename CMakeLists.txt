@@ -230,6 +230,7 @@ add_library(bagwiz_core
   src/core/pointcloud/cloud_concat.cpp
   src/core/pointcloud/concat_sync.cpp
   src/core/pointcloud/point_time.cpp
+  src/core/pointcloud/deskew.cpp
   src/core/pointcloud/color_mapper.cpp
   src/core/pointcloud/projector.cpp
   src/core/pointcloud/fetcher.cpp
@@ -349,6 +350,7 @@ add_executable(bagwiz
   src/commands/ls.cpp
   src/commands/pcd.cpp
   src/commands/pcd_concat.cpp
+  src/commands/pcd_undistort.cpp
   src/commands/walk.cpp
   src/commands/traj.cpp
   src/commands/tf.cpp
@@ -596,6 +598,11 @@ if(BUILD_TESTING)
     src/commands/pcd_concat.cpp)
   target_link_libraries(bagwiz_pcd_concat_command_test bagwiz_core fmt::fmt)
 
+  ament_add_gtest(bagwiz_pcd_undistort_command_test
+    test/commands/pcd_undistort_test.cpp
+    src/commands/pcd_undistort.cpp)
+  target_link_libraries(bagwiz_pcd_undistort_command_test bagwiz_core fmt::fmt)
+
   ament_add_gtest(bagwiz_smoke_test test/smoke_test.cpp)
   ament_add_gtest(bagwiz_yaml_msg_validate_test test/core/yaml_msg_validate_test.cpp)
   target_link_libraries(bagwiz_yaml_msg_validate_test bagwiz_core)
@@ -758,6 +765,9 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_trajectory_test test/core/trajectory_test.cpp)
   target_link_libraries(bagwiz_trajectory_test bagwiz_core)
 
+  ament_add_gtest(bagwiz_tf_buffer_loader_test test/core/tf_buffer_loader_test.cpp)
+  target_link_libraries(bagwiz_tf_buffer_loader_test bagwiz_core)
+
   ament_add_gtest(bagwiz_tf_chain_test test/core/tf_chain_test.cpp)
   target_link_libraries(bagwiz_tf_chain_test bagwiz_core)
 
@@ -850,6 +860,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_point_time_test test/core/pointcloud/point_time_test.cpp)
   target_link_libraries(bagwiz_point_time_test bagwiz_core)
+
+  ament_add_gtest(bagwiz_deskew_test test/core/pointcloud/deskew_test.cpp)
+  target_link_libraries(bagwiz_deskew_test bagwiz_core)
 
   ament_add_gtest(bagwiz_color_mapper_test test/core/pointcloud/color_mapper_test.cpp)
   target_link_libraries(bagwiz_color_mapper_test bagwiz_core)
