@@ -416,7 +416,6 @@ if(BAGWIZ_WITH_SLAM)
     src/core/slam/cuda_device.cpp
     src/core/slam/progress_bar.cpp
     src/commands/map.cpp
-    src/commands/map_filter.cpp
     src/commands/map_slam.cpp
     src/commands/map_viewer.cpp)
   target_link_libraries(bagwiz PRIVATE glim::glim gtsam_points::gtsam_points gtsam)

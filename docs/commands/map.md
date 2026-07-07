@@ -1,13 +1,12 @@
 # `bagwiz map`
 
-In-process LiDAR SLAM and map post-processing. `map` is a command group with
-three actions:
+In-process LiDAR SLAM and map viewing. `map` is a command group with two
+actions:
 
-| Subcommand                     | What it does                                                                          |
-| ------------------------------ | ------------------------------------------------------------------------------------- |
-| [`slam`](#bagwiz-map-slam)     | Estimate a trajectory (and optimized map) from a PointCloud2 topic.                   |
-| [`viewer`](#bagwiz-map-viewer) | Open the browser map viewer for an existing `map.pcd` (no SLAM run).                  |
-| [`filter`](#bagwiz-map-filter) | Post-process an existing map. The first filter is `removert` (dynamic-point removal). |
+| Subcommand                     | What it does                                                         |
+| ------------------------------ | -------------------------------------------------------------------- |
+| [`slam`](#bagwiz-map-slam)     | Estimate a trajectory (and optimized map) from a PointCloud2 topic.  |
+| [`viewer`](#bagwiz-map-viewer) | Open the browser map viewer for an existing `map.pcd` (no SLAM run). |
 
 > **Build.** The `map` command group links the GLIM stack (compiled with
 > `-DBAGWIZ_WITH_SLAM=ON`) and belongs to the **full** build (`build-full`), which
@@ -21,8 +20,8 @@ three actions:
 > GLIM) into `install/<distro>/glim-deps` — a slow one-time step (tens of minutes) —
 > then compiles bagwiz with SLAM enabled. Later builds reuse the cached deps and are
 > fast. The **core** build (`pixi run -e <distro> build-core`) omits the `map`
-> command group entirely and skips the GLIM stack, so it is much faster but exposes
-> neither `bagwiz map slam` nor `bagwiz map filter`.
+> command group entirely and skips the GLIM stack, so it is much faster but does
+> not expose `bagwiz map slam`.
 >
 > **GPU fast path.** For the optional CUDA backend (`--backend cuda`), build the
 > full CUDA build in a `*-cuda` environment — the CUDA toolkit is pixi-managed
@@ -51,8 +50,7 @@ frames flow through GLIM's SubMapping → GlobalMapping, so the output is the
 globally-optimized 6-DoF trajectory (`traj.tum`) plus an optimized world-frame
 point-cloud map (`map.pcd`).
 
-Dynamic-point removal is **not** part of this command; use
-[`bagwiz map filter removert`](#bagwiz-map-filter-removert) afterwards.
+Dynamic-point removal is **not** part of this command.
 
 ### Usage
 
@@ -135,8 +133,6 @@ Written under `<output_root>`:
   horizontal). Each prior is weighted by the fix's reported position covariance,
   falling back to a fixed precision when the covariance is unknown. The antenna
   lever-arm is resolved from the bag's static TF and removed.
-- **Dynamic-point removal.** Removed from `map slam`. Run
-  `bagwiz map filter removert` afterwards if you need a cleaned map.
 - **Deskewing.** Clouds with a per-point time field are deskewed by GLIM; clouds
   without one are treated as already motion-undistorted.
 - **Output directory.** A file at `<output_root>` is an error; an existing
@@ -178,10 +174,6 @@ bagwiz map slam drive.mcap /points out/ --min-range 2.0 --max-range 60.0 --overw
 
 # Build the map, then open it in the browser (blocks until Ctrl-C).
 bagwiz map slam drive.mcap /points out/ --viewer
-
-# Clean dynamic points in a separate step.
-bagwiz map slam drive.mcap /points out/
-bagwiz map filter removert out/ drive.mcap /points out/traj.tum filtered/ --overwrite
 ```
 
 ### Exit status
@@ -249,78 +241,6 @@ bagwiz map viewer out/map.pcd
 | ---- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `0`  | The viewer served the map and exited cleanly after an interrupt (`Ctrl-C`).                                                      |
 | `1`  | `<map>` (or `map.pcd` within it) was not found; no loopback port could be bound; or the binary was built without the map viewer. |
-
----
-
-## `bagwiz map filter`
-
-Post-process an existing point-cloud map. `filter` is a command group; each
-filter type is an action subcommand. The first supported filter is `removert`;
-more filters will be added as additional subcommands.
-
-### `bagwiz map filter removert`
-
-Remove dynamic (moving-object) points from an existing `map.pcd` using an
-original Removert-style filter. The optimized `traj.tum` from `bagwiz map slam`
-is used to reproject each raw scan from `<input>`'s `<pcd_topic>` into the world
-frame; the merged map is then filtered against those scan views.
-
-#### Usage
-
-```text
-bagwiz map filter removert [OPTIONS] <map> <input> <pcd_topic> <traj> <output>
-```
-
-#### Positional arguments
-
-| Name        | Description                                                                          |
-| ----------- | ------------------------------------------------------------------------------------ |
-| `map`       | Map to filter: a `map.pcd` file or a directory containing `map.pcd`.                 |
-| `input`     | Source ROS 2 rosbag (file or directory) that carries the original PointCloud2 scans. |
-| `pcd_topic` | `sensor_msgs/msg/PointCloud2` topic whose scans will be reprojected using `<traj>`.  |
-| `traj`      | TUM trajectory file produced by `bagwiz map slam` (one pose per scan).               |
-| `output`    | Output map path (`.pcd` file) or directory (receives `map.pcd`). Created if absent.  |
-
-#### Options
-
-| Flag                          | Description                                                                                                                                                                                              |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--revert` / `--no-revert`    | Enable the multi-resolution consensus revert pass (default on). Removed points are re-checked at coarser resolutions and recovered if they are not dynamic at any of them. Use `--no-revert` to disable. |
-| `--vfov <deg>`                | Total vertical field of view for the Removert range images (default `50.0`; positive).                                                                                                                   |
-| `--hfov <deg>`                | Horizontal field of view for the Removert range images (default `360.0`; positive).                                                                                                                      |
-| `--remove-resolutions <list>` | Comma-separated magnifier ratios (pixels per degree) for the remove pass (default `2.0`). Processed in order; each resolution operates on the map left by the previous one.                              |
-| `--revert-resolutions <list>` | Comma-separated magnifier ratios for the consensus revert pass (default `1.0`).                                                                                                                          |
-| `--adaptive-coeff <c>`        | Adaptive discrepancy coefficient (default `0.05`; positive). A map point is dynamic when `abs(scan_range - map_range) > c * scan_range`.                                                                 |
-| `--valid-diff-max <m>`        | Upper bound on range difference for a valid pixel comparison (default `200.0`; positive). Pixels with larger differences are treated as no-point pixels.                                                 |
-| `-w`, `--overwrite`           | Overwrite the output file(s) if they already exist.                                                                                                                                                      |
-| `--no-progress`               | Disable the live progress bar.                                                                                                                                                                           |
-
-#### Behavior
-
-- The filter is purely geometric, deterministic, and runs on the CPU.
-- It touches only the output map; the input `map.pcd`, trajectory, and source bag
-  are left untouched.
-- Scans whose optimized pose cannot be found in `<traj>` are skipped with a
-  warning.
-- Intensity is preserved when the input map carries per-point intensity.
-
-#### Examples
-
-```bash
-# Basic dynamic-point removal.
-bagwiz map filter removert out/ drive.mcap /points out/traj.tum filtered/
-
-# More aggressive removal with finer remove resolutions.
-bagwiz map filter removert out/ drive.mcap /points out/traj.tum filtered/ \
-  --remove-resolutions 3.0,2.5,2.0,1.5 --overwrite
-```
-
-#### Exit status
-
-| Code | Meaning                                                                                                                                                                                          |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `0`  | The filtered map was written.                                                                                                                                                                    |
-| `1`  | The input map/bag/trajectory could not be opened; the topic was absent or had the wrong type; the map was empty; no scans could be decoded; the output collided; or a read/write error occurred. |
 
 ---
 

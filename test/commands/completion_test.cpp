@@ -299,8 +299,8 @@ std::filesystem::path write_camera_info_fixture(const std::filesystem::path & pa
 }
 
 // MCAP carrying one PointCloud2 topic (/points) and one non-PointCloud2 topic
-// (/image). Used to verify that `map slam` and `map filter removert` complete
-// the <pcd_topic> slot with only sensor_msgs/msg/PointCloud2 topics.
+// (/image). Used to verify that `map slam` completes the <pcd_topic> slot with
+// only sensor_msgs/msg/PointCloud2 topics.
 std::filesystem::path write_pointcloud2_fixture(const std::filesystem::path & path)
 {
   bagwiz::io::CreateOptions options;
@@ -1020,12 +1020,11 @@ TEST(FlagCompletionTest, TopicSubcommandListsDropKeepAndRename)
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "topic", ""}), "drop\nkeep\nrename\n");
 }
 
-// `bagwiz map <TAB>` lists the command group's action verbs (filter, slam,
-// viewer), sorted.
-TEST(FlagCompletionTest, MapSubcommandListsFilterSlamAndViewer)
+// `bagwiz map <TAB>` lists the command group's action verbs (slam, viewer),
+// sorted.
+TEST(FlagCompletionTest, MapSubcommandListsSlamAndViewer)
 {
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "2", "bagwiz", "map", ""}), "filter\nslam\nviewer\n");
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "map", ""}), "slam\nviewer\n");
 }
 
 // A partial verb narrows the candidates.
@@ -1068,29 +1067,6 @@ TEST(FlagCompletionTest, MapSlamBackendListsModes)
     "auto\ncpu\ncuda\n");
 }
 
-// `map filter <TAB>` lists the filter group's action verbs.
-TEST(FlagCompletionTest, MapFilterSubcommandListsRemovert)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "map", "filter", ""}), "removert\n");
-}
-
-// `map filter -` at the group slot shows only help flags.
-TEST(FlagCompletionTest, MapFilterGroupDashListsHelpFlagsOnly)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "map", "filter", "-"}), "--help\n-h\n");
-}
-
-// `map filter removert -` lists the removert flags plus help, sorted.
-TEST(FlagCompletionTest, MapFilterRemovertDashListsRemovertFlags)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "map", "filter", "removert", "-"}),
-    "--adaptive-coeff\n--help\n--hfov\n--no-progress\n--no-revert\n--overwrite\n"
-    "--remove-resolutions\n--revert\n--revert-resolutions\n--valid-diff-max\n--vfov\n-h\n-w\n");
-}
-
 // `map slam <input> <pcd_topic>` completes the topic slot from the bag's
 // PointCloud2 topics, excluding other types.
 TEST_F(CompletionTest, MapSlamTopicCompletionListsOnlyPointCloud2)
@@ -1100,20 +1076,6 @@ TEST_F(CompletionTest, MapSlamTopicCompletionListsOnlyPointCloud2)
 
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "map", "slam", "~/fixture.mcap"}),
-    "/points\n");
-}
-
-// `map filter removert <map> <input> <pcd_topic>` completes the topic slot
-// from the input bag's PointCloud2 topics, excluding other types.
-TEST_F(CompletionTest, MapFilterRemovertTopicCompletionListsOnlyPointCloud2)
-{
-  const HomeEnvGuard home_guard(tmp_dir_);
-  write_pointcloud2_fixture(tmp_dir_ / "fixture.mcap");
-
-  EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "map", "filter", "removert", "~/map.pcd",
-       "~/fixture.mcap"}),
     "/points\n");
 }
 
