@@ -188,6 +188,7 @@ add_library(bagwiz_core
   src/core/logging.cpp
   src/core/message_deserializer.cpp
   src/core/output_path.cpp
+  src/core/atomic_write.cpp
   src/core/message_formatter.cpp
   src/core/msg_definition_resolver.cpp
   src/core/msg_schema/parser.cpp
@@ -340,6 +341,7 @@ add_executable(bagwiz
   src/main.cpp
   src/commands/help_formatter.cpp
   src/commands/cam_info.cpp
+  src/commands/cam_info_dump.cpp
   src/commands/cam_info_recompute_p.cpp
   src/commands/cam_info_replace.cpp
   src/commands/check.cpp
@@ -923,6 +925,9 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_output_path_test test/core/output_path_test.cpp)
   target_link_libraries(bagwiz_output_path_test bagwiz_core)
 
+  ament_add_gtest(bagwiz_atomic_write_test test/core/atomic_write_test.cpp)
+  target_link_libraries(bagwiz_atomic_write_test bagwiz_core)
+
   ament_add_gtest(bagwiz_mcap_reader_test test/io/mcap_reader_test.cpp)
   target_link_libraries(bagwiz_mcap_reader_test bagwiz_core)
 
@@ -992,6 +997,12 @@ if(BUILD_TESTING)
     src/commands/cam_info_replace.cpp)
   target_link_libraries(
     bagwiz_cam_info_replace_test bagwiz_core fmt::fmt ${sensor_msgs_TARGETS})
+
+  ament_add_gtest(bagwiz_cam_info_dump_test
+    test/commands/cam_info_dump_test.cpp
+    src/commands/cam_info_dump.cpp)
+  target_link_libraries(
+    bagwiz_cam_info_dump_test bagwiz_core fmt::fmt ${sensor_msgs_TARGETS})
 endif()
 
 ament_package()
