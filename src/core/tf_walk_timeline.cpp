@@ -26,15 +26,16 @@ std::vector<tf2::TimePoint> build_tf_walk_timeline(std::vector<tf2::TimePoint> s
 }
 
 TfWalkStep resolve_tf_walk_step(
-  const tf2::BufferCore & buffer, tf2::TimePoint time, const std::string & from_frame,
-  const std::string & to_frame)
+  const tf2::BufferCore & buffer, tf2::TimePoint time, const std::string & of_frame,
+  const std::string & ref_frame)
 {
   TfWalkStep step;
   step.time = time;
   try {
-    // lookupTransform(target=to, source=from): the result is <from>'s origin
-    // expressed in <to>, matching `ros2 run tf2_ros tf2_echo <from> <to>`.
-    step.transform = buffer.lookupTransform(to_frame, from_frame, time);
+    // lookupTransform(target=ref, source=of): the result is <of>'s pose
+    // expressed in <ref>. Equivalent to `ros2 run tf2_ros tf2_echo <ref> <of>`
+    // (tf2_echo takes the reference frame first).
+    step.transform = buffer.lookupTransform(ref_frame, of_frame, time);
   } catch (const tf2::TransformException & e) {
     step.error = e.what();
   }

@@ -22,7 +22,7 @@ namespace bagwiz::core
 {
 
 std::vector<std::string> resolve_chain(
-  const tf2::BufferCore & buffer, const std::string & from_frame, const std::string & to_frame,
+  const tf2::BufferCore & buffer, const std::string & of_frame, const std::string & ref_frame,
   tf2::TimePoint time)
 {
   constexpr std::size_t kMaxDepth = 1024;
@@ -42,61 +42,62 @@ std::vector<std::string> resolve_chain(
     return path;
   };
 
-  const auto path_to = walk_to_root(to_frame);
+  const auto path_ref = walk_to_root(ref_frame);
 
-  // Fast path: from_frame is on path_to (i.e. from is an ancestor of to).
+  // Fast path: of_frame is on path_ref (i.e. of is an ancestor of ref).
   using DiffT = std::vector<std::string>::difference_type;
-  for (std::size_t i = 0; i < path_to.size(); ++i) {
-    if (path_to[i] == from_frame) {
-      std::vector<std::string> chain(path_to.begin(), path_to.begin() + static_cast<DiffT>(i + 1));
+  for (std::size_t i = 0; i < path_ref.size(); ++i) {
+    if (path_ref[i] == of_frame) {
+      std::vector<std::string> chain(
+        path_ref.begin(), path_ref.begin() + static_cast<DiffT>(i + 1));
       std::reverse(chain.begin(), chain.end());
       return chain;
     }
   }
 
   // General case: locate the lowest common ancestor.
-  const auto path_from = walk_to_root(from_frame);
-  std::unordered_set<std::string> to_ancestors(path_to.begin(), path_to.end());
-  std::size_t lca_in_from = path_from.size();
-  for (std::size_t i = 0; i < path_from.size(); ++i) {
-    if (to_ancestors.count(path_from[i]) != 0) {
+  const auto path_of = walk_to_root(of_frame);
+  std::unordered_set<std::string> to_ancestors(path_ref.begin(), path_ref.end());
+  std::size_t lca_in_from = path_of.size();
+  for (std::size_t i = 0; i < path_of.size(); ++i) {
+    if (to_ancestors.count(path_of[i]) != 0) {
       lca_in_from = i;
       break;
     }
   }
-  if (lca_in_from == path_from.size()) {
+  if (lca_in_from == path_of.size()) {
     return {};
   }
-  const std::string & lca = path_from[lca_in_from];
+  const std::string & lca = path_of[lca_in_from];
 
   std::vector<std::string> chain(
-    path_from.begin(), path_from.begin() + static_cast<DiffT>(lca_in_from + 1));
+    path_of.begin(), path_of.begin() + static_cast<DiffT>(lca_in_from + 1));
   std::size_t lca_in_to = 0;
-  for (; lca_in_to < path_to.size(); ++lca_in_to) {
-    if (path_to[lca_in_to] == lca) {
+  for (; lca_in_to < path_ref.size(); ++lca_in_to) {
+    if (path_ref[lca_in_to] == lca) {
       break;
     }
   }
   for (std::size_t i = lca_in_to; i-- > 0;) {
-    chain.push_back(path_to[i]);
+    chain.push_back(path_ref[i]);
   }
   return chain;
 }
 
 std::vector<std::string> missing_frames(
-  const tf2::BufferCore & buffer, const std::string & from_frame, const std::string & to_frame)
+  const tf2::BufferCore & buffer, const std::string & of_frame, const std::string & ref_frame)
 {
   const std::vector<std::string> all = buffer.getAllFrameNames();
   const std::unordered_set<std::string> known(all.begin(), all.end());
 
   std::vector<std::string> missing;
-  if (known.count(from_frame) == 0) {
-    missing.push_back(from_frame);
+  if (known.count(of_frame) == 0) {
+    missing.push_back(of_frame);
   }
   // Skip the second check when both endpoints are the same frame so a missing
   // `tf walk <f> <f>` reports the frame once rather than twice.
-  if (to_frame != from_frame && known.count(to_frame) == 0) {
-    missing.push_back(to_frame);
+  if (ref_frame != of_frame && known.count(ref_frame) == 0) {
+    missing.push_back(ref_frame);
   }
   return missing;
 }

@@ -45,15 +45,16 @@ struct TfWalkStep
 // input yields an empty timeline.
 std::vector<tf2::TimePoint> build_tf_walk_timeline(std::vector<tf2::TimePoint> stamps);
 
-// Resolve <from> -> <to> from `buffer` at `time`, matching
-// lookupTransform(target=to_frame, source=from_frame) — the tf2_echo
-// convention, where the translation is <from>'s origin expressed in <to>. A
-// tf2::TransformException is caught and reported via the step's `error`
-// (transform left empty) rather than thrown, so a single unresolvable time
-// does not abort the walk.
+// Resolve <of>'s pose in <ref> from `buffer` at `time` — that is,
+// lookupTransform(target=ref_frame, source=of_frame), whose translation is
+// <of>'s origin expressed in <ref>. Equivalent to
+// `ros2 run tf2_ros tf2_echo <ref> <of>` (note the operand order — tf2_echo
+// takes the reference frame first). A tf2::TransformException is caught and
+// reported via the step's `error` (transform left empty) rather than thrown, so
+// a single unresolvable time does not abort the walk.
 TfWalkStep resolve_tf_walk_step(
-  const tf2::BufferCore & buffer, tf2::TimePoint time, const std::string & from_frame,
-  const std::string & to_frame);
+  const tf2::BufferCore & buffer, tf2::TimePoint time, const std::string & of_frame,
+  const std::string & ref_frame);
 
 }  // namespace bagwiz::core
 
