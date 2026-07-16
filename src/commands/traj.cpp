@@ -493,7 +493,7 @@ private:
     }
 
     const tf2::TimePoint resolve_tp{std::chrono::nanoseconds(input_edges.front().stamp_ns)};
-    const auto chain = core::resolve_chain(tf_buffer, *args.ref_frame, *args.of_frame, resolve_tp);
+    const auto chain = core::resolve_chain(tf_buffer, *args.of_frame, *args.ref_frame, resolve_tp);
     if (chain.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger,

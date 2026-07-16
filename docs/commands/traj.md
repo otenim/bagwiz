@@ -319,8 +319,8 @@ bagwiz traj join [OPTIONS] <input> <traj_file> <topic>
 > the values and results are unchanged. Note the mapping is **crossed** —
 > `--from` becomes `--ref`, **not** `--of`. `--ref` is the reference frame the
 > trajectory is expressed in; `--of` is the tracked frame it is written for.
-> `traj dump <bag> /tf --from map --to base_link` becomes
-> `traj dump <bag> /tf --ref map --of base_link`.
+> `traj join <bag> traj.tum /tf --from map --to base_link` becomes
+> `traj join <bag> traj.tum /tf --ref map --of base_link`.
 
 ### Behavior
 

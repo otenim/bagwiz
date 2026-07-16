@@ -158,7 +158,7 @@ TrajectoryBuildResult build_trajectory_from_tf_message(
   // linkage in tf2 is fixed for a frame's whole life, so any populated stamp
   // works — this just needs to land inside what was just set above.
   const tf2::TimePoint resolve_tp{std::chrono::nanoseconds(input_edges.front().stamp_ns)};
-  const auto chain = core::resolve_chain(buffer, ref, of, resolve_tp);
+  const auto chain = core::resolve_chain(buffer, of, ref, resolve_tp);
   if (chain.empty()) {
     out.error = "no TF path from --ref '" + ref + "' to --of '" + of + "' (checked '" +
                 pose_ti.name + "' + the bag's static TF)";

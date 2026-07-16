@@ -123,7 +123,8 @@ TEST(FormatTransformHuman, MirrorsJsonKeyHierarchy)
   // The header label is lowercase "transform:" (not "Transform:").
   EXPECT_NE(out.find("transform: "), std::string::npos);
   EXPECT_EQ(out.find("Transform:"), std::string::npos);
-  // Direction label joins the chain with " -> "; here it is just the endpoints.
+  // This substring is satisfied by the chain line below ("chain: base_link ->
+  // velodyne"), not by the label — the label never joins with " -> ".
   EXPECT_NE(out.find("base_link -> velodyne"), std::string::npos);
   // The label states the direction explicitly; the arrow is confined to the
   // chain line, where it describes the tree path rather than a direction.
@@ -147,11 +148,11 @@ TEST(FormatTransformHuman, MirrorsJsonKeyHierarchy)
 
 TEST(FormatTransformHuman, IdentitySelfTransform)
 {
-  // from == to resolves to the identity transform; the formatter must still
+  // of == ref resolves to the identity transform; the formatter must still
   // render a well-formed block labelled "<frame> -> <frame>".
   const auto tf = make_identity_tf("lidar", "lidar", 0.0, 0.0, 0.0);
 
-  // A single-frame chain (source == target) keeps the arrow form "x -> x".
+  // A single-frame chain (of == ref) keeps the arrow form "x -> x".
   const std::string out = bagwiz::core::format_transform_human(tf, {"lidar"});
 
   EXPECT_NE(out.find("lidar -> lidar"), std::string::npos);

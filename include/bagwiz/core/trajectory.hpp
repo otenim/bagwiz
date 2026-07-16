@@ -76,7 +76,7 @@ geometry_msgs::msg::TransformStamped pose_to_transform_stamped(
 
 // Compose the output trajectory pose for `traj dump`:
 //
-//   T_from_to = T_from_header * T_header_body * T_body_to
+//   T_ref_of = T_ref_header * T_header_body * T_body_of
 //
 // `body_pose` is the message's pose — the tracked body expressed in its own
 // `header.frame_id` (`T_header_body`). The two optional bridges come from the

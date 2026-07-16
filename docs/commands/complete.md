@@ -218,11 +218,11 @@ source ~/.config/fish/completions/bagwiz.fish
   - `bagwiz traj dump <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
   - `bagwiz traj join <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
   - `bagwiz pcd undistort <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
-  - `bagwiz tf walk <input> <FRAME> <FRAME>` (the `<from>` and `<to>`
-    positional slots; all TF topics, static + dynamic, merged)
-  - `bagwiz tf static calc <input> <FRAME> <FRAME>` (the `<from>` and `<to>`
-    positional slots; **only** static `*tf_static` topics, since `tf static calc`
-    resolves the static tree)
+  - `bagwiz tf walk <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics,
+    static + dynamic, merged)
+  - `bagwiz tf static calc <input> ... --ref <FRAME>` / `--of <FRAME>`
+    (**only** static `*tf_static` topics, since `tf static calc` resolves the
+    static tree)
 
   The bag is opened lazily and only the first ~5000 TF messages are scanned
   so per-keystroke latency stays bounded on large bags. When the bag opens

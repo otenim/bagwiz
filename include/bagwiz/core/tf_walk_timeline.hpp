@@ -20,7 +20,7 @@
 
 // Timeline + per-step resolution for `bagwiz tf walk`. The walk merges every
 // TF topic of a bag into one buffer and steps through the distinct times at
-// which the merged TF changed, resolving <from> -> <to> at each. These helpers
+// which the merged TF changed, resolving --of's pose in --ref at each. These helpers
 // are the pure, bag-free core (no I/O, no terminal) so they can be unit-tested
 // against an in-memory tf2::BufferCore; the command layer owns the bag reading
 // and the pager. The walk does not classify transforms as static vs dynamic.
@@ -28,7 +28,7 @@ namespace bagwiz::core
 {
 
 // One step of a tf walk: the query time on the merged TF timeline and the
-// resolved <from> -> <to> transform at that time. `transform` is std::nullopt
+// resolved --of's pose in --ref at that time. `transform` is std::nullopt
 // when the buffer cannot connect the two frames at `time` (e.g. the chain is
 // not yet complete, or the time is outside a dynamic frame's cached window);
 // `error` then carries the tf2 reason and is empty on success.
