@@ -72,7 +72,7 @@ bool is_supported_pose_topic_type(const std::string & type)
          type == kPoseWithCovarianceStampedType;
 }
 
-// Outcome of building the --ref -> --of trajectory in Pass 1.
+// Outcome of building the --of -> --ref trajectory in Pass 1.
 struct TrajectoryBuildResult
 {
   std::vector<core::TrajectoryPose> trajectory;
@@ -160,7 +160,7 @@ TrajectoryBuildResult build_trajectory_from_tf_message(
   const tf2::TimePoint resolve_tp{std::chrono::nanoseconds(input_edges.front().stamp_ns)};
   const auto chain = core::resolve_chain(buffer, of, ref, resolve_tp);
   if (chain.empty()) {
-    out.error = "no TF path from --ref '" + ref + "' to --of '" + of + "' (checked '" +
+    out.error = "no TF path from --of '" + of + "' to --ref '" + ref + "' (checked '" +
                 pose_ti.name + "' + the bag's static TF)";
     return out;
   }
@@ -178,7 +178,7 @@ TrajectoryBuildResult build_trajectory_from_tf_message(
     }
   }
   if (sample_stamps.empty()) {
-    out.error = "--ref '" + ref + "' -> --of '" + of +
+    out.error = "--of '" + of + "' -> --ref '" + ref +
                 "' resolves via static TF, but none of the edges on that path are published on "
                 "pose topic '" +
                 pose_ti.name + "'";
@@ -744,7 +744,7 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
     }
   }
 
-  // ---- Pass 1: build the --ref -> --of trajectory ------------------------
+  // ---- Pass 1: build the --of -> --ref trajectory ------------------------
   tf2::BufferCore buffer{kTfBufferCacheTime};
   if (const auto error = core::load_static_tf_buffer(args.input_path, buffer); error.has_value()) {
     // load_static_tf_buffer is a shared, caller-neutral helper (it names no
@@ -764,8 +764,8 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
           args.input_path, *pose_ti, pose_compose_kind(pose_ti->type), ref, of, buffer);
   if (!built.ok()) {
     BAGWIZ_LOG_ERROR(
-      kLogger, "pcd undistort: could not resolve --ref '%s' -> --of '%s' from pose topic '%s': %s",
-      ref.c_str(), of.c_str(), args.pose_topic.c_str(), built.error.c_str());
+      kLogger, "pcd undistort: could not resolve --of '%s' -> --ref '%s' from pose topic '%s': %s",
+      of.c_str(), ref.c_str(), args.pose_topic.c_str(), built.error.c_str());
     return 1;
   }
   std::vector<core::TrajectoryPose> trajectory = std::move(built.trajectory);
