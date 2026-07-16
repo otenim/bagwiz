@@ -1246,7 +1246,7 @@ TEST(FlagCompletionTest, PcdUndistortDashListsUndistortFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "pcd", "undistort", "-"}),
-    "--from\n--help\n--output\n--overwrite\n--pcd\n--threads\n--to\n-h\n-j\n-o\n-w\n");
+    "--help\n--of\n--output\n--overwrite\n--pcd\n--ref\n--threads\n-h\n-j\n-o\n-w\n");
 }
 
 // `pcd undistort <bag> <pose_topic> --pcd <TAB>` completes PointCloud2 topics
@@ -1263,10 +1263,10 @@ TEST_F(CompletionTest, PcdUndistortPcdCompletesPointCloud2Topics)
     "/points\n");
 }
 
-// `--from <TAB>` after a TF-bearing bag lists every distinct frame id
+// `--ref <TAB>` after a TF-bearing bag lists every distinct frame id
 // reachable from the bag's /tf message(s), sorted and deduplicated — pcd
 // undistort reuses the same complete_frame_id_arg helper as traj dump/join.
-TEST_F(CompletionTest, PcdUndistortFromFlagListsBagFrameIds)
+TEST_F(CompletionTest, PcdUndistortRefFlagListsBagFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -1274,13 +1274,13 @@ TEST_F(CompletionTest, PcdUndistortFromFlagListsBagFrameIds)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "~/tf.mcap", "/pose", "--from"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "~/tf.mcap", "/pose", "--ref"}),
     "base_link\nlidar\nmap\nodom\n");
 }
 
-// `--to <TAB>` shares the same value source as `--from`. Pin both so that a
+// `--of <TAB>` shares the same value source as `--ref`. Pin both so that a
 // future divergence cannot silently regress one branch.
-TEST_F(CompletionTest, PcdUndistortToFlagListsBagFrameIds)
+TEST_F(CompletionTest, PcdUndistortOfFlagListsBagFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -1288,7 +1288,7 @@ TEST_F(CompletionTest, PcdUndistortToFlagListsBagFrameIds)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "~/tf.mcap", "/pose", "--to"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "~/tf.mcap", "/pose", "--of"}),
     "base_link\nlidar\nmap\nodom\n");
 }
 

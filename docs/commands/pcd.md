@@ -86,7 +86,7 @@ intact for the downstream merge.
 
 ```text
 bagwiz pcd undistort <input> <pose_topic> --pcd <topic> [--pcd <topic>]... \
-    [--from <frame>] [--to <frame>] [-o|--output <path>] [-w|--overwrite] \
+    [--ref <frame>] [--of <frame>] [-o|--output <path>] [-w|--overwrite] \
     [-j|--threads <N>]
 ```
 
@@ -102,34 +102,39 @@ bagwiz pcd undistort <input> <pose_topic> --pcd <topic> [--pcd <topic>]... \
 | Flag                  | Default      | Description                                                                                                                                                                          |
 | --------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--pcd <topic>`       | _(required)_ | PointCloud2 topic to deskew. Repeatable — pass `--pcd` once per topic (e.g. `--pcd /a --pcd /b`) to deskew several topics against the same trajectory. At least one is required.     |
-| `--from <frame>`      | `map`        | Reference frame the trajectory is resolved in (same convention as `traj dump`).                                                                                                      |
-| `--to <frame>`        | `base_link`  | Tracked body frame. The trajectory is obtained as `T_from_to` (e.g. `T_map_base_link`).                                                                                              |
+| `--ref <frame>`       | `map`        | Reference frame the trajectory is resolved in (same convention as `traj dump`).                                                                                                      |
+| `--of <frame>`        | `base_link`  | Tracked body frame. The trajectory is obtained as `T_ref_of` (e.g. `T_map_base_link`).                                                                                               |
 | `-o, --output <path>` | _(unset)_    | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                         |
 | `-w, --overwrite`     | `false`      | Replace `-o/--output` if it already exists. Has no effect in in-place mode.                                                                                                          |
 | `-j, --threads <N>`   | `0`          | Number of worker threads for Pass 2. `0` (or omitted) uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; larger values are capped at hardware concurrency. |
 
+> **Renamed in this release.** `--from` is now `--ref` and `--to` is now `--of`;
+> the values and results are unchanged. Note the mapping is **crossed** —
+> `--from` becomes `--ref`, **not** `--of`. `--ref` is the reference frame
+> (default `map`); `--of` is the tracked body frame (default `base_link`).
+
 ### Behavior
 
 1. **Resolve the trajectory (Pass 1).** `<input>` must have a `...tf_static`
-   topic — it is loaded together with `<pose_topic>` to resolve `--from` →
-   `--to`. Only `<pose_topic>` and the bag's static TF feed the trajectory; no
+   topic — it is loaded together with `<pose_topic>` to resolve `--ref` →
+   `--of`. Only `<pose_topic>` and the bag's static TF feed the trajectory; no
    other topic (e.g. a bag's own dynamic `/tf`) is read automatically. The
-   composition mirrors `traj dump`'s: for `TFMessage`, the `--from` → `--to`
+   composition mirrors `traj dump`'s: for `TFMessage`, the `--ref` → `--of`
    chain is resolved against tf_static plus the edges carried on
    `<pose_topic>` itself, then sampled at every stamp published on that
    chain; for `Odometry` /
    `PoseStamped` / `PoseWithCovarianceStamped`, each message's own pose is
-   bridged into `--from`/`--to` via the bag's static TF when its frames don't
-   already match (`T_from_to = T_from_header · T_header_body · T_body_to`).
+   bridged into `--ref`/`--of` via the bag's static TF when its frames don't
+   already match (`T_ref_of = T_ref_header · T_header_body · T_body_of`).
    One difference from `traj dump`: an unresolvable bridge is fatal here,
    where `traj dump` would just skip that one sample. An unresolvable
-   `--from` → `--to` overall is likewise fatal — checked before anything is
+   `--ref` → `--of` overall is likewise fatal — checked before anything is
    written.
 2. **Resolve each topic's extrinsic.** For every `--pcd` topic, the sensor
-   extrinsic `E = T_to_C` (`C` = that topic's cloud `frame_id`) is resolved
-   from the same frame sources as `--from` → `--to`: the bag's `*tf_static`,
+   extrinsic `E = T_of_C` (`C` = that topic's cloud `frame_id`) is resolved
+   from the same frame sources as `--ref` → `--of`: the bag's `*tf_static`,
    plus `<pose_topic>` itself when it is a `TFMessage` topic (identity when
-   `C == --to`). For a statically-mounted sensor — the normal case — this
+   `C == --of`). For a statically-mounted sensor — the normal case — this
    extrinsic comes from `tf_static` alone. A missing chain is fatal. Each
    topic's first message must also already carry a per-point time
    field (checked by name: `t`, `time`, `time_stamp`, or `timestamp`); a topic
@@ -140,7 +145,7 @@ bagwiz pcd undistort <input> <pose_topic> --pcd <topic> [--pcd <topic>]... \
      (relative-to-header vs. absolute is auto-detected);
    - each point's xyz is moved from its own timestamp's pose to the pose at
      `t_ref = header.stamp` via
-     `p' = E⁻¹·(T_from_to(t_ref)⁻¹·T_from_to(t_i))·E·p`, interpolating the
+     `p' = E⁻¹·(T_ref_of(t_ref)⁻¹·T_ref_of(t_i))·E·p`, interpolating the
      trajectory (SLERP + lerp) and clamping to the nearest endpoint pose for
      points outside its time span;
    - the per-point time field is rewritten to the `t_ref`-equivalent value
@@ -186,7 +191,7 @@ bagwiz pcd undistort drive.mcap /localization/kinematic_state \
 # Composition workflow: derive a trajectory with SLAM, embed it as a topic,
 # then deskew against it.
 bagwiz map slam drive.mcap /points out/                 # -> out/traj.tum
-bagwiz traj join drive.mcap out/traj.tum /slam/tf --from map --to base_link
+bagwiz traj join drive.mcap out/traj.tum /slam/tf --ref map --of base_link
 bagwiz pcd undistort drive.mcap /slam/tf --pcd /points -o undistorted.mcap
 ```
 
@@ -197,10 +202,10 @@ bagwiz pcd undistort drive.mcap /slam/tf --pcd /points -o undistorted.mcap
 | No `--pcd` given                                                                                                          | Error.                                                                                                    |
 | `pose_topic` absent from `<input>`, or not one of the four supported types                                                | Error.                                                                                                    |
 | A `--pcd` topic absent from `<input>`, or not `PointCloud2`                                                               | Error.                                                                                                    |
-| `<input>` has no `...tf_static` topic                                                                                     | Fatal — needed to resolve `--from` → `--to` and every `--pcd` topic's extrinsic.                          |
-| `--from` → `--to` cannot be resolved from `pose_topic` + the bag's static TF                                              | Fatal.                                                                                                    |
+| `<input>` has no `...tf_static` topic                                                                                     | Fatal — needed to resolve `--ref` → `--of` and every `--pcd` topic's extrinsic.                           |
+| `--ref` → `--of` cannot be resolved from `pose_topic` + the bag's static TF                                               | Fatal.                                                                                                    |
 | A `--pcd` topic's first message has no per-point time field                                                               | Fatal.                                                                                                    |
-| `--to` → a `--pcd` topic's cloud frame is not reachable via `*tf_static` + `<pose_topic>`                                 | Fatal.                                                                                                    |
+| `--of` → a `--pcd` topic's cloud frame is not reachable via `*tf_static` + `<pose_topic>`                                 | Fatal.                                                                                                    |
 | A cloud reaching the rewrite step is malformed (big-endian, missing/misshapen x/y/z, or an inconsistent point/row layout) | Aborts the run (a cloud that merely fails to _parse_ is copied through unchanged with a warning instead). |
 | `-o` output path already exists without `-w`/`--overwrite`                                                                | Error.                                                                                                    |
 

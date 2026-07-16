@@ -47,7 +47,7 @@ struct DeskewResult
 
 // Deskew `input`, moving each point to the reference timestamp `t_ref_ns` using
 // the world trajectory (T_world_sensor over time). `extrinsic` E maps a point
-// from the cloud frame into the trajectory (`--to`) frame; nullopt = identity.
+// from the cloud frame into the trajectory (`--of`) frame; nullopt = identity.
 //   p' = E^{-1} * (T(t_ref)^{-1} * T(t_i)) * E * p
 // Non-target fields/bytes are preserved; only xyz + one per-point time field are
 // rewritten (time -> t_ref-equivalent to block downstream double-deskew). Time

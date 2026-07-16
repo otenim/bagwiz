@@ -25,8 +25,8 @@ struct PcdUndistortArgs
   std::filesystem::path input_path;                  // <input> bag
   std::string pose_topic;                            // <pose_topic> positional (motion source)
   std::vector<std::string> pcd_topics;               // --pcd (>=1)
-  std::optional<std::string> from_frame;             // --from; empty => "map"
-  std::optional<std::string> to_frame;               // --to;   empty => "base_link"
+  std::optional<std::string> ref_frame;              // --ref; empty => "map"
+  std::optional<std::string> of_frame;               // --of;  empty => "base_link"
   std::optional<std::filesystem::path> output_path;  // -o; empty => in-place
   bool overwrite = false;                            // -w
   std::optional<int> threads;  // -j,--threads; 0/omit => hardware concurrency, 1 => sync

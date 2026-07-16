@@ -106,7 +106,7 @@ std::vector<std::byte> serialize_cloud(
 // Writes:
 //   /pose_tf   tf2_msgs/msg/TFMessage, map->base_link, tx 0.0 (t0) -> 1.0 (t1)
 //   /tf_static tf2_msgs/msg/TFMessage, present but carries no edges (base_link
-//              already equals --to for /points, so no extrinsic hop is needed;
+//              already equals --of for /points, so no extrinsic hop is needed;
 //              load_static_tf_buffer only requires the topic to exist)
 //   /points    sensor_msgs/msg/PointCloud2, frame base_link, one point at
 //              local x=0 with per-point relative time 0.1s (when
@@ -313,8 +313,8 @@ PcdUndistortArgs base_args(const std::filesystem::path & in, const std::filesyst
   a.input_path = in;
   a.pose_topic = "/pose_tf";
   a.pcd_topics = {"/points"};
-  a.from_frame = "map";
-  a.to_frame = "base_link";
+  a.ref_frame = "map";
+  a.of_frame = "base_link";
   a.output_path = out;
   a.overwrite = true;
   return a;
@@ -380,11 +380,11 @@ TEST_F(PcdUndistortTest, OutOfBoundsTimeFieldIsFatal)
   EXPECT_EQ(run_pcd_undistort(base_args(in_, out_)), 1);
 }
 
-TEST_F(PcdUndistortTest, UnresolvableToIsFatal)
+TEST_F(PcdUndistortTest, UnresolvableOfIsFatal)
 {
   write_undistort_input(in_, /*with_time_field=*/true);
   auto a = base_args(in_, out_);
-  a.to_frame = "no_such_frame";
+  a.of_frame = "no_such_frame";
   EXPECT_EQ(run_pcd_undistort(a), 1);
 }
 
@@ -419,8 +419,8 @@ TEST_F(PcdUndistortTest, InPlaceRewritesTargetTopicAndPreservesOthers)
   a.input_path = inplace_path;
   a.pose_topic = "/pose_tf";
   a.pcd_topics = {"/points"};
-  a.from_frame = "map";
-  a.to_frame = "base_link";
+  a.ref_frame = "map";
+  a.of_frame = "base_link";
   // a.output_path is left unset -> in-place.
   ASSERT_EQ(run_pcd_undistort(a), 0);
 

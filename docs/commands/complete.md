@@ -215,9 +215,9 @@ source ~/.config/fish/completions/bagwiz.fish
 - TF frame-id positions complete to the set of distinct `header.frame_id`
   and `child_frame_id` values observed in the input bag's
   `tf2_msgs/msg/TFMessage` topics. Coverage:
-  - `bagwiz traj dump <input> ... --from <FRAME>` / `--to <FRAME>` (all TF topics)
-  - `bagwiz traj join <input> ... --from <FRAME>` / `--to <FRAME>` (all TF topics)
-  - `bagwiz pcd undistort <input> ... --from <FRAME>` / `--to <FRAME>` (all TF topics)
+  - `bagwiz traj dump <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
+  - `bagwiz traj join <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
+  - `bagwiz pcd undistort <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
   - `bagwiz tf walk <input> <FRAME> <FRAME>` (the `<from>` and `<to>`
     positional slots; all TF topics, static + dynamic, merged)
   - `bagwiz tf static calc <input> <FRAME> <FRAME>` (the `<from>` and `<to>`

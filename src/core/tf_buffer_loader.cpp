@@ -115,7 +115,7 @@ std::optional<std::string> load_static_tf_buffer(
   }
   if (static_topics.empty()) {
     // Caller-neutral: this helper is shared across commands with different
-    // flags (pcd concat's --frame, pcd undistort's --from/--to, ...), so it
+    // flags (pcd concat's --frame, pcd undistort's --ref/--of, ...), so it
     // must not bake any one of them into the message. Callers that want
     // flag-specific context should prepend their own.
     return "bag has no static TF topic (…tf_static)";

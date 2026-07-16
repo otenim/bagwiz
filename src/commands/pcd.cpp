@@ -128,8 +128,8 @@ private:
         "--pcd", undistort_args_.pcd_topics, "PointCloud2 topic(s) to deskew (repeatable).")
       ->required()
       ->expected(-1);
-    sub->add_option("--from", undistort_args_.from_frame, "Reference frame (default: map).");
-    sub->add_option("--to", undistort_args_.to_frame, "Tracked body frame (default: base_link).");
+    sub->add_option("--ref", undistort_args_.ref_frame, "Reference frame (default: map).");
+    sub->add_option("--of", undistort_args_.of_frame, "Tracked body frame (default: base_link).");
     sub->add_option(
       "-o,--output", undistort_args_.output_path,
       "Output bag. Omitted => rewrite <input> in place.");

@@ -594,7 +594,7 @@ std::vector<std::string> collect_tf_frame_ids(
   return frame_ids;
 }
 
-// Completion candidates for the value of `--from` / `--to`. Returns the
+// Completion candidates for the value of `--of` / `--ref`. Returns the
 // bag's TF frame ids filtered by `prefix`. When the bag yields no frame
 // ids to suggest — whether it failed to open or opened cleanly but carries
 // no TF data — we return an empty list so completion simply offers nothing
@@ -1295,12 +1295,12 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 // For `undistort`, `<pose_topic>` is a free-form topic name (accepted types are
 // TFMessage / Odometry / PoseStamped / PoseWithCovarianceStamped) with nothing
 // to suggest. `--pcd` is variadic and completes PointCloud2 topics from the bag
-// named at word 2, mirroring concat's `--pcd`. `--from`/`--to` complete
+// named at word 2, mirroring concat's `--pcd`. `--ref`/`--of` complete
 // the bag's TF frame ids, mirroring `traj dump`/`join`. `-o`/`--output` takes a
 // path and `-j`/`--threads` takes a count, so they get no value completion.
 //
 //   undistort: `pcd`(0) `undistort`(1) `<input>`(2) `<pose_topic>`(3)
-//              --pcd <t...> [--from <frame>] [--to <frame>] [-o <out>]
+//              --pcd <t...> [--ref <frame>] [--of <frame>] [-o <out>]
 //              [-j|--threads <N>] [-w|--overwrite]
 std::vector<std::string> complete_pcd(const CompletionRequest & request)
 {
@@ -1324,7 +1324,7 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
     if (sub == "undistort") {
       return matching(
         with_help(
-          {"--from", "--output", "--overwrite", "--pcd", "--threads", "--to", "-j", "-o", "-w"}),
+          {"--of", "--output", "--overwrite", "--pcd", "--ref", "--threads", "-j", "-o", "-w"}),
         current);
     }
   }
@@ -1382,11 +1382,11 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
     break;  // the nearest option decides; a non-pcd option ends the run
   }
 
-  // undistort's --from/--to complete the bag's TF frame ids, mirroring
+  // undistort's --of/--ref complete the bag's TF frame ids, mirroring
   // `traj dump`/`join` (bag path at the same word 2 <input> slot).
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
-    if (previous == "--from" || previous == "--to") {
+    if (previous == "--of" || previous == "--ref") {
       return complete_frame_id_arg(request, kSecondCommandArgWord, current);
     }
   }
