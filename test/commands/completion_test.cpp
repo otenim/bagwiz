@@ -551,9 +551,9 @@ TEST_F(CompletionTest, TrajDumpFormatFlagValueCompletes)
     "tum\n");
 }
 
-// `--from <TAB>` after a TF-bearing bag must list every distinct frame
+// `--ref <TAB>` after a TF-bearing bag must list every distinct frame
 // id reachable from the bag's /tf message(s), sorted and deduplicated.
-TEST_F(CompletionTest, TrajDumpFromFlagListsBagFrameIds)
+TEST_F(CompletionTest, TrajDumpRefFlagListsBagFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -562,13 +562,13 @@ TEST_F(CompletionTest, TrajDumpFromFlagListsBagFrameIds)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "7", "bagwiz", "traj", "dump", "~/tf.mcap", "/tf", "out.tum",
-       "--from"}),
+       "--ref"}),
     "base_link\nlidar\nmap\nodom\n");
 }
 
-// `--to <TAB>` shares the same value source as `--from`. Pin both so
+// `--of <TAB>` shares the same value source as `--ref`. Pin both so
 // that a future divergence cannot silently regress one branch.
-TEST_F(CompletionTest, TrajDumpToFlagListsBagFrameIds)
+TEST_F(CompletionTest, TrajDumpOfFlagListsBagFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -577,14 +577,14 @@ TEST_F(CompletionTest, TrajDumpToFlagListsBagFrameIds)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "7", "bagwiz", "traj", "dump", "~/tf.mcap", "/tf", "out.tum",
-       "--to"}),
+       "--of"}),
     "base_link\nlidar\nmap\nodom\n");
 }
 
 // Typed prefix narrows the candidates to matching frame ids. Validates
 // the prefix filter that `complete_frame_id_value` applies, including
 // the case where a partial prefix matches no frames (returns empty).
-TEST_F(CompletionTest, TrajDumpFromFlagRespectsPrefix)
+TEST_F(CompletionTest, TrajDumpRefFlagRespectsPrefix)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -593,7 +593,7 @@ TEST_F(CompletionTest, TrajDumpFromFlagRespectsPrefix)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "7", "bagwiz", "traj", "dump", "~/tf.mcap", "/tf", "out.tum",
-       "--from", "ba"}),
+       "--ref", "ba"}),
     "base_link\n");
 }
 
@@ -601,7 +601,7 @@ TEST_F(CompletionTest, TrajDumpFromFlagRespectsPrefix)
 // it puts the bag at the same positional slot. Verify it actually
 // surfaces frame ids too — guards against a regression where someone
 // later restricts the helper to just `traj dump`.
-TEST_F(CompletionTest, TrajJoinFromFlagListsBagFrameIds)
+TEST_F(CompletionTest, TrajJoinRefFlagListsBagFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -610,14 +610,14 @@ TEST_F(CompletionTest, TrajJoinFromFlagListsBagFrameIds)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "8", "bagwiz", "traj", "join", "~/tf.mcap", "in.tum", "/tf",
-       "--from"}),
+       "--ref"}),
     "base_link\nlidar\nmap\nodom\n");
 }
 
 // When the bag opens successfully but carries no tf2_msgs/msg/TFMessage
 // topic, completion has nothing to suggest and returns empty — completion
 // simply offers nothing rather than surfacing a placeholder candidate.
-TEST_F(CompletionTest, TrajDumpFromFlagEmptyWhenBagHasNoTf)
+TEST_F(CompletionTest, TrajDumpRefFlagEmptyWhenBagHasNoTf)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -626,7 +626,7 @@ TEST_F(CompletionTest, TrajDumpFromFlagEmptyWhenBagHasNoTf)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "7", "bagwiz", "traj", "dump", "~/no_tf.mcap", "/tf", "out.tum",
-       "--from"}),
+       "--ref"}),
     "");
 }
 
@@ -634,21 +634,21 @@ TEST_F(CompletionTest, TrajDumpFromFlagEmptyWhenBagHasNoTf)
 // mislead the user into believing the bag exists but is empty of TF.
 // The contract is "silent fall-through so the shell's file completion
 // takes over", matching how `complete_topics` handles bad inputs.
-TEST_F(CompletionTest, TrajDumpFromFlagEmptyForMissingBag)
+TEST_F(CompletionTest, TrajDumpRefFlagEmptyForMissingBag)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "7", "bagwiz", "traj", "dump", "~/missing.mcap", "/tf", "out.tum",
-       "--from"}),
+       "--ref"}),
     "");
 }
 
 // A flag in the bag slot must not be passed to io::open_read by the
 // frame-id completer. Pins the same defensive gate that the topic
 // binding applies for `walk` / `traj`.
-TEST_F(CompletionTest, TrajDumpFromFlagSuppressedWhenBagSlotIsFlag)
+TEST_F(CompletionTest, TrajDumpRefFlagSuppressedWhenBagSlotIsFlag)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -657,7 +657,7 @@ TEST_F(CompletionTest, TrajDumpFromFlagSuppressedWhenBagSlotIsFlag)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "7", "bagwiz", "traj", "dump", "--unknown-flag", "/tf", "out.tum",
-       "--from"}),
+       "--ref"}),
     "");
 }
 
@@ -769,14 +769,14 @@ TEST(FlagCompletionTest, TrajDumpDashListsDumpFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "traj", "dump", "-"}),
-    "--format\n--from\n--help\n--overwrite\n--to\n-f\n-h\n-w\n");
+    "--format\n--help\n--of\n--overwrite\n--ref\n-f\n-h\n-w\n");
 }
 
 TEST(FlagCompletionTest, TrajJoinDashListsJoinFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "traj", "join", "-"}),
-    "--force\n--format\n--from\n--help\n--msg-type\n--output\n--overwrite\n--to\n-f\n-h\n-o\n-t\n-"
+    "--force\n--format\n--help\n--msg-type\n--of\n--output\n--overwrite\n--ref\n-f\n-h\n-o\n-t\n-"
     "w\n");
 }
 
@@ -1026,11 +1026,12 @@ TEST_F(CompletionTest, TfTreeTopicsFlagCompletesEveryValueSlot)
 }
 
 // Prefix narrowing still works once the flag candidate set is widened.
-TEST(FlagCompletionTest, TrajDumpDoubleDashOPrefixSelectsOverwrite)
+// `--o` now matches both `--of` and `--overwrite`, sorted lexicographically.
+TEST(FlagCompletionTest, TrajDumpDoubleDashOPrefixSelectsOfAndOverwrite)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "traj", "dump", "--o"}),
-    "--overwrite\n");
+    "--of\n--overwrite\n");
 }
 
 // `topic drop <input> -t <TAB>` offers every topic in the bag -- drop takes
@@ -2104,9 +2105,9 @@ TEST_F(CompletionTest, WalkTopicCompletionListsSqlite3DirectoryTopics)
 }
 
 // frame-id discovery iterates TF messages; on a FILE-mode zstd bag the first read
-// decompresses the whole shard to a temp .db3. `traj dump --from` must offer
+// decompresses the whole shard to a temp .db3. `traj dump --ref` must offer
 // nothing instead of hanging, even though the bag declares a /tf topic.
-TEST_F(CompletionTest, TrajDumpFromFlagSkipsFileModeZstd)
+TEST_F(CompletionTest, TrajDumpRefFlagSkipsFileModeZstd)
 {
   const auto bag = tmp_dir_ / "tf_file_mode";
   write_sqlite3_dir_bag(
@@ -2116,6 +2117,6 @@ TEST_F(CompletionTest, TrajDumpFromFlagSkipsFileModeZstd)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "7", "bagwiz", "traj", "dump", bag.string(), "/tf", "out.tum",
-       "--from"}),
+       "--ref"}),
     "");
 }

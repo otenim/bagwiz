@@ -813,7 +813,7 @@ std::vector<std::string> complete_convert(const CompletionRequest & request)
 // slot is missing or holds a flag — otherwise we would invoke
 // io::open_read on something that is definitely not a bag path.
 //
-// Callers: traj dump/join --from/--to flag-value completion (bag at
+// Callers: traj dump/join --of/--ref flag-value completion (bag at
 // word 2). Parameterising the slot keeps the helper reusable for any
 // future command that places the bag at a different positional index.
 std::vector<std::string> complete_frame_id_arg(
@@ -843,13 +843,12 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
   if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
     const auto & mode = request.words[kFirstCommandArgWord];
     if (mode == "dump") {
-      return matching(
-        with_help({"--format", "--from", "--overwrite", "--to", "-f", "-w"}), current);
+      return matching(with_help({"--format", "--of", "--overwrite", "--ref", "-f", "-w"}), current);
     }
     if (mode == "join") {
       return matching(
         with_help(
-          {"--force", "--format", "--from", "--msg-type", "--output", "--overwrite", "--to", "-f",
+          {"--force", "--format", "--msg-type", "--of", "--output", "--overwrite", "--ref", "-f",
            "-o", "-t", "-w"}),
         current);
     }
@@ -863,7 +862,7 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
     if (previous == "--msg-type" || previous == "-t") {
       return matching({"tf"}, current);
     }
-    if (previous == "--from" || previous == "--to") {
+    if (previous == "--of" || previous == "--ref") {
       return complete_frame_id_arg(request, kSecondCommandArgWord, current);
     }
   }
