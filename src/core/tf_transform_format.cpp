@@ -55,6 +55,18 @@ std::string format_chain(const std::vector<std::string> & path)
   return out;
 }
 
+// The label for the transform's direction: "of=<of>  ref=<ref>", where the
+// chain runs of -> ... -> ref, so of is path.front() and ref is path.back().
+// A single-frame path (of == ref, the identity) names the same frame twice; an
+// empty path (no chain resolved) has no endpoints and yields "(unknown)".
+std::string format_endpoints(const std::vector<std::string> & path)
+{
+  if (path.empty()) {
+    return "(unknown)";
+  }
+  return "of=" + path.front() + "  ref=" + path.back();
+}
+
 }  // namespace
 
 RollPitchYaw quaternion_to_rpy(const geometry_msgs::msg::Quaternion & q)
@@ -93,12 +105,16 @@ std::string format_transform_human(
   // clang-tidy pass when instantiated here (the same reason renderer.cpp
   // avoids fmt formatting). Fixed 6-decimal precision matches tf2_echo.
   //
-  // The body mirrors the --json hierarchy and key names: translation under
-  // `translation`; rotation under `rotation` as `quaternion` plus `rpy_rad` /
-  // `rpy_deg`. One value per line, two-space indent per level (YAML-like).
+  // The label states the direction as "of=<of>  ref=<ref>"; the frame chain
+  // moves to its own `chain:` line, where the " -> " arrow describes the tree
+  // path rather than the transform's direction. The body mirrors the --json
+  // hierarchy and key names: translation under `translation`; rotation under
+  // `rotation` as `quaternion` plus `rpy_rad` / `rpy_deg`. One value per line,
+  // two-space indent per level (YAML-like).
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(kHumanDecimals);
-  oss << "transform: " << format_chain(path) << annotation << "\n";
+  oss << "transform: " << format_endpoints(path) << annotation << "\n";
+  oss << "  chain: " << format_chain(path) << "\n";
   oss << "  translation:\n";
   oss << "    x: " << t.x << "\n";
   oss << "    y: " << t.y << "\n";
@@ -121,16 +137,16 @@ std::string format_transform_human(
 }
 
 std::string format_transform_json(
-  const geometry_msgs::msg::TransformStamped & tf, const std::string & from_frame,
-  const std::string & to_frame)
+  const geometry_msgs::msg::TransformStamped & tf, const std::string & of_frame,
+  const std::string & ref_frame)
 {
   const auto & t = tf.transform.translation;
   const auto & rot = tf.transform.rotation;
   const RollPitchYaw rpy = quaternion_to_rpy(rot);
 
   nlohmann::json j;
-  j["from"] = from_frame;
-  j["to"] = to_frame;
+  j["of"] = of_frame;
+  j["ref"] = ref_frame;
   j["translation"] = {{"x", t.x}, {"y", t.y}, {"z", t.z}};
   j["rotation"]["quaternion"] = {{"x", rot.x}, {"y", rot.y}, {"z", rot.z}, {"w", rot.w}};
   j["rotation"]["rpy_rad"] = {{"roll", rpy.roll}, {"pitch", rpy.pitch}, {"yaw", rpy.yaw}};
