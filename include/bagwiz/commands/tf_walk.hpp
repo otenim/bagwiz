@@ -15,19 +15,19 @@
 namespace bagwiz::commands
 {
 
-// Implements `bagwiz tf walk <input> <from> <to>`: merge every
+// Implements `bagwiz tf walk <input> --of <of> --ref <ref>`: merge every
 // tf2_msgs/msg/TFMessage topic in the bag into one tf2 buffer and step through
-// the distinct times at which the merged TF changed, rendering the
-// <from> -> <to> transform at each in an interactive pager (the same UX as
-// `bagwiz walk`). The walk does not classify transforms as static vs dynamic.
+// the distinct times at which the merged TF changed, rendering <of>'s pose in
+// <ref> at each in an interactive pager (the same UX as `bagwiz walk`). The
+// walk does not classify transforms as static vs dynamic.
 //
 // Returns the process exit code: 0 on a clean quit, 1 on a setup error (no
 // TTY, bag could not be opened, no TF topic, no decodable transforms). Kept as
 // a free function in its own translation unit so the TfCommand dispatcher in
 // tf.cpp stays small; declared here so tf.cpp can call it.
 int run_tf_walk(
-  const std::filesystem::path & input_path, const std::string & from_frame,
-  const std::string & to_frame);
+  const std::filesystem::path & input_path, const std::string & of_frame,
+  const std::string & ref_frame);
 
 }  // namespace bagwiz::commands
 

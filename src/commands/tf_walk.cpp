@@ -184,8 +184,8 @@ std::vector<tf2::TimePoint> load_merged_tf(
 }  // namespace
 
 int run_tf_walk(
-  const std::filesystem::path & input_path, const std::string & from_frame,
-  const std::string & to_frame)
+  const std::filesystem::path & input_path, const std::string & of_frame,
+  const std::string & ref_frame)
 {
   if (!::isatty(STDIN_FILENO) || !::isatty(STDOUT_FILENO)) {
     BAGWIZ_LOG_ERROR(
@@ -229,11 +229,12 @@ int run_tf_walk(
     return 1;
   }
 
-  // Reject a <from>/<to> the bag's TF tree does not contain before opening the
+  // Reject an --of/--ref the bag's TF tree does not contain before opening the
   // viewer. tf2's lookupTransform returns an identity transform when
-  // target == source WITHOUT checking the frame exists, so `tf walk <f> <f>`
-  // for an absent frame would otherwise display a bogus identity transform.
-  const std::vector<std::string> missing = core::missing_frames(buffer, from_frame, to_frame);
+  // target == source WITHOUT checking the frame exists, so
+  // `tf walk --of <f> --ref <f>` for an absent frame would otherwise display a
+  // bogus identity transform.
+  const std::vector<std::string> missing = core::missing_frames(buffer, of_frame, ref_frame);
   if (!missing.empty()) {
     BAGWIZ_LOG_ERROR(
       kLogger, "Frame(s) not present in the bag's TF tree: %s", join_frames(missing).c_str());
@@ -259,7 +260,7 @@ int run_tf_walk(
     const int cols = std::max(1, term.cols);
     const std::size_t last_index = timeline.size() - 1;
 
-    const auto step = core::resolve_tf_walk_step(buffer, timeline[index], from_frame, to_frame);
+    const auto step = core::resolve_tf_walk_step(buffer, timeline[index], of_frame, ref_frame);
 
     // Header: the resolved transform's timestamp, then a blank separator.
     append_wrapped(
@@ -274,15 +275,15 @@ int run_tf_walk(
       // successfully, so a chain exists; fall back to the bare endpoints if
       // resolve_chain cannot reconstruct it.
       std::vector<std::string> chain =
-        core::resolve_chain(buffer, from_frame, to_frame, timeline[index]);
+        core::resolve_chain(buffer, of_frame, ref_frame, timeline[index]);
       if (chain.empty()) {
-        chain = {from_frame, to_frame};
+        chain = {of_frame, ref_frame};
       }
       body_logical = split_lines(core::format_transform_human(*step.transform, chain));
     } else {
       body_logical.push_back(
         fmt::format(
-          "⚠  Could not resolve {} -> {} at this time: {}", from_frame, to_frame, step.error));
+          "⚠  Could not resolve of={} ref={} at this time: {}", of_frame, ref_frame, step.error));
     }
     frame.body.reserve(body_logical.size());
     for (const auto & line : body_logical) {
@@ -312,7 +313,7 @@ int run_tf_walk(
     };
 
     const std::string index_no_hint =
-      fmt::format("  [{} / {}]  {} -> {}", index, last_index, from_frame, to_frame);
+      fmt::format("  [{} / {}]  of={}  ref={}", index, last_index, of_frame, ref_frame);
     recompute_footer(index_no_hint);
 
     auto body_rows_for = [&](const std::vector<std::string> & footer) {

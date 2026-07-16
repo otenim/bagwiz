@@ -875,15 +875,15 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
 // verb adds one positional slot, shifting every argument one word to the right
 // of the flat `tf` subcommands.
 //
-//   calc: `tf`(0) `static`(1) `calc`(2) `<input>`(3) `<from>`(4) `<to>`(5) [--json]
+//   calc: `tf`(0) `static`(1) `calc`(2) `<input>`(3) --of <frame> --ref <frame> [--json]
 //   cp:   `tf`(0) `static`(1) `cp`(2)   `<src>`(3)   `<dst>`(4)  [-o <out>] [-w|--overwrite]
 //
 // At the action slot (word 2) the candidates are `calc` / `cp`. For `calc`,
-// `--json` is offered for any `-` word and the <from>/<to> slots complete from
-// the bag's static `*tf_static` frame ids only (the bag path sits at word 3);
-// unlike `tf walk`, dynamic-only frames are never offered. For `cp`, the
-// <src>/<dst>/-o values are bag paths that fall through to the shell's file
-// completion, so only the flags are surfaced.
+// `--json`/`--of`/`--ref` are offered for any `-` word, and the `--of`/`--ref`
+// value slots complete from the bag's static `*tf_static` frame ids only (the
+// bag path sits at word 3); unlike `tf walk`, dynamic-only frames are never
+// offered. For `cp`, the <src>/<dst>/-o values are bag paths that fall through
+// to the shell's file completion, so only the flags are surfaced.
 std::vector<std::string> complete_tf_static(
   const CompletionRequest & request, const std::string & current)
 {
@@ -900,11 +900,13 @@ std::vector<std::string> complete_tf_static(
 
   if (action == "calc") {
     if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
-      return matching(with_help({"--json"}), current);
+      return matching(with_help({"--json", "--of", "--ref"}), current);
     }
-    if (
-      request.cursor_word == kFourthCommandArgWord || request.cursor_word == kFifthCommandArgWord) {
-      return complete_frame_id_arg(request, kThirdCommandArgWord, current, /*static_only=*/true);
+    if (request.cursor_word > 0) {
+      const auto & previous = request.words[request.cursor_word - 1];
+      if (previous == "--of" || previous == "--ref") {
+        return complete_frame_id_arg(request, kThirdCommandArgWord, current, /*static_only=*/true);
+      }
     }
     return {};
   }
@@ -924,14 +926,14 @@ std::vector<std::string> complete_tf_static(
 // the candidates are `static` / `tree` / `walk`.
 //
 //   tree: `tf`(0) `tree`(1) `<input>`(2) [-t|--topics <topic-or-selector>...]
-//   walk: `tf`(0) `walk`(1) `<input>`(2) `<from>`(3) `<to>`(4)
+//   walk: `tf`(0) `walk`(1) `<input>`(2) --of <frame> --ref <frame>
 //
 // `tree`'s -t/--topics value completion is handled earlier by
 // try_topic_completion via kTopicBindings (TFMessage topics only, at every
 // value slot since the flag is variadic and optional); here we surface only
-// `tree`'s own flags for any `-` word. `walk`'s <from>/<to> slots complete the
-// bag's TF frame ids merged from every TF topic (static + dynamic); <input> is
-// a path that falls through to the shell's file completion.
+// `tree`'s own flags for any `-` word. `walk`'s --of/--ref value slots complete
+// the bag's TF frame ids merged from every TF topic (static + dynamic);
+// <input> is a path that falls through to the shell's file completion.
 std::vector<std::string> complete_tf(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -954,18 +956,22 @@ std::vector<std::string> complete_tf(const CompletionRequest & request)
     if (mode == "tree") {
       return matching(with_help({"--topics", "-t"}), current);
     }
-    // `walk` carries just the implicit help flags.
+    if (mode == "walk") {
+      return matching(with_help({"--of", "--ref"}), current);
+    }
     return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
   }
 
-  // `tf walk <input> <from> <to>`: complete the <from>/<to> slots from the bag's
-  // TF frame ids (bag path at the <input> slot, word 2). The <input> slot itself
-  // falls through to the shell's file completion. `tf walk` merges every TF
-  // topic, so it offers frame ids from all of them (static + dynamic).
-  if (
-    mode == "walk" &&
-    (request.cursor_word == kThirdCommandArgWord || request.cursor_word == kFourthCommandArgWord)) {
-    return complete_frame_id_arg(request, kSecondCommandArgWord, current);
+  // `tf walk <input> --of <frame> --ref <frame>`: complete the --of/--ref value
+  // slots from the bag's TF frame ids (bag path at the <input> slot, word 2).
+  // The <input> slot itself falls through to the shell's file completion.
+  // `tf walk` merges every TF topic, so it offers frame ids from all of them
+  // (static + dynamic).
+  if (mode == "walk" && request.cursor_word > 0) {
+    const auto & previous = request.words[request.cursor_word - 1];
+    if (previous == "--of" || previous == "--ref") {
+      return complete_frame_id_arg(request, kSecondCommandArgWord, current);
+    }
   }
 
   return {};

@@ -816,13 +816,13 @@ TEST(FlagCompletionTest, TfStaticGroupDashListsHelpFlagsOnly)
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "static", "-"}), "--help\n-h\n");
 }
 
-// `tf static calc -` surfaces the action's own --json flag alongside the
-// implicit help flags.
+// `tf static calc -` surfaces the action's own --json/--of/--ref flags alongside
+// the implicit help flags, sorted.
 TEST(FlagCompletionTest, TfStaticCalcDashListsStaticFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "calc", "-"}),
-    "--help\n--json\n-h\n");
+    "--help\n--json\n--of\n--ref\n-h\n");
 }
 
 // `tf static cp -` surfaces the copy action's flags (--output/-o, -w/--overwrite)
@@ -835,30 +835,19 @@ TEST(FlagCompletionTest, TfStaticCpDashListsCpFlags)
     "--help\n--output\n--overwrite\n-h\n-o\n-w\n");
 }
 
-// `tf walk -` has no user flags, so only the implicit help flags appear.
-TEST(FlagCompletionTest, TfWalkDashListsHelpFlagsOnly)
+// `tf walk -` surfaces its --of/--ref flags alongside the implicit help flags,
+// sorted.
+TEST(FlagCompletionTest, TfWalkDashListsWalkFlags)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "walk", "-"}), "--help\n-h\n");
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "walk", "-"}),
+    "--help\n--of\n--ref\n-h\n");
 }
 
-// `tf static calc <bag> <TAB>` (the <from> slot) lists only frame ids from the
-// bag's static TF (*tf_static) topics, since `tf static calc` resolves the
-// static tree. The mixed fixture's /tf_static carries map→odom→base_link.
-TEST_F(CompletionTest, TfStaticCalcFromSlotListsStaticFrameIds)
-{
-  const HomeEnvGuard home_guard(tmp_dir_);
-
-  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
-
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "5", "bagwiz", "tf", "static", "calc", "~/mixed.mcap"}),
-    "base_link\nmap\nodom\n");
-}
-
-// `tf static calc <bag> <from> <TAB>` (the <to> slot) shares the same
-// static-only frame-id source as the <from> slot.
-TEST_F(CompletionTest, TfStaticCalcToSlotListsStaticFrameIds)
+// `tf static calc <bag> --of <TAB>` lists only frame ids from the bag's static
+// TF (*tf_static) topics, since `tf static calc` resolves the static tree. The
+// mixed fixture's /tf_static carries map→odom→base_link.
+TEST_F(CompletionTest, TfStaticCalcOfFlagListsStaticFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -866,12 +855,12 @@ TEST_F(CompletionTest, TfStaticCalcToSlotListsStaticFrameIds)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "tf", "static", "calc", "~/mixed.mcap", "map"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "tf", "static", "calc", "~/mixed.mcap", "--of"}),
     "base_link\nmap\nodom\n");
 }
 
-// A typed prefix narrows the static <from> frame-id candidates.
-TEST_F(CompletionTest, TfStaticCalcFromSlotRespectsPrefix)
+// `--ref <TAB>` shares the same static-only frame-id source as `--of`.
+TEST_F(CompletionTest, TfStaticCalcRefFlagListsStaticFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -879,14 +868,28 @@ TEST_F(CompletionTest, TfStaticCalcFromSlotRespectsPrefix)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "5", "bagwiz", "tf", "static", "calc", "~/mixed.mcap", "ba"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "tf", "static", "calc", "~/mixed.mcap", "--ref"}),
+    "base_link\nmap\nodom\n");
+}
+
+// A typed prefix narrows the static --of frame-id candidates.
+TEST_F(CompletionTest, TfStaticCalcOfFlagRespectsPrefix)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "tf", "static", "calc", "~/mixed.mcap", "--of",
+       "ba"}),
     "base_link\n");
 }
 
 // A bag with only a dynamic /tf topic (no *tf_static) has no static frames, so
 // `tf static calc` completion returns empty rather than listing the dynamic
 // frames — confirming the static-only restriction. (`tf walk` on the same bag
-// does list those frames; see TfWalkFromSlotListsFrameIds.)
+// does list those frames; see TfWalkOfFlagListsFrameIds.)
 TEST_F(CompletionTest, TfStaticCalcFromSlotExcludesDynamicOnlyFrames)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
@@ -898,29 +901,29 @@ TEST_F(CompletionTest, TfStaticCalcFromSlotExcludesDynamicOnlyFrames)
     "");
 }
 
-// `tf walk <bag> <TAB>` (the <from> slot) lists the bag's TF frame ids. Unlike
-// `tf static calc`, `tf walk`'s frame-id slots sit one word earlier (it has no
-// `calc` action verb) and draw from all TF topics, not just the static ones.
-TEST_F(CompletionTest, TfWalkFromSlotListsFrameIds)
+// `tf walk <bag> --of <TAB>` lists the bag's TF frame ids. Unlike
+// `tf static calc`, `tf walk` draws from all TF topics, not just the static
+// ones.
+TEST_F(CompletionTest, TfWalkOfFlagListsFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
   write_tf_mcap_fixture(tmp_dir_ / "tf.mcap");
 
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "walk", "~/tf.mcap"}),
+    run_completion({"bagwiz", "__complete", "5", "bagwiz", "tf", "walk", "~/tf.mcap", "--of"}),
     "base_link\nlidar\nmap\nodom\n");
 }
 
-// `tf walk <bag> <from> <TAB>` (the <to> slot) shares the same frame-id source.
-TEST_F(CompletionTest, TfWalkToSlotListsFrameIds)
+// `--ref <TAB>` shares the same frame-id source as `--of`.
+TEST_F(CompletionTest, TfWalkRefFlagListsFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
   write_tf_mcap_fixture(tmp_dir_ / "tf.mcap");
 
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "5", "bagwiz", "tf", "walk", "~/tf.mcap", "map"}),
+    run_completion({"bagwiz", "__complete", "5", "bagwiz", "tf", "walk", "~/tf.mcap", "--ref"}),
     "base_link\nlidar\nmap\nodom\n");
 }
 
