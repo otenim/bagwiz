@@ -887,17 +887,22 @@ TEST_F(CompletionTest, TfStaticCalcOfFlagRespectsPrefix)
 }
 
 // A bag with only a dynamic /tf topic (no *tf_static) has no static frames, so
-// `tf static calc` completion returns empty rather than listing the dynamic
-// frames — confirming the static-only restriction. (`tf walk` on the same bag
-// does list those frames; see TfWalkOfFlagListsFrameIds.)
-TEST_F(CompletionTest, TfStaticCalcFromSlotExcludesDynamicOnlyFrames)
+// `tf static calc --of <TAB>` returns empty rather than listing the dynamic
+// frames — confirming the static-only restriction. `tf walk --of` on the
+// exact same fixture DOES list those frames (see TfWalkOfFlagListsFrameIds),
+// so this is the one test in the suite that can actually tell "static
+// filtering applied" apart from "no filtering at all": every other static
+// fixture (write_mixed_tf_mcap_fixture) carries identical frames on /tf and
+// /tf_static and so cannot distinguish the two.
+TEST_F(CompletionTest, TfStaticCalcOfFlagExcludesDynamicOnlyFrames)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
   write_tf_mcap_fixture(tmp_dir_ / "tf.mcap");  // /tf only, no /tf_static
 
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "5", "bagwiz", "tf", "static", "calc", "~/tf.mcap"}),
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "tf", "static", "calc", "~/tf.mcap", "--of"}),
     "");
 }
 

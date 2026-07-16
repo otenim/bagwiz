@@ -52,7 +52,6 @@ constexpr std::size_t kFirstCommandArgWord = 1;
 constexpr std::size_t kSecondCommandArgWord = 2;
 constexpr std::size_t kThirdCommandArgWord = 3;
 constexpr std::size_t kFourthCommandArgWord = 4;
-constexpr std::size_t kFifthCommandArgWord = 5;
 
 constexpr std::string_view kTfMessageType = "tf2_msgs/msg/TFMessage";
 
