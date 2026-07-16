@@ -207,6 +207,34 @@ part of the CLI itself.
   that subcommand's help text so users do not have to infer it
   from the signature.
 
+- Expose a pair of TF frame ids that names a rigid transform as
+  `--of <frame>` and `--ref <frame>`. Do not use `from`, `to`,
+  `source`, or `target` for this purpose, as positionals or as
+  flags. The pair has exactly one meaning, on every subcommand: the
+  command resolves **the pose of `--of`, expressed in the `--ref`
+  frame** — `T = lookupTransform(target=<ref>, source=<of>)`,
+  satisfying `p_ref = T · p_of`. This is equivalent to
+  `ros2 run tf2_ros tf2_echo <ref> <of>`.
+
+  `from`/`to` is banned because it has two legitimate, opposite
+  readings: the mapping reading ("convert A-frame data into B",
+  `T_B_A`, as in `convert from meters to feet`) and the pose reading
+  ("A から見た B" / "traverse A to B", `T_A_B`). Both readings were
+  simultaneously present in this codebase — `tf static calc` used the
+  first and `traj dump` the second — so identical words produced
+  inverse transforms. A convention that depends on readers consulting
+  documentation cannot fix this; `--of`/`--ref` carry their meaning at
+  the call site instead. `source`/`target` are banned for the same
+  reason: tf2 itself is inconsistent, passing `tf2_echo`'s
+  `source_frame` argument into `lookupTransform`'s `target`
+  parameter.
+
+  This is a deliberate exception to the positional-ordering rule
+  above. A frame pair MUST be flags even though each operand takes a
+  single value, because the ambiguity being eliminated _is_ argument
+  order: a positional cannot name itself at the call site, so
+  `calc bag A B` cannot tell a reader which operand is which.
+
 ### 3. Progress Indicators
 
 Applies to any bagwiz subcommand or supporting code that renders an
