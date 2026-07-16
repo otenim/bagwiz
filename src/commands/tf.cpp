@@ -578,15 +578,15 @@ std::string format_category_legend(bool use_color)
 //                vs dynamic. The 'static' / 'dynamic' selectors pick all static
 //                / dynamic TF topics. A merge conflict (same child via different
 //                parents, or both static and dynamic) aborts with an error.
-//   static calc  Resolve the rigid transform from <from> to <to> using only the
+//   static calc  Resolve <of>'s pose in <ref> using only the
 //                bag's static TF tree, and print translation / quaternion / RPY
 //                (or JSON). 'static' is a command group; 'calc' is its action.
 //   static cp    Copy every static TF topic from <src> into <dst> (in place, or
 //                to a new bag via -o), preserving topic names and stamping each
 //                at <dst>'s start time.
 //   walk         Merge every TF topic into one buffer and step interactively
-//                through the times the merged TF changed, showing <from> -> <to>
-//                at each.
+//                through the times the merged TF changed, showing of=<of>
+//                ref=<ref> at each
 class TfCommand : public Command
 {
 public:
@@ -632,8 +632,8 @@ private:
   struct StaticArgs
   {
     std::filesystem::path input_path;
-    std::string from_frame;
-    std::string to_frame;
+    std::string of_frame;
+    std::string ref_frame;
     bool json = false;
   } static_args_;
 
@@ -648,8 +648,8 @@ private:
   struct WalkArgs
   {
     std::filesystem::path input_path;
-    std::string from_frame;
-    std::string to_frame;
+    std::string of_frame;
+    std::string ref_frame;
   } walk_args_;
 
   void configure_tree(CLI::App & app)
@@ -821,13 +821,18 @@ private:
   {
     auto * sub = group.add_subcommand(
       "calc",
-      "Rigid transform from <from> to <to> resolved from the bag's static TF tree "
-      "(tf2_echo convention)");
+      "Pose of <of> expressed in <ref>, resolved from the bag's static TF tree. "
+      "Equivalent to `ros2 run tf2_ros tf2_echo <ref> <of>` (tf2_echo takes the "
+      "reference frame first).");
     sub->add_option("input", static_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option("from", static_args_.from_frame, "Source frame id (<from>)")->required();
-    sub->add_option("to", static_args_.to_frame, "Target frame id (<to>)")->required();
+    sub->add_option("--of", static_args_.of_frame, "Frame whose pose is resolved (<of>)")
+      ->required();
+    sub
+      ->add_option(
+        "--ref", static_args_.ref_frame, "Reference frame the pose is expressed in (<ref>)")
+      ->required();
     sub->add_flag("--json", static_args_.json, "Emit the transform as JSON instead of text");
     sub->callback([this]() { selected_ = Subcommand::kStaticCalc; });
   }
@@ -858,10 +863,10 @@ private:
   {
     const auto & args = static_args_;
 
-    // CLI11 marks <from>/<to> required but accepts the empty string; reject
+    // CLI11 marks --of/--ref required but accepts the empty string; reject
     // it up front so lookupTransform isn't asked to resolve a blank frame.
-    if (args.from_frame.empty() || args.to_frame.empty()) {
-      BAGWIZ_LOG_ERROR(kLogger, "Both <from> and <to> frame ids must be non-empty.");
+    if (args.of_frame.empty() || args.ref_frame.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "Both --of and --ref frame ids must be non-empty.");
       return 1;
     }
 
@@ -904,11 +909,11 @@ private:
     }
 
     // tf2's lookupTransform returns an identity transform when target == source
-    // WITHOUT checking the frame exists, so `tf static calc <f> <f>` for an
-    // absent frame would otherwise print a bogus identity transform. Reject
-    // either endpoint up front when the static tree does not contain it.
+    // WITHOUT checking the frame exists, so `tf static calc --of <f> --ref <f>`
+    // for an absent frame would otherwise print a bogus identity transform.
+    // Reject either endpoint up front when the static tree does not contain it.
     const std::vector<std::string> missing =
-      core::missing_frames(tf_buffer, args.from_frame, args.to_frame);
+      core::missing_frames(tf_buffer, args.of_frame, args.ref_frame);
     if (!missing.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger, "Frame(s) not present in the bag's static TF tree: %s", join_csv(missing).c_str());
@@ -919,17 +924,17 @@ private:
 
     geometry_msgs::msg::TransformStamped tf;
     try {
-      // from→to: lookupTransform(target=<to>, source=<from>). Translation is
-      // then <from>'s origin expressed in <to>. Matches
-      // `ros2 run tf2_ros tf2_echo <from> <to>`. Static entries ignore the
-      // query time, so TimePointZero is used.
-      tf = tf_buffer.lookupTransform(args.to_frame, args.from_frame, tf2::TimePointZero);
+      // lookupTransform(target=<ref>, source=<of>) — <of>'s pose expressed in
+      // <ref>. Equivalent to `ros2 run tf2_ros tf2_echo <ref> <of>` (tf2_echo
+      // takes the reference frame first). Static entries ignore the query time,
+      // so TimePointZero is used.
+      tf = tf_buffer.lookupTransform(args.ref_frame, args.of_frame, tf2::TimePointZero);
     } catch (const tf2::TransformException & e) {
       // Both endpoints exist (validated above) but are not connected in the
       // static tree at TimePointZero.
       BAGWIZ_LOG_ERROR(
-        kLogger, "Could not resolve static transform %s -> %s: %s", args.from_frame.c_str(),
-        args.to_frame.c_str(), e.what());
+        kLogger, "Could not resolve static transform: of=%s ref=%s: %s", args.of_frame.c_str(),
+        args.ref_frame.c_str(), e.what());
       BAGWIZ_LOG_ERROR(
         kLogger, "Available static frames: %s", sorted_frames_csv(tf_buffer).c_str());
       return 1;
@@ -937,7 +942,7 @@ private:
 
     std::string out;
     if (args.json) {
-      out = core::format_transform_json(tf, args.from_frame, args.to_frame);
+      out = core::format_transform_json(tf, args.of_frame, args.ref_frame);
     } else {
       // Resolve the full frame chain so the direction line lists every
       // intermediate frame, not just the endpoints. Static entries ignore the
@@ -945,9 +950,9 @@ private:
       // succeeded, so a chain exists; fall back to the bare endpoints if
       // resolve_chain cannot reconstruct it.
       std::vector<std::string> chain =
-        core::resolve_chain(tf_buffer, args.from_frame, args.to_frame, tf2::TimePointZero);
+        core::resolve_chain(tf_buffer, args.of_frame, args.ref_frame, tf2::TimePointZero);
       if (chain.empty()) {
-        chain = {args.from_frame, args.to_frame};
+        chain = {args.of_frame, args.ref_frame};
       }
       out = core::format_transform_human(tf, chain, "  (static)");
     }
@@ -971,13 +976,16 @@ private:
   {
     auto * sub = app.add_subcommand(
       "walk",
-      "Step interactively through the times the merged TF changed, showing the "
-      "<from> -> <to> transform at each (merges every TF topic in the bag)");
+      "Step interactively through the times the merged TF changed, showing "
+      "<of>'s pose in <ref> at each (merges every TF topic in the bag)");
     sub->add_option("input", walk_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option("from", walk_args_.from_frame, "Source frame id (<from>)")->required();
-    sub->add_option("to", walk_args_.to_frame, "Target frame id (<to>)")->required();
+    sub->add_option("--of", walk_args_.of_frame, "Frame whose pose is resolved (<of>)")->required();
+    sub
+      ->add_option(
+        "--ref", walk_args_.ref_frame, "Reference frame the pose is expressed in (<ref>)")
+      ->required();
     sub->callback([this]() { selected_ = Subcommand::kWalk; });
   }
 
@@ -985,14 +993,14 @@ private:
   {
     const auto & args = walk_args_;
 
-    // CLI11 marks <from>/<to> required but accepts the empty string; reject it
+    // CLI11 marks --of/--ref required but accepts the empty string; reject it
     // up front so lookupTransform isn't asked to resolve a blank frame.
-    if (args.from_frame.empty() || args.to_frame.empty()) {
-      BAGWIZ_LOG_ERROR(kLogger, "Both <from> and <to> frame ids must be non-empty.");
+    if (args.of_frame.empty() || args.ref_frame.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "Both --of and --ref frame ids must be non-empty.");
       return 1;
     }
 
-    return run_tf_walk(args.input_path, args.from_frame, args.to_frame);
+    return run_tf_walk(args.input_path, args.of_frame, args.ref_frame);
   }
 };
 

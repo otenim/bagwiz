@@ -63,8 +63,8 @@ constexpr const char * kPoseStampedType = "geometry_msgs/msg/PoseStamped";
 constexpr const char * kPoseWithCovarianceStampedType =
   "geometry_msgs/msg/PoseWithCovarianceStamped";
 constexpr std::chrono::hours kTfBufferCacheTime{24 * 365};
-constexpr const char * kDefaultFromFrame = "map";
-constexpr const char * kDefaultToFrame = "base_link";
+constexpr const char * kDefaultRefFrame = "map";
+constexpr const char * kDefaultOfFrame = "base_link";
 
 bool is_supported_pose_topic_type(const std::string & type)
 {
@@ -72,7 +72,7 @@ bool is_supported_pose_topic_type(const std::string & type)
          type == kPoseWithCovarianceStampedType;
 }
 
-// Outcome of building the --from -> --to trajectory in Pass 1.
+// Outcome of building the --of -> --ref trajectory in Pass 1.
 struct TrajectoryBuildResult
 {
   std::vector<core::TrajectoryPose> trajectory;
@@ -97,14 +97,14 @@ std::string edge_key(const std::string & parent, const std::string & child)
 }
 
 // TFMessage pose topic: feed every transform it carries into `buffer` as
-// dynamic edges (tf_static is already loaded there), resolve the --from ->
-// --to chain, and sample it at every stamp the chain's edges are actually
+// dynamic edges (tf_static is already loaded there), resolve the --ref ->
+// --of chain, and sample it at every stamp the chain's edges are actually
 // published on `pose_topic` — mirrors `traj dump`'s TFMessage path
 // (traj.cpp's run_dump_tf_message), but scoped to this one topic since pcd
 // undistort never reads a bag's dynamic /tf.
 TrajectoryBuildResult build_trajectory_from_tf_message(
-  const std::filesystem::path & input_path, const io::TopicInfo & pose_ti, const std::string & from,
-  const std::string & to, tf2::BufferCore & buffer)
+  const std::filesystem::path & input_path, const io::TopicInfo & pose_ti, const std::string & ref,
+  const std::string & of, tf2::BufferCore & buffer)
 {
   TrajectoryBuildResult out;
   std::unique_ptr<io::BagReader> reader;
@@ -158,9 +158,9 @@ TrajectoryBuildResult build_trajectory_from_tf_message(
   // linkage in tf2 is fixed for a frame's whole life, so any populated stamp
   // works — this just needs to land inside what was just set above.
   const tf2::TimePoint resolve_tp{std::chrono::nanoseconds(input_edges.front().stamp_ns)};
-  const auto chain = core::resolve_chain(buffer, from, to, resolve_tp);
+  const auto chain = core::resolve_chain(buffer, of, ref, resolve_tp);
   if (chain.empty()) {
-    out.error = "no TF path from --from '" + from + "' to --to '" + to + "' (checked '" +
+    out.error = "no TF path from --of '" + of + "' to --ref '" + ref + "' (checked '" +
                 pose_ti.name + "' + the bag's static TF)";
     return out;
   }
@@ -178,7 +178,7 @@ TrajectoryBuildResult build_trajectory_from_tf_message(
     }
   }
   if (sample_stamps.empty()) {
-    out.error = "--from '" + from + "' -> --to '" + to +
+    out.error = "--of '" + of + "' -> --ref '" + ref +
                 "' resolves via static TF, but none of the edges on that path are published on "
                 "pose topic '" +
                 pose_ti.name + "'";
@@ -192,7 +192,7 @@ TrajectoryBuildResult build_trajectory_from_tf_message(
   for (const std::int64_t ns : sample_stamps) {
     const tf2::TimePoint tp{std::chrono::nanoseconds(ns)};
     try {
-      const auto tf = buffer.lookupTransform(from, to, tp);
+      const auto tf = buffer.lookupTransform(ref, of, tp);
       core::TrajectoryPose p;
       p.timestamp_ns = ns;
       p.tx = tf.transform.translation.x;
@@ -276,15 +276,15 @@ bool decode_pose_sample(
 }
 
 // Odometry / PoseStamped / PoseWithCovarianceStamped pose topic: for each
-// message, compose T_from_to = T_from_header * T_header_body * T_body_to,
-// bridging into --from / --to via the bag's static TF when the message's own
+// message, compose T_ref_of = T_ref_header * T_header_body * T_body_of,
+// bridging into --ref / --of via the bag's static TF when the message's own
 // frames do not already match. Mirrors traj.cpp's run_dump_pose_topic
 // composition (traj.cpp:732-757), except an unresolvable bridge is fatal here
 // rather than a per-sample skip: pcd undistort's TF is static-only, so a
 // failure is a configuration problem, not transient sensor noise.
 TrajectoryBuildResult build_trajectory_from_pose_topic(
   const std::filesystem::path & input_path, const io::TopicInfo & pose_ti, PoseComposeKind kind,
-  const std::string & from, const std::string & to, tf2::BufferCore & buffer)
+  const std::string & ref, const std::string & of, tf2::BufferCore & buffer)
 {
   TrajectoryBuildResult out;
   const bool is_odom = (kind == PoseComposeKind::kOdometry);
@@ -337,32 +337,31 @@ TrajectoryBuildResult build_trajectory_from_pose_topic(
         static_cast<std::int64_t>(sample.pose.header.stamp.nanosec);
 
       std::optional<geometry_msgs::msg::Transform> from_header;
-      if (from != header_frame) {
-        if (!core::missing_frames(buffer, from, header_frame).empty()) {
-          out.error = "--from '" + from + "' has no static TF chain to pose topic '" +
-                      pose_ti.name + "'s frame '" + header_frame + "'";
+      if (ref != header_frame) {
+        if (!core::missing_frames(buffer, ref, header_frame).empty()) {
+          out.error = "--ref '" + ref + "' has no static TF chain to pose topic '" + pose_ti.name +
+                      "'s frame '" + header_frame + "'";
           return out;
         }
         try {
-          from_header = buffer.lookupTransform(from, header_frame, tf2::TimePointZero).transform;
+          from_header = buffer.lookupTransform(ref, header_frame, tf2::TimePointZero).transform;
         } catch (const std::exception & e) {
-          out.error =
-            "--from '" + from + "' -> '" + header_frame + "' TF lookup failed: " + e.what();
+          out.error = "--ref '" + ref + "' -> '" + header_frame + "' TF lookup failed: " + e.what();
           return out;
         }
       }
       std::optional<geometry_msgs::msg::Transform> body_to;
-      if (is_odom && to != sample.child_frame) {
-        if (!core::missing_frames(buffer, sample.child_frame, to).empty()) {
-          out.error = "--to '" + to + "' has no static TF chain from Odometry child frame '" +
+      if (is_odom && of != sample.child_frame) {
+        if (!core::missing_frames(buffer, sample.child_frame, of).empty()) {
+          out.error = "--of '" + of + "' has no static TF chain from Odometry child frame '" +
                       sample.child_frame + "'";
           return out;
         }
         try {
-          body_to = buffer.lookupTransform(sample.child_frame, to, tf2::TimePointZero).transform;
+          body_to = buffer.lookupTransform(sample.child_frame, of, tf2::TimePointZero).transform;
         } catch (const std::exception & e) {
           out.error =
-            "'" + sample.child_frame + "' -> --to '" + to + "' TF lookup failed: " + e.what();
+            "'" + sample.child_frame + "' -> --of '" + of + "' TF lookup failed: " + e.what();
           return out;
         }
       }
@@ -695,8 +694,8 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
     BAGWIZ_LOG_ERROR(kLogger, "pcd undistort: --pcd needs at least 1 topic");
     return 1;
   }
-  const std::string from = args.from_frame.value_or(kDefaultFromFrame);
-  const std::string to = args.to_frame.value_or(kDefaultToFrame);
+  const std::string ref = args.ref_frame.value_or(kDefaultRefFrame);
+  const std::string of = args.of_frame.value_or(kDefaultOfFrame);
 
   std::unique_ptr<io::BagReader> reader;
   try {
@@ -745,28 +744,28 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
     }
   }
 
-  // ---- Pass 1: build the --from -> --to trajectory ------------------------
+  // ---- Pass 1: build the --of -> --ref trajectory ------------------------
   tf2::BufferCore buffer{kTfBufferCacheTime};
   if (const auto error = core::load_static_tf_buffer(args.input_path, buffer); error.has_value()) {
     // load_static_tf_buffer is a shared, caller-neutral helper (it names no
     // command's flags), so its detail is always safe to forward here.
     BAGWIZ_LOG_ERROR(
       kLogger,
-      "pcd undistort: could not load the bag's static TF (needed to resolve --from '%s' / --to "
+      "pcd undistort: could not load the bag's static TF (needed to resolve --ref '%s' / --of "
       "'%s' and any --pcd topic's sensor extrinsic); detail: %s",
-      from.c_str(), to.c_str(), error->c_str());
+      ref.c_str(), of.c_str(), error->c_str());
     return 1;
   }
 
   TrajectoryBuildResult built =
     (pose_ti->type == kTfMessageType)
-      ? build_trajectory_from_tf_message(args.input_path, *pose_ti, from, to, buffer)
+      ? build_trajectory_from_tf_message(args.input_path, *pose_ti, ref, of, buffer)
       : build_trajectory_from_pose_topic(
-          args.input_path, *pose_ti, pose_compose_kind(pose_ti->type), from, to, buffer);
+          args.input_path, *pose_ti, pose_compose_kind(pose_ti->type), ref, of, buffer);
   if (!built.ok()) {
     BAGWIZ_LOG_ERROR(
-      kLogger, "pcd undistort: could not resolve --from '%s' -> --to '%s' from pose topic '%s': %s",
-      from.c_str(), to.c_str(), args.pose_topic.c_str(), built.error.c_str());
+      kLogger, "pcd undistort: could not resolve --of '%s' -> --ref '%s' from pose topic '%s': %s",
+      of.c_str(), ref.c_str(), args.pose_topic.c_str(), built.error.c_str());
     return 1;
   }
   std::vector<core::TrajectoryPose> trajectory = std::move(built.trajectory);
@@ -836,24 +835,24 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
     }
   }
 
-  // ---- resolve each --pcd topic's extrinsic E = T_to_cloud -----------------
+  // ---- resolve each --pcd topic's extrinsic E = T_of_cloud -----------------
   std::unordered_map<std::string, std::optional<geometry_msgs::msg::Transform>> extrinsics;
   for (const auto & topic : args.pcd_topics) {
     const std::string & frame_id = pcd_state.at(topic).frame_id;
     std::optional<geometry_msgs::msg::Transform> extrinsic;
-    if (frame_id != to) {
-      if (!core::missing_frames(buffer, to, frame_id).empty()) {
+    if (frame_id != of) {
+      if (!core::missing_frames(buffer, of, frame_id).empty()) {
         BAGWIZ_LOG_ERROR(
-          kLogger, "pcd undistort: --to '%s' has no static TF chain to --pcd topic '%s' frame '%s'",
-          to.c_str(), topic.c_str(), frame_id.c_str());
+          kLogger, "pcd undistort: --of '%s' has no static TF chain to --pcd topic '%s' frame '%s'",
+          of.c_str(), topic.c_str(), frame_id.c_str());
         return 1;
       }
       try {
-        extrinsic = buffer.lookupTransform(to, frame_id, tf2::TimePointZero).transform;
+        extrinsic = buffer.lookupTransform(of, frame_id, tf2::TimePointZero).transform;
       } catch (const std::exception & e) {
         BAGWIZ_LOG_ERROR(
-          kLogger, "pcd undistort: --to '%s' -> --pcd topic '%s' frame '%s' TF lookup failed: %s",
-          to.c_str(), topic.c_str(), frame_id.c_str(), e.what());
+          kLogger, "pcd undistort: --of '%s' -> --pcd topic '%s' frame '%s' TF lookup failed: %s",
+          of.c_str(), topic.c_str(), frame_id.c_str(), e.what());
         return 1;
       }
     }

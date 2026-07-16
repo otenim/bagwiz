@@ -67,10 +67,11 @@ TEST(BuildTfWalkTimeline, EmptyInputYieldsEmptyTimeline)
 // resolve_tf_walk_step
 // ---------------------------------------------------------------------------
 
-// A single static hop base_link -> lidar (+1 along X). Resolving
-// from=base_link, to=lidar yields base_link's origin in the lidar frame, which
-// for a +1 child offset is -1 (the tf2_echo convention).
-TEST(ResolveTfWalkStep, AppliesTf2EchoDirectionConvention)
+// A single static hop base_link -> lidar (+1 along X). Resolving of=base_link,
+// ref=lidar yields the pose of base_link expressed in the lidar frame, which for
+// a +1 child offset is -1. (`ros2 run tf2_ros tf2_echo lidar base_link` prints
+// the same -1; note tf2_echo takes the reference frame first.)
+TEST(ResolveTfWalkStep, ExpressesOfFrameInRefFrame)
 {
   tf2::BufferCore buffer{std::chrono::seconds(120)};
   buffer.setTransform(make_tf("base_link", "lidar", 0, 1.0), "test", /*is_static=*/true);

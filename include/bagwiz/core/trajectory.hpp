@@ -76,16 +76,16 @@ geometry_msgs::msg::TransformStamped pose_to_transform_stamped(
 
 // Compose the output trajectory pose for `traj dump`:
 //
-//   T_from_to = T_from_header * T_header_body * T_body_to
+//   T_ref_of = T_ref_header * T_header_body * T_body_of
 //
 // `body_pose` is the message's pose — the tracked body expressed in its own
 // `header.frame_id` (`T_header_body`). The two optional bridges come from the
 // bag's TF tree:
-//   * `from_header` re-expresses the result into the requested `--from` frame
-//     (`lookupTransform(--from, header.frame_id)`); pass std::nullopt when
-//     `--from` is omitted or equals `header.frame_id` (identity, no remap).
-//   * `body_to` walks from the body frame to the requested `--to` frame
-//     (`lookupTransform(body, --to)`, e.g. Odometry child_frame_id -> sensor
+//   * `from_header` re-expresses the result into the requested `--ref` frame
+//     (`lookupTransform(--ref, header.frame_id)`); pass std::nullopt when
+//     `--ref` is omitted or equals `header.frame_id` (identity, no remap).
+//   * `body_to` walks from the body frame to the requested `--of` frame
+//     (`lookupTransform(body, --of)`, e.g. Odometry child_frame_id -> sensor
 //     via static TF); pass std::nullopt when no tracked-side traversal applies.
 //
 // When both bridges are std::nullopt the input pose is returned verbatim (no

@@ -123,8 +123,13 @@ TEST(FormatTransformHuman, MirrorsJsonKeyHierarchy)
   // The header label is lowercase "transform:" (not "Transform:").
   EXPECT_NE(out.find("transform: "), std::string::npos);
   EXPECT_EQ(out.find("Transform:"), std::string::npos);
-  // Direction label joins the chain with " -> "; here it is just the endpoints.
+  // This substring is satisfied by the chain line below ("chain: base_link ->
+  // velodyne"), not by the label — the label never joins with " -> ".
   EXPECT_NE(out.find("base_link -> velodyne"), std::string::npos);
+  // The label states the direction explicitly; the arrow is confined to the
+  // chain line, where it describes the tree path rather than a direction.
+  EXPECT_NE(out.find("transform: of=base_link  ref=velodyne"), std::string::npos);
+  EXPECT_NE(out.find("  chain: base_link -> velodyne"), std::string::npos);
   // Body uses the --json key/hierarchy: translation {x,y,z},
   // rotation {quaternion, rpy_rad, rpy_deg}.
   EXPECT_NE(out.find("  translation:"), std::string::npos);
@@ -143,34 +148,38 @@ TEST(FormatTransformHuman, MirrorsJsonKeyHierarchy)
 
 TEST(FormatTransformHuman, IdentitySelfTransform)
 {
-  // from == to resolves to the identity transform; the formatter must still
+  // of == ref resolves to the identity transform; the formatter must still
   // render a well-formed block labelled "<frame> -> <frame>".
   const auto tf = make_identity_tf("lidar", "lidar", 0.0, 0.0, 0.0);
 
-  // A single-frame chain (source == target) keeps the arrow form "x -> x".
+  // A single-frame chain (of == ref) keeps the arrow form "x -> x".
   const std::string out = bagwiz::core::format_transform_human(tf, {"lidar"});
 
   EXPECT_NE(out.find("lidar -> lidar"), std::string::npos);
+  EXPECT_NE(out.find("transform: of=lidar  ref=lidar"), std::string::npos);
   EXPECT_NE(out.find("0.000000"), std::string::npos);
   ASSERT_FALSE(out.empty());
   EXPECT_EQ(out.back(), '\n');
 }
 
-// `tf static calc` passes an annotation so the direction line is tagged
-// "(static)"; the annotation appears right after the "<from> -> <to>" label.
-TEST(FormatTransformHuman, AppendsAnnotationToDirectionLine)
+// `tf static calc` passes an annotation so the label line is tagged "(static)";
+// the annotation appears right after the "of=<of>  ref=<ref>" label, not on the
+// chain line.
+TEST(FormatTransformHuman, AppendsAnnotationToLabelLine)
 {
   const auto tf = make_identity_tf("base_link", "lidar", 1.0, 0.0, 0.0);
 
   const std::string out =
     bagwiz::core::format_transform_human(tf, {"base_link", "lidar"}, "  (static)");
 
-  EXPECT_NE(out.find("base_link -> lidar  (static)"), std::string::npos);
+  EXPECT_NE(out.find("transform: of=base_link  ref=lidar  (static)"), std::string::npos);
+  // The chain line carries no annotation.
+  EXPECT_NE(out.find("  chain: base_link -> lidar\n"), std::string::npos);
 }
 
-// A multi-frame chain (from -> ... -> to) is rendered with every intermediate
-// frame in the direction line, joined by " -> ", not just the endpoints.
-TEST(FormatTransformHuman, RendersFullChainInDirectionLine)
+// A multi-frame chain (of -> ... -> ref) is rendered on the chain line with
+// every intermediate frame, joined by " -> ", not just the endpoints.
+TEST(FormatTransformHuman, RendersFullChainOnChainLine)
 {
   const auto tf = make_identity_tf("base_link", "velodyne_top", 1.0, 0.0, 0.0);
 
@@ -178,8 +187,10 @@ TEST(FormatTransformHuman, RendersFullChainInDirectionLine)
     tf, {"base_link", "sensor_kit_base_link", "velodyne_top_base_link", "velodyne_top"});
 
   EXPECT_NE(
-    out.find("base_link -> sensor_kit_base_link -> velodyne_top_base_link -> velodyne_top"),
+    out.find(
+      "  chain: base_link -> sensor_kit_base_link -> velodyne_top_base_link -> velodyne_top"),
     std::string::npos);
+  EXPECT_NE(out.find("transform: of=base_link  ref=velodyne_top"), std::string::npos);
 }
 
 // `tf walk` does not classify transforms, so the default (no annotation) must
@@ -193,6 +204,18 @@ TEST(FormatTransformHuman, OmitsAnnotationByDefault)
   EXPECT_EQ(out.find("(static)"), std::string::npos);
 }
 
+// An unresolved chain (empty path) has no endpoints to name; the label must
+// still render a well-formed block rather than "of=  ref=".
+TEST(FormatTransformHuman, RendersUnknownForEmptyChain)
+{
+  const auto tf = make_identity_tf("base_link", "velodyne", 1.0, 2.0, 3.0);
+
+  const std::string out = bagwiz::core::format_transform_human(tf, {});
+
+  EXPECT_NE(out.find("transform: (unknown)"), std::string::npos);
+  EXPECT_NE(out.find("  chain: (unknown)"), std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // format_transform_json (parsed back with nlohmann to verify values)
 // ---------------------------------------------------------------------------
@@ -204,8 +227,8 @@ TEST(FormatTransformJson, RoundTripsExpectedSchemaAndValues)
   const std::string out = bagwiz::core::format_transform_json(tf, "map", "odom");
   const auto j = nlohmann::json::parse(out);
 
-  EXPECT_EQ(j.at("from").get<std::string>(), "map");
-  EXPECT_EQ(j.at("to").get<std::string>(), "odom");
+  EXPECT_EQ(j.at("of").get<std::string>(), "map");
+  EXPECT_EQ(j.at("ref").get<std::string>(), "odom");
 
   EXPECT_DOUBLE_EQ(j.at("translation").at("x").get<double>(), 1.5);
   EXPECT_DOUBLE_EQ(j.at("translation").at("y").get<double>(), -2.5);

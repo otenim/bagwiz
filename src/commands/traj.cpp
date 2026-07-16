@@ -297,16 +297,16 @@ bool decode_pose_sample(
 // Subcommands
 // -----------
 //   dump      Write TUM trajectory samples. Every row is the pose of the
-//             tracked frame --to expressed in the reference frame --from,
+//             tracked frame --of expressed in the reference frame --ref,
 //             resolved through the bag's TF tree (static + dynamic). For
-//             tf2_msgs/msg/TFMessage, --from/--to are required and sampling
+//             tf2_msgs/msg/TFMessage, --ref/--of are required and sampling
 //             follows TF chain edges on the input topic. For nav_msgs/msg/
-//             Odometry, both default per message (--from to header.frame_id,
-//             --to to child_frame_id); a --to that differs from child_frame_id
+//             Odometry, both default per message (--ref to header.frame_id,
+//             --of to child_frame_id); a --of that differs from child_frame_id
 //             traverses the TF tree (e.g. static base_link -> sensor). For
-//             PoseStamped / PoseWithCovarianceStamped, --to is the asserted
+//             PoseStamped / PoseWithCovarianceStamped, --of is the asserted
 //             body frame (the pose already encodes it, so it does not change
-//             the numbers); --from optionally re-expresses each pose via TF.
+//             the numbers); --ref optionally re-expresses each pose via TF.
 //   join      Embed a trajectory file into a bag as a new TFMessage topic.
 //             Each trajectory row becomes one message on <topic>, with the
 //             message receive time and header.stamp taken from the row's
@@ -348,8 +348,8 @@ private:
     std::string topic;
     std::filesystem::path output_path;
     std::string format;
-    std::optional<std::string> from_frame;
-    std::optional<std::string> to_frame;
+    std::optional<std::string> ref_frame;
+    std::optional<std::string> of_frame;
     bool overwrite = false;  // replace any pre-existing output_path
   } dump_args_;
 
@@ -361,8 +361,8 @@ private:
     std::optional<std::filesystem::path> output_path;
     std::string format;
     std::string msg_type = kJoinMsgTypeTf;
-    std::optional<std::string> from_frame;
-    std::optional<std::string> to_frame;
+    std::optional<std::string> ref_frame;
+    std::optional<std::string> of_frame;
     bool force = false;
     bool overwrite = false;  // replace any pre-existing -o/--output path
                              // (no effect in in-place mode, where <input> is
@@ -374,7 +374,7 @@ private:
     auto * sub = app.add_subcommand(
       "dump",
       "Dump a topic's trajectory to a file. The accepted message types and the meaning "
-      "of --from / --to per type are listed in the SUPPORTED TOPIC TYPES section below.");
+      "of --of / --ref per type are listed in the SUPPORTED TOPIC TYPES section below.");
     sub->add_option("input", dump_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
@@ -390,12 +390,12 @@ private:
         "Output format (tum). When omitted, inferred from the output file extension (e.g. .tum).")
       ->check(CLI::IsMember({kFormatTum}));
     sub->add_option(
-      "--from", dump_args_.from_frame,
+      "--ref", dump_args_.ref_frame,
       "Reference frame the trajectory is expressed in. Required for TF topics; "
       "optional for pose / odometry (defaults to each message's header.frame_id). "
       "See SUPPORTED TOPIC TYPES below.");
     sub->add_option(
-      "--to", dump_args_.to_frame,
+      "--of", dump_args_.of_frame,
       "Tracked frame whose trajectory is written. Required for TF topics; optional "
       "for odometry (defaults to child_frame_id; a different value traverses the TF "
       "tree). For pose topics it names the body the pose reports. See SUPPORTED "
@@ -406,46 +406,46 @@ private:
       "existing output path stops the run.");
     sub->footer(
       "SUPPORTED TOPIC TYPES:\n"
-      "  Every row is the pose of --to expressed in --from. All TF lookups are\n"
+      "  Every row is the pose of --of expressed in --ref. All TF lookups are\n"
       "  resolved automatically from the bag's static and dynamic TFs (/tf and\n"
       "  *tf_static are picked up from the bag) — any multi-hop path through the TF\n"
-      "  tree is OK; --from / --to need not be directly connected.\n"
+      "  tree is OK; --ref / --of need not be directly connected.\n"
       "\n"
       "  tf2_msgs/msg/TFMessage  (e.g. /tf)\n"
-      "    --from  REQUIRED  reference frame of the trajectory\n"
-      "    --to    REQUIRED  tracked frame\n"
+      "    --ref  REQUIRED  reference frame of the trajectory\n"
+      "    --of   REQUIRED  tracked frame\n"
       "\n"
       "  nav_msgs/msg/Odometry\n"
-      "    --from  optional  reference frame; defaults to header.frame_id (no remap)\n"
-      "    --to    optional  tracked frame; defaults to child_frame_id. A value that\n"
-      "                      differs from child_frame_id walks the TF tree from the\n"
-      "                      body to --to (e.g. static base_link -> sensor)\n"
+      "    --ref  optional  reference frame; defaults to header.frame_id (no remap)\n"
+      "    --of   optional  tracked frame; defaults to child_frame_id. A value that\n"
+      "                     differs from child_frame_id walks the TF tree from the\n"
+      "                     body to --of (e.g. static base_link -> sensor)\n"
       "\n"
       "  geometry_msgs/msg/PoseStamped\n"
       "  geometry_msgs/msg/PoseWithCovarianceStamped\n"
-      "    --from  optional  re-express each pose into this frame via TF;\n"
-      "                      when omitted, the pose's header.frame_id is kept as-is\n"
-      "    --to    optional  the body frame the pose reports. The pose already\n"
-      "                      encodes its body, so --to does not change the numbers\n"
-      "                      and never traverses further; use Odometry or /tf for\n"
-      "                      tracked-side TF traversal");
+      "    --ref  optional  re-express each pose into this frame via TF;\n"
+      "                     when omitted, the pose's header.frame_id is kept as-is\n"
+      "    --of   optional  the body frame the pose reports. The pose already\n"
+      "                     encodes its body, so --of does not change the numbers\n"
+      "                     and never traverses further; use Odometry or /tf for\n"
+      "                     tracked-side TF traversal");
     sub->callback([this]() { selected_ = Subcommand::kDump; });
   }
 
   int run_dump_tf_message(const DumpArgs & args)
   {
     if (
-      !args.from_frame.has_value() || !args.to_frame.has_value() || args.from_frame->empty() ||
-      args.to_frame->empty()) {
+      !args.ref_frame.has_value() || !args.of_frame.has_value() || args.ref_frame->empty() ||
+      args.of_frame->empty()) {
       BAGWIZ_LOG_ERROR(
-        kLogger, "Topic '%s' is tf2_msgs/msg/TFMessage; both --from and --to are required.",
+        kLogger, "Topic '%s' is tf2_msgs/msg/TFMessage; both --ref and --of are required.",
         args.topic.c_str());
       return 1;
     }
-    if (*args.from_frame == *args.to_frame) {
+    if (*args.ref_frame == *args.of_frame) {
       BAGWIZ_LOG_ERROR(
-        kLogger, "--from and --to must be distinct frames; both were '%s'.",
-        args.from_frame->c_str());
+        kLogger, "--ref and --of must be distinct frames; both were '%s'.",
+        args.ref_frame->c_str());
       return 1;
     }
 
@@ -493,13 +493,13 @@ private:
     }
 
     const tf2::TimePoint resolve_tp{std::chrono::nanoseconds(input_edges.front().stamp_ns)};
-    const auto chain = core::resolve_chain(tf_buffer, *args.from_frame, *args.to_frame, resolve_tp);
+    const auto chain = core::resolve_chain(tf_buffer, *args.of_frame, *args.ref_frame, resolve_tp);
     if (chain.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger,
         "No TF path between '%s' and '%s' in the bag (different connected components, "
         "or one of the frames is absent).",
-        args.from_frame->c_str(), args.to_frame->c_str());
+        args.ref_frame->c_str(), args.of_frame->c_str());
       return 1;
     }
     const auto path_edges = core::chain_to_edges(tf_buffer, chain, resolve_tp);
@@ -526,7 +526,7 @@ private:
         "The whole chain may live on /tf_static (a fully-static path is rejected by "
         "traj dump — there is no time axis to sample), or the input topic does not "
         "carry the relevant edge.",
-        args.from_frame->c_str(), args.to_frame->c_str(), args.topic.c_str());
+        args.ref_frame->c_str(), args.of_frame->c_str(), args.topic.c_str());
       return 1;
     }
 
@@ -541,7 +541,7 @@ private:
     for (const std::int64_t ns : sample_stamps) {
       const tf2::TimePoint tp{std::chrono::nanoseconds(ns)};
       try {
-        const auto tf = tf_buffer.lookupTransform(*args.from_frame, *args.to_frame, tp);
+        const auto tf = tf_buffer.lookupTransform(*args.ref_frame, *args.of_frame, tp);
         core::TrajectoryPose p;
         p.timestamp_ns = ns;
         p.tx = tf.transform.translation.x;
@@ -601,7 +601,7 @@ private:
     if (tf_topics.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger,
-        "Topic '%s' needs a TF lookup (--from / --to) but the bag has no "
+        "Topic '%s' needs a TF lookup (--ref / --of) but the bag has no "
         "tf2_msgs/msg/TFMessage topics to resolve it.",
         args.topic.c_str());
       return false;
@@ -620,36 +620,36 @@ private:
 
   // Unified pose / odometry trajectory dump.
   //
-  // Each output row is the pose of the tracked frame `--to` expressed in the
-  // reference frame `--from`, composed as
+  // Each output row is the pose of the tracked frame `--of` expressed in the
+  // reference frame `--ref`, composed as
   //
-  //   T_from_to = T_from_header * T_header_body * T_body_to
+  //   T_ref_of = T_ref_header * T_header_body * T_body_of
   //
   // where T_header_body is the message's own pose and the two bridges come
   // from the bag's TF tree (static + dynamic). Frames default per message:
-  // `--from` to header.frame_id (no remap) and, for Odometry, `--to` to
+  // `--ref` to header.frame_id (no remap) and, for Odometry, `--of` to
   // child_frame_id (no tracked-side traversal). PoseStamped / PWC do not name
-  // their body, so `--to` is accepted as the asserted body frame but never
-  // traverses further (the pose already encodes the body); only `--from`
+  // their body, so `--of` is accepted as the asserted body frame but never
+  // traverses further (the pose already encodes the body); only `--ref`
   // re-expresses them.
   int run_dump_pose_topic(
     const DumpArgs & args, const io::TopicInfo & topic_info, PoseDumpKind kind)
   {
     const bool is_odom = (kind == PoseDumpKind::Odometry);
 
-    if (args.from_frame.has_value() && args.from_frame->empty()) {
-      BAGWIZ_LOG_ERROR(kLogger, "When set, --from must be a non-empty frame id.");
+    if (args.ref_frame.has_value() && args.ref_frame->empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "When set, --ref must be a non-empty frame id.");
       return 1;
     }
-    if (args.to_frame.has_value() && args.to_frame->empty()) {
-      BAGWIZ_LOG_ERROR(kLogger, "When set, --to must be a non-empty frame id.");
+    if (args.of_frame.has_value() && args.of_frame->empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "When set, --of must be a non-empty frame id.");
       return 1;
     }
 
-    // A TF lookup can be non-identity only when --from is set (reference-side
-    // bridge) or Odometry has --to set (tracked-side bridge). Pure raw dumps
+    // A TF lookup can be non-identity only when --ref is set (reference-side
+    // bridge) or Odometry has --of set (tracked-side bridge). Pure raw dumps
     // (no flags) need no TF tree at all.
-    const bool need_tree = args.from_frame.has_value() || (is_odom && args.to_frame.has_value());
+    const bool need_tree = args.ref_frame.has_value() || (is_odom && args.of_frame.has_value());
 
     tf2::BufferCore tf_buffer{std::chrono::hours(24 * 365)};
     if (!build_dump_tf_tree(args, need_tree, tf_buffer)) {
@@ -723,25 +723,25 @@ private:
       }
 
       const std::string & header_frame = sample.pose.header.frame_id;
-      const std::string from_frame = args.from_frame.has_value() ? *args.from_frame : header_frame;
+      const std::string ref_frame = args.ref_frame.has_value() ? *args.ref_frame : header_frame;
       const std::int64_t ns =
         static_cast<std::int64_t>(sample.pose.header.stamp.sec) * 1'000'000'000LL +
         static_cast<std::int64_t>(sample.pose.header.stamp.nanosec);
       const tf2::TimePoint tp{std::chrono::nanoseconds(ns)};
 
       try {
-        // Reference-side bridge: re-express the result into --from. Identity
-        // (no lookup) when --from is absent or already equals header.frame_id.
+        // Reference-side bridge: re-express the result into --ref. Identity
+        // (no lookup) when --ref is absent or already equals header.frame_id.
         std::optional<geometry_msgs::msg::Transform> from_header;
-        if (from_frame != header_frame) {
-          from_header = tf_buffer.lookupTransform(from_frame, header_frame, tp).transform;
+        if (ref_frame != header_frame) {
+          from_header = tf_buffer.lookupTransform(ref_frame, header_frame, tp).transform;
         }
-        // Tracked-side bridge (Odometry only): walk body/child -> --to via the
+        // Tracked-side bridge (Odometry only): walk body/child -> --of via the
         // TF tree (e.g. base_link -> sensor through static TF). Identity when
-        // --to is absent or already equals the body frame.
+        // --of is absent or already equals the body frame.
         std::optional<geometry_msgs::msg::Transform> body_to;
-        if (is_odom && args.to_frame.has_value() && *args.to_frame != sample.child_frame) {
-          body_to = tf_buffer.lookupTransform(sample.child_frame, *args.to_frame, tp).transform;
+        if (is_odom && args.of_frame.has_value() && *args.of_frame != sample.child_frame) {
+          body_to = tf_buffer.lookupTransform(sample.child_frame, *args.of_frame, tp).transform;
         }
 
         const auto out_pose = core::compose_trajectory_pose(from_header, sample.pose.pose, body_to);
@@ -921,10 +921,10 @@ private:
         "supported today.")
       ->check(CLI::IsMember({kJoinMsgTypeTf}));
     sub->add_option(
-      "--from", join_args_.from_frame,
+      "--ref", join_args_.ref_frame,
       "Parent frame id. Required for --msg-type tf; mapped to TransformStamped.header.frame_id.");
     sub->add_option(
-      "--to", join_args_.to_frame,
+      "--of", join_args_.of_frame,
       "Child frame id. Required for --msg-type tf; mapped to TransformStamped.child_frame_id.");
     sub
       ->add_flag(
@@ -977,8 +977,7 @@ private:
     out_transforms.reserve(parsed.poses.size());
     out_stamps_ns.reserve(parsed.poses.size());
     for (const auto & p : parsed.poses) {
-      out_transforms.push_back(
-        core::pose_to_transform_stamped(p, *args.from_frame, *args.to_frame));
+      out_transforms.push_back(core::pose_to_transform_stamped(p, *args.ref_frame, *args.of_frame));
       out_stamps_ns.push_back(p.timestamp_ns);
     }
     return true;
@@ -1134,21 +1133,21 @@ private:
     const auto & args = join_args_;
 
     // 1. Validate type-specific arg constraints. Today only --msg-type tf
-    //    is supported, and it requires --from / --to as distinct non-empty
+    //    is supported, and it requires --ref / --of as distinct non-empty
     //    frame ids.
     if (args.msg_type == kJoinMsgTypeTf) {
       if (
-        !args.from_frame.has_value() || !args.to_frame.has_value() || args.from_frame->empty() ||
-        args.to_frame->empty()) {
+        !args.ref_frame.has_value() || !args.of_frame.has_value() || args.ref_frame->empty() ||
+        args.of_frame->empty()) {
         BAGWIZ_LOG_ERROR(
           kLogger,
-          "--msg-type tf requires both --from (parent frame_id) and --to (child_frame_id).");
+          "--msg-type tf requires both --ref (parent frame_id) and --of (child_frame_id).");
         return 1;
       }
-      if (*args.from_frame == *args.to_frame) {
+      if (*args.ref_frame == *args.of_frame) {
         BAGWIZ_LOG_ERROR(
-          kLogger, "--from and --to must be distinct frames; both were '%s'.",
-          args.from_frame->c_str());
+          kLogger, "--ref and --of must be distinct frames; both were '%s'.",
+          args.ref_frame->c_str());
         return 1;
       }
     }

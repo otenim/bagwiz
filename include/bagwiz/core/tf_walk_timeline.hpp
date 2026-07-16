@@ -20,7 +20,7 @@
 
 // Timeline + per-step resolution for `bagwiz tf walk`. The walk merges every
 // TF topic of a bag into one buffer and steps through the distinct times at
-// which the merged TF changed, resolving <from> -> <to> at each. These helpers
+// which the merged TF changed, resolving --of's pose in --ref at each. These helpers
 // are the pure, bag-free core (no I/O, no terminal) so they can be unit-tested
 // against an in-memory tf2::BufferCore; the command layer owns the bag reading
 // and the pager. The walk does not classify transforms as static vs dynamic.
@@ -28,7 +28,7 @@ namespace bagwiz::core
 {
 
 // One step of a tf walk: the query time on the merged TF timeline and the
-// resolved <from> -> <to> transform at that time. `transform` is std::nullopt
+// resolved --of's pose in --ref at that time. `transform` is std::nullopt
 // when the buffer cannot connect the two frames at `time` (e.g. the chain is
 // not yet complete, or the time is outside a dynamic frame's cached window);
 // `error` then carries the tf2 reason and is empty on success.
@@ -45,15 +45,16 @@ struct TfWalkStep
 // input yields an empty timeline.
 std::vector<tf2::TimePoint> build_tf_walk_timeline(std::vector<tf2::TimePoint> stamps);
 
-// Resolve <from> -> <to> from `buffer` at `time`, matching
-// lookupTransform(target=to_frame, source=from_frame) — the tf2_echo
-// convention, where the translation is <from>'s origin expressed in <to>. A
-// tf2::TransformException is caught and reported via the step's `error`
-// (transform left empty) rather than thrown, so a single unresolvable time
-// does not abort the walk.
+// Resolve <of>'s pose in <ref> from `buffer` at `time` — that is,
+// lookupTransform(target=ref_frame, source=of_frame), whose translation is
+// <of>'s origin expressed in <ref>. Equivalent to
+// `ros2 run tf2_ros tf2_echo <ref> <of>` (note the operand order — tf2_echo
+// takes the reference frame first). A tf2::TransformException is caught and
+// reported via the step's `error` (transform left empty) rather than thrown, so
+// a single unresolvable time does not abort the walk.
 TfWalkStep resolve_tf_walk_step(
-  const tf2::BufferCore & buffer, tf2::TimePoint time, const std::string & from_frame,
-  const std::string & to_frame);
+  const tf2::BufferCore & buffer, tf2::TimePoint time, const std::string & of_frame,
+  const std::string & ref_frame);
 
 }  // namespace bagwiz::core
 
