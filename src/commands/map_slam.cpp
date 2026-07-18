@@ -8,9 +8,12 @@
 
 #include "bagwiz/commands/map_slam.hpp"
 
+#include "bagwiz/core/camera_info_resolver.hpp"
 #include "bagwiz/core/decoder/decoder.hpp"
+#include "bagwiz/core/image/packed_raster.hpp"
 #include "bagwiz/core/logging.hpp"
 #include "bagwiz/core/output_path.hpp"
+#include "bagwiz/core/pointcloud/color_propagation.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/slam/cloud_mapper.hpp"
 #include "bagwiz/core/slam/cuda_device.hpp"
@@ -18,6 +21,7 @@
 #include "bagwiz/core/slam/gnss_sample.hpp"
 #include "bagwiz/core/slam/imu_sample.hpp"
 #include "bagwiz/core/slam/lidar_scan.hpp"
+#include "bagwiz/core/slam/map_colorizer.hpp"
 #include "bagwiz/core/slam/map_viewer.hpp"
 #include "bagwiz/core/slam/point_cloud_io.hpp"
 #include "bagwiz/core/slam/progress_bar.hpp"
@@ -40,9 +44,11 @@
 #include <array>
 #include <chrono>
 #include <cinttypes>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -93,6 +99,15 @@ int cap_threads_at_hardware_limit(int num_threads)
     return num_threads;
   }
   return std::min(num_threads, static_cast<int>(hardware));
+}
+
+// Quaternion (x, y, z, w) to a row-major 3x3 rotation, for transforming the
+// colorization pass's occluder scans into the world frame.
+std::array<double, 9> quat_to_rot(double x, double y, double z, double w)
+{
+  return {1 - 2 * (y * y + z * z), 2 * (x * y - w * z),     2 * (x * z + w * y),
+          2 * (x * y + w * z),     1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
+          2 * (x * z - w * y),     2 * (y * z + w * x),     1 - 2 * (x * x + y * y)};
 }
 
 // tf2's lookupTransform(target=cloud, source=imu) yields p_cloud = T * p_imu,
@@ -169,6 +184,9 @@ public:
         return 1;
       }
     }
+    if (!args_.image_topics.empty() && !validate_camera_inputs(*reader)) {
+      return 1;
+    }
 
     // Validate / create the output root before any heavy work. A file at the
     // path is an error; an existing directory is accepted so the user can target a
@@ -216,6 +234,13 @@ public:
         return 1;
       }
       t_lidar_imu = extrinsic;
+    }
+
+    // Resolve every cloud<-camera extrinsic before feeding GLIM so an absent
+    // TF chain aborts before hours of SLAM, not after. The colorization
+    // itself runs after the global optimization.
+    if (!args_.image_topics.empty() && !resolve_camera_extrinsics()) {
+      return 1;
     }
 
     return run_mapping(*reader, t_lidar_imu);
@@ -278,6 +303,163 @@ private:
         kLogger, "Could not read a PointCloud2 frame_id from '%s' (%s message(s) failed to parse)",
         args_.cloud_topic.c_str(), std::to_string(cloud_fail).c_str());
       return false;
+    }
+    return true;
+  }
+
+  // Validate every --cam image topic and resolve + load its CameraInfo (into
+  // camera_info_topics_ / camera_infos_, parallel to args_.image_topics).
+  // Errors are logged; false aborts before any heavy work.
+  bool validate_camera_inputs(io::BagReader & reader)
+  {
+    if (
+      !args_.camera_info_topics.empty() &&
+      args_.camera_info_topics.size() != args_.image_topics.size()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "--cam-info was given %zu time(s) for %zu --cam topic(s); pass exactly one --cam-info "
+        "per --cam (in the same order), or none to auto-resolve all of them.",
+        args_.camera_info_topics.size(), args_.image_topics.size());
+      return false;
+    }
+
+    for (std::size_t cam = 0; cam < args_.image_topics.size(); ++cam) {
+      const std::string & image_topic = args_.image_topics[cam];
+      for (std::size_t prev = 0; prev < cam; ++prev) {
+        if (args_.image_topics[prev] == image_topic) {
+          BAGWIZ_LOG_ERROR(
+            kLogger, "--cam topic '%s' was given more than once.", image_topic.c_str());
+          return false;
+        }
+      }
+
+      const io::TopicInfo * info = nullptr;
+      for (const auto & t : reader.topics()) {
+        if (t.name == image_topic) {
+          info = &t;
+          break;
+        }
+      }
+      if (info == nullptr) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Topic '%s' is not present in %s", image_topic.c_str(),
+          args_.input_path.c_str());
+        return false;
+      }
+      // Gate on the shared to_packed_raster() decoder's type set — the same
+      // check `walk`'s image preview uses — so --cam and the preview can never
+      // drift apart in what they accept.
+      if (!core::image::is_supported_image_type(info->type)) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "Topic '%s' is %s, which map slam --cam cannot decode; supported types are "
+          "sensor_msgs/msg/Image and sensor_msgs/msg/CompressedImage.",
+          image_topic.c_str(), info->type.c_str());
+        return false;
+      }
+
+      std::string camera_info_topic;
+      if (!args_.camera_info_topics.empty()) {
+        camera_info_topic = args_.camera_info_topics[cam];
+        const auto error =
+          core::camera_info::validate_camera_info_topic(args_.input_path, camera_info_topic);
+        if (error.has_value()) {
+          BAGWIZ_LOG_ERROR(kLogger, "%s", error->c_str());
+          return false;
+        }
+      } else {
+        const auto resolved =
+          core::camera_info::resolve_camera_info_topic(image_topic, reader.topics());
+        if (!resolved.topic.has_value()) {
+          BAGWIZ_LOG_ERROR(
+            kLogger,
+            "Could not auto-resolve a CameraInfo topic for '%s'%s%s. Pass it explicitly "
+            "with --cam-info.",
+            image_topic.c_str(), resolved.error.has_value() ? ": " : "",
+            resolved.error.has_value() ? resolved.error->c_str() : "");
+          return false;
+        }
+        camera_info_topic = *resolved.topic;
+      }
+
+      const auto loaded = core::camera_info::load_camera_info(args_.input_path, camera_info_topic);
+      if (!loaded.ok()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Could not read CameraInfo from '%s': %s", camera_info_topic.c_str(),
+          loaded.error.c_str());
+        return false;
+      }
+      if (!(loaded.info->k[0] > 0.0) || !(loaded.info->k[4] > 0.0)) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "CameraInfo on '%s' has a degenerate intrinsic matrix (fx=%g, fy=%g); cannot project "
+          "the map for colorization.",
+          camera_info_topic.c_str(), loaded.info->k[0], loaded.info->k[4]);
+        return false;
+      }
+      camera_info_topics_.push_back(camera_info_topic);
+      camera_infos_.push_back(*loaded.info);
+    }
+    return true;
+  }
+
+  // Resolve T_cloud_cam (cloud frame <- camera optical frame) for every --cam
+  // from the bag's static TF, into t_cloud_cams_ (parallel to image_topics).
+  // Mirrors resolve_extrinsic: --cam is an explicit request, so any failure is
+  // fatal rather than silently writing an uncolored map. The cloud frame and
+  // the static TF buffer are resolved once and shared across cameras.
+  bool resolve_camera_extrinsics()
+  {
+    std::string cloud_frame;
+    if (!peek_cloud_frame(cloud_frame)) {
+      return false;
+    }
+
+    // Build the static TF buffer lazily: an all-identity setup (every camera
+    // sharing the cloud frame) needs no TF topic at all.
+    std::optional<tf2::BufferCore> buffer;
+    for (std::size_t cam = 0; cam < camera_infos_.size(); ++cam) {
+      const std::string & cam_frame = camera_infos_[cam].frame_id;
+      if (cam_frame.empty()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "CameraInfo on '%s' has an empty header.frame_id; cannot resolve the camera "
+          "extrinsic from the bag's static TF.",
+          camera_info_topics_[cam].c_str());
+        return false;
+      }
+      if (cloud_frame == cam_frame) {
+        t_cloud_cams_.push_back(core::slam::SensorTransform{});
+        continue;
+      }
+
+      if (!buffer.has_value()) {
+        buffer.emplace(kTfBufferCacheTime);
+        if (!build_static_tf_buffer(*buffer, "the camera extrinsic")) {
+          return false;
+        }
+      }
+
+      const auto missing = core::missing_frames(*buffer, cloud_frame, cam_frame);
+      if (!missing.empty()) {
+        std::string names;
+        for (std::size_t i = 0; i < missing.size(); ++i) {
+          names += (i ? ", " : "") + missing[i];
+        }
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Frame(s) not present in the bag's static TF tree: %s", names.c_str());
+        return false;
+      }
+
+      try {
+        const auto ts = buffer->lookupTransform(cloud_frame, cam_frame, tf2::TimePointZero);
+        t_cloud_cams_.push_back(to_sensor_transform(ts));
+      } catch (const std::exception & e) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "No static TF chain from '%s' to '%s': %s", cloud_frame.c_str(),
+          cam_frame.c_str(), e.what());
+        return false;
+      }
     }
     return true;
   }
@@ -945,6 +1127,16 @@ private:
       return 1;
     }
 
+    // Colorize the map from the camera images BEFORE the optional --frame
+    // remap: the colorizer interpolates camera poses from the trajectory,
+    // which at this point still expresses the cloud frame the camera
+    // extrinsic was resolved against.
+    std::vector<std::array<std::uint8_t, 3>> map_colors;
+    if (!args_.image_topics.empty()) {
+      core::slam::FinalizeSpinner spinner("Colorizing map", progress_on);
+      colorize_map(map, map_colors);
+    }
+
     // Apply the optional --frame remapping before writing.
     if (output_body_to.has_value()) {
       transform_trajectory_to_frame(map.trajectory, *output_body_to);
@@ -961,7 +1153,7 @@ private:
     if (!write_trajectory(map.trajectory)) {
       return 1;
     }
-    core::slam::write_pcd(map_out, map.points, map.intensities);
+    core::slam::write_pcd(map_out, map.points, map.intensities, map_colors);
     // Flush and close before the good() check and before --viewer serves the file.
     // An open ofstream keeps the final partial (<8 KiB) block in its user-space
     // buffer, so until the stream is destroyed the on-disk file is short of its
@@ -1046,6 +1238,265 @@ private:
     return 0;
   }
 
+  // Colorize the optimized map from the --cam image topics: stream every
+  // camera's images through its own MapColorizer in a single bag pass,
+  // gain-align the per-camera results and blend them by observation weight,
+  // then fill the points no camera observed from their nearest observed
+  // neighbor (unless --no-color-propagate) and move the result into `colors`
+  // (parallel to map.points). NON-FATAL by design — the map geometry is valid
+  // without colors, so every failure path warns and leaves `colors` empty
+  // (map.pcd is then written without an rgb field) rather than discarding a
+  // finished SLAM run.
+  void colorize_map(
+    const core::slam::CloudMap & map, std::vector<std::array<std::uint8_t, 3>> & colors)
+  {
+    const std::size_t cam_count = args_.image_topics.size();
+    const int capped = cap_threads_at_hardware_limit(args_.num_threads);
+    const int threads = capped > 0 ? capped : 4;
+
+    // The geometry pre-pass (kd-tree, normals, spacings) is camera
+    // independent and the kd-tree build is the expensive part, so build it
+    // once and share it between every camera's MapColorizer. The neighbor
+    // count is the MapColorizerConfig default.
+    const core::slam::MapColorizerConfig default_config;
+    auto geometry = std::make_shared<const core::slam::ColorizeGeometry>(
+      core::slam::build_colorize_geometry(map.points, default_config.geometry_neighbors, threads));
+
+    std::vector<std::unique_ptr<core::slam::MapColorizer>> colorizers;
+    colorizers.reserve(cam_count);
+    for (std::size_t cam = 0; cam < cam_count; ++cam) {
+      core::slam::MapColorizerConfig config;
+      config.camera = camera_infos_[cam];
+      config.t_cloud_cam = t_cloud_cams_[cam];
+      // Reuse the SLAM range crop: geometry farther than --max-range from any
+      // single viewpoint was never captured in one scan either.
+      config.rasterizer.max_range = args_.range_max;
+      config.rasterizer.num_threads = threads;
+      colorizers.push_back(
+        std::make_unique<core::slam::MapColorizer>(config, geometry, map.points, map.trajectory));
+    }
+
+    std::unique_ptr<io::BagReader> reader;
+    try {
+      reader = io::open_read(args_.input_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "Could not reopen %s for colorization (%s); map.pcd is written without colors.",
+        args_.input_path.c_str(), e.what());
+      return;
+    }
+    io::ReadFilter filter;
+    filter.topics = args_.image_topics;
+    // The SLAM LiDAR stream rides along: each scan is the scene's occluder
+    // geometry at its own time, so the colorizer can reject map points that
+    // sit behind vehicles and pedestrians which left nothing in the
+    // accumulated map (see MapColorizer::add_image's dynamic_points).
+    filter.topics.push_back(args_.cloud_topic);
+    reader->set_filter(filter);
+
+    const auto colorize_start = std::chrono::steady_clock::now();
+    std::vector<std::int64_t> decode_failures(cam_count, 0);
+    // Images are paired with their temporally NEAREST scan, not the latest
+    // one: the scan is the visibility oracle for moving traffic, so the
+    // pairing must be tight. The recording pipeline publishes scans and
+    // images tens to a hundred milliseconds after capture, so an image
+    // usually reaches this loop before the scan captured nearest to it;
+    // images wait in a short pending queue until the scans bracketing their
+    // stamp have arrived.
+    constexpr std::int64_t kScanPairWindowNs = 150'000'000;
+    struct PendingImage
+    {
+      std::size_t cam = 0;
+      std::int64_t stamp_ns = 0;
+      std::string type;
+      std::vector<std::byte> payload;
+    };
+    struct ScanSlot
+    {
+      std::int64_t stamp_ns = 0;
+      std::vector<std::array<float, 3>> world_points;
+    };
+    std::deque<PendingImage> pending_images;
+    std::deque<ScanSlot> scans;  // the latest few, in arrival (stamp) order
+
+    auto feed_image = [&](const PendingImage & img) {
+      const ScanSlot * best = nullptr;
+      for (const auto & slot : scans) {
+        if (
+          best == nullptr ||
+          std::abs(slot.stamp_ns - img.stamp_ns) < std::abs(best->stamp_ns - img.stamp_ns)) {
+          best = &slot;
+        }
+      }
+      std::span<const std::array<float, 3>> dynamic;
+      if (best != nullptr && std::abs(best->stamp_ns - img.stamp_ns) <= kScanPairWindowNs) {
+        dynamic = best->world_points;
+      }
+      const auto decoded = core::image::to_packed_raster(img.type, img.payload);
+      if (!decoded.ok()) {
+        ++decode_failures[img.cam];
+        return;
+      }
+      const auto & raster = *decoded.raster;
+      // Prefer the capture stamp; fall back to the queue stamp (the bag
+      // record time) when the publisher left header.stamp unset.
+      const std::int64_t stamp =
+        raster.header_stamp_ns != 0 ? raster.header_stamp_ns : img.stamp_ns;
+      colorizers[img.cam]->add_image(stamp, raster.bgr, raster.width, raster.height, dynamic);
+    };
+    // Flush every pending image whose nearest scan is known: once a scan with
+    // a stamp at or beyond the image's has arrived, no closer scan can still
+    // come (scans arrive in stamp order).
+    auto flush_decidable_images = [&]() {
+      while (!pending_images.empty() &&
+             std::any_of(scans.begin(), scans.end(), [&](const ScanSlot & s) {
+               return s.stamp_ns >= pending_images.front().stamp_ns;
+             })) {
+        feed_image(pending_images.front());
+        pending_images.pop_front();
+      }
+    };
+
+    io::RawMessage raw;
+    try {
+      while (reader->next(raw)) {
+        if (raw.topic->name == args_.cloud_topic) {
+          if (map.trajectory.empty()) {
+            continue;
+          }
+          const auto parsed = core::pointcloud::parse_pointcloud2(raw.payload);
+          if (!parsed.ok()) {
+            continue;
+          }
+          const auto extracted = core::slam::to_lidar_scan(*parsed.cloud);
+          if (!extracted.ok()) {
+            continue;
+          }
+          const auto & scan = *extracted.scan;
+          // Same span rule as the colorizer's images: a clamped pose would
+          // place the occluders somewhere the platform never was.
+          if (
+            scan.stamp_ns < map.trajectory.front().timestamp_ns ||
+            scan.stamp_ns > map.trajectory.back().timestamp_ns) {
+            continue;
+          }
+          const auto pose = core::lookup_pose(scan.stamp_ns, map.trajectory);
+          if (!pose) {
+            continue;
+          }
+          const std::array<double, 9> r = quat_to_rot(pose->qx, pose->qy, pose->qz, pose->qw);
+          std::vector<std::array<float, 3>> scan_world;
+          scan_world.reserve(scan.points.size());
+          for (const auto & p : scan.points) {
+            scan_world.push_back(
+              {static_cast<float>(r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + pose->tx),
+               static_cast<float>(r[3] * p[0] + r[4] * p[1] + r[5] * p[2] + pose->ty),
+               static_cast<float>(r[6] * p[0] + r[7] * p[1] + r[8] * p[2] + pose->tz)});
+          }
+          scans.push_back(ScanSlot{scan.stamp_ns, std::move(scan_world)});
+          while (scans.size() > 4) {
+            scans.pop_front();
+          }
+          flush_decidable_images();
+          continue;
+        }
+        // One filtered pass over the bag; each message belongs to exactly one
+        // camera, dispatched by topic name.
+        std::size_t cam = cam_count;
+        for (std::size_t i = 0; i < cam_count; ++i) {
+          if (raw.topic->name == args_.image_topics[i]) {
+            cam = i;
+            break;
+          }
+        }
+        if (cam == cam_count) {
+          continue;
+        }
+        pending_images.push_back(
+          PendingImage{
+            cam,
+            core::image::image_capture_stamp_ns(raw.topic->type, raw.payload, raw.timestamp_ns),
+            raw.topic->type, std::vector<std::byte>(raw.payload.begin(), raw.payload.end())});
+        flush_decidable_images();
+      }
+      // End of stream: no closer scan can still arrive; flush the rest.
+      while (!pending_images.empty()) {
+        feed_image(pending_images.front());
+        pending_images.pop_front();
+      }
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "Error reading the --cam topic(s) for colorization (%s); continuing with the images "
+        "read so far.",
+        e.what());
+    }
+
+    std::vector<core::slam::MapColorizeResult> results;
+    results.reserve(cam_count);
+    for (std::size_t cam = 0; cam < cam_count; ++cam) {
+      results.push_back(colorizers[cam]->finish());
+      const auto & result = results.back();
+      BAGWIZ_LOG_INFO(
+        kLogger,
+        "Colorize: %zu of %zu map points observed via '%s' (%zu image(s) used, %zu outside "
+        "the trajectory span, %" PRId64 " failed to decode)",
+        result.colored_points, map.points.size(), args_.image_topics[cam].c_str(),
+        result.images_used, result.images_skipped, decode_failures[cam]);
+    }
+
+    auto merged = core::slam::merge_colorize_results(results);
+    const double colorize_seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - colorize_start).count();
+    if (merged.images_used == 0) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "No usable image on any --cam topic for colorization; map.pcd is written without "
+        "colors.");
+      return;
+    }
+
+    // Fill the points no camera observed with the color of the nearest
+    // observed neighbor. The radius follows the data — 4x the median local
+    // point spacing, clamped to [0.05, 5] m — so it tracks the map density
+    // instead of an absolute guess. Degenerate inputs (empty spacings, a
+    // non-finite or zero median) skip the propagation.
+    std::size_t propagated = 0;
+    if (args_.color_propagate && merged.colored_points > 0) {
+      std::vector<float> scratch(geometry->spacings.begin(), geometry->spacings.end());
+      if (!scratch.empty()) {
+        const auto mid = scratch.begin() + static_cast<std::ptrdiff_t>(scratch.size() / 2);
+        std::nth_element(scratch.begin(), mid, scratch.end());
+        const double median = static_cast<double>(*mid);
+        if (std::isfinite(median) && median > 0.0) {
+          const double radius = std::clamp(4.0 * median, 0.05, 5.0);
+          propagated = core::pointcloud::propagate_uncolored(
+            map.points, geometry->tree, merged.colors, merged.observed, radius, threads);
+          BAGWIZ_LOG_INFO(
+            kLogger, "Propagated colors to %zu unobserved map points (radius %.3f m)", propagated,
+            radius);
+        }
+      }
+    }
+
+    colors = std::move(merged.colors);
+    if (args_.color_propagate) {
+      const std::size_t uncolored = map.points.size() - merged.colored_points - propagated;
+      BAGWIZ_LOG_INFO(
+        kLogger,
+        "Colorized %zu of %zu map points from %zu camera topic(s) in %.1fs (%zu propagated "
+        "from observed neighbors, %zu left uncolored)",
+        merged.colored_points, map.points.size(), cam_count, colorize_seconds, propagated,
+        uncolored);
+    } else {
+      BAGWIZ_LOG_INFO(
+        kLogger,
+        "Colorized %zu of %zu map points from %zu camera topic(s) in %.1fs (%zu left uncolored)",
+        merged.colored_points, map.points.size(), cam_count, colorize_seconds,
+        map.points.size() - merged.colored_points);
+    }
+  }
+
   // " + N IMU samples" when IMU mode ran, otherwise empty.
   std::string imu_suffix(std::int64_t imu_count) const
   {
@@ -1060,6 +1511,12 @@ private:
   std::filesystem::path map_path_;     // <output_root>/map.pcd (mapping mode only)
   // Effective backend resolved by resolve_backend() from --backend.
   bool use_gpu_ = false;
+  // --cam state, parallel to args_.image_topics (listing order; the first
+  // topic is the gain-alignment reference when the per-camera results are
+  // blended), filled by validate_camera_inputs / resolve_camera_extrinsics.
+  std::vector<std::string> camera_info_topics_;            // resolved CameraInfo topics
+  std::vector<core::image::CameraInfo> camera_infos_;      // first CameraInfo message on each
+  std::vector<core::slam::SensorTransform> t_cloud_cams_;  // cloud <- camera optical frames
 };
 
 }  // namespace
