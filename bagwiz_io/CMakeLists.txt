@@ -49,10 +49,34 @@ if(NOT zstd_vendor_FOUND)
 endif()
 find_package(zstd REQUIRED)
 
+# mcap 1.x moved ReadJobQueue / ReadMessageJob / DecompressChunkJob under
+# mcap::internal; mcap 0.x leaves them in mcap. The layout is tied to the
+# distro's vendored mcap version, so detect it from the installed header and
+# expose a compile definition for the src-local compatibility header.
+set(_mcap_types_hpp "")
+foreach(_mcap_include_dir IN LISTS mcap_vendor_INCLUDE_DIRS)
+  if(EXISTS "${_mcap_include_dir}/mcap/types.hpp")
+    set(_mcap_types_hpp "${_mcap_include_dir}/mcap/types.hpp")
+    break()
+  endif()
+endforeach()
+set(BAGWIZ_MCAP_READ_JOBS_INTERNAL_NAMESPACE OFF)
+if(_mcap_types_hpp)
+  file(STRINGS "${_mcap_types_hpp}" _mcap_version_line REGEX "^#define MCAP_LIBRARY_VERSION ")
+  if(_mcap_version_line MATCHES "\"([0-9]+)\\.([0-9]+)\\.([0-9]+)\"")
+    set(_mcap_major "${CMAKE_MATCH_1}")
+    if(_mcap_major GREATER_EQUAL 1)
+      set(BAGWIZ_MCAP_READ_JOBS_INTERNAL_NAMESPACE ON)
+    endif()
+  endif()
+endif()
+
 add_library(bagwiz_io
   src/io/bag_factory.cpp
   src/io/bag_open.cpp
   src/io/file_decompressor.cpp
+  src/io/mcap_chunk_prefetch.cpp
+  src/io/mcap_indexed_stream.cpp
   src/io/mcap_reader.cpp
   src/io/mcap_writer.cpp
   src/io/message_decompressor.cpp
@@ -62,6 +86,9 @@ add_library(bagwiz_io
   src/io/sqlite3_writer.cpp
   src/io/topics.cpp
 )
+if(BAGWIZ_MCAP_READ_JOBS_INTERNAL_NAMESPACE)
+  target_compile_definitions(bagwiz_io PRIVATE BAGWIZ_MCAP_READ_JOBS_INTERNAL_NAMESPACE=1)
+endif()
 target_include_directories(bagwiz_io
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -125,6 +152,9 @@ if(BUILD_TESTING)
   # directly (<mcap/writer.hpp>) re-link it explicitly.
   ament_add_gtest(bagwiz_mcap_reader_test test/io/mcap_reader_test.cpp)
   target_link_libraries(bagwiz_mcap_reader_test bagwiz_io ${mcap_vendor_TARGETS})
+
+  ament_add_gtest(bagwiz_mcap_parallel_read_test test/io/mcap_parallel_read_test.cpp)
+  target_link_libraries(bagwiz_mcap_parallel_read_test bagwiz_io ${mcap_vendor_TARGETS})
 
   ament_add_gtest(bagwiz_sqlite3_reader_test test/io/sqlite3_reader_test.cpp)
   target_link_libraries(bagwiz_sqlite3_reader_test bagwiz_io)
