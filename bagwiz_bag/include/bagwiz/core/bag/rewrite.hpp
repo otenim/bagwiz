@@ -63,7 +63,9 @@ struct BagRewriteOptions
   // Force mcap_compression = "none" on the writer options (both modes).
   // Rewrite commands disable compression so a bag that is rewritten often
   // does not pay the (de)compression cost each time; commands that want the
-  // storage default set this to false.
+  // storage default set this to false. This flag governs only the decoded
+  // rewrite pipeline: the chunk pass-through never opens a writer through
+  // these options and preserves the input's chunk compression instead.
   bool disable_mcap_compression = true;
 };
 
@@ -72,6 +74,24 @@ struct BagRewriteOptions
 // process exit code: 0 on success; non-zero on failure after logging the
 // specific error itself.
 using BagRewritePass = std::function<int(const io::WriterFactory & open_writer)>;
+
+// The resolved write target of the dispatch branch that runs the pass: the
+// concrete path being written (the output path in -o mode, the sibling tmp
+// path in-place) and the exact CreateOptions the writer factory hands to
+// io::open_write. Exposed so a pass can offer the target to a path-level
+// fast path — the mcap chunk pass-through — before opening a writer through
+// the factory.
+struct RewriteTarget
+{
+  std::filesystem::path path;
+  io::CreateOptions create_options;
+};
+
+// Pass variant for commands that try the chunk pass-through first: same
+// contract as BagRewritePass, with the resolved target alongside the
+// factory.
+using BagRewritePassWithTarget =
+  std::function<int(const io::WriterFactory & open_writer, const RewriteTarget & target)>;
 
 // Run the -o / in-place dispatch for a rewrite-style command.
 //
@@ -86,6 +106,13 @@ int run_bag_rewrite(
   const std::filesystem::path & input_path,
   const std::optional<std::filesystem::path> & output_path, bool overwrite,
   const BagRewriteOptions & options, const BagRewritePass & pass);
+
+// Overload handing the pass the resolved RewriteTarget as well. The
+// BagRewritePass overload delegates here; both run the identical dispatch.
+int run_bag_rewrite(
+  const std::filesystem::path & input_path,
+  const std::optional<std::filesystem::path> & output_path, bool overwrite,
+  const BagRewriteOptions & options, const BagRewritePassWithTarget & pass);
 
 }  // namespace bagwiz::core
 
