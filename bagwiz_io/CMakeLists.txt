@@ -86,6 +86,8 @@ add_library(bagwiz_io
   src/io/metadata_computer.cpp
   src/io/metadata_yaml.cpp
   src/io/sqlite3_reader.cpp
+  src/io/sqlite3_slice_prefetch.cpp
+  src/io/sqlite3_slice_schedule.cpp
   src/io/sqlite3_writer.cpp
   src/io/topics.cpp
 )
@@ -168,6 +170,9 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_sqlite3_reader_test test/io/sqlite3_reader_test.cpp)
   target_link_libraries(bagwiz_sqlite3_reader_test bagwiz_io)
 
+  ament_add_gtest(bagwiz_sqlite3_parallel_read_test test/io/sqlite3_parallel_read_test.cpp)
+  target_link_libraries(bagwiz_sqlite3_parallel_read_test bagwiz_io)
+
   ament_add_gtest(bagwiz_metadata_computer_test test/io/metadata_computer_test.cpp)
   target_link_libraries(bagwiz_metadata_computer_test bagwiz_io)
 
@@ -218,6 +223,22 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_shard_multiplexer_test test/io/shard_multiplexer_test.cpp)
   target_include_directories(bagwiz_shard_multiplexer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(bagwiz_shard_multiplexer_test bagwiz_io)
+
+  # The slice schedule is a src-local detail header; the test drives the pure
+  # boundary arithmetic without a database.
+  ament_add_gtest(
+    bagwiz_sqlite3_slice_schedule_test test/io/sqlite3_slice_schedule_test.cpp)
+  target_include_directories(
+    bagwiz_sqlite3_slice_schedule_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(bagwiz_sqlite3_slice_schedule_test bagwiz_io)
+
+  # The slice scanner is a src-local detail class; the test drives its worker
+  # pool against a throwaway .db3 (the sqlite3 reader suite covers the wiring).
+  ament_add_gtest(
+    bagwiz_sqlite3_slice_prefetch_test test/io/sqlite3_slice_prefetch_test.cpp)
+  target_include_directories(
+    bagwiz_sqlite3_slice_prefetch_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(bagwiz_sqlite3_slice_prefetch_test bagwiz_io)
 endif()
 
 ament_package()
