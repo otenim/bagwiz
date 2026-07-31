@@ -172,8 +172,10 @@ cyan/yellow):
 ## `bagwiz tf static calc`
 
 `static` is a command group for working with the bag's static TF tree. Its
-actions are `calc` (resolve a transform, below) and [`cp`](#bagwiz-tf-static-cp)
-(copy static TF between bags), so the full invocation is
+actions are `calc` (resolve a transform, below), [`cp`](#bagwiz-tf-static-cp)
+(copy static TF between bags), [`dump`](#bagwiz-tf-static-dump) (write the static
+tree as a publisher-config YAML), and [`join`](#bagwiz-tf-static-join) (embed such
+a YAML into a bag), so the full invocation is
 `bagwiz tf static calc ...`. Running `bagwiz tf static` without an action prints
 an error and the group's help.
 
@@ -718,44 +720,3 @@ bagwiz tf static join -i target.mcap --yaml rig.yaml
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `0`  | Static TF embedded; `<input>` rewritten or `<output>` written.                                                                                                                                                                                                         |
 | `1`  | The YAML could not be read or was rejected (see [Accepted input](#accepted-input)), the bag could not be opened, `<topic>` is populated without `--force` or has another type, an existing `-o` path without `-w`/`--overwrite`, a serialize failure, or an I/O error. |
-
-## Migration
-
-**`tf static cp`: replacing a colliding topic is now `--force`, not `-w`.** The
-single `-w`/`--overwrite` that used to permit both conflicts has been split, so
-`cp` matches [`static join`](#bagwiz-tf-static-join) and
-[`traj join`](traj.md#bagwiz-traj-join): `--force` covers a colliding static topic
-in `<dst>`, and `-w`/`--overwrite` now covers only an existing `-o` path. Neither
-stands in for the other, so clearing an output path no longer also authorises
-replacing a bag's real static TF.
-
-```bash
-# before: -w permitted both
-bagwiz tf static cp --src donor.mcap --dst target.mcap -w
-
-# after: name the conflict being permitted
-bagwiz tf static cp --src donor.mcap --dst target.mcap --force            # colliding topic
-bagwiz tf static cp --src donor.mcap --dst target.mcap -o out.mcap -w     # existing output
-bagwiz tf static cp --src donor.mcap --dst target.mcap -o out.mcap --force -w  # both
-```
-
-`tf walk` was removed. `tf static calc` covers the static-tree query; there is
-no in-tree replacement for stepping through a dynamic TF timeline.
-
-The bag operand is now `-i` / `--input` on every `tf` subcommand.
-`tf static cp` operands are `--src` and `--dst`, long-form only: the `-s` / `-d`
-short forms they briefly carried have been removed.
-The frame operands on `tf static calc` have long been `--of` / `--ref`; the only
-change is that the bag is no longer positional:
-
-```bash
-bagwiz tf tree capture.mcap                           # before — now an error
-bagwiz tf tree -i capture.mcap                      # after
-
-bagwiz tf static calc capture.mcap --of base_link --ref lidar   # before — now an error
-bagwiz tf static calc -i capture.mcap --of base_link --ref lidar # after
-
-bagwiz tf static cp donor.mcap target.mcap                # before — now an error
-bagwiz tf static cp -s donor.mcap -d target.mcap          # before — now an error
-bagwiz tf static cp --src donor.mcap --dst target.mcap    # after
-```

@@ -73,8 +73,9 @@ Because `*` spans `/`, `/sensing/*` removes the entire `/sensing` subtree.
 bag`; pass an explicit `-o` output for those.
 - Embedded message schemas are preserved for the surviving topics so MCAP
   outputs stay self-describing.
-- MCAP attachment and metadata records are not carried into the output. When
-  the input has any, the run logs a warning naming the counts.
+- MCAP attachment and metadata records are not carried into the output. On
+  the chunk pass-through path the run logs a warning naming the counts; on
+  the decoded fallback path they are dropped silently.
 - When both the input and the output are MCAP, chunks the edit does not touch
   are copied byte-for-byte, preserving the input's chunk compression; only
   chunks that still carry both removed and surviving topics are re-encoded
@@ -219,25 +220,6 @@ bagwiz topic rename -i drive.mcap --src /old/name --dst /new/name -o drive_renam
 
 # Rename a topic in a directory bag.
 bagwiz topic rename -i drive_dir/ --src /camera/image_raw --dst /camera/front/image_raw
-```
-
-## Migration
-
-All operands on `topic drop`, `topic keep`, and `topic rename` are now flags.
-The old positional forms fail loudly. `rename`'s two topic names are `--src` /
-`--dst` (long-form only, matching `tf static cp`); they were briefly
-`-s` / `--src-topic` and `-d` / `--dst-topic`:
-
-```bash
-bagwiz topic drop drive.mcap /sensing/lidar              # before — now an error
-bagwiz topic drop -i drive.mcap -t /sensing/lidar        # after
-
-bagwiz topic keep drive.mcap /sensing/lidar              # before — now an error
-bagwiz topic keep -i drive.mcap -t /sensing/lidar        # after
-
-bagwiz topic rename drive.mcap /old/name /new/name              # before — now an error
-bagwiz topic rename -i drive.mcap -s /old/name -d /new/name     # before — now an error
-bagwiz topic rename -i drive.mcap --src /old/name --dst /new/name  # after
 ```
 
 ## Exit status

@@ -233,7 +233,9 @@ Fisheye is a known gap, not an oversight: its projection matrix comes from
 `cv::fisheye::estimateNewCameraMatrixForUndistortRectify`, which is different
 maths parameterized by a `balance` rather than an `alpha`. (`bagwiz`'s
 point-cloud projector does handle `equidistant`, so the asymmetry is deliberate.)
-Nothing is written when a model is rejected.
+Nothing is written when a model is rejected in YAML mode or in place; with
+`-o`, messages streamed before the first offending CameraInfo may already have
+been written, leaving a partial output bag.
 
 ### Choosing `alpha`
 
@@ -270,7 +272,9 @@ to tell apart.
 ### When it refuses
 
 Recomputing `p` from `k` is **wrong**, not merely imprecise, in these cases, so
-the run stops before anything is written:
+the run stops with an error. In YAML mode and in place nothing is written; with
+`-o`, messages streamed before the first offending CameraInfo may already have
+been written, leaving a partial output bag:
 
 | Condition                              | Why                                                                                                                                                                                                                        |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -317,28 +321,6 @@ Pull a bag's calibration out as a YAML — that is `cam-info dump`, and
 bagwiz cam-info dump -i drive.mcap -t /camera/camera_info -o camera_info.yaml
 bagwiz cam-info recompute-p -i camera_info.yaml
 ```
-
-### Migration from the old `-o` behavior
-
-`-o`'s extension used to choose what `recompute-p` produced. It no longer does,
-so two command lines that used to work now mean something else — and neither
-errors:
-
-| Command                                        | Before                   | Now                                    |
-| ---------------------------------------------- | ------------------------ | -------------------------------------- |
-| `recompute-p drive.mcap -t /cam -o calib.yaml` | exported to `calib.yaml` | a directory bag **named** `calib.yaml` |
-| `recompute-p calib.yaml -o out.mcap`           | error                    | a YAML file **named** `out.mcap`       |
-
-Use [`cam-info dump`](#bagwiz-cam-info-dump) for the first.
-
-The bare form above is safe: `calib.yaml` didn't exist as a directory bag before,
-so it errors rather than writing anything. A scripted re-run typically adds
-`-w`/`--overwrite`, though — and under `-w`, `prepare_output_path()` removes the
-existing entry at `-o` before writing (`std::filesystem::remove_all`, regardless
-of whether it's a file or a directory). So `recompute-p drive.mcap -t /cam -o
-calib.yaml -w` **deletes the existing `calib.yaml` calibration** and replaces it
-with a directory bag. Re-check any script that re-runs `recompute-p` with `-w`
-against a `.yaml` path.
 
 ### Notes
 
@@ -440,20 +422,3 @@ bagwiz cam-info replace -i drive.mcap --yaml camera_info.yaml -t /camera/camera_
 - A topic that is missing, is not a CameraInfo topic, or carries no messages
   stops the run; nothing is written.
 - The bag is opened read-only and is never modified.
-
-## Migration
-
-All operands on `cam-info replace` and `cam-info dump` are now flags.
-`cam-info recompute-p` already took `-t/--topics`; the only change is that the
-input is now `-i` / `--input`:
-
-```bash
-bagwiz cam-info replace drive.mcap left.yaml /cam_info      # before — now an error
-bagwiz cam-info replace -i drive.mcap --yaml left.yaml -t /cam_info # after
-
-bagwiz cam-info recompute-p drive.mcap --topics /cam_info   # before — now an error
-bagwiz cam-info recompute-p -i drive.mcap -t /cam_info      # after
-
-bagwiz cam-info dump drive.mcap /camera/camera_info         # before — now an error
-bagwiz cam-info dump -i drive.mcap -t /camera/camera_info   # after
-```

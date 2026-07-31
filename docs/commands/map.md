@@ -8,37 +8,37 @@ actions:
 | [`slam`](#bagwiz-map-slam)     | Estimate a trajectory (and optimized map) from a PointCloud2 topic.  |
 | [`viewer`](#bagwiz-map-viewer) | Open the browser map viewer for an existing `map.pcd` (no SLAM run). |
 
-> **Build.** The `map` command group links the GLIM stack (compiled with
-> `-DBAGWIZ_WITH_SLAM=ON`) and belongs to the **full** build (`build-full`), which
-> is the default on **humble**/**jazzy**:
->
-> ```bash
-> pixi run -e humble build-full   # or: jazzy
-> ```
->
-> The first `build-full` builds the GLIM dependency stack (GTSAM, gtsam_points,
-> GLIM) into `install/<distro>/glim-deps` — a slow one-time step (tens of minutes) —
-> then compiles bagwiz with SLAM enabled. Later builds reuse the cached deps and are
-> fast. The **core** build (`pixi run -e <distro> build-core`) omits the `map`
-> command group entirely and skips the GLIM stack, so it is much faster but does
-> not expose `bagwiz map slam`.
->
-> **GPU fast path.** For the optional CUDA backend (`--backend cuda`), build the
-> full CUDA build in a `*-cuda` environment — the CUDA toolkit is pixi-managed
-> (conda-forge), so no system CUDA install is needed, only an NVIDIA driver + GPU:
->
-> ```bash
-> pixi run -e humble-cuda build-full   # or: jazzy-cuda
-> ```
->
-> The `humble-cuda` environment is the distro plus the conda CUDA toolkit (12.8:
-> nvcc, cudart, cusolver). This builds a CUDA GLIM stack (sm_86) into
-> `install/humble-cuda/glim-deps-cuda` and compiles bagwiz with
-> `-DBAGWIZ_WITH_SLAM_CUDA=ON` into `install/humble-cuda`. CUDA comes entirely from
-> `$CONDA_PREFIX` (no `/usr/local/cuda`). Run it with
-> `pixi run -e humble-cuda run -- map slam …`, or put it on your PATH with
-> `pixi run -e humble-cuda install`. The CPU environments stay CUDA-free, and
-> the CPU build, prefix, and reproducibility guarantee are untouched.
+**Build.** The `map` command group links the GLIM stack (compiled with
+`-DBAGWIZ_WITH_SLAM=ON`) and belongs to the **full** build (`build-full`), which
+is the default on **humble**/**jazzy**:
+
+```bash
+pixi run -e humble build-full   # or: jazzy
+```
+
+The first `build-full` builds the GLIM dependency stack (GTSAM, gtsam_points,
+GLIM) into `install/<distro>/glim-deps` — a slow one-time step (tens of minutes) —
+then compiles bagwiz with SLAM enabled. Later builds reuse the cached deps and are
+fast. The **core** build (`pixi run -e <distro> build-core`) omits the `map`
+command group entirely and skips the GLIM stack, so it is much faster but does
+not expose `bagwiz map slam`.
+
+**GPU fast path.** For the optional CUDA backend (`--backend cuda`), build the
+full CUDA build in a `*-cuda` environment — the CUDA toolkit is pixi-managed
+(conda-forge), so no system CUDA install is needed, only an NVIDIA driver + GPU:
+
+```bash
+pixi run -e humble-cuda build-full   # or: jazzy-cuda
+```
+
+The `humble-cuda` environment is the distro plus the conda CUDA toolkit (12.8:
+nvcc, cudart, cusolver). This builds a CUDA GLIM stack (sm_86) into
+`install/humble-cuda/glim-deps-cuda` and compiles bagwiz with
+`-DBAGWIZ_WITH_SLAM_CUDA=ON` into `install/humble-cuda`. CUDA comes entirely from
+`$CONDA_PREFIX` (no `/usr/local/cuda`). Run it with
+`pixi run -e humble-cuda run -- map slam …`, or put it on your PATH with
+`pixi run -e humble-cuda install`. The CPU environments stay CUDA-free, and
+the CPU build, prefix, and reproducibility guarantee are untouched.
 
 ---
 
@@ -92,7 +92,7 @@ bagwiz map slam -i <input> --pcd <pcd_topic> -o <output_root> [OPTIONS]
 | `--viewer`                     | After writing `map.pcd`, serve it over a loopback HTTP server and open the default browser to a Three.js point-cloud viewer. Blocks until interrupted (`Ctrl-C`). Requires bagwiz to be built with the map viewer; otherwise this flag errors out.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `--no-warmup-fill`             | Disable initialization-window ('start') pose fill (default **on**). GLIM's odometry emits no pose over its opening window (the LiDAR-IMU init, ~1 s), so `traj.tum` otherwise has no samples there. By default those pre-init scans are buffered and filled in by scan-matching each against the optimized map (so it works in LiDAR-only mode too); with `--imu` the buffered IMU additionally seeds each registration's initial guess and is the fallback if a fit is rejected. Affects `traj.tum`'s opening window only; the map is unaffected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `--no-cooldown-fill`           | Disable cooldown-window ('end') pose fill (default **on**) — the symmetric counterpart of `--no-warmup-fill`. The newest scans stay inside the odometry smoother window at end-of-sequence, so `traj.tum` otherwise stops one window short of the last input scan. By default those trailing scans are buffered and filled in by scan-matching each against the optimized map (LiDAR-only included); with `--imu` the buffered IMU additionally seeds each initial guess and is the fallback. Affects `traj.tum`'s closing window only; the map is unaffected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--fill-min-inliers`           | Inlier-fraction acceptance gate (`0`–`1`, default `0.7`) for warmup/cooldown pose-fill scan-matching. Higher = stricter (endpoints may stay unfilled); lower = looser (a bad fit can degrade the fill). No effect when both fills are disabled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `--fill-min-inliers`           | Inlier-fraction acceptance gate (must be greater than `0`, up to `1`, default `0.7`) for warmup/cooldown pose-fill scan-matching. Higher = stricter (endpoints may stay unfilled); lower = looser (a bad fit can degrade the fill). No effect when both fills are disabled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `-w`, `--overwrite`            | Overwrite the output file(s) if they already exist. Without it, an existing output file stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `--no-progress`                | Disable the live progress bars. The bars are also auto-suppressed when stderr is not a terminal or `NO_COLOR` is set, so this flag is only needed to silence them on an interactive terminal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -397,9 +397,9 @@ bagwiz map viewer -i|--input <map>
   draws an X/Y/Z axis triad at selected poses — oriented by the pose's quaternion
   and colored to match the corner orientation gizmo (X red, Y green, Z blue) —
   with every recorded pose origin joined by a neutral backbone line (the triads
-  sit on a subset of those poses). Triads are placed at actual poses spaced by
-  arc length along the path; **Axis length** and **Axis spacing** sliders tune
-  their size and density. The vehicle's forward axis is X, and a teal ring / blue
+  sit on a subset of those poses). Triads are placed at every 10th actual pose,
+  plus the last pose so the path's end always carries one, with a fixed 1.5 m
+  axis length; there are no sliders or other tuning controls for them. The vehicle's forward axis is X, and a teal ring / blue
   node mark the first and last pose, so direction of travel and both ends of the
   path read at a glance. No `traj.tum` next to the map means no panel is shown.
 - **Color fields.** The inspector's Field selector offers `x`/`y`/`z` (plus
@@ -428,21 +428,6 @@ bagwiz map viewer -i out/map.pcd
 | `1`  | `<map>` (or `map.pcd` within it) was not found; no loopback port could be bound; or the binary was built without the map viewer. |
 
 ---
-
-## Migration
-
-All operands on `map slam` and `map viewer` are now flags. The `map viewer` map
-is named `-i` / `--input` (it was briefly `-m` / `--map`), matching every other
-bagwiz command's input flag:
-
-```bash
-bagwiz map slam drive.mcap /sensing/lidar/concatenated/pointcloud out/  # before — now an error
-bagwiz map slam -i drive.mcap --pcd /sensing/lidar/concatenated/pointcloud -o out/ # after
-
-bagwiz map viewer out/      # before — now an error
-bagwiz map viewer -m out/   # before — now an error
-bagwiz map viewer -i out/   # after
-```
 
 ## Special thanks
 
