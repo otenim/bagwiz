@@ -52,15 +52,25 @@ find_package(rmw_implementation REQUIRED)
 # only inside tf_transform_format.cpp, so it is linked PRIVATE and does not
 # leak into the export set.
 find_package(nlohmann_json REQUIRED)
+# yaml-cpp backs the static-TF-tree YAML reader (tf_static_tree_yaml.cpp). Only
+# the reader needs it: the writer emits its YAML directly, so nothing in the
+# public header exposes a yaml-cpp type and it is linked PRIVATE.
+# yaml_cpp_vendor sets yaml-cpp_DIR so the real yaml-cpp package is found.
+find_package(yaml_cpp_vendor REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 add_library(bagwiz_tf
   src/core/tf/tf_buffer_loader.cpp
   src/core/tf/tf_chain.cpp
+  src/core/tf/tf_forest_check.cpp
   src/core/tf/tf_merge_check.cpp
   src/core/tf/tf_message_wire.cpp
+  src/core/tf/tf_static_collect.cpp
+  src/core/tf/tf_static_tree_yaml.cpp
   src/core/tf/tf_topics.cpp
   src/core/tf/tf_trajectory_sample.cpp
   src/core/tf/tf_transform_format.cpp
+  src/core/tf/tf_tree_check.cpp
   src/core/tf/tf_value_extract.cpp
   src/core/tf/trajectory.cpp
 )
@@ -108,6 +118,7 @@ endforeach()
 # archive's link interface and downstream packages need no target.
 target_include_directories(bagwiz_tf SYSTEM PRIVATE
   $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>)
+target_link_libraries(bagwiz_tf PRIVATE yaml-cpp)
 
 install(TARGETS bagwiz_tf
   EXPORT export_${PROJECT_NAME}
@@ -147,6 +158,10 @@ if(BUILD_TESTING)
   find_package(diagnostic_msgs REQUIRED)
   find_package(builtin_interfaces REQUIRED)
 
+  # yaml-cpp is a PRIVATE dependency of bagwiz_tf (see above), so tests that use
+  # it directly — parsing the emitted YAML back, which is what proves the output
+  # is well-formed rather than merely well-indented — must link it themselves.
+
   ament_add_gtest(bagwiz_tf_buffer_loader_test test/core/tf/tf_buffer_loader_test.cpp)
   target_link_libraries(bagwiz_tf_buffer_loader_test bagwiz_tf)
 
@@ -167,6 +182,12 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_tf_message_wire_test test/core/tf/tf_message_wire_test.cpp)
   target_link_libraries(bagwiz_tf_message_wire_test bagwiz_tf)
+
+  ament_add_gtest(bagwiz_tf_static_tree_yaml_test test/core/tf/tf_static_tree_yaml_test.cpp)
+  target_link_libraries(bagwiz_tf_static_tree_yaml_test bagwiz_tf yaml-cpp)
+
+  ament_add_gtest(bagwiz_tf_tree_check_test test/core/tf/tf_tree_check_test.cpp)
+  target_link_libraries(bagwiz_tf_tree_check_test bagwiz_tf)
 
   ament_add_gtest(bagwiz_tf_transform_format_test test/core/tf/tf_transform_format_test.cpp)
   target_link_libraries(

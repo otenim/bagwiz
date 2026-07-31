@@ -784,10 +784,11 @@ TEST(FlagCompletionTest, TfSubcommandListsStaticAndTree)
 }
 
 // `tf static <TAB>` lists the command group's actions, sorted.
-TEST(FlagCompletionTest, TfStaticSubcommandListsCalcAndCp)
+TEST(FlagCompletionTest, TfStaticSubcommandListsEveryAction)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "static", ""}), "calc\ncp\n");
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "static", ""}),
+    "calc\ncp\ndump\njoin\n");
 }
 
 // `tf static -` is the command-group slot; `--json` lives under `calc`, so only
@@ -814,7 +815,26 @@ TEST(FlagCompletionTest, TfStaticCpDashListsCpFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "cp", "-"}),
-    "--dst\n--help\n--output\n--overwrite\n--src\n-h\n-o\n-w\n");
+    "--dst\n--force\n--help\n--output\n--overwrite\n--src\n-h\n-o\n-w\n");
+}
+
+// `tf static dump -` surfaces the dump action's flags (-i/--input, -o/--output,
+// -w/--overwrite) alongside the implicit help flags, sorted.
+TEST(FlagCompletionTest, TfStaticDumpDashListsDumpFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "dump", "-"}),
+    "--help\n--input\n--output\n--overwrite\n-h\n-i\n-o\n-w\n");
+}
+
+// `tf static join -` adds --yaml, -t/--topic, and --force to the dump set. The
+// --yaml value is a file path and --topic names a topic being created, so neither
+// carries bagwiz candidates; both fall through to the shell.
+TEST(FlagCompletionTest, TfStaticJoinDashListsJoinFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "join", "-"}),
+    "--force\n--help\n--input\n--output\n--overwrite\n--topic\n--yaml\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `tf static calc <bag> --of <TAB>` lists only frame ids from the bag's static
