@@ -145,6 +145,8 @@ std::vector<VisualObservation> VisualFrontend::Impl::track(
   t = Clock::now();
   cv::resize(gray, resized, cv::Size(tracking_width, tracking_height), 0, 0, cv::INTER_AREA);
   std::vector<cv::Mat> cur_pyramid;
+  // Build pyramid once per frame for reuse in forward and backward flow calls;
+  // pyramid construction cost is folded into resize_ns.
   cv::buildOpticalFlowPyramid(resized, cur_pyramid, kKltWindow, kKltMaxLevel);
   stats.resize_ns += ns_since(t);
 

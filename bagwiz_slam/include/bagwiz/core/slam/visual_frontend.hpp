@@ -48,7 +48,7 @@ struct VisualFrontendStats
 {
   std::int64_t frames = 0;           // accepted track() calls
   std::int64_t gray_ns = 0;          // BGR -> gray conversion
-  std::int64_t resize_ns = 0;        // downscale to tracking width
+  std::int64_t resize_ns = 0;        // downscale to tracking width + KLT pyramid build
   std::int64_t klt_forward_ns = 0;   // forward optical flow
   std::int64_t klt_backward_ns = 0;  // backward (FB-check) optical flow
   std::int64_t detect_ns = 0;        // mask build + goodFeaturesToTrack
