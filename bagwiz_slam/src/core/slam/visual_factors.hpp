@@ -140,12 +140,16 @@ struct Landmark
 
 // Re-triangulate every qualifying track at the submaps' current poses (the
 // caller passes post-optimization views for the final map) and return the
-// landmarks in deterministic track-key order. Track selection mirrors
-// build_visual_factors (>= 3 associated observations, >= 2 distinct submaps,
-// the same triangulation quality gates) so the exported set is exactly the
-// geometry that constrained the trajectory; the LiDAR-support gate is NOT
-// applied (camera-only submaps carry landmark clouds, not LiDAR geometry).
-// Each landmark's rgb comes from its track's first associated observation.
+// landmarks in deterministic track-key order. A track qualifies with >= 3
+// associated observations that triangulate cleanly (the same quality gates
+// factor construction uses); unlike build_visual_factors there is NO
+// two-submap requirement — that rule exists because a factor over a single
+// submap key constrains nothing, while a single-submap track with parallax
+// is still valid geometry for the map (on real data most tracks never cross
+// a submap boundary, so the factor selection would export an empty map).
+// The LiDAR-support gate is NOT applied either (camera-only submaps carry
+// landmark clouds, not LiDAR geometry). Each landmark's rgb comes from its
+// track's first associated observation.
 [[nodiscard]] std::vector<Landmark> triangulate_landmarks(
   std::span<const VisualObservation> observations,
   std::span<const Eigen::Isometry3d> t_lidar_cams,  // by camera_id

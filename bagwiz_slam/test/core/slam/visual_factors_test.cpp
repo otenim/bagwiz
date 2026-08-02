@@ -580,10 +580,12 @@ TEST(VisualFactorsTest, TriangulateLandmarksCarriesFirstObservationRgb)
   }
 }
 
-// The export applies the same track selection as factor construction:
-// single-submap tracks qualify for nothing, and a moved landmark fails
-// triangulation — so neither becomes a map point.
-TEST(VisualFactorsTest, TriangulateLandmarksDropsIneligibleTracks)
+// The export needs only triangulable geometry, not cross-submap
+// co-visibility: single-submap tracks become landmarks too (a factor over
+// one key would constrain nothing, but a track with parallax is valid
+// geometry — most real-world tracks never cross a submap boundary). A moved
+// landmark still fails triangulation and is dropped.
+TEST(VisualFactorsTest, TriangulateLandmarksKeepsSingleSubmapTracks)
 {
   const Scene full = make_scene(wall_landmarks(), wall_landmarks(), false);
   const visual::Params params;
@@ -595,7 +597,8 @@ TEST(VisualFactorsTest, TriangulateLandmarksDropsIneligibleTracks)
     }
   }
   ASSERT_EQ(only_a.size(), 60u);  // 20 landmarks x 3 frames of submap A
-  EXPECT_TRUE(visual::triangulate_landmarks(only_a, full.t_lidar_cams, full.views, params).empty());
+  EXPECT_EQ(
+    visual::triangulate_landmarks(only_a, full.t_lidar_cams, full.views, params).size(), 20u);
 
   auto moved = wall_landmarks();
   moved.front().y() += 0.5;  // the tracked object slid sideways

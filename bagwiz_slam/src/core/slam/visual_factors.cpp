@@ -434,9 +434,11 @@ std::vector<Landmark> triangulate_landmarks(
   for (const TrackKey & key : keys) {
     const std::vector<TrackObs> track =
       associate(subsample(groups.at(key), params.max_obs_per_track), t_lidar_cams, submaps);
-    // Same selection as factor construction: a track qualifies only with
-    // enough parallax (>= 2 submaps) and enough observations to triangulate.
-    if (distinct_views(track) < 2 || track.size() < kMinObservations) {
+    // Map-export selection: enough observations to triangulate. The
+    // two-submap rule from factor construction (a one-key factor constrains
+    // nothing) does NOT apply here — a single-submap track with parallax is
+    // valid geometry for the map.
+    if (track.size() < kMinObservations) {
       continue;
     }
     const gtsam::TriangulationResult point =
