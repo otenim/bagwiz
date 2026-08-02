@@ -34,6 +34,7 @@ using bagwiz::commands::build_mapper_config;
 using bagwiz::commands::MapSlamArgs;
 using bagwiz::commands::remove_isolated_map_points;
 using bagwiz::commands::resolve_scan_progress;
+using bagwiz::commands::validate_mode_flags;
 using bagwiz::commands::write_map_outputs;
 using bagwiz::core::TrajectoryPose;
 
@@ -453,6 +454,124 @@ TEST(RemoveIsolatedMapPoints, EmptyMapIsANoOp)
   bagwiz::core::slam::CloudMap map;
   EXPECT_EQ(remove_isolated_map_points(map, 0.5, 3, 1), 0U);
   EXPECT_TRUE(map.points.empty());
+}
+
+// ---------------------------------------------------------------------------
+// validate_mode_flags: the mode-level flag combinations. --pcd is optional
+// since camera-only mode (issue #376 Phase 3); an empty cloud_topic with
+// --cam set is the camera-only combination, which --imu must drive.
+// ---------------------------------------------------------------------------
+
+TEST(ValidateModeFlags, LidarRunIsValid)
+{
+  const auto args = make_args();
+  EXPECT_TRUE(validate_mode_flags(args).empty());
+}
+
+// LiDAR + --cam without --imu is the Phase 2 combination (visual constraints
+// only) and stays valid.
+TEST(ValidateModeFlags, LidarPlusCamWithoutImuIsValid)
+{
+  auto args = make_args();
+  args.imu_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  EXPECT_TRUE(validate_mode_flags(args).empty());
+}
+
+TEST(ValidateModeFlags, NeitherPcdNorCamIsAnError)
+{
+  auto args = make_args();
+  args.cloud_topic.clear();
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("--pcd"), std::string::npos) << error;
+  EXPECT_NE(error.find("--cam"), std::string::npos) << error;
+}
+
+// Monocular + IMU is standard VIO and must be accepted.
+TEST(ValidateModeFlags, CameraOnlyWithImuIsValidIncludingMonocular)
+{
+  auto args = make_args();
+  args.cloud_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  args.remove_dynamic = false;  // make_args turns this LiDAR-map feature on
+  EXPECT_TRUE(validate_mode_flags(args).empty());
+}
+
+TEST(ValidateModeFlags, CameraOnlyWithoutImuIsAnError)
+{
+  auto args = make_args();
+  args.cloud_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  args.imu_topic.clear();
+  args.remove_dynamic = false;
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("requires --imu"), std::string::npos) << error;
+}
+
+TEST(ValidateModeFlags, ColorWithoutPcdIsAnError)
+{
+  auto args = make_args();
+  args.cloud_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  args.color_topics = {"/cam1/image_raw"};
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("--color requires --pcd"), std::string::npos) << error;
+}
+
+TEST(ValidateModeFlags, CameraOnlyRejectsForcedCuda)
+{
+  auto args = make_args();
+  args.cloud_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  args.remove_dynamic = false;
+  args.backend = "cuda";
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("--backend cuda"), std::string::npos) << error;
+}
+
+TEST(ValidateModeFlags, CameraOnlyRejectsLidarMapPostProcessors)
+{
+  auto dynamic_args = make_args();  // make_args sets remove_dynamic = true
+  dynamic_args.cloud_topic.clear();
+  dynamic_args.cam_topics = {"/cam0/image_raw"};
+  const std::string dynamic_error = validate_mode_flags(dynamic_args);
+  EXPECT_NE(dynamic_error.find("--remove-dynamic"), std::string::npos) << dynamic_error;
+
+  auto outlier_args = make_args();
+  outlier_args.cloud_topic.clear();
+  outlier_args.cam_topics = {"/cam0/image_raw"};
+  outlier_args.remove_dynamic = false;
+  outlier_args.remove_outliers = true;
+  const std::string outlier_error = validate_mode_flags(outlier_args);
+  EXPECT_NE(outlier_error.find("--remove-outliers"), std::string::npos) << outlier_error;
+}
+
+// No --pcd selects the mapper's camera-only mode; a set --pcd keeps it off.
+TEST(BuildMapperConfig, CloudTopicEmptinessSelectsCameraOnly)
+{
+  auto camera_only_args = make_args();
+  camera_only_args.cloud_topic.clear();
+  camera_only_args.cam_topics = {"/cam0/image_raw"};
+  const auto camera_only_config =
+    build_mapper_config(camera_only_args, std::nullopt, false, {0.0, 0.0, 0.0}, {});
+  EXPECT_TRUE(camera_only_config.camera_only);
+
+  const auto lidar_config = build_mapper_config(make_args(), std::nullopt, false, {0, 0, 0}, {});
+  EXPECT_FALSE(lidar_config.camera_only);
+}
+
+// Camera-only mode streams no cloud topic: the bar's denominator is the IMU +
+// GNSS + --cam counts only.
+TEST(ResolveScanProgress, CameraOnlyCountsImuAndCamerasWithoutTheCloudTopic)
+{
+  const EnvVarGuard no_color("NO_COLOR", std::nullopt);
+  auto args = make_args();
+  args.cloud_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  CountsReader reader({{"/points", 1000}, {"/imu", 90}, {"/fix", 5}, {"/cam0/image_raw", 40}});
+  const auto setup = resolve_scan_progress(reader, args, true, kLogger);
+  EXPECT_TRUE(setup.enabled);
+  EXPECT_EQ(setup.total_msgs, 135);  // /points is not streamed in camera-only mode
 }
 
 }  // namespace

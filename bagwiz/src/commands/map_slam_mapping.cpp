@@ -41,6 +41,40 @@ std::string imu_suffix(const MapSlamArgs & args, std::int64_t imu_count)
 
 }  // namespace
 
+std::string validate_mode_flags(const MapSlamArgs & args)
+{
+  const bool camera_only = args.cloud_topic.empty();
+  if (camera_only && args.cam_topics.empty()) {
+    return "either --pcd (LiDAR SLAM) or --cam (camera-only visual-inertial SLAM) is required";
+  }
+  if (!camera_only) {
+    return "";  // LiDAR mode: every camera/feature flag keeps its existing meaning
+  }
+  if (!args.color_topics.empty()) {
+    return "--color requires --pcd (colorization needs the LiDAR map and its "
+           "dynamic-occluder oracle); the camera-only map is rgb-colored from its own "
+           "track observations instead";
+  }
+  if (args.imu_topic.empty()) {
+    return "camera-only mode (--cam without --pcd) requires --imu: the odometry is "
+           "visual-INERTIAL — gravity alignment and the asynchronous-camera folding both "
+           "integrate the IMU stream";
+  }
+  if (args.backend == "cuda") {
+    return "camera-only mode (--cam without --pcd) does not support --backend cuda: the "
+           "visual-inertial odometry is CPU-only (use --backend auto/cpu)";
+  }
+  if (args.remove_dynamic) {
+    return "--remove-dynamic requires --pcd (it ray-casts the LiDAR scans); the "
+           "camera-only map is a sparse landmark set with no scan ghosts to remove";
+  }
+  if (args.remove_outliers) {
+    return "--remove-outliers requires --pcd (a dense-map neighborhood filter); it would "
+           "decimate the camera-only sparse landmark map";
+  }
+  return "";
+}
+
 core::slam::CloudMapperConfig build_mapper_config(
   const MapSlamArgs & args, const std::optional<core::slam::SensorTransform> & t_lidar_imu,
   bool use_gpu, const std::array<double, 3> & gnss_antenna_offset,
@@ -67,6 +101,11 @@ core::slam::CloudMapperConfig build_mapper_config(
   config.fill_end = args.fill_end;
   config.gnss_antenna_offset = gnss_antenna_offset;
   config.visual_cameras.assign(visual_cameras.begin(), visual_cameras.end());
+  // No --pcd == camera-only visual-inertial SLAM (issue #376 Phase 3): the
+  // mapper swaps its odometry layer for the visual-inertial estimator and
+  // exports a sparse landmark map. validate_mode_flags (called first by
+  // run_map_slam) guarantees --cam and --imu are set in this mode.
+  config.camera_only = args.cloud_topic.empty();
   return config;
 }
 
@@ -81,7 +120,12 @@ ScanProgressSetup resolve_scan_progress(
   setup.enabled = core::slam::progress_enabled(
     stderr_is_tty, std::getenv("NO_COLOR") != nullptr, args.no_progress);
   if (setup.enabled) {
-    std::vector<std::string> progress_topics{args.cloud_topic};
+    // The read loop streams the cloud topic in LiDAR modes; camera-only mode
+    // (--cam without --pcd) streams IMU + cameras only.
+    std::vector<std::string> progress_topics;
+    if (!args.cloud_topic.empty()) {
+      progress_topics.push_back(args.cloud_topic);
+    }
     if (!args.imu_topic.empty()) {
       progress_topics.push_back(args.imu_topic);
     }
@@ -221,14 +265,36 @@ void log_mapping_summary(
   const std::filesystem::path & trajectory_path, const std::filesystem::path & map_path,
   const char * logger)
 {
-  BAGWIZ_LOG_INFO(
-    logger,
-    "Wrote %zu optimized trajectory poses and a %zu-point map from %zu scans%s (%zu skipped) "
-    "to %s and %s",
-    map.trajectory.size(), map.points.size(), scans, imu_suffix(args, imu_count).c_str(), skipped,
-    trajectory_path.string().c_str(), map_path.string().c_str());
+  if (args.cloud_topic.empty()) {
+    // Camera-only mode: the "scans" are the visual-inertial odometry's
+    // keyframes, and the map is the sparse landmark set.
+    BAGWIZ_LOG_INFO(
+      logger,
+      "Wrote %zu optimized trajectory poses and a %zu-landmark sparse map from %" PRId64
+      " visual keyframe(s)%s to %s and %s",
+      map.trajectory.size(), map.points.size(), map.visual_odom_keyframe_count,
+      imu_suffix(args, imu_count).c_str(), trajectory_path.string().c_str(),
+      map_path.string().c_str());
+    if (map.visual_dropped_observation_count > 0) {
+      BAGWIZ_LOG_WARN(
+        logger,
+        "%" PRId64
+        " visual observation(s) were dropped by the cross-camera grouping (uncovered "
+        "windows or a silent camera); check the --cam topics' frame rates",
+        map.visual_dropped_observation_count);
+    }
+  } else {
+    BAGWIZ_LOG_INFO(
+      logger,
+      "Wrote %zu optimized trajectory poses and a %zu-point map from %zu scans%s (%zu skipped) "
+      "to %s and %s",
+      map.trajectory.size(), map.points.size(), scans, imu_suffix(args, imu_count).c_str(), skipped,
+      trajectory_path.string().c_str(), map_path.string().c_str());
+  }
 
-  if (args.fill_start) {
+  // The endpoint fills scan-match LiDAR window scans; they are force-disabled
+  // in camera-only mode, so only report them in LiDAR modes.
+  if (args.fill_start && !args.cloud_topic.empty()) {
     if (map.filled_start_pose_count > 0) {
       BAGWIZ_LOG_INFO(
         logger, "Filled %zu initialization-window pose(s) by scan-matching",
@@ -246,7 +312,7 @@ void log_mapping_summary(
     }
   }
 
-  if (args.fill_end) {
+  if (args.fill_end && !args.cloud_topic.empty()) {
     if (map.filled_end_pose_count > 0) {
       BAGWIZ_LOG_INFO(
         logger, "Filled %zu cooldown-window pose(s) by scan-matching", map.filled_end_pose_count);

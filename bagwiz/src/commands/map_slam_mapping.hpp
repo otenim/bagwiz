@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string>
 
 // Internals of `map slam`'s mapping run, split out of map_slam.cpp so the
 // config fill, the progress setup, the output writing, and the run summary
@@ -28,6 +29,25 @@
 // lives with the command sources and is not installed.
 namespace bagwiz::commands
 {
+
+// Validate the mode-level flag combinations the per-option CLI checks cannot
+// express: --pcd is optional since camera-only mode (issue #376 Phase 3), but
+// exactly one of the LiDAR or camera input modes must be fully specified.
+// Returns the first violation found as a human-readable message, or an empty
+// string when the combination is valid. Pure over MapSlamArgs (no bag access)
+// so it can be unit-tested directly; run_map_slam calls it before any bag
+// work. Rules (--pcd absent == camera-only mode, which --cam must drive):
+//   - neither --pcd nor --cam: no SLAM input at all;
+//   - --color without --pcd: colorization needs the LiDAR map and its
+//     dynamic-occluder oracle;
+//   - camera-only without --imu: the odometry is visual-INERTIAL (gravity
+//     alignment and the async-rig folding both need the IMU);
+//   - camera-only with --backend cuda: the visual-inertial odometry is
+//     CPU-only;
+//   - camera-only with --remove-dynamic / --remove-outliers: both are
+//     LiDAR-map post-processors (ray-cast scans / dense-neighborhood filter)
+//     and meaningless on a sparse landmark map.
+[[nodiscard]] std::string validate_mode_flags(const MapSlamArgs & args);
 
 // Fill the CloudMapperConfig from the parsed CLI arguments.
 // `gnss_antenna_offset` is the antenna lever-arm (T_cloud_gnss.translation)
