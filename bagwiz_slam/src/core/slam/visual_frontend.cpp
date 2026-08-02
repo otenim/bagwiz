@@ -42,6 +42,9 @@ std::int64_t ns_since(Clock::time_point start)
   return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
 }
 
+const cv::Size kKltWindow(21, 21);
+constexpr int kKltMaxLevel = 3;
+
 }  // namespace
 
 struct VisualFrontend::Impl
@@ -74,9 +77,11 @@ struct VisualFrontend::Impl
   std::uint32_t effective_width = 0;
   std::uint32_t effective_height = 0;
 
-  // Previous frame, downscaled to config.tracking_width, kept for the KLT
-  // optical-flow step.
-  cv::Mat prev_gray;
+  // Previous frame's optical-flow pyramid (buildOpticalFlowPyramid output at
+  // kKltWindow/kKltMaxLevel), kept so each frame builds its own pyramid exactly
+  // once: calcOpticalFlowPyrLK otherwise rebuilds both pyramids internally on
+  // every call — four builds per frame for the forward + backward pair.
+  std::vector<cv::Mat> prev_pyramid;
 
   // Downscale factor applied to reach config.tracking_width:
   // scale = width / tracking_width. Recomputed every call in case the
@@ -139,11 +144,15 @@ std::vector<VisualObservation> VisualFrontend::Impl::track(
   cv::Mat resized;
   t = Clock::now();
   cv::resize(gray, resized, cv::Size(tracking_width, tracking_height), 0, 0, cv::INTER_AREA);
+  std::vector<cv::Mat> cur_pyramid;
+  // Build pyramid once per frame for reuse in forward and backward flow calls;
+  // pyramid construction cost is folded into resize_ns.
+  cv::buildOpticalFlowPyramid(resized, cur_pyramid, kKltWindow, kKltMaxLevel);
   stats.resize_ns += ns_since(t);
 
   // The very first frame this instance ever sees has no prior frame to flow
   // from, so it only seeds the detector below and reports no observations.
-  const bool have_prev_frame = !prev_gray.empty();
+  const bool have_prev_frame = !prev_pyramid.empty();
 
   if (have_prev_frame && !tracks.empty()) {
     std::vector<cv::Point2f> prev_pts;
@@ -157,10 +166,10 @@ std::vector<VisualObservation> VisualFrontend::Impl::track(
     std::vector<float> err;
     t = Clock::now();
     cv::calcOpticalFlowPyrLK(
-      prev_gray, resized, prev_pts, next_pts, status, err, cv::Size(21, 21), 3);
+      prev_pyramid, cur_pyramid, prev_pts, next_pts, status, err, kKltWindow, kKltMaxLevel);
     stats.klt_forward_ns += ns_since(t);
 
-    // Forward-backward check: flow next_pts back into prev_gray and drop any
+    // Forward-backward check: flow next_pts back into prev_pyramid and drop any
     // track whose round trip misses its origin by more than the configured
     // tolerance, along with anything OpenCV itself marked lost or that left
     // the tracking-scale frame.
@@ -169,7 +178,8 @@ std::vector<VisualObservation> VisualFrontend::Impl::track(
     std::vector<float> back_err;
     t = Clock::now();
     cv::calcOpticalFlowPyrLK(
-      resized, prev_gray, next_pts, back_pts, back_status, back_err, cv::Size(21, 21), 3);
+      cur_pyramid, prev_pyramid, next_pts, back_pts, back_status, back_err, kKltWindow,
+      kKltMaxLevel);
     stats.klt_backward_ns += ns_since(t);
 
     std::vector<Track> surviving;
@@ -192,7 +202,7 @@ std::vector<VisualObservation> VisualFrontend::Impl::track(
     tracks = std::move(surviving);
   }
   // Otherwise there is nothing to flow: either this is the first frame ever
-  // (prev_gray empty) or every prior track was already lost (tracks empty),
+  // (prev_pyramid empty) or every prior track was already lost (tracks empty),
   // and in both cases `tracks` is already the empty table detection tops up
   // below.
 
@@ -258,7 +268,7 @@ std::vector<VisualObservation> VisualFrontend::Impl::track(
     stats.emit_ns += ns_since(t);
   }
 
-  prev_gray = std::move(resized);
+  prev_pyramid = std::move(cur_pyramid);
   return observations;
 }
 

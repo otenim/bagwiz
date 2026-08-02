@@ -558,4 +558,40 @@ TEST(VisualFrontend, StatsIgnoreRejectedFrames)
   EXPECT_EQ(fe.stats().frames, 0);
 }
 
+TEST(VisualFrontend, RepeatedRunsAreIdentical)
+{
+  std::vector<std::array<int, 2>> centers;
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 4; ++col) {
+      centers.push_back({100 + col * 120, 100 + row * 120});
+    }
+  }
+  std::vector<std::array<int, 2>> shifted;
+  for (const auto & c : centers) shifted.push_back({c[0] + 8, c[1] + 3});
+  const auto frame1 = render_dots(640, 480, centers);
+  const auto frame2 = render_dots(640, 480, shifted);
+
+  const auto run = [&] {
+    slam::VisualFrontendConfig cfg;
+    cfg.camera = make_pinhole();
+    cfg.tracking_width = 640;
+    slam::VisualFrontend fe(cfg);
+    std::vector<slam::VisualObservation> all;
+    for (const auto obs :
+         {fe.track(0, frame1, 640, 480), fe.track(1, frame1, 640, 480),
+          fe.track(2, frame2, 640, 480)}) {
+      all.insert(all.end(), obs.begin(), obs.end());
+    }
+    return all;
+  };
+  const auto a = run();
+  const auto b = run();
+  ASSERT_EQ(a.size(), b.size());
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    EXPECT_EQ(a[i].track_id, b[i].track_id);
+    EXPECT_EQ(a[i].x, b[i].x);  // exact: same code on same input
+    EXPECT_EQ(a[i].y, b[i].y);
+  }
+}
+
 }  // namespace
