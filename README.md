@@ -35,6 +35,10 @@ install needed.
    environment is Jazzy, so `pixi run build-core` is equivalent to
    `pixi run -e jazzy build-core`.
 
+   Builds compile through ccache and Ninja (both provided by the pixi
+   environment), so repeated builds — including the first build in a fresh git
+   worktree — reuse previously compiled objects.
+
 3. Install a `bagwiz` launcher on your `PATH` so you can run it from anywhere:
 
    ```bash

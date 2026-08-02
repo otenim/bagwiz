@@ -212,6 +212,12 @@ govern source code or CLI behavior.
 - Prefer the `pixi run` tasks over ad-hoc `colcon build` invocations when
   verifying changes, unless you are reproducing a CI or tooling issue that
   requires a different command line. The task definitions live in `pixi.toml`.
+- Builds compile through ccache and the Ninja generator, both pixi-provided and
+  wired up by `scripts/bagwiz-build.sh` (CMAKE\_\*\_COMPILER_LAUNCHER and
+  CMAKE_GENERATOR; build-glim-deps.sh repeats the launcher exports for
+  standalone runs). ccache reuses objects across rebuilds, distros and git
+  worktrees (CCACHE_NOHASHDIR=1), and CI restores the same cache; a build dir
+  configured with a different generator is wiped and reconfigured automatically.
 
 ### 2. bagwiz CLI
 

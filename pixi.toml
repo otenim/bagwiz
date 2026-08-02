@@ -34,8 +34,13 @@ platforms = ["linux-64"]
 # ---------------------------------------------------------------------------
 [dependencies]
 cmake = ">=3.27,<4"            # ament_cmake breaks under CMake 4; keep it pinned <4
-ninja = "*"
+ninja = "*"                    # colcon builds use the Ninja generator (scripts/bagwiz-build.sh exports CMAKE_GENERATOR)
 make = "*"
+# ccache is the compiler launcher for every bagwiz build: scripts/bagwiz-build.sh
+# and scripts/build-glim-deps.sh export CMAKE_{C,CXX,CUDA}_COMPILER_LAUNCHER=ccache
+# when it is on PATH, so colcon and the GLIM deps reuse compiled objects across
+# rebuilds, distros and worktrees (CCACHE_NOHASHDIR=1). CI restores the same cache.
+ccache = "*"
 c-compiler = "*"              # conda-forge gcc; sets CC on activation
 cxx-compiler = "*"            # conda-forge g++; sets CXX on activation
 pkg-config = "*"

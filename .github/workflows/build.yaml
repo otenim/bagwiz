@@ -13,6 +13,12 @@ jobs:
       matrix:
         distro: [humble, jazzy]
     runs-on: ubuntu-latest
+    env:
+      # ccache (a pixi dependency) wraps every compile in the colcon and GLIM
+      # deps builds via CMAKE_*_COMPILER_LAUNCHER (see scripts/bagwiz-build.sh).
+      # Keep the cache inside the workspace so actions/cache can restore it.
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_MAXSIZE: 2G
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,8 +44,23 @@ jobs:
           path: install/${{ matrix.distro }}/glim-deps
           key: glim-deps-${{ matrix.distro }}-${{ hashFiles('scripts/build-glim-deps.sh') }}
 
+      # ccache carries the compiled objects for everything outside the GLIM
+      # prefix (and for the GLIM stack itself when its cache above misses), so
+      # a PR only recompiles the TUs it touches. A run-scoped key saves each
+      # run's updated cache; the restore key falls back to the most recent
+      # entry for this distro, including entries saved on the base branch.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .cache/ccache
+          key: ccache-${{ matrix.distro }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ccache-${{ matrix.distro }}-
+
       - name: Build
-        run: pixi run -e ${{ matrix.distro }} build-full
+        run: |
+          pixi run -e ${{ matrix.distro }} ccache --zero-stats
+          pixi run -e ${{ matrix.distro }} build-full
+          pixi run -e ${{ matrix.distro }} ccache --show-stats
 
       - name: Test
         run: pixi run -e ${{ matrix.distro }} test-full
