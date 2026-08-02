@@ -202,6 +202,16 @@ glim::SubMappingParams make_sub_mapping_params(
     params.keyframe_update_min_points = 0;
     params.between_registration_type = "NONE";
     params.registration_error_factor_type = "NONE";
+    // Keep the full keyframe clouds. GLIM's default 0.1 random sampling is
+    // sized for dense LiDAR frames; against sparse landmark clouds it can
+    // truncate a small cloud to ZERO points (N * 0.1 rounds down), and such a
+    // keyframe carries no covariances — the merged submap cloud then drops
+    // them too (gtsam_points keeps covs only when every merged frame has
+    // them) and segfaults the unconditional covariance read in
+    // GaussianVoxel::add when GlobalMapping voxelizes the submap. Every
+    // consumer of the subsampling (registration factors, overlap estimation)
+    // is suppressed in this mode anyway, so sampling buys nothing here.
+    params.keyframe_randomsampling_rate = 1.0;
     return params;
   }
   if (use_gpu) {
