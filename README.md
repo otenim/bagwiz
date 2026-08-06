@@ -96,6 +96,14 @@ finds the `msg/*.msg` definitions and can dlopen() the introspection typesupport
 at runtime without a rebuild. Build overlays against the same distro so their
 libraries stay ABI compatible with bagwiz.
 
+This works through the installed `bagwiz` launcher as well: it re-reads your
+`AMENT_PREFIX_PATH` on every invocation, layering the pixi environment's own
+prefixes in front of yours so it keeps priority on package-name collisions.
+The one invocation path where a sourced overlay does not survive is
+`pixi run -e <distro> run -- ...`, because pixi's own activation rebuilds
+`AMENT_PREFIX_PATH` before bagwiz starts — there, enter
+`pixi shell -e <distro>` first and source the overlay inside that shell.
+
 ## Subcommands
 
 `bagwiz` is a single executable that dispatches to one subcommand per

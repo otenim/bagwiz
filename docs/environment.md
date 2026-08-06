@@ -71,6 +71,13 @@ source /path/to/my_msgs_ws/install/setup.bash   # sets both variables
 bagwiz walk my.mcap /topic
 ```
 
+Sourcing the overlay works through the installed `bagwiz` launcher (its
+cached environment layers your live `AMENT_PREFIX_PATH` behind the pixi
+environment's prefixes) and inside `pixi shell` when done after entering the
+shell. It does not work through `pixi run -e <distro> run -- ...`: pixi's
+activation rebuilds `AMENT_PREFIX_PATH` before bagwiz starts, discarding the
+caller's value.
+
 ## Launcher and install
 
 Read by the wrapper, installer, and build **shell scripts**, not by the `bagwiz`
