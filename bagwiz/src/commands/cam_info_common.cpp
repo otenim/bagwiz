@@ -225,8 +225,9 @@ core::pipeline::Emit CameraInfoProcessor::route(const std::string & in_topic) co
 }
 
 core::pipeline::TransformAction CameraInfoProcessor::transform(
-  const std::string & in_topic, std::span<const std::byte> in, std::vector<std::byte> & out) const
+  const io::RawMessage & msg, std::vector<std::byte> & out) const
 {
+  const std::string & in_topic = msg.topic->name;
   if (targets_.find(in_topic) == targets_.end()) {
     return core::pipeline::TransformAction::kPassthrough;
   }
@@ -234,9 +235,9 @@ core::pipeline::TransformAction CameraInfoProcessor::transform(
   // The deserialize -> mutate -> serialize round-trip preserves every field
   // mutate() does not touch (header, binning, roi, and the calibration fields
   // the command leaves alone).
-  sensor_msgs::msg::CameraInfo msg = deserialize_camera_info(in, typesupport_, in_topic);
-  mutate(in_topic, msg);
-  out = serialize_camera_info(msg);
+  sensor_msgs::msg::CameraInfo typed = deserialize_camera_info(msg.payload, typesupport_, in_topic);
+  mutate(in_topic, typed);
+  out = serialize_camera_info(typed);
 
   ++rewritten_.at(in_topic);
   return core::pipeline::TransformAction::kWrite;

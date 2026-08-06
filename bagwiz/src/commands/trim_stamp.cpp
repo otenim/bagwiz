@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -86,6 +87,36 @@ std::optional<std::int64_t> read_leading_header_stamp_ns(std::span<const std::by
   const auto sec = static_cast<std::int32_t>(u32_at(4));
   const std::uint32_t nanosec = u32_at(8);
   return static_cast<std::int64_t>(sec) * 1'000'000'000LL + nanosec;
+}
+
+bool write_leading_header_stamp_ns(std::span<std::byte> payload, std::int64_t stamp_ns)
+{
+  // Same layout as read_leading_header_stamp_ns: 4-byte CDR encapsulation
+  // (byte 1's LSB: 1 = little endian), then int32 sec + uint32 nanosec at
+  // offsets 4 and 8.
+  constexpr std::size_t kStampEnd = 12;
+  if (payload.size() < kStampEnd) {
+    return false;
+  }
+  // builtin_interfaces/Time holds int32 sec + uint32 nanosec; a negative
+  // receive time or one whose seconds overflow int32 cannot be represented.
+  constexpr std::int64_t kMaxRepresentableNs =
+    std::int64_t{std::numeric_limits<std::int32_t>::max()} * 1'000'000'000LL + 999'999'999LL;
+  if (stamp_ns < 0 || stamp_ns > kMaxRepresentableNs) {
+    return false;
+  }
+  const auto sec = static_cast<std::uint32_t>(stamp_ns / 1'000'000'000LL);
+  const auto nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
+  const bool little_endian = (static_cast<unsigned char>(payload[1]) & 0x01U) != 0;
+  const auto put_u32 = [&](std::size_t off, std::uint32_t v) {
+    for (std::size_t i = 0; i < 4; ++i) {
+      const auto shift = little_endian ? 8 * i : 8 * (3 - i);
+      payload[off + i] = static_cast<std::byte>((v >> shift) & 0xFFU);
+    }
+  };
+  put_u32(4, sec);
+  put_u32(8, nanosec);
+  return true;
 }
 
 HeaderedTopics classify_headered_topics(std::span<const io::TopicInfo> topics)

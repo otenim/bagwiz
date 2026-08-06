@@ -187,6 +187,8 @@ add_executable(bagwiz
   src/commands/topic_drop.cpp
   src/commands/topic_keep.cpp
   src/commands/topic_rename.cpp
+  src/commands/stamp.cpp
+  src/commands/stamp_sync.cpp
   src/commands/trim.cpp
   src/commands/trim_stamp.cpp
 )
@@ -426,6 +428,17 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_trim_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_trim_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
+
+  # trim_stamp.hpp (the shared header.stamp helpers `stamp sync` patches
+  # through) is CLI-internal, so the test adds src/commands to its include
+  # path (traj_common idiom).
+  ament_add_gtest(bagwiz_stamp_sync_test
+    test/commands/stamp_sync_test.cpp
+    src/commands/stamp_sync.cpp
+    src/commands/trim_stamp.cpp)
+  target_include_directories(bagwiz_stamp_sync_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_stamp_sync_test ${bagwiz_test_libs} fmt::fmt)
 
   ament_add_gtest(bagwiz_cam_info_recompute_p_test
     test/commands/cam_info_recompute_p_test.cpp

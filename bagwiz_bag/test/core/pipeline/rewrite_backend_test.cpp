@@ -83,9 +83,8 @@ protected:
     tmp_dir_ = std::filesystem::temp_directory_path() /
                ("bagwiz_rewrite_backend_" +
                 std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + "_" +
-                std::to_string(
-                  reinterpret_cast<std::uintptr_t>(
-                    this)));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+                std::to_string(reinterpret_cast<std::uintptr_t>(
+                  this)));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
     std::filesystem::create_directories(tmp_dir_);
   }
 
@@ -182,6 +181,69 @@ TEST_F(RewriteBackendTest, SequentialRenameRewritesName)
   EXPECT_EQ(foo, 0);
   EXPECT_EQ(renamed_count, 2);
   EXPECT_EQ(bar, 1);
+}
+
+namespace
+{
+
+// Replaces every payload with the message's receive time (little-endian
+// int64): pins that transform() sees the full RawMessage, receive time
+// included — the seam `stamp sync` depends on.
+class StampingProcessor : public pipeline::Processor
+{
+public:
+  [[nodiscard]] pipeline::Emit route(const std::string & in_topic) const override
+  {
+    return pipeline::Emit{true, in_topic};
+  }
+  [[nodiscard]] bool transforms() const override { return true; }
+  [[nodiscard]] pipeline::TransformAction transform(
+    const bagwiz::io::RawMessage & msg, std::vector<std::byte> & out) const override
+  {
+    const auto ts = static_cast<std::uint64_t>(msg.timestamp_ns);
+    out.resize(sizeof(ts));
+    for (std::size_t i = 0; i < sizeof(ts); ++i) {
+      out[i] = static_cast<std::byte>((ts >> (8 * i)) & 0xFFU);
+    }
+    return pipeline::TransformAction::kWrite;
+  }
+};
+
+}  // namespace
+
+TEST_F(RewriteBackendTest, TransformSeesReceiveTime)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto out_path = tmp_dir_ / "output";
+
+  auto reader = bagwiz::io::open_read(in_path);
+  auto writer = bagwiz::io::open_write(out_path, mcap_dir_opts());
+  for (const auto & t : reader->topics()) {
+    writer->declare_topic(t);
+  }
+
+  StampingProcessor proc;
+  pipeline::SequentialBackend backend;
+  const auto counts = pipeline::run_pipeline(*reader, *writer, proc, backend, "");
+  writer->close();
+
+  EXPECT_EQ(counts.copied, 3U);
+  EXPECT_EQ(counts.transformed, 3U);
+
+  // Every output payload decodes back to its own message's receive time.
+  auto verify = bagwiz::io::open_read(out_path);
+  bagwiz::io::RawMessage raw;
+  int seen = 0;
+  while (verify->next(raw)) {
+    ASSERT_EQ(raw.payload.size(), 8U);
+    std::uint64_t ts = 0;
+    for (std::size_t i = 0; i < 8; ++i) {
+      ts |= static_cast<std::uint64_t>(static_cast<unsigned char>(raw.payload[i])) << (8 * i);
+    }
+    EXPECT_EQ(static_cast<std::int64_t>(ts), raw.timestamp_ns);
+    ++seen;
+  }
+  EXPECT_EQ(seen, 3);
 }
 
 TEST_F(RewriteBackendTest, SequentialPassthroughIsByteIdentical)

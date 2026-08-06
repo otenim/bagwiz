@@ -949,6 +949,32 @@ std::vector<std::string> complete_topic(const CompletionRequest & request)
   return {};
 }
 
+// `stamp` is a command group with one action verb, `sync`. At the action slot
+// (word 1) the sole candidate is `sync`; past it we surface `sync`'s own flags
+// for any `-` word. The `-i`/`-o` values are bag paths, so they carry no bagwiz
+// candidates and fall through to the shell's own file completion.
+//
+//   sync: `stamp`(0) `sync`(1) -i|--input <bag> [-o <out>] [-w|--overwrite]
+std::vector<std::string> complete_stamp(const CompletionRequest & request)
+{
+  const auto current = current_word(request);
+  if (request.cursor_word == kFirstCommandArgWord) {
+    if (current.starts_with("-")) {
+      return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
+    }
+    return matching({"sync"}, current);
+  }
+
+  if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
+    const auto & verb = request.words[kFirstCommandArgWord];
+    if (verb == "sync") {
+      return matching(with_help({"--input", "--output", "--overwrite", "-i", "-o", "-w"}), current);
+    }
+    return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
+  }
+  return {};
+}
+
 // `generate` is a command group for producing media from a rosbag; its sole
 // subcommand is `video`. At the subcommand slot (word 1) the only candidate is
 // `video`. The image topic is completed earlier by try_topic_completion via
@@ -1504,6 +1530,9 @@ std::vector<std::string> complete_request(const CompletionRequest & request)
   }
   if (command == "topic") {
     return complete_topic(request);
+  }
+  if (command == "stamp") {
+    return complete_stamp(request);
   }
   if (command == "generate") {
     return complete_generate(request);
