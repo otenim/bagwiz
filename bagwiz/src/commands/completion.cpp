@@ -70,6 +70,19 @@ constexpr std::array<std::string_view, 4> kTrajDumpSupportedTypes{{
 // `tf tree` renders only tf2_msgs/msg/TFMessage topics.
 constexpr std::array<std::string_view, 1> kTfTreeSupportedTypes{{kTfMessageType}};
 
+// Pose topic types `pcd undistort --pose` accepts. This MUST mirror
+// is_supported_pose_topic_type() in src/commands/pcd_undistort_common.cpp
+// (which validate_undistort_topics enforces); keep the two in sync. The set
+// happens to equal kTrajDumpSupportedTypes today, but the two commands gate on
+// separate validators and can drift independently. A topic typed as anything
+// outside this set is rejected by the command, so completion never offers it.
+constexpr std::array<std::string_view, 4> kUndistortPoseTopicTypes{{
+  kTfMessageType,
+  "geometry_msgs/msg/PoseStamped",
+  "geometry_msgs/msg/PoseWithCovarianceStamped",
+  "nav_msgs/msg/Odometry",
+}};
+
 // Image topic types the shared to_packed_raster() decoder accepts —
 // `generate video` rendering, `walk`'s image preview, and `map slam`'s
 // `--color` / `--cam` cameras all gate on it. This MUST mirror
@@ -1331,12 +1344,13 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 //           [--stamp-offset <t=v>...]... [-o <out>] [--drop-inputs] [--force]
 //           [-j|--threads <N>] [-w|--overwrite]
 //
-// For `undistort`, `--pose` names a topic (accepted types are TFMessage /
-// Odometry / PoseStamped / PoseWithCovarianceStamped) with nothing to suggest.
-// `--pcd` is variadic and completes PointCloud2 topics from the input bag,
-// mirroring concat's `--pcd`. `--ref`/`--of` complete the bag's TF frame ids,
-// mirroring `traj dump`/`join`. `-o`/`--output` takes a path and `-j`/`--threads`
-// takes a count, so they get no value completion.
+// For `undistort`, `--pose` names a pose topic and completes the bag's
+// TFMessage / Odometry / PoseStamped / PoseWithCovarianceStamped topics — the
+// accepted set validate_undistort_topics enforces, mirroring `traj dump`'s
+// topic slot. `--pcd` is variadic and completes PointCloud2 topics from the
+// input bag, mirroring concat's `--pcd`. `--ref`/`--of` complete the bag's TF
+// frame ids, mirroring `traj dump`/`join`. `-o`/`--output` takes a path and
+// `-j`/`--threads` takes a count, so they get no value completion.
 //
 //   undistort: `pcd`(0) `undistort`(1) -i|--input <bag> --pose <topic>
 //              --pcd <t...> [--ref <frame>] [--of <frame>] [-o <out>]
@@ -1427,7 +1441,9 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
   }
 
   // undistort's --of/--ref complete the bag's TF frame ids, mirroring
-  // `traj dump`/`join`.
+  // `traj dump`/`join`. --pose completes the bag's pose topics (the four
+  // types the command accepts); it is single-valued, so only the word
+  // immediately after the flag is a topic slot.
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
     if (previous == "--of" || previous == "--ref") {
@@ -1436,6 +1452,13 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
         return {};
       }
       return complete_frame_id_value(*bag_arg, current);
+    }
+    if (previous == "--pose") {
+      const auto bag_arg = find_flag_value(request, kInputFlags);
+      if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+        return {};
+      }
+      return complete_topics(expand_current_user_home(*bag_arg), current, kUndistortPoseTopicTypes);
     }
   }
   return {};
