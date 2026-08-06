@@ -311,6 +311,15 @@ which part of the repository the change touches.
   in the same change — that file is the single inventory of every
   supported variable, and a variable missing from it is effectively
   undocumented.
+- When adding, renaming, or changing a `bagwiz` command's flags,
+  positionals, subcommands, or the message types a topic-valued flag
+  accepts, sync the completion tables in
+  `bagwiz/src/commands/completion.cpp` in the same change. They
+  re-declare every command's flags and accepted types independently of
+  `configure()`, so they are the easiest drift surface to forget. Verify
+  with the `bagwiz_completion_test` suite, and for bag-driven value
+  completion additionally with a live `bagwiz __complete <cword> ...`
+  against a real bag.
 
 ### 5. Module Layout
 
