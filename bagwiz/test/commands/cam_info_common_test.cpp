@@ -20,6 +20,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -31,6 +33,7 @@ using bagwiz::commands::camera_info_topic_names;
 using bagwiz::commands::CameraInfoProcessor;
 using bagwiz::commands::deserialize_camera_info;
 using bagwiz::commands::kCameraInfoType;
+using bagwiz::commands::parse_cam_info_replace_targets;
 using bagwiz::commands::serialize_camera_info;
 using bagwiz::commands::take_rmw_error;
 using bagwiz::commands::validate_camera_info_targets;
@@ -120,6 +123,107 @@ TEST(ValidateCameraInfoTargets, RepeatedMissingTopicIsOneFailure)
     topics, {"/nope", "/nope", "/cam1/camera_info"}, "/tmp/in.bag", kLogger);
   EXPECT_FALSE(result.all_valid);
   EXPECT_EQ(result.topics, (std::vector<std::string>{"/cam1/camera_info"}));
+}
+
+// ---------------------------------------------------------------------------
+// parse_cam_info_replace_targets
+// ---------------------------------------------------------------------------
+
+TEST(ParseCamInfoReplaceTargets, BareEntriesUseTheDefaultYaml)
+{
+  const auto result = parse_cam_info_replace_targets(
+    {"/cam1/camera_info", "/cam2/camera_info"}, std::filesystem::path{"shared.yaml"}, kLogger);
+  EXPECT_TRUE(result.all_valid);
+  ASSERT_EQ(result.targets.size(), 2U);
+  EXPECT_EQ(result.targets[0].topic, "/cam1/camera_info");
+  EXPECT_EQ(result.targets[0].yaml_path, "shared.yaml");
+  EXPECT_EQ(result.targets[1].topic, "/cam2/camera_info");
+  EXPECT_EQ(result.targets[1].yaml_path, "shared.yaml");
+}
+
+TEST(ParseCamInfoReplaceTargets, PairEntriesCarryTheirOwnYaml)
+{
+  const auto result = parse_cam_info_replace_targets(
+    {"/cam1/camera_info=left.yaml", "/cam2/camera_info=right.yaml"}, std::nullopt, kLogger);
+  EXPECT_TRUE(result.all_valid);
+  ASSERT_EQ(result.targets.size(), 2U);
+  EXPECT_EQ(result.targets[0].topic, "/cam1/camera_info");
+  EXPECT_EQ(result.targets[0].yaml_path, "left.yaml");
+  EXPECT_EQ(result.targets[1].topic, "/cam2/camera_info");
+  EXPECT_EQ(result.targets[1].yaml_path, "right.yaml");
+}
+
+TEST(ParseCamInfoReplaceTargets, MixedEntriesResolvePerEntry)
+{
+  const auto result = parse_cam_info_replace_targets(
+    {"/cam1/camera_info=left.yaml", "/cam2/camera_info"}, std::filesystem::path{"shared.yaml"},
+    kLogger);
+  EXPECT_TRUE(result.all_valid);
+  ASSERT_EQ(result.targets.size(), 2U);
+  EXPECT_EQ(result.targets[0].yaml_path, "left.yaml");
+  EXPECT_EQ(result.targets[1].yaml_path, "shared.yaml");
+}
+
+TEST(ParseCamInfoReplaceTargets, SplitsAtTheFirstEquals)
+{
+  // Topic names cannot contain '=', so everything after the first '=' is the
+  // YAML path — including any further '=' in it.
+  const auto result =
+    parse_cam_info_replace_targets({"/cam1/camera_info=dir/cal=v2.yaml"}, std::nullopt, kLogger);
+  EXPECT_TRUE(result.all_valid);
+  ASSERT_EQ(result.targets.size(), 1U);
+  EXPECT_EQ(result.targets[0].topic, "/cam1/camera_info");
+  EXPECT_EQ(result.targets[0].yaml_path, "dir/cal=v2.yaml");
+}
+
+TEST(ParseCamInfoReplaceTargets, BareEntryWithoutDefaultYamlFails)
+{
+  const auto result = parse_cam_info_replace_targets({"/cam1/camera_info"}, std::nullopt, kLogger);
+  EXPECT_FALSE(result.all_valid);
+}
+
+TEST(ParseCamInfoReplaceTargets, EmptyTopicOrYamlHalfFails)
+{
+  EXPECT_FALSE(parse_cam_info_replace_targets({"=cal.yaml"}, std::nullopt, kLogger).all_valid);
+  EXPECT_FALSE(
+    parse_cam_info_replace_targets({"/cam1/camera_info="}, std::nullopt, kLogger).all_valid);
+}
+
+TEST(ParseCamInfoReplaceTargets, ConflictingDuplicateTopicFails)
+{
+  const auto result = parse_cam_info_replace_targets(
+    {"/cam1/camera_info=left.yaml", "/cam1/camera_info=right.yaml"}, std::nullopt, kLogger);
+  EXPECT_FALSE(result.all_valid);
+}
+
+TEST(ParseCamInfoReplaceTargets, ExactDuplicateIsDeduplicated)
+{
+  // A repeated (topic, yaml) pair is harmless, including when one occurrence
+  // spells the shared --yaml out explicitly.
+  const auto result = parse_cam_info_replace_targets(
+    {"/cam1/camera_info=shared.yaml", "/cam1/camera_info"}, std::filesystem::path{"shared.yaml"},
+    kLogger);
+  EXPECT_TRUE(result.all_valid);
+  ASSERT_EQ(result.targets.size(), 1U);
+  EXPECT_EQ(result.targets[0].yaml_path, "shared.yaml");
+}
+
+TEST(ParseCamInfoReplaceTargets, UnusedDefaultYamlFails)
+{
+  // --yaml that no entry falls back to is a likely mistake, so it is rejected
+  // rather than silently ignored.
+  const auto result = parse_cam_info_replace_targets(
+    {"/cam1/camera_info=left.yaml"}, std::filesystem::path{"shared.yaml"}, kLogger);
+  EXPECT_FALSE(result.all_valid);
+}
+
+TEST(ParseCamInfoReplaceTargets, ReportsEveryBadEntryAndKeepsTheGoodOnes)
+{
+  const auto result = parse_cam_info_replace_targets(
+    {"=cal.yaml", "/cam1/camera_info=left.yaml", "/cam2/camera_info="}, std::nullopt, kLogger);
+  EXPECT_FALSE(result.all_valid);
+  ASSERT_EQ(result.targets.size(), 1U);
+  EXPECT_EQ(result.targets[0].topic, "/cam1/camera_info");
 }
 
 TEST(TakeRmwError, ReturnsMessageThenResets)

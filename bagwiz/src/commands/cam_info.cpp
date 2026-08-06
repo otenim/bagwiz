@@ -25,9 +25,10 @@ constexpr const char * kLogger = "bagwiz.cmd.cam-info";
 
 // `bagwiz cam-info` is a command group for sensor_msgs/msg/CameraInfo
 // operations. It ships `replace` (swap one or more CameraInfo topics'
-// calibration for the values in a single standard ROS camera_calibration YAML
-// file), `recompute-p` (derive the projection matrix from the intrinsics it
-// belongs to), and `dump` (write a topic's calibration back out to YAML).
+// calibration for the values in standard ROS camera_calibration YAML files —
+// a shared --yaml, a per-topic <topic>=<yaml>, or a mix), `recompute-p`
+// (derive the projection matrix from the intrinsics it belongs to), and
+// `dump` (write a topic's calibration back out to YAML).
 // Modeling it as a group keeps each action's options on the action that owns
 // them, rather than a flat command accreting every one of them.
 class CamInfoCommand : public Command
@@ -76,7 +77,7 @@ private:
     auto * sub = app.add_subcommand(
       "replace",
       "Replace the calibration carried by one or more sensor_msgs/msg/CameraInfo topics with the "
-      "values from a single standard ROS camera_calibration YAML file");
+      "values from standard ROS camera_calibration YAML files");
     sub
       ->add_option("-i,--input", replace_args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
@@ -84,14 +85,16 @@ private:
     sub
       ->add_option(
         "--yaml", replace_args_.yaml_path,
-        "Camera calibration YAML in the camera_calibration / camera_info_manager format")
-      ->required()
+        "Camera calibration YAML in the camera_calibration / camera_info_manager format, applied "
+        "to every bare <topic> entry of -t. Required when at least one entry is bare; rejected "
+        "when every entry carries its own =<yaml>.")
       ->check(CLI::ExistingFile);
     sub
       ->add_option(
         "-t,--topics", replace_args_.topics,
-        "One or more CameraInfo topics to rewrite (each type must be "
-        "sensor_msgs/msg/CameraInfo). The same calibration YAML is applied to every listed topic.")
+        "One or more CameraInfo topics to rewrite, each as <topic> or <topic>=<yaml> (each type "
+        "must be sensor_msgs/msg/CameraInfo). A bare <topic> receives the shared --yaml; "
+        "<topic>=<yaml> gives that topic its own calibration YAML. The two forms can be mixed.")
       ->required();
     sub->add_option(
       "--frame-id", replace_args_.frame_id,

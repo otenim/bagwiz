@@ -17,10 +17,14 @@
 #include <rmw/rmw.h>
 #include <rmw/serialized_message.h>
 
+#include <cstddef>
+#include <filesystem>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace bagwiz::commands
@@ -139,6 +143,63 @@ CameraInfoTargets validate_camera_info_targets(
   if (!result.all_valid) {
     const std::string available = core::join_csv(camera_info_topic_names(topics));
     BAGWIZ_LOG_ERROR(logger, "Available %s topic(s): %s", kCameraInfoType, available.c_str());
+  }
+  return result;
+}
+
+CamInfoReplaceTargets parse_cam_info_replace_targets(
+  const std::vector<std::string> & entries,
+  const std::optional<std::filesystem::path> & default_yaml, const char * logger)
+{
+  CamInfoReplaceTargets result;
+  // topic -> index into result.targets, for duplicate detection.
+  std::unordered_map<std::string, std::size_t> seen;
+  bool used_default = false;
+  for (const auto & entry : entries) {
+    const auto sep = entry.find('=');
+    std::string topic;
+    std::filesystem::path yaml;
+    if (sep == std::string::npos) {
+      if (!default_yaml.has_value()) {
+        BAGWIZ_LOG_ERROR(
+          logger, "-t entry '%s' names no calibration: give --yaml or use <topic>=<yaml>.",
+          entry.c_str());
+        result.all_valid = false;
+        continue;
+      }
+      topic = entry;
+      yaml = *default_yaml;
+      used_default = true;
+    } else if (sep == 0 || sep + 1 == entry.size()) {
+      BAGWIZ_LOG_ERROR(
+        logger, "-t entry '%s' is not of the form <topic> or <topic>=<yaml>.", entry.c_str());
+      result.all_valid = false;
+      continue;
+    } else {
+      // Topic names cannot contain '=', so the first '=' ends the topic half;
+      // any further '=' belongs to the YAML path.
+      topic = entry.substr(0, sep);
+      yaml = entry.substr(sep + 1);
+    }
+    const auto it = seen.find(topic);
+    if (it != seen.end()) {
+      if (result.targets[it->second].yaml_path != yaml) {
+        BAGWIZ_LOG_ERROR(
+          logger, "Topic '%s' is listed with two different YAMLs ('%s' and '%s').", topic.c_str(),
+          result.targets[it->second].yaml_path.c_str(), yaml.c_str());
+        result.all_valid = false;
+      }
+      continue;  // an exact duplicate is harmless
+    }
+    seen.emplace(topic, result.targets.size());
+    result.targets.push_back({std::move(topic), std::move(yaml)});
+  }
+  if (default_yaml.has_value() && !used_default) {
+    BAGWIZ_LOG_ERROR(
+      logger,
+      "--yaml was given but every -t entry carries its own '=<yaml>'; drop --yaml or leave one "
+      "entry bare.");
+    result.all_valid = false;
   }
   return result;
 }

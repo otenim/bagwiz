@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -73,6 +74,36 @@ struct CameraInfoTargets
 [[nodiscard]] CameraInfoTargets validate_camera_info_targets(
   std::span<const io::TopicInfo> topics, const std::vector<std::string> & requested,
   const std::filesystem::path & input_path, const char * logger);
+
+// One `cam-info replace` target: the CameraInfo topic to rewrite and the
+// calibration YAML whose values it receives.
+struct CamInfoReplaceTarget
+{
+  std::string topic;
+  std::filesystem::path yaml_path;
+};
+
+// Outcome of parse_cam_info_replace_targets().
+struct CamInfoReplaceTargets
+{
+  // Targets that parsed cleanly, deduplicated while preserving command-line
+  // order.
+  std::vector<CamInfoReplaceTarget> targets;
+  bool all_valid = true;
+};
+
+// Resolve each raw `-t/--topics` entry of `cam-info replace` — `<topic>` or
+// `<topic>=<yaml>` — to its calibration YAML. A bare `<topic>` falls back to
+// `default_yaml` (the --yaml option); `<topic>=<yaml>` carries its own file.
+// Topic names cannot contain '=', so the split is at the first '='. An exact
+// duplicate (same topic, same YAML) is deduplicated; the same topic with two
+// different YAMLs is an error, as are a bare entry without `default_yaml`, an
+// entry with an empty half, and a `default_yaml` no entry falls back to.
+// Every failure is logged to `logger` so one run reports every bad entry; the
+// caller must stop when all_valid is false.
+[[nodiscard]] CamInfoReplaceTargets parse_cam_info_replace_targets(
+  const std::vector<std::string> & entries,
+  const std::optional<std::filesystem::path> & default_yaml, const char * logger);
 
 // Shared skeleton of the `cam-info replace` / `cam-info recompute-p`
 // processors: every topic is routed through under its own name, and on a

@@ -205,9 +205,14 @@ source ~/.config/fish/completions/bagwiz.fish
   - `bagwiz pcd undistort -i <input> ... --pcd <topic>...` —
     `sensor_msgs/msg/PointCloud2` topics, offered at every value of the variadic
     run
-  - `bagwiz cam-info replace -i <input> --yaml <yaml> -t/--topics <topic>...` —
+  - `bagwiz cam-info replace -i <input> [--yaml <yaml>] -t/--topics <topic>[=<yaml>]...` —
     `sensor_msgs/msg/CameraInfo` topics (the only type `cam-info replace`
-    rewrites), offered at every value of the variadic run
+    rewrites), offered at every value of the variadic run. Unlike the
+    `<topic>=<value>` flags above, the candidates carry no trailing `=`: a bare
+    `<topic>` is a complete value here (it takes the shared `--yaml`), so the
+    pair form is optional. Once the cursor moves past `=`, the `<yaml>` half is
+    a file path with nothing to suggest, so the shell's file completion takes
+    over
   - `bagwiz cam-info recompute-p -i <input> ... -t/--topics <topic>...` —
     `sensor_msgs/msg/CameraInfo` topics, offered at every value of the variadic
     run

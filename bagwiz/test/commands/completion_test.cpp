@@ -1916,6 +1916,37 @@ TEST_F(CompletionTest, CamInfoReplaceTopicsFlagCompletesEveryValueSlot)
     "/cam/camera_info\n");
 }
 
+// A -t value may be <topic>=<yaml>. Once the word contains '=', the topic
+// half is chosen and the <yaml> half is a file path: nothing is offered so
+// the shell's file completion takes over (zsh/fish keep the word unsplit).
+TEST_F(CompletionTest, CamInfoReplaceTopicsOfferNothingAfterEquals)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "cam-info", "replace", "-i", "~/cameras.mcap", "-t",
+       "/cam/camera_info=cal"}),
+    "");
+}
+
+// bash splits a typed -t value at '=', leaving a bare '=' as the word right
+// before the cursor; the <yaml> half offers nothing there either.
+TEST_F(CompletionTest, CamInfoReplaceTopicsOfferNothingOnBashSplitValueHalf)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "8", "bagwiz", "cam-info", "replace", "-i", "~/cameras.mcap", "-t",
+       "/cam/camera_info", "="}),
+    "");
+}
+
 // The <yaml> slot is a path, not a topic list: it must not offer topics
 // now that they are no longer positional there.
 TEST_F(CompletionTest, CamInfoReplaceYamlSlotOffersNoTopics)
