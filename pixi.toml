@@ -111,9 +111,15 @@ scripts = ["scripts/pixi-activate.sh"]
 
 # Core build (no `map` command group): the fast build, no GLIM/SLAM stack. Any distro.
 # In a *-cuda env it builds the same core binary into that env's install base.
+# Both build tasks take optional positional args: the CMake build type, then a
+# cap for colcon's --parallel-workers (pixi task args are positional-only, so
+# the build type must be spelled out first): `pixi run build-core Release 8`.
+# Unset defaults: Release, and half the physical CPU cores. Both knobs also
+# have env vars: BAGWIZ_BUILD_TYPE=Debug and BAGWIZ_BUILD_PARALLELISM=8 (the
+# positional args win when both are given).
 [tasks.build-core]
-args = [{ arg = "build_type", default = "Release" }]
-cmd = 'bash scripts/bagwiz-build.sh {{ build_type }} --core'
+args = [{ arg = "build_type", default = "" }, { arg = "parallel_workers", default = "" }]
+cmd = 'bash scripts/bagwiz-build.sh{% if build_type %} {{ build_type }}{% endif %} --core{% if parallel_workers %} --parallel-workers {{ parallel_workers }}{% endif %}'
 
 # Full build (core + `map` SLAM). CPU SLAM in a CPU env; CUDA SLAM
 # (BAGWIZ_WITH_SLAM_CUDA=ON) in a *-cuda env (humble-cuda/jazzy-cuda). Builds the
@@ -121,8 +127,8 @@ cmd = 'bash scripts/bagwiz-build.sh {{ build_type }} --core'
 # CUDA is pixi-managed from $CONDA_PREFIX (conda-forge cuda-toolkit) + the conda g++
 # host compiler + single-arch sm_86.
 [tasks.build-full]
-args = [{ arg = "build_type", default = "Release" }]
-cmd = 'bash scripts/bagwiz-build.sh {{ build_type }}'
+args = [{ arg = "build_type", default = "" }, { arg = "parallel_workers", default = "" }]
+cmd = 'bash scripts/bagwiz-build.sh{% if build_type %} {{ build_type }}{% endif %}{% if parallel_workers %} --parallel-workers {{ parallel_workers }}{% endif %}'
 
 # Test the core build (build-core).
 [tasks.test-core]

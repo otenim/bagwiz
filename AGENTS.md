@@ -212,6 +212,12 @@ govern source code or CLI behavior.
 - Prefer the `pixi run` tasks over ad-hoc `colcon build` invocations when
   verifying changes, unless you are reproducing a CI or tooling issue that
   requires a different command line. The task definitions live in `pixi.toml`.
+  Both build tasks take an optional second positional arg forwarded to colcon's
+  `--parallel-workers` (pixi task args are positional-only, so the build type
+  comes first: `pixi run build-core Release 8`); unset means the default of
+  half the physical CPU cores, and `BAGWIZ_BUILD_PARALLELISM` sets the same cap.
+  `BAGWIZ_BUILD_TYPE` likewise selects the CMake build type when no positional
+  arg is given.
 - Builds compile through ccache and the Ninja generator, both pixi-provided and
   wired up by `scripts/bagwiz-build.sh` (CMAKE\_\*\_COMPILER_LAUNCHER and
   CMAKE_GENERATOR; build-glim-deps.sh repeats the launcher exports for
@@ -299,6 +305,12 @@ which part of the repository the change touches.
   every affected `bagwiz` command. Fix each inconsistency you find as
   part of the same change so these descriptions never drift from the
   actual behavior.
+- When adding, renaming, or changing the behavior of an environment
+  variable read by bagwiz code or its scripts (the `BAGWIZ_*` variables
+  and conventional ones like `NO_COLOR`), update `docs/environment.md`
+  in the same change — that file is the single inventory of every
+  supported variable, and a variable missing from it is effectively
+  undocumented.
 
 ### 5. Module Layout
 

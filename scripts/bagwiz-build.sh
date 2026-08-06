@@ -46,21 +46,65 @@
 # find_package(glim). colcon's own incremental build keeps a no-change rebuild fast.
 set -euo pipefail
 
-# First positional (anything not starting with `-`) is the CMake build type. The
-# only flag is --core, which selects the core (no `map`/SLAM) profile; the CPU/CUDA
-# profile comes from the active env, not a flag.
-build_type="Release"
+# First positional (anything not starting with `-`) is the CMake build type;
+# when no positional is given, BAGWIZ_BUILD_TYPE applies, then the Release
+# default. Flags: --core selects the core (no `map`/SLAM) profile; the CPU/CUDA
+# profile comes from the active env, not a flag. --parallel-workers N caps
+# colcon's parallel package builds; when neither the flag nor
+# BAGWIZ_BUILD_PARALLELISM is set, the default computed below applies.
+build_type="${BAGWIZ_BUILD_TYPE:-Release}"
 core=0
-for arg in "$@"; do
-    case "${arg}" in
+parallel_workers="${BAGWIZ_BUILD_PARALLELISM:-}"
+while [ $# -gt 0 ]; do
+    case "$1" in
     --core) core=1 ;;
+    --parallel-workers)
+        if [ $# -lt 2 ]; then
+            echo "bagwiz-build: --parallel-workers needs a value" >&2
+            exit 2
+        fi
+        parallel_workers="$2"
+        shift
+        ;;
     -*)
-        echo "bagwiz-build: unknown flag '${arg}' (expected --core)" >&2
+        echo "bagwiz-build: unknown flag '$1' (expected --core or --parallel-workers N)" >&2
         exit 2
         ;;
-    *) build_type="${arg}" ;;
+    *) build_type="$1" ;;
     esac
+    shift
 done
+case "${parallel_workers}" in
+"") ;; # unset: the half-physical-cores default below applies
+*[!0-9]* | 0)
+    echo "bagwiz-build: --parallel-workers must be a positive integer (got '${parallel_workers}')" >&2
+    exit 2
+    ;;
+esac
+
+if [ -z "${parallel_workers}" ]; then
+    # Default: half the PHYSICAL cores, min 1. colcon's own default (all logical
+    # cores) puts one Ninja package build on every SMT sibling, and the
+    # template-heavy ROS/Eigen translation units are memory-hungry, so full SMT
+    # oversubscription mostly buys peak RAM, not wall-clock speed. Unique
+    # (core, socket) pairs from lscpu keep SMT siblings out of the count; fall
+    # back to nproc (logical) when lscpu is missing or unparseable. `|| true`
+    # keeps an empty lscpu output (grep exits 1, and pipefail propagates it)
+    # from aborting the script: wc still prints 0, caught by the case below.
+    physical="$(lscpu -b -p=CORE,SOCKET 2>/dev/null | grep -v '^#' | sort -u | wc -l || true)"
+    core_kind="physical"
+    case "${physical}" in
+    '' | *[!0-9]* | 0)
+        physical="$(nproc 2>/dev/null || echo 2)"
+        core_kind="logical (lscpu unavailable)"
+        ;;
+    esac
+    parallel_workers=$((physical / 2))
+    if [ "${parallel_workers}" -lt 1 ]; then
+        parallel_workers=1
+    fi
+    echo "bagwiz-build: --parallel-workers defaults to ${parallel_workers} (half of ${physical} ${core_kind} cores)"
+fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${PIXI_PROJECT_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
@@ -193,5 +237,5 @@ fi
 
 colcon build --symlink-install --packages-up-to bagwiz \
     --build-base "build/${ENV_NAME}" --install-base "install/${ENV_NAME}" \
-    --cmake-args "${cmake_args[@]}"
+    --parallel-workers "${parallel_workers}" --cmake-args "${cmake_args[@]}"
 ln -sfn "${ENV_NAME}/compile_commands.json" build/compile_commands.json
