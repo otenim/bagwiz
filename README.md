@@ -37,7 +37,11 @@ install needed.
 
    Builds compile through ccache and Ninja (both provided by the pixi
    environment), so repeated builds — including the first build in a fresh git
-   worktree — reuse previously compiled objects.
+   worktree — reuse previously compiled objects. To cap build parallelism on
+   memory-constrained hosts, append the worker count after the build type, e.g.
+   `pixi run build-core Release 8`; it is forwarded to colcon's
+   `--parallel-workers` (default: half the physical CPU cores). Both knobs have
+   env-var forms too: `BAGWIZ_BUILD_PARALLELISM=8` and `BAGWIZ_BUILD_TYPE=Debug`.
 
 3. Install a `bagwiz` launcher on your `PATH` so you can run it from anywhere:
 
