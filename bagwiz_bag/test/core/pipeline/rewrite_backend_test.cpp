@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -83,8 +84,9 @@ protected:
     tmp_dir_ = std::filesystem::temp_directory_path() /
                ("bagwiz_rewrite_backend_" +
                 std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + "_" +
-                std::to_string(reinterpret_cast<std::uintptr_t>(
-                  this)));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+                std::to_string(
+                  reinterpret_cast<std::uintptr_t>(
+                    this)));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
     std::filesystem::create_directories(tmp_dir_);
   }
 

@@ -134,8 +134,9 @@ protected:
     tmp_dir_ = fs::temp_directory_path() /
                ("bagwiz_pipelined_backend_" +
                 std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + "_" +
-                std::to_string(reinterpret_cast<std::uintptr_t>(
-                  this)));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+                std::to_string(
+                  reinterpret_cast<std::uintptr_t>(
+                    this)));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
     fs::create_directories(tmp_dir_);
   }
 

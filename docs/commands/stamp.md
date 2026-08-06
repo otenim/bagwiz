@@ -2,9 +2,9 @@
 
 Message-timestamp edits. Subcommands:
 
-| Subcommand                   | What it does                                                     |
-| ---------------------------- | ---------------------------------------------------------------- |
-| [`sync`](#bagwiz-stamp-sync) | Overwrite each message's `header.stamp` with its receive time.   |
+| Subcommand                   | What it does                                                   |
+| ---------------------------- | -------------------------------------------------------------- |
+| [`sync`](#bagwiz-stamp-sync) | Overwrite each message's `header.stamp` with its receive time. |
 
 ---
 
