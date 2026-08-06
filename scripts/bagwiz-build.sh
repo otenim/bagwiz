@@ -33,6 +33,12 @@
 # into a later core build (or vice versa). The trailing symlink keeps
 # build/compile_commands.json pointing at the last-built env for editor tooling.
 #
+# Build speed comes from two transparent layers below, both no-ops for the produced
+# binaries: ccache reuses compiled objects across rebuilds, distros and git
+# worktrees, and Ninja drives the per-package builds. A package configured with a
+# different generator in the past (e.g. an old Unix Makefiles cache) has its build
+# dir wiped and reconfigured automatically instead of aborting the colcon run.
+#
 # Intentionally NOT pixi-input-cached: the bundled GLIM step is already idempotent
 # via its own stamp (build-glim-deps.sh), and an `inputs` cache keyed on src/ alone
 # would report a false "cache hit" and skip the whole task even when the GLIM prefix
@@ -84,6 +90,45 @@ if [ "${core}" -eq 1 ]; then
 fi
 
 cd "${REPO}"
+
+# Compile through ccache when it is on PATH (the pixi env provides it). CMake
+# initializes each language's launcher from these env vars, so no CMakeLists
+# changes are needed and the exports propagate to the build-glim-deps.sh calls
+# below. CCACHE_NOHASHDIR drops the build directory from ccache's hash so
+# rebuilds hit across distros and git worktrees (Release builds carry no -g, so
+# the working directory never lands in debug info). All four exports leave a
+# value already set by the caller untouched.
+if command -v ccache >/dev/null 2>&1; then
+    export CMAKE_C_COMPILER_LAUNCHER="${CMAKE_C_COMPILER_LAUNCHER:-ccache}"
+    export CMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER:-ccache}"
+    export CMAKE_CUDA_COMPILER_LAUNCHER="${CMAKE_CUDA_COMPILER_LAUNCHER:-ccache}"
+    export CCACHE_NOHASHDIR="${CCACHE_NOHASHDIR:-1}"
+fi
+
+# Prefer Ninja (from the pixi env) over Unix Makefiles: faster no-op and
+# incremental builds. colcon invokes cmake without -G, so the standard
+# CMAKE_GENERATOR env var selects the generator; without ninja the build falls
+# back to Make as before.
+if [ -z "${CMAKE_GENERATOR:-}" ] && command -v ninja >/dev/null 2>&1; then
+    export CMAKE_GENERATOR=Ninja
+fi
+
+# A package configured with a different generator than the selected one (e.g. a
+# Unix Makefiles cache predating the Ninja switch) makes CMake abort with
+# "generator does not match", failing the whole colcon run. Wipe just those
+# package build dirs - they are pure build artifacts that this run recreates.
+# The depth-1 glob matches only the ament packages; the GLIM deps caches live
+# deeper (glim-src*/<dep>/build/) and the glim-deps* prefixes under
+# install/<env>/ are never touched.
+if [ -n "${CMAKE_GENERATOR:-}" ]; then
+    for cache in "build/${ENV_NAME}"/*/CMakeCache.txt; do
+        [ -e "${cache}" ] || continue
+        if ! grep -qxF "CMAKE_GENERATOR:INTERNAL=${CMAKE_GENERATOR}" "${cache}"; then
+            echo "bagwiz-build: removing $(dirname "${cache}") (configured with a different generator; reconfiguring)"
+            rm -rf "$(dirname "${cache}")"
+        fi
+    done
+fi
 
 cmake_args=(-DCMAKE_BUILD_TYPE="${build_type}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)
 

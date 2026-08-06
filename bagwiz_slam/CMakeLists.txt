@@ -248,6 +248,15 @@ if(BAGWIZ_WITH_SLAM)
     endif()
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
+    # bagwiz_slam_glim was created above, before enable_language(CUDA) ran, so it
+    # never picked up CMAKE_CUDA_COMPILER_LAUNCHER (scripts/bagwiz-build.sh
+    # exports it as ccache): CMake only initializes the launcher property from it
+    # for languages already enabled when a target is created. Forward it here so
+    # the .cu TUs compile through the launcher like the C++ ones.
+    if(CMAKE_CUDA_COMPILER_LAUNCHER)
+      set_target_properties(bagwiz_slam_glim PROPERTIES
+        CUDA_COMPILER_LAUNCHER "${CMAKE_CUDA_COMPILER_LAUNCHER}")
+    endif()
     target_sources(bagwiz_slam_glim PRIVATE
       src/core/slam/cloud_voxelize_gpu.cu
       src/core/slam/colorize_rasterizer_gpu.cu)

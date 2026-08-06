@@ -107,6 +107,19 @@ CC_BIN="$(command -v x86_64-conda-linux-gnu-gcc || command -v gcc)"
 export CXX="${CXX_BIN}" CC="${CC_BIN}"
 export CMAKE_PREFIX_PATH="${CONDA_PREFIX:-}:${PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
 
+# Compile through ccache when it is on PATH (the pixi env provides it), so the
+# GTSAM / gtsam_points / glim builds reuse objects across rebuilds, distros and
+# git worktrees. These exports are inherited from scripts/bagwiz-build.sh when
+# invoked through it; they are repeated here for standalone invocations.
+# CCACHE_NOHASHDIR drops the build directory from ccache's hash (safe here:
+# Release builds carry no -g). Callers' own values are left untouched.
+if command -v ccache >/dev/null 2>&1; then
+    export CMAKE_C_COMPILER_LAUNCHER="${CMAKE_C_COMPILER_LAUNCHER:-ccache}"
+    export CMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER:-ccache}"
+    export CMAKE_CUDA_COMPILER_LAUNCHER="${CMAKE_CUDA_COMPILER_LAUNCHER:-ccache}"
+    export CCACHE_NOHASHDIR="${CCACHE_NOHASHDIR:-1}"
+fi
+
 # CUDA flag arrays consumed by the gtsam_points / glim cmake calls below. Empty of
 # CUDA in the default (CPU) mode, so those builds are byte-for-byte unchanged.
 gp_cuda=(-DBUILD_WITH_CUDA=OFF)
