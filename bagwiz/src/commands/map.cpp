@@ -33,7 +33,7 @@ public:
   [[nodiscard]] std::string_view name() const override { return "map"; }
   [[nodiscard]] std::string_view description() const override
   {
-    return "LiDAR map generation and viewing";
+    return "LiDAR and camera map generation and viewing";
   }
 
   void configure(CLI::App & app) override
@@ -67,20 +67,27 @@ private:
   void configure_slam(CLI::App & app)
   {
     auto * sub = app.add_subcommand(
-      "slam", "Estimate a trajectory from a LiDAR PointCloud2 topic (GLIM, in-process)");
+      "slam",
+      "Estimate a trajectory from a LiDAR PointCloud2 topic, or camera-only "
+      "visual-inertial SLAM from --cam + --imu (GLIM, in-process)");
     sub->add_option("-i,--input", slam_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option("--pcd", slam_args_.cloud_topic, "PointCloud2 topic to run SLAM on")
-      ->required();
+    sub->add_option(
+      "--pcd", slam_args_.cloud_topic,
+      "PointCloud2 topic to run SLAM on. Optional since camera-only mode: either --pcd or "
+      "--cam must be given (both may be). Without --pcd the run is camera-only "
+      "visual-inertial SLAM driven by --cam + --imu.");
     sub
       ->add_option(
         "-o,--output", slam_args_.output_root, "Output root directory; writes traj.tum and map.pcd")
       ->required();
     sub->add_option(
       "--imu", slam_args_.imu_topic,
-      "Optional Imu topic; switches odometry to LiDAR-IMU. The LiDAR<-IMU extrinsic is "
-      "resolved from the bag's static TF using the cloud and IMU header frame_ids "
+      "Optional Imu topic; switches odometry to LiDAR-IMU. REQUIRED in camera-only mode "
+      "(--cam without --pcd): the visual-inertial odometry integrates the IMU stream. The "
+      "LiDAR<-IMU extrinsic is resolved from the bag's static TF using the cloud and IMU "
+      "header frame_ids — or, in camera-only mode, the first --cam camera's frame — "
       "(errors if that chain is absent).");
     sub->add_option(
       "--gnss", slam_args_.gnss_topic,
@@ -90,7 +97,8 @@ private:
     auto * color_opt = sub->add_option(
       "--color", slam_args_.color_topics,
       "Camera image topic(s) (sensor_msgs/msg/Image or CompressedImage) to colorize the "
-      "map from; list several after one flag and/or repeat the flag. After the global "
+      "map from; list several after one flag and/or repeat the flag. Requires --pcd "
+      "(colorization needs the LiDAR map and its occluder geometry). After the global "
       "optimization, map points are colorized from each camera's images and map.pcd "
       "gains an rgb field. Intrinsics come from each camera's CameraInfo topic (see "
       "--cam-info); each camera extrinsic is resolved from the bag's static TF (errors "
@@ -99,9 +107,11 @@ private:
     auto * cam_opt = sub->add_option(
       "--cam", slam_args_.cam_topics,
       "Camera image topic(s) (sensor_msgs/msg/Image or CompressedImage) used as SLAM "
-      "visual constraints; list several after one flag and/or repeat the flag. Feature "
-      "tracks from these cameras become co-visibility constraints between submap poses "
-      "in the global optimization, curbing drift. Independent of --color (a topic may "
+      "visual constraints; list several after one flag and/or repeat the flag. With "
+      "--pcd, feature tracks from these cameras become co-visibility constraints "
+      "between submap poses in the global optimization, curbing drift. Without --pcd "
+      "(camera-only mode, requires --imu) the cameras drive a visual-inertial odometry "
+      "and map.pcd is the sparse rgb landmark map. Independent of --color (a topic may "
       "appear in both). Intrinsics come from each camera's CameraInfo topic (see "
       "--cam-info); each camera extrinsic is resolved from the bag's static TF (errors "
       "if that chain is absent). Images are assumed raw (unrectified). A topic listed "
@@ -148,7 +158,8 @@ private:
       "keep a neutral gray instead of inheriting the nearest observed neighbor's color.");
     sub->add_option(
       "--frame", slam_args_.output_frame,
-      "Output trajectory frame. Defaults to the PointCloud2 topic's frame_id; a "
+      "Output trajectory frame. Defaults to the PointCloud2 topic's frame_id — or, in "
+      "camera-only mode (--cam without --pcd), the first --cam camera's frame_id; a "
       "different value is resolved through the bag's static TF and the trajectory is "
       "transformed so each pose expresses the requested frame in the SLAM world.");
     sub
@@ -157,7 +168,8 @@ private:
         "Voxel size in meters (default 0.15) for BOTH the LiDAR input downsample and the "
         "exported-map merge — the single map-resolution knob. Smaller = denser map and finer "
         "SLAM detail, at more points and runtime. Feeds the optimizer, so it also changes "
-        "the trajectory.")
+        "the trajectory. No effect in camera-only mode (the sparse landmark map is not "
+        "voxel-merged).")
       ->check(CLI::PositiveNumber);
     sub
       ->add_option(
@@ -277,7 +289,9 @@ private:
         "SLAM backend (default 'auto'). 'auto' uses the CUDA GPU backend when this "
         "binary was built with CUDA support AND a CUDA device is visible, else CPU. "
         "'cuda' forces it (errors on a non-CUDA build / no device). 'cpu' forces the "
-        "CPU backend. The two backends' numbers are not bit-identical.")
+        "CPU backend. In camera-only mode (--cam without --pcd) the run is always CPU: "
+        "'cuda' is rejected and 'auto' resolves to CPU. The two backends' numbers are "
+        "not bit-identical.")
       ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
     sub->callback([this]() { selected_ = Subcommand::kSlam; });
   }

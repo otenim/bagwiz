@@ -188,6 +188,15 @@ public:
       return 1;
     }
 
+    // Mode-level flag combinations (--pcd is optional since camera-only mode;
+    // camera-only additionally requires --imu and rejects the LiDAR-only
+    // features). Checked before any bag work.
+    camera_only_ = args_.cloud_topic.empty();
+    if (const std::string mode_error = validate_mode_flags(args_); !mode_error.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", mode_error.c_str());
+      return 1;
+    }
+
     // Resolve the effective backend (CPU/GPU) from --backend plus a CUDA device
     // probe, before any bag work. A forced 'cuda' that cannot run errors here;
     // 'auto' degrades to CPU.
@@ -207,7 +216,9 @@ public:
       return 1;
     }
 
-    if (!topic_present_with_type(*reader, args_.cloud_topic, kPointCloud2Type)) {
+    if (
+      !args_.cloud_topic.empty() &&
+      !topic_present_with_type(*reader, args_.cloud_topic, kPointCloud2Type)) {
       return 1;
     }
     if (!args_.imu_topic.empty() && !topic_present_with_type(*reader, args_.imu_topic, kImuType)) {
@@ -230,6 +241,13 @@ public:
       return 1;
     }
     if (!all_camera_topics_.empty() && !validate_camera_inputs(*reader)) {
+      return 1;
+    }
+
+    // Resolve the frame every static-TF lookup anchors at: the cloud frame in
+    // LiDAR modes, the first --cam topic's CameraInfo frame_id in camera-only
+    // mode (CameraInfos are already loaded, so no bag re-scan is needed).
+    if (!resolve_anchor_frame()) {
       return 1;
     }
 
@@ -348,6 +366,29 @@ private:
       BAGWIZ_LOG_ERROR(
         kLogger, "Could not read a PointCloud2 frame_id from '%s' (%s message(s) failed to parse)",
         args_.cloud_topic.c_str(), std::to_string(cloud_fail).c_str());
+      return false;
+    }
+    return true;
+  }
+
+  // Resolve anchor_frame_: peek the cloud topic's frame_id in LiDAR modes;
+  // take the first --cam topic's CameraInfo frame_id in camera-only mode,
+  // where that camera's frame takes the cloud frame's role (the mapper's
+  // "lidar" frame is cam0, so T_world_lidar is T_world_cam0). False (logged)
+  // on failure. validate_mode_flags guarantees cam_indices_ is non-empty in
+  // camera-only mode.
+  bool resolve_anchor_frame()
+  {
+    if (!camera_only_) {
+      return peek_cloud_frame(anchor_frame_);
+    }
+    anchor_frame_ = camera_infos_[cam_indices_.front()].frame_id;
+    if (anchor_frame_.empty()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "CameraInfo on '%s' has an empty header.frame_id; cannot anchor the camera-only "
+        "extrinsics (the first --cam camera's frame takes the cloud frame's role).",
+        camera_info_topics_[cam_indices_.front()].c_str());
       return false;
     }
     return true;
@@ -510,10 +551,10 @@ private:
   // resolved once and shared across cameras.
   bool resolve_camera_extrinsics()
   {
-    std::string cloud_frame;
-    if (!peek_cloud_frame(cloud_frame)) {
-      return false;
-    }
+    // The anchor frame (cloud frame, or cam0's frame in camera-only mode) and
+    // the static TF buffer are resolved once and shared across cameras.
+    // cam0 itself hits the identity shortcut below in camera-only mode.
+    const std::string & cloud_frame = anchor_frame_;
 
     // Build the static TF buffer lazily: an all-identity setup (every camera
     // sharing the cloud frame) needs no TF topic at all.
@@ -564,9 +605,11 @@ private:
     return true;
   }
 
-  // First decodable header.frame_id of the cloud and IMU topics, captured in a
-  // single bounded pass (stops once both are known). Empty strings on failure.
-  bool peek_frames(std::string & cloud_frame, std::string & imu_frame)
+  // First decodable header.frame_id of the IMU topic, captured in a bounded
+  // pass (stops at the first decodable message). Empty on failure. The cloud
+  // side of the LiDAR<-IMU pair is not peeked here: every resolver anchors at
+  // anchor_frame_, resolved once by resolve_anchor_frame().
+  bool peek_imu_frame(std::string & imu_frame)
   {
     std::unique_ptr<io::BagReader> reader;
     try {
@@ -576,22 +619,13 @@ private:
       return false;
     }
     io::ReadFilter filter;
-    filter.topics.push_back(args_.cloud_topic);
     filter.topics.push_back(args_.imu_topic);
     reader->set_filter(filter);
 
-    std::int64_t cloud_fail = 0;
     std::int64_t imu_fail = 0;
     io::RawMessage raw;
-    while ((cloud_frame.empty() || imu_frame.empty()) && reader->next(raw)) {
-      if (cloud_frame.empty() && raw.topic->name == args_.cloud_topic) {
-        const auto parsed = core::pointcloud::parse_pointcloud2(raw.payload);
-        if (parsed.ok()) {
-          cloud_frame = parsed.cloud->frame_id;
-        } else {
-          ++cloud_fail;
-        }
-      } else if (imu_frame.empty() && raw.topic->name == args_.imu_topic) {
+    while (imu_frame.empty() && reader->next(raw)) {
+      if (raw.topic->name == args_.imu_topic) {
         const auto parsed = core::slam::parse_imu(raw.payload);
         if (parsed.ok()) {
           imu_frame = parsed.sample->frame_id;
@@ -602,12 +636,6 @@ private:
     }
     // On exhaustion the count of failed parses points at a schema/format mismatch
     // rather than an empty topic.
-    if (cloud_frame.empty()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "Could not read a PointCloud2 frame_id from '%s' (%s message(s) failed to parse)",
-        args_.cloud_topic.c_str(), std::to_string(cloud_fail).c_str());
-      return false;
-    }
     if (imu_frame.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger, "Could not read an Imu frame_id from '%s' (%s message(s) failed to parse)",
@@ -691,14 +719,16 @@ private:
   }
 
   // Resolve T_lidar_imu (cloud frame <- imu frame) from the bag's static TF.
-  // Returns false (logged) on any failure.
+  // In camera-only mode the cloud frame is cam0's, so this is T_cam0_imu —
+  // the extrinsic the visual-inertial odometry requires. Returns false
+  // (logged) on any failure.
   bool resolve_extrinsic(core::slam::SensorTransform & out)
   {
-    std::string cloud_frame;
     std::string imu_frame;
-    if (!peek_frames(cloud_frame, imu_frame)) {
+    if (!peek_imu_frame(imu_frame)) {
       return false;
     }
+    const std::string & cloud_frame = anchor_frame_;
 
     // Same frame for cloud and IMU (e.g. an already-base_link IMU): the extrinsic
     // is identity regardless of whether that frame is a TF node.
@@ -736,10 +766,11 @@ private:
     return true;
   }
 
-  // First decodable header.frame_id of the cloud and GNSS topics in one bounded
-  // pass. Returns false only on a reopen failure; a topic that never decodes
-  // leaves its frame empty for the caller to handle.
-  bool peek_cloud_and_gnss_frames(std::string & cloud_frame, std::string & gnss_frame)
+  // First decodable header.frame_id of the GNSS topic in one bounded pass.
+  // Returns false only on a reopen failure; a topic that never decodes
+  // leaves its frame empty for the caller to handle. The cloud side of the
+  // pair is not peeked: the caller anchors at anchor_frame_.
+  bool peek_gnss_frame(std::string & gnss_frame)
   {
     std::unique_ptr<io::BagReader> reader;
     try {
@@ -751,18 +782,12 @@ private:
       return false;
     }
     io::ReadFilter filter;
-    filter.topics.push_back(args_.cloud_topic);
     filter.topics.push_back(args_.gnss_topic);
     reader->set_filter(filter);
 
     io::RawMessage raw;
-    while ((cloud_frame.empty() || gnss_frame.empty()) && reader->next(raw)) {
-      if (cloud_frame.empty() && raw.topic->name == args_.cloud_topic) {
-        const auto parsed = core::pointcloud::parse_pointcloud2(raw.payload);
-        if (parsed.ok()) {
-          cloud_frame = parsed.cloud->frame_id;
-        }
-      } else if (gnss_frame.empty() && raw.topic->name == args_.gnss_topic) {
+    while (gnss_frame.empty() && reader->next(raw)) {
+      if (raw.topic->name == args_.gnss_topic) {
         const auto parsed = core::slam::parse_navsatfix(raw.payload);
         if (parsed.ok()) {
           gnss_frame = parsed.sample->frame_id;
@@ -792,22 +817,24 @@ private:
   }
 
   // Resolve the GNSS antenna lever-arm T_cloud_gnss.translation() from the bag's
-  // static TF (cloud frame <- NavSatFix frame_id). Unlike the IMU extrinsic this
-  // is NON-FATAL: GNSS still works without it, just uncorrected, so every failure
-  // path logs a warning and returns {0,0,0} (no correction) rather than aborting.
+  // static TF (anchor frame <- NavSatFix frame_id; the anchor is the cloud
+  // frame in LiDAR modes, cam0's frame in camera-only mode). Unlike the IMU
+  // extrinsic this is NON-FATAL: GNSS still works without it, just uncorrected,
+  // so every failure path logs a warning and returns {0,0,0} (no correction)
+  // rather than aborting.
   std::array<double, 3> resolve_gnss_offset()
   {
     const std::array<double, 3> kZero{0.0, 0.0, 0.0};
 
-    std::string cloud_frame;
     std::string gnss_frame;
-    if (!peek_cloud_and_gnss_frames(cloud_frame, gnss_frame) || cloud_frame.empty()) {
+    if (!peek_gnss_frame(gnss_frame)) {
       BAGWIZ_LOG_WARN(
         kLogger,
-        "Could not read cloud/GNSS frame_ids; GNSS constraints use the raw antenna position "
+        "Could not read the GNSS frame_id; GNSS constraints use the raw antenna position "
         "(no lever-arm correction).");
       return kZero;
     }
+    const std::string & cloud_frame = anchor_frame_;
     if (gnss_frame.empty()) {
       BAGWIZ_LOG_WARN(
         kLogger,
@@ -884,7 +911,11 @@ private:
     std::int64_t & skipped, std::int64_t & imu_count, std::int64_t & gnss_count)
   {
     io::ReadFilter filter;
-    filter.topics.push_back(args_.cloud_topic);
+    // Camera-only mode has no cloud topic to stream; the pass is IMU (+GNSS)
+    // and the --cam images only.
+    if (!args_.cloud_topic.empty()) {
+      filter.topics.push_back(args_.cloud_topic);
+    }
     if (!args_.imu_topic.empty()) {
       filter.topics.push_back(args_.imu_topic);
     }
@@ -953,7 +984,10 @@ private:
         kLogger, "read error after %s scans: %s", std::to_string(scans).c_str(), e.what());
       return false;
     }
-    if (scans == 0) {
+    // No decodable scans is fatal in LiDAR modes. Camera-only mode is fed by
+    // the cameras instead; a silent camera stream surfaces later as an empty
+    // trajectory (run_mapping's check) rather than here.
+    if (scans == 0 && !camera_only_) {
       BAGWIZ_LOG_ERROR(
         kLogger, "No decodable PointCloud2 messages on '%s'", args_.cloud_topic.c_str());
       return false;
@@ -1007,19 +1041,18 @@ private:
 
   // Resolve the optional --frame remapping. Returns true when no remapping is
   // requested or when the transform was found. On failure logs and returns false.
-  // On success, `cloud_frame` holds the PointCloud2 frame_id and `body_to` is
-  // set to the cloud-frame -> output-frame transform when remapping is needed.
-  bool resolve_output_transform(
-    std::string & cloud_frame, std::optional<geometry_msgs::msg::Transform> & body_to)
+  // On success, `body_to` is set to the anchor-frame -> output-frame transform
+  // when remapping is needed. The anchor (anchor_frame_) is the cloud frame in
+  // LiDAR modes and cam0's frame in camera-only mode — the trajectory's native
+  // frame in both.
+  bool resolve_output_transform(std::optional<geometry_msgs::msg::Transform> & body_to)
   {
     body_to = std::nullopt;
     if (args_.output_frame.empty()) {
       return true;
     }
 
-    if (!peek_cloud_frame(cloud_frame)) {
-      return false;
-    }
+    const std::string & cloud_frame = anchor_frame_;
 
     if (args_.output_frame == cloud_frame) {
       BAGWIZ_LOG_INFO(
@@ -1097,6 +1130,15 @@ private:
     }
     // auto (the default): prefer GPU when runnable, else CPU.
     use_gpu_ = gpu_runnable;
+    if (use_gpu_ && camera_only_) {
+      // The visual-inertial odometry is CPU-only and camera-only suppresses
+      // every scan-matching factor, so the GPU backend has nothing left to
+      // accelerate (a forced '--backend cuda' was already rejected by
+      // validate_mode_flags).
+      BAGWIZ_LOG_INFO(kLogger, "Backend: CPU — camera-only mode runs on the CPU backend.");
+      use_gpu_ = false;
+      return true;
+    }
     if (use_gpu_) {
       BAGWIZ_LOG_INFO(kLogger, "Backend: GPU (CUDA) — auto-selected.");
     } else if (cuda.has_cuda_build) {
@@ -1132,12 +1174,12 @@ private:
       build_mapper_config(args_, t_lidar_imu, use_gpu_, gnss_antenna_offset, visual_cameras);
 
     // Resolve the optional --frame remapping up front. The trajectory is expressed
-    // in the PointCloud2 frame_id by default; a requested --frame is resolved
+    // in the anchor frame (the PointCloud2 frame_id, or cam0's frame in
+    // camera-only mode) by default; a requested --frame is resolved
     // through the bag's static TF and applied after optimization. Resolving here
     // avoids running the full SLAM pipeline only to fail on an invalid frame.
-    std::string cloud_frame;
     std::optional<geometry_msgs::msg::Transform> output_body_to;
-    if (!resolve_output_transform(cloud_frame, output_body_to)) {
+    if (!resolve_output_transform(output_body_to)) {
       return 1;
     }
 
@@ -1206,8 +1248,17 @@ private:
     core::slam::CloudMap map = std::move(finalized.map);
 
     if (map.trajectory.empty()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "SLAM produced no trajectory poses from %s scans", std::to_string(scans).c_str());
+      if (camera_only_) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "SLAM produced no trajectory poses: the visual-inertial odometry emitted no usable "
+          "keyframes (check that the --cam topics carry decodable images and the --imu stream "
+          "covers them)");
+      } else {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "SLAM produced no trajectory poses from %s scans",
+          std::to_string(scans).c_str());
+      }
       return 1;
     }
 
@@ -1245,9 +1296,14 @@ private:
     // Colorize the map from the camera images BEFORE the optional --frame
     // remap: the colorizer interpolates camera poses from the trajectory,
     // which at this point still expresses the cloud frame the camera
-    // extrinsic was resolved against.
+    // extrinsic was resolved against. In camera-only mode the map is already
+    // colored: finish() re-triangulated the sparse landmark set with each
+    // landmark's frontend-sampled rgb (and --color is rejected in that mode,
+    // so the colorize pass never runs).
     std::vector<std::array<std::uint8_t, 3>> map_colors;
-    if (!args_.color_topics.empty()) {
+    if (camera_only_) {
+      map_colors = std::move(map.colors);
+    } else if (!args_.color_topics.empty()) {
       core::slam::FinalizeSpinner spinner("Colorizing map", progress_on);
       colorize_map(map, map_colors, use_gpu_);
     }
@@ -1606,6 +1662,16 @@ private:
   std::filesystem::path map_path_;     // <output_root>/map.pcd (mapping mode only)
   // Effective backend resolved by resolve_backend() from --backend.
   bool use_gpu_ = false;
+  // Camera-only mode (issue #376 Phase 3): --cam without --pcd runs
+  // visual-inertial SLAM. Set from args_.cloud_topic.empty() early in run()
+  // (validate_mode_flags guarantees --cam + --imu are present in this mode).
+  bool camera_only_ = false;
+  // The frame every static-TF resolution anchors at: the PointCloud2 frame_id
+  // in LiDAR modes, the FIRST --cam topic's CameraInfo frame_id in
+  // camera-only mode (where it takes the cloud frame's role — the mapper's
+  // "lidar" frame is cam0, so the exported trajectory is cam0's). Resolved
+  // once by resolve_anchor_frame() after the camera infos are loaded.
+  std::string anchor_frame_;
   // The --color ∪ --cam camera list built by build_camera_union(): --color
   // topics first (in listing order; the first is the colorize gain-alignment
   // reference), then the --cam topics not already listed. color_indices_ and

@@ -23,11 +23,16 @@ namespace bagwiz::commands
 struct MapSlamArgs
 {
   std::filesystem::path input_path;
-  // PointCloud2 topic to run SLAM on.
+  // PointCloud2 topic to run SLAM on. Empty selects camera-only mode
+  // (--cam-driven visual-inertial SLAM, issue #376 Phase 3); validate_mode_flags
+  // requires at least one of cloud_topic / cam_topics.
   std::string cloud_topic;
   // Optional Imu topic. Empty: LiDAR-only odometry. Set: switches to GLIM's
   // LiDAR-IMU OdometryEstimationCPU, resolving the LiDAR<-IMU extrinsic from the
-  // bag's static TF using the cloud's and the IMU's header frame_ids.
+  // bag's static TF using the cloud's and the IMU's header frame_ids. REQUIRED in
+  // camera-only mode (cloud_topic empty): the visual-inertial odometry integrates
+  // the IMU stream, and the extrinsic is resolved against the first --cam
+  // camera's frame instead of the cloud frame.
   std::string imu_topic;
   // Optional NavSatFix topic. Empty: no GNSS. Set: adds GNSS global constraints
   // (horizontal translation priors on submap poses) during global mapping,
@@ -40,7 +45,10 @@ struct MapSlamArgs
   // Optional camera image topics (sensor_msgs/msg/Image or CompressedImage)
   // to colorize the map from (--color). Empty: no colorization. Set: after
   // the global optimization, the map points are colorized by splatting them
-  // into each camera's images and map.pcd gains an rgb field. Each point's
+  // into each camera's images and map.pcd gains an rgb field. Requires
+  // cloud_topic (colorization needs the LiDAR map and its occluder geometry);
+  // in camera-only mode the sparse landmark map is rgb-colored from its own
+  // track observations instead, no flag involved. Each point's
   // color is a robust weighted average over its observations; a point
   // observed by several cameras gets a weighted blend of them after
   // per-camera gain alignment against the FIRST listed topic. Points no image
@@ -58,7 +66,10 @@ struct MapSlamArgs
   // bag read and the resulting co-visibility observations become
   // rig-projection factors between submap poses in the global optimization,
   // curbing the drift LiDAR geometry alone cannot see (long corridors,
-  // tunnels, open fields). Independent of color_topics — a topic may appear in
+  // tunnels, open fields). Without cloud_topic (camera-only mode, imu_topic
+  // required) the cameras additionally drive the visual-inertial odometry and
+  // map.pcd is the sparse rgb landmark map. Independent of color_topics — a
+  // topic may appear in
   // both, and is then read once for the SLAM pass and once for the later
   // colorize pass. Intrinsics come from each camera's CameraInfo topic
   // (camera_info_overrides, or auto-resolved from the image topic name); each
@@ -107,7 +118,8 @@ struct MapSlamArgs
   // Output root directory; receives traj.tum and map.pcd.
   std::filesystem::path output_root;
   // Frame the output trajectory is expressed in. Empty (the default) keeps the
-  // trajectory in the PointCloud2 topic's frame_id. A different value is resolved
+  // trajectory in the PointCloud2 topic's frame_id — or, in camera-only mode,
+  // in the first --cam camera's frame_id. A different value is resolved
   // through the bag's static TF and each output pose is transformed accordingly.
   std::string output_frame;
   // Voxel size in meters used for BOTH the GLIM LiDAR input downsample and the
@@ -204,6 +216,9 @@ struct MapSlamArgs
   // (the CUDA colorize rasterizer). Its numbers are not bit-identical to the
   // CPU backend's; the difference is bounded by AGENTS.md "Numerical
   // Reproducibility". The effective choice is resolved in run_map_slam.
+  // In camera-only mode (cloud_topic empty) the visual-inertial odometry is
+  // CPU-only: "cuda" is rejected by validate_mode_flags and "auto" resolves
+  // to CPU.
   std::string backend = "auto";
 };
 
@@ -214,7 +229,10 @@ struct MapSlamArgs
 // trajectory (traj.tum) plus an optimized world-frame point-cloud map (map.pcd),
 // both under args.output_root. With args.imu_topic set, odometry switches to
 // GLIM's LiDAR-IMU estimator (OdometryEstimationCPU, or OdometryEstimationGPU
-// on the GPU backend — see backend).
+// on the GPU backend — see backend). With args.cloud_topic EMPTY (camera-only
+// mode; args.cam_topics and args.imu_topic required), the odometry layer is the
+// visual-inertial estimator and map.pcd is the sparse rgb landmark map instead
+// of a dense point cloud.
 //
 // Returns a process exit code: 0 on success, 1 on any error (input open
 // failure, topic/type mismatch, an absent LiDAR<-IMU static-TF chain, output

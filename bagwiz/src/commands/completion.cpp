@@ -989,7 +989,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 // verbs are `slam` and `viewer`. The verb adds one positional slot, shifting
 // every argument one word to the right of a flat command.
 //
-//   slam:   `map`(0) `slam`(1) -i|--input <bag> --pcd <topic> -o|--output <root>
+//   slam:   `map`(0) `slam`(1) -i|--input <bag> [--pcd <topic>] -o|--output <root>
 //           [--backend <cpu|cuda|auto>] [--frame <frame_id>] [--imu <topic>]
 //           [--gnss <topic>] [--color <topic>...] [--cam <topic>...]
 //           [--cam-info <image>=<info>...] [--visual-max-features <N>]

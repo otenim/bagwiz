@@ -1222,4 +1222,44 @@ TEST(CloudMapper, CameraOnlyRejectsScans)
   EXPECT_THROW(mapper.insert(make_room_scan(kCamOnlyBaseStamp)), std::logic_error);
 }
 
+// Regression for a real-bag crash: GLIM's SubMapping downsamples each
+// keyframe cloud to 10% (keyframe_randomsampling_rate), and N * 0.1 truncates
+// a small landmark cloud to ZERO points. Such a keyframe carries no
+// covariances, the merged submap cloud drops them as well (gtsam_points keeps
+// covs only when every merged frame has them), and GlobalMapping's voxel
+// insertion then segfaults on the missing covariance array. Camera-only mode
+// keeps the full keyframe clouds (rate 1.0), so few-landmark keyframes must
+// survive sub + global mapping — this run crashed before the fix.
+TEST(CloudMapper, CameraOnlyFewLandmarkKeyframesSurviveMapping)
+{
+  slam::CloudMapper mapper(make_camera_only_config());
+  const std::int64_t motion = kCamOnlyBaseStamp + kCamOnlyMotionStartNs;
+  constexpr int kGroups = 40;
+  feed_camera_only_imu(mapper, kCamOnlyBaseStamp, motion + kGroups * kCamOnlyPeriodNs);
+
+  // Only 6 landmarks are visible: 6 * 0.1 = 0 samples under GLIM's default
+  // keyframe downsampling.
+  const auto all_landmarks = cam_only_wall_landmarks();
+  const std::vector<Eigen::Vector3d> landmarks(all_landmarks.begin(), all_landmarks.begin() + 6);
+  const Eigen::Isometry3d T_imu_cam0 = forward_camera_pose();
+  for (int i = 0; i < kGroups; ++i) {
+    const std::int64_t stamp = motion + static_cast<std::int64_t>(i) * kCamOnlyPeriodNs;
+    const Eigen::Isometry3d T_cam0_world =
+      (cam_only_gt_pose(stamp - motion) * T_imu_cam0).inverse();
+    std::vector<slam::VisualObservation> batch;
+    for (std::size_t track = 0; track < landmarks.size(); ++track) {
+      const Eigen::Vector3d p_cam = T_cam0_world * landmarks[track];
+      if (p_cam.z() <= 0.0) {
+        continue;
+      }
+      batch.push_back(
+        make_visual_observation(stamp, 0, track, p_cam.x() / p_cam.z(), p_cam.y() / p_cam.z()));
+    }
+    mapper.insert_visual_observations(batch);
+  }
+
+  const slam::CloudMap map = mapper.finish();
+  EXPECT_FALSE(map.trajectory.empty());
+}
+
 }  // namespace
