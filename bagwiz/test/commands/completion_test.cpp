@@ -1382,6 +1382,38 @@ TEST(FlagCompletionTest, PcdUndistortDashListsUndistortFlags)
     "o\n-w\n");
 }
 
+// `pcd undistort --pose <TAB>` completes the bag's topics of the four pose
+// types the flag accepts (TFMessage / Odometry / PoseStamped /
+// PoseWithCovarianceStamped), excluding unsupported types — the same
+// candidate set `traj dump`'s topic slot offers, mirroring
+// validate_undistort_topics.
+TEST_F(CompletionTest, PcdUndistortPoseCompletesPoseTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_traj_dump_mixed_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "-i", "~/fixture.mcap", "--pose",
+       ""}),
+    "/odom\n/pose\n/pwc\n/tf\n");
+}
+
+// A typed prefix narrows the --pose candidates within the supported set.
+TEST_F(CompletionTest, PcdUndistortPoseRespectsPrefix)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_traj_dump_mixed_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "-i", "~/fixture.mcap", "--pose",
+       "/p"}),
+    "/pose\n/pwc\n");
+}
+
 // `pcd undistort <bag> <pose_topic> --pcd <TAB>` completes PointCloud2 topics
 // from the bag named at the <input> slot, mirroring concat's --pcd.
 TEST_F(CompletionTest, PcdUndistortPcdCompletesPointCloud2Topics)
