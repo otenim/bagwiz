@@ -514,7 +514,7 @@ TEST_F(CamInfoReplaceTest, DeduplicatesRepeatedTopic)
   expect_replaced(cam1.messages[0], 100);
 }
 
-TEST_F(CamInfoReplaceTest, PerTopicYamlsReplaceEachTopicWithItsOwnCalibration)
+TEST_F(CamInfoReplaceTest, PerTopicYamlFilesReplaceEachTopicWithItsOwnCalibration)
 {
   const auto in = tmp_dir_ / "in.mcap";
   const auto out = tmp_dir_ / "out.mcap";
@@ -592,7 +592,7 @@ TEST_F(CamInfoReplaceTest, RejectsMalformedTopicYamlEntry)
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(CamInfoReplaceTest, RejectsSameTopicWithTwoDifferentYamls)
+TEST_F(CamInfoReplaceTest, RejectsSameTopicWithTwoDifferentYamlFiles)
 {
   const auto in = tmp_dir_ / "in.mcap";
   const auto out = tmp_dir_ / "out.mcap";

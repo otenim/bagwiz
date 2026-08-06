@@ -205,7 +205,7 @@ int run_cam_info_replace(const CamInfoReplaceArgs & args)
   //    share one file), collecting every failure before bailing so one run
   //    reports every bad file. Then hand each target topic its calibration.
   std::unordered_map<std::string, img::CameraCalibration> calibration_by_yaml;
-  bool yamls_ok = true;
+  bool all_yaml_ok = true;
   for (const auto & target : requested.targets) {
     const std::string key = target.yaml_path.string();
     if (calibration_by_yaml.find(key) != calibration_by_yaml.end()) {
@@ -216,12 +216,12 @@ int run_cam_info_replace(const CamInfoReplaceArgs & args)
       BAGWIZ_LOG_ERROR(
         kLogger, "Could not load calibration from '%s': %s", target.yaml_path.c_str(),
         parsed.error.c_str());
-      yamls_ok = false;
+      all_yaml_ok = false;
       continue;
     }
     calibration_by_yaml.emplace(key, *parsed.calibration);
   }
-  if (!yamls_ok) {
+  if (!all_yaml_ok) {
     return 1;
   }
 
