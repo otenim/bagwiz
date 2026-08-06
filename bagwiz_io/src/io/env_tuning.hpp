@@ -43,10 +43,11 @@ inline std::int64_t resolve_env_int(
 
 // Worker count for the parallel read paths (per-chunk decompression on mcap,
 // per-slice scanning on db3). Defaults to 8, capped at the host's hardware
-// concurrency so low-core machines keep a smaller worker count
-// (docs/benchmarks/mcap-read-threads.md and docs/benchmarks/db3-read-threads.md
-// have the sweeps the default is based on). BAGWIZ_READ_THREADS overrides the
-// default, and 0 or 1 selects the serial read (the debugging escape hatch).
+// concurrency so low-core machines keep a smaller worker count. Sweeps on a
+// 24-core host placed 8 at the knee of the curve for both backends: on mcap 16
+// workers already regressed, and on db3 the step from 4 to 8 bought ~2 % wall
+// time for ~26 % more peak RSS. BAGWIZ_READ_THREADS overrides the default, and
+// 0 or 1 selects the serial read (the debugging escape hatch).
 inline int resolve_read_threads(const char * logger)
 {
   constexpr std::int64_t kDefault = 8;
@@ -62,8 +63,7 @@ inline int resolve_read_threads(const char * logger)
 // 32 KiB is the default because it measured fastest on every shape tried — a
 // payload-heavy Autoware bag, a small-message bag, and one whose messages
 // straddle a page boundary — while producing a smaller file than 64 KiB in all
-// three (docs/benchmarks/db3-page-size.md). 64 KiB bought no additional speed
-// and cost ~1.6 % on disk.
+// three. 64 KiB bought no additional speed and cost ~1.6 % on disk.
 //
 // SQLite accepts only a power of two in [512, 65536] and *silently ignores*
 // anything else, leaving its own 4 KiB default in the file. An invalid value is
