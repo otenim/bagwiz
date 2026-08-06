@@ -148,6 +148,10 @@ struct TopicArgBinding
   std::span<const std::string_view> topic_flags{};
   std::span<const std::string_view> allowed_types{};
   bool variadic{false};
+  // True when a value may also be a `<topic>=<path>` pair (e.g. `cam-info
+  // replace -t`): topics complete the half before '='; past it the value is a
+  // file path, so nothing is offered and the shell's file completion applies.
+  bool pair_value{false};
 };
 
 constexpr std::array<TopicArgBinding, 11> kTopicBindings{{
@@ -166,8 +170,8 @@ constexpr std::array<TopicArgBinding, 11> kTopicBindings{{
   {"generate", "video", kInputFlags, kSingleTopicFlags, kImageTopicTypes, false},
   // `map slam -i <bag> --pcd <topic>`
   {"map", "slam", kInputFlags, kPcdFlags, kPointCloud2Type, false},
-  // `cam-info replace -i <bag> -t/--topics <topic>...`
-  {"cam-info", "replace", kInputFlags, kTopicsFlags, kCameraInfoType, true},
+  // `cam-info replace -i <bag> -t/--topics <topic>[=<yaml>]...`
+  {"cam-info", "replace", kInputFlags, kTopicsFlags, kCameraInfoType, true, true},
   // `cam-info dump -i <bag> -t <topic>`
   {"cam-info", "dump", kInputFlags, kSingleTopicFlags, kCameraInfoType, false},
   // `cam-info recompute-p -i <bag> -t/--topics <topic>...`
@@ -686,6 +690,16 @@ std::optional<std::vector<std::string>> try_topic_completion(const CompletionReq
   for (const auto & binding : kTopicBindings) {
     if (!binding_applies(binding, request)) {
       continue;
+    }
+    // On the <path> half of a `<topic>=<path>` value, offer nothing so the
+    // shell's default file completion takes over (bash splits the typed value
+    // at '=', leaving a bare '=' before the cursor; zsh/fish keep it unsplit,
+    // showing up as a current word containing '=').
+    if (
+      binding.pair_value &&
+      (current.find('=') != std::string::npos ||
+       (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "="))) {
+      return std::vector<std::string>{};
     }
     const auto input_path = find_flag_value(request, binding.input_flags);
     if (!input_path) {

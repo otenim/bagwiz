@@ -118,8 +118,9 @@ constexpr std::array<std::byte, 4> kOtherPayload{
 // Writes an input bag with two CameraInfo topics (/camera/camera_info and
 // /camera2/camera_info), each carrying two messages with a deliberately wrong
 // calibration, plus one unrelated /other message. The second camera topic lets
-// the multi-topic tests confirm a single YAML is applied to every listed topic
-// while a non-listed CameraInfo topic is still copied verbatim.
+// the multi-topic tests confirm a shared YAML is applied to every listed topic
+// (and a per-topic <topic>=<yaml> lands on its own topic) while a non-listed
+// CameraInfo topic is still copied verbatim.
 void write_input_bag(const std::filesystem::path & path)
 {
   auto writer = bagwiz::io::open_write(path, mcap_options());
@@ -170,6 +171,31 @@ projection_matrix:
   rows: 3
   cols: 4
   data: [500.0, 0.0, 320.0, 0.0, 0.0, 500.0, 240.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+)";
+
+// A second calibration with values distinct from kCalibYaml on every field the
+// replace overwrites, so the per-topic tests can tell which YAML landed on
+// which topic.
+constexpr const char * kCalibYaml2 = R"(image_width: 800
+image_height: 600
+camera_name: wide_stereo
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [700.0, 0.0, 400.0, 0.0, 700.0, 300.0, 0.0, 0.0, 1.0]
+distortion_model: rational_polynomial
+distortion_coefficients:
+  rows: 1
+  cols: 8
+  data: [0.1, -0.2, 0.03, 0.04, 0.0, 0.01, 0.02, 0.03]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [700.0, 0.0, 400.0, 0.0, 0.0, 700.0, 300.0, 0.0, 0.0, 0.0, 1.0, 0.0]
 )";
 
 const bagwiz::io::TopicInfo * find_topic(
@@ -246,6 +272,10 @@ protected:
     std::ofstream out(calib_path_);
     out << kCalibYaml;
     out.close();
+    calib2_path_ = tmp_dir_ / "calib2.yaml";
+    std::ofstream out2(calib2_path_);
+    out2 << kCalibYaml2;
+    out2.close();
   }
   void TearDown() override { std::filesystem::remove_all(tmp_dir_); }
 
@@ -270,8 +300,28 @@ protected:
     EXPECT_TRUE(msg.roi.do_rectify);
   }
 
+  // Assert that `msg` carries the kCalibYaml2 calibration and the preserved
+  // fields.
+  static void expect_replaced2(const sensor_msgs::msg::CameraInfo & msg, std::int32_t expect_sec)
+  {
+    EXPECT_EQ(msg.width, 800U);
+    EXPECT_EQ(msg.height, 600U);
+    EXPECT_EQ(msg.distortion_model, "rational_polynomial");
+    ASSERT_EQ(msg.d.size(), 8U);
+    EXPECT_DOUBLE_EQ(msg.d[0], 0.1);
+    EXPECT_DOUBLE_EQ(msg.k[0], 700.0);
+    EXPECT_DOUBLE_EQ(msg.k[2], 400.0);
+    EXPECT_DOUBLE_EQ(msg.p[0], 700.0);
+    // Preserved fields.
+    EXPECT_EQ(msg.header.stamp.sec, expect_sec);
+    EXPECT_EQ(msg.header.stamp.nanosec, 250U);
+    EXPECT_EQ(msg.binning_x, 2U);
+    EXPECT_EQ(msg.binning_y, 3U);
+  }
+
   std::filesystem::path tmp_dir_;
   std::filesystem::path calib_path_;
+  std::filesystem::path calib2_path_;
 };
 
 TEST_F(CamInfoReplaceTest, ReplacesToOutputAndCopiesOthers)
@@ -462,6 +512,130 @@ TEST_F(CamInfoReplaceTest, DeduplicatesRepeatedTopic)
   const auto cam1 = read_camera_info(out, "/camera/camera_info");
   ASSERT_EQ(cam1.count, 2);  // two messages, each rewritten once (not duplicated)
   expect_replaced(cam1.messages[0], 100);
+}
+
+TEST_F(CamInfoReplaceTest, PerTopicYamlsReplaceEachTopicWithItsOwnCalibration)
+{
+  const auto in = tmp_dir_ / "in.mcap";
+  const auto out = tmp_dir_ / "out.mcap";
+  write_input_bag(in);
+
+  bagwiz::commands::CamInfoReplaceArgs args;
+  args.input_path = in;
+  // No --yaml: every entry carries its own file.
+  args.topics = {
+    "/camera/camera_info=" + calib_path_.string(), "/camera2/camera_info=" + calib2_path_.string()};
+  args.output_path = out;
+  ASSERT_EQ(bagwiz::commands::run_cam_info_replace(args), 0);
+
+  const auto cam1 = read_camera_info(out, "/camera/camera_info");
+  ASSERT_EQ(cam1.count, 2);
+  expect_replaced(cam1.messages[0], 100);
+  expect_replaced(cam1.messages[1], 101);
+
+  const auto cam2 = read_camera_info(out, "/camera2/camera_info");
+  ASSERT_EQ(cam2.count, 2);
+  expect_replaced2(cam2.messages[0], 200);
+  expect_replaced2(cam2.messages[1], 201);
+}
+
+TEST_F(CamInfoReplaceTest, MixedBareAndPairEntriesResolvePerEntry)
+{
+  const auto in = tmp_dir_ / "in.mcap";
+  const auto out = tmp_dir_ / "out.mcap";
+  write_input_bag(in);
+
+  bagwiz::commands::CamInfoReplaceArgs args;
+  args.input_path = in;
+  args.yaml_path = calib_path_;  // the bare entry's fallback
+  args.topics = {"/camera/camera_info=" + calib2_path_.string(), "/camera2/camera_info"};
+  args.output_path = out;
+  ASSERT_EQ(bagwiz::commands::run_cam_info_replace(args), 0);
+
+  const auto cam1 = read_camera_info(out, "/camera/camera_info");
+  ASSERT_EQ(cam1.count, 2);
+  expect_replaced2(cam1.messages[0], 100);
+
+  const auto cam2 = read_camera_info(out, "/camera2/camera_info");
+  ASSERT_EQ(cam2.count, 2);
+  expect_replaced(cam2.messages[0], 200);
+}
+
+TEST_F(CamInfoReplaceTest, RejectsBareTopicWithoutDefaultYaml)
+{
+  const auto in = tmp_dir_ / "in.mcap";
+  const auto out = tmp_dir_ / "out.mcap";
+  write_input_bag(in);
+
+  bagwiz::commands::CamInfoReplaceArgs args;
+  args.input_path = in;
+  args.topics = {"/camera/camera_info"};  // bare, but no --yaml
+  args.output_path = out;
+  EXPECT_EQ(bagwiz::commands::run_cam_info_replace(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(out));
+}
+
+TEST_F(CamInfoReplaceTest, RejectsMalformedTopicYamlEntry)
+{
+  const auto in = tmp_dir_ / "in.mcap";
+  const auto out = tmp_dir_ / "out.mcap";
+  write_input_bag(in);
+
+  bagwiz::commands::CamInfoReplaceArgs args;
+  args.input_path = in;
+  args.topics = {"=" + calib_path_.string()};  // empty topic half
+  args.output_path = out;
+  EXPECT_EQ(bagwiz::commands::run_cam_info_replace(args), 1);
+
+  args.topics = {"/camera/camera_info="};  // empty yaml half
+  EXPECT_EQ(bagwiz::commands::run_cam_info_replace(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(out));
+}
+
+TEST_F(CamInfoReplaceTest, RejectsSameTopicWithTwoDifferentYamls)
+{
+  const auto in = tmp_dir_ / "in.mcap";
+  const auto out = tmp_dir_ / "out.mcap";
+  write_input_bag(in);
+
+  bagwiz::commands::CamInfoReplaceArgs args;
+  args.input_path = in;
+  args.topics = {
+    "/camera/camera_info=" + calib_path_.string(), "/camera/camera_info=" + calib2_path_.string()};
+  args.output_path = out;
+  EXPECT_EQ(bagwiz::commands::run_cam_info_replace(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(out));
+}
+
+TEST_F(CamInfoReplaceTest, RejectsUnusedDefaultYaml)
+{
+  const auto in = tmp_dir_ / "in.mcap";
+  const auto out = tmp_dir_ / "out.mcap";
+  write_input_bag(in);
+
+  bagwiz::commands::CamInfoReplaceArgs args;
+  args.input_path = in;
+  args.yaml_path = calib_path_;  // nothing falls back to it
+  args.topics = {"/camera/camera_info=" + calib2_path_.string()};
+  args.output_path = out;
+  EXPECT_EQ(bagwiz::commands::run_cam_info_replace(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(out));
+}
+
+TEST_F(CamInfoReplaceTest, RejectsMissingPerTopicYamlFile)
+{
+  // The CLI's ExistingFile check covers --yaml only; a per-topic =<yaml> path
+  // is validated when the file is parsed, before the bag is touched.
+  const auto in = tmp_dir_ / "in.mcap";
+  const auto out = tmp_dir_ / "out.mcap";
+  write_input_bag(in);
+
+  bagwiz::commands::CamInfoReplaceArgs args;
+  args.input_path = in;
+  args.topics = {"/camera/camera_info=" + (tmp_dir_ / "nope.yaml").string()};
+  args.output_path = out;
+  EXPECT_EQ(bagwiz::commands::run_cam_info_replace(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(out));
 }
 
 std::vector<std::vector<std::byte>> read_raw_payloads(
