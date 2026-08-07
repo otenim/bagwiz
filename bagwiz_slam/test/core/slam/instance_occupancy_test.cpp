@@ -302,15 +302,17 @@ TEST(InstanceOccupancy, HugeCoordinatesAreOutsideTheAnalysis)
 {
   // Finite but absurd coordinates (a corrupt cloud) must neither be removed
   // nor derail the grid: they fall outside the volume of interest by the
-  // binnable-coordinate guard.
+  // binnable-coordinate guard. Scans differ in size (the car leaves), so the
+  // huge point's index is recorded per scan.
   auto scans = make_transient_car_scans();
-  const std::size_t base_size = scans[0].size();
+  std::vector<std::size_t> huge_index(scans.size(), 0);
   for (std::size_t t = 0; t < scans.size(); ++t) {
+    huge_index[t] = scans[t].size();
     scans[t].push_back({1.0e30F, 1.0F, 0.5F});
   }
   const auto keep = run_classifier(make_config(), scans);
   for (std::size_t t = 0; t < scans.size(); ++t) {
-    EXPECT_EQ(keep[t][base_size], 1U) << "huge point of scan " << t;
+    EXPECT_EQ(keep[t][huge_index[t]], 1U) << "huge point of scan " << t;
   }
 }
 

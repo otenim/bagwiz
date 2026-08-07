@@ -149,7 +149,7 @@ std::size_t segment_ground(
   std::size_t ground_count = 0;
   std::vector<float> heights;
   std::vector<std::uint32_t> inliers;
-  for (auto & entry : cells) {
+  for (const auto & entry : cells) {
     const std::vector<std::uint32_t> & members = entry.second;
 
     // Seed reference: mean z of the cell's lowest points. The seed band both
