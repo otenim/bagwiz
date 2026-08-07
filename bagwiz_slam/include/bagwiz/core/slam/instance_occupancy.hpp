@@ -173,7 +173,9 @@ struct InstanceOccupancyConfig
 // grid, so the classification is byte-identical for any thread count or scan
 // order. Memory holds per-cell statistics plus one verdict byte per point
 // (never a copy of the clouds); the per-scan cell statistics are released by
-// finalize_grid().
+// finalize_grid(). Violating the phase contract (wrong order, an unknown or
+// repeated scan_id, mismatched point counts, an undersized keep span) throws
+// std::logic_error / std::invalid_argument in every build type.
 class InstanceOccupancyClassifier
 {
 public:

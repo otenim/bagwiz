@@ -515,6 +515,20 @@ TEST(ValidateModeFlags, Erasor2WithItsOwnTuningIsValid)
   EXPECT_TRUE(validate_mode_flags(args).empty());
 }
 
+// In camera-only mode --remove-dynamic itself is the problem; the mode error
+// must win over the per-method tuning mismatch so the guidance is not
+// misleading.
+TEST(ValidateModeFlags, CameraOnlyModeErrorWinsOverMethodMismatch)
+{
+  auto args = make_args();  // remove_dynamic = true
+  args.cloud_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  args.dynamic_method = "erasor2";
+  args.dynamic_dufomap_tuning_given = true;
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("--remove-dynamic requires --pcd"), std::string::npos) << error;
+}
+
 // ---------------------------------------------------------------------------
 // is_vehicle_like_frame: the heuristic behind the dufomap-on-a-concatenated-
 // topic warning.

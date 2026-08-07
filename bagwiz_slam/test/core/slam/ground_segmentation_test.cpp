@@ -156,6 +156,20 @@ TEST(SegmentGround, NonFinitePointsAreNonGround)
   EXPECT_EQ(ground[points.size() - 1], 0U);
 }
 
+TEST(SegmentGround, HugeCoordinatesAreNonGround)
+{
+  // Finite but absurd coordinates would overflow the int32 cell index; they
+  // must be rejected like non-finite points instead of hitting undefined
+  // behavior in the cast.
+  auto points = make_plane(0.0, 2.0, 0.0, 2.0, 0.2, 0.0);
+  points.push_back({1.0e30F, 0.5F, 0.0F});
+  slam::GroundSegmentationConfig config;
+  std::size_t ground_count = 0;
+  const auto ground = run(points, config, ground_count);
+  EXPECT_EQ(ground_count, points.size() - 1);
+  EXPECT_EQ(ground[points.size() - 1], 0U);
+}
+
 TEST(SegmentGround, EmptyInputReturnsZero)
 {
   slam::GroundSegmentationConfig config;

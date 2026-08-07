@@ -144,6 +144,20 @@ TEST(ClusterPoints, NonFinitePointsAreUnclustered)
   EXPECT_EQ(ids[points.size() - 1], 0U);
 }
 
+TEST(ClusterPoints, HugeCoordinatesAreUnclustered)
+{
+  // Finite but absurd coordinates would overflow the int32 voxel index; they
+  // must be rejected like non-finite points instead of hitting undefined
+  // behavior in the cast.
+  auto points = make_blob(0.0, 0.0, 0.0, 1.0, 0.25);
+  points.push_back({1.0e30F, 0.0F, 0.0F});
+  slam::EuclideanClusteringConfig config;
+  std::size_t cluster_count = 0;
+  const auto ids = run(points, config, cluster_count);
+  EXPECT_EQ(cluster_count, 1U);
+  EXPECT_EQ(ids[points.size() - 1], 0U);
+}
+
 TEST(ClusterPoints, EmptyInputReturnsZero)
 {
   slam::EuclideanClusteringConfig config;

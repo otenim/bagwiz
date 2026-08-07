@@ -1054,8 +1054,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 // every argument one word to the right of a flat command.
 //
 //   slam:   `map`(0) `slam`(1) -i|--input <bag> [--pcd <topic>] -o|--output <root>
-//           [--backend <cpu|cuda|auto>] [--dynamic-method <dufomap|erasor2>]
-//           [--frame <frame_id>] [--imu <topic>]
+//           [--backend <cpu|cuda|auto>] [--frame <frame_id>] [--imu <topic>]
 //           [--gnss <topic>] [--color <topic>...] [--cam <topic>...]
 //           [--cam-info <image>=<info>...] [--visual-max-features <N>]
 //           [--color-min-dist <m>] [--color-keyframe-blur]
@@ -1064,7 +1063,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 //           [--no-progress] [--no-warmup-fill] [--no-cooldown-fill]
 //           [--no-color-propagate] [--fill-min-inliers <f>] [--submap-keyframes <N>]
 //           [--remove-outliers] [--outlier-r <m>] [--outlier-k <N>]
-//           [--remove-dynamic] [--dynamic-method <method>]
+//           [--remove-dynamic] [--dynamic-method <dufomap|erasor2>]
 //           [--dynamic-res <m>] [--dynamic-ds <m>] [--dynamic-dp <N>]
 //           [--dynamic-sensor-height <m>]
 //   viewer: `map`(0) `viewer`(1) -i|--input <map>

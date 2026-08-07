@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 // GLIM-free unit tests for the ERASOR2-style instance-aware pseudo-occupancy
@@ -232,14 +233,17 @@ TEST(InstanceOccupancy, UnderSegmentationSplitsAMergedCluster)
   // them into ONE cluster: the merged instance's average posterior stays under
   // the drop threshold (the wall dominates), so only the under-segmentation
   // check can — and must — carve out the points on the car's high-posterior
-  // cells while keeping the wall and the bridge.
+  // cells while keeping the wall and the bridge. "Wheels" under the car
+  // (ground-labeled, so never part of any cluster) prove the carved points
+  // seed the volumetric erosion like a normally-clustered removal would. The
+  // bridge points stay farther than the erosion radius (0.346 m) from every
+  // car point, so the weld itself must survive.
   const auto ground = make_plane(4.0, 12.0, -4.0, 4.0, 0.1, 0.0);
   const auto wall = make_box(5.0, 5.4, 0.0, 4.0, 0.0, 2.6, 0.13);
   const auto car = make_box(7.0, 9.0, 0.0, 2.0, 0.4, 1.8, 0.25);
-  std::vector<Point> bridge;
-  for (double x = 5.5; x < 7.0 - 1e-9; x += 0.2) {
-    bridge.push_back({static_cast<float>(x), 1.0F, 1.0F});
-  }
+  const auto wheels = make_box(7.25, 8.1, 0.5, 1.35, 0.12, 0.13, 0.25);
+  const std::vector<Point> bridge{
+    {5.5F, 1.0F, 1.0F}, {5.9F, 1.0F, 1.0F}, {6.3F, 1.0F, 1.0F}, {6.65F, 1.0F, 1.0F}};
 
   std::vector<std::vector<Point>> scans;
   std::vector<std::array<std::size_t, 2>> car_span;  // [begin, end) per scan
@@ -250,6 +254,7 @@ TEST(InstanceOccupancy, UnderSegmentationSplitsAMergedCluster)
     const std::size_t begin = scan.size();
     if (t < 5) {
       append(scan, car);
+      append(scan, wheels);
     }
     car_span.push_back({begin, scan.size()});
     scans.push_back(std::move(scan));
@@ -264,8 +269,48 @@ TEST(InstanceOccupancy, UnderSegmentationSplitsAMergedCluster)
       EXPECT_EQ(keep[t][i], 1U) << "static point " << i << " of scan " << t;
     }
     for (std::size_t i = car_span[t][0]; i < car_span[t][1]; ++i) {
-      EXPECT_EQ(keep[t][i], 0U) << "car point " << i << " of scan " << t;
+      EXPECT_EQ(keep[t][i], 0U) << "car/wheel point " << i << " of scan " << t;
     }
+  }
+}
+
+TEST(InstanceOccupancy, PhaseContractViolationsThrow)
+{
+  // The five-phase contract must fail loudly in every build type, not read
+  // out of bounds when asserts are compiled out.
+  slam::InstanceOccupancyClassifier classifier(make_config(), 1);
+  const std::vector<Point> points{{1.0F, 1.0F, 0.0F}};
+  std::vector<std::uint8_t> keep(points.size(), 1U);
+
+  EXPECT_THROW(classifier.propose(0, points), std::logic_error);
+  EXPECT_THROW(classifier.classify(0, points, keep), std::logic_error);
+  EXPECT_THROW(classifier.add_scan(1, points, kOrigin), std::invalid_argument);
+  classifier.add_scan(0, points, kOrigin);
+  EXPECT_THROW(classifier.add_scan(0, points, kOrigin), std::logic_error);
+  classifier.finalize_grid(1);
+  EXPECT_THROW(classifier.finalize_grid(1), std::logic_error);
+  EXPECT_THROW(classifier.finalize_proposals(), std::logic_error);  // nothing proposed yet
+  classifier.propose(0, points);
+  EXPECT_THROW(classifier.propose(0, points), std::logic_error);
+  classifier.finalize_proposals();
+  std::vector<std::uint8_t> undersized;
+  EXPECT_THROW(classifier.classify(0, points, undersized), std::invalid_argument);
+  EXPECT_EQ(classifier.classify(0, points, keep), 0U);
+}
+
+TEST(InstanceOccupancy, HugeCoordinatesAreOutsideTheAnalysis)
+{
+  // Finite but absurd coordinates (a corrupt cloud) must neither be removed
+  // nor derail the grid: they fall outside the volume of interest by the
+  // binnable-coordinate guard.
+  auto scans = make_transient_car_scans();
+  const std::size_t base_size = scans[0].size();
+  for (std::size_t t = 0; t < scans.size(); ++t) {
+    scans[t].push_back({1.0e30F, 1.0F, 0.5F});
+  }
+  const auto keep = run_classifier(make_config(), scans);
+  for (std::size_t t = 0; t < scans.size(); ++t) {
+    EXPECT_EQ(keep[t][base_size], 1U) << "huge point of scan " << t;
   }
 }
 

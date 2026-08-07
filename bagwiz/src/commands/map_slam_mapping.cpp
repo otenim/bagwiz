@@ -43,21 +43,23 @@ std::string imu_suffix(const MapSlamArgs & args, std::int64_t imu_count)
 
 std::string validate_mode_flags(const MapSlamArgs & args)
 {
-  // The --dynamic-* tuning options each affect exactly one removal method;
-  // passing one to the other method would be a silent no-op, so refuse it.
-  if (args.dynamic_method == "erasor2" && args.dynamic_dufomap_tuning_given) {
-    return "--dynamic-res / --dynamic-ds / --dynamic-dp tune the dufomap method's "
-           "free-space grid and have no effect with --dynamic-method erasor2";
-  }
-  if (args.dynamic_method != "erasor2" && args.dynamic_sensor_height_given) {
-    return "--dynamic-sensor-height anchors the erasor2 method's height band and has "
-           "no effect with the dufomap method (pass --dynamic-method erasor2)";
-  }
   const bool camera_only = args.cloud_topic.empty();
   if (camera_only && args.cam_topics.empty()) {
     return "either --pcd (LiDAR SLAM) or --cam (camera-only visual-inertial SLAM) is required";
   }
   if (!camera_only) {
+    // The --dynamic-* tuning options each affect exactly one removal method;
+    // passing one to the other method would be a silent no-op, so refuse it.
+    // Checked in LiDAR mode only: in camera-only mode --remove-dynamic itself
+    // is rejected below, which is the guidance that matters there.
+    if (args.dynamic_method == "erasor2" && args.dynamic_dufomap_tuning_given) {
+      return "--dynamic-res / --dynamic-ds / --dynamic-dp tune the dufomap method's "
+             "free-space grid and have no effect with --dynamic-method erasor2";
+    }
+    if (args.dynamic_method != "erasor2" && args.dynamic_sensor_height_given) {
+      return "--dynamic-sensor-height anchors the erasor2 method's height band and has "
+             "no effect with the dufomap method (pass --dynamic-method erasor2)";
+    }
     return "";  // LiDAR mode: every camera/feature flag keeps its existing meaning
   }
   if (!args.color_topics.empty()) {

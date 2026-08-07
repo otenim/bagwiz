@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -50,6 +51,12 @@ constexpr std::size_t kHashY = 19349663U;
 // Verdict bits stored per point by propose(), read by classify().
 constexpr std::uint8_t kDropBit = 1U;      // dynamic instance / split / stray
 constexpr std::uint8_t kErodibleBit = 2U;  // may be swept by the volumetric erosion
+
+// Coordinates whose scaled magnitude exceeds this cannot be binned into an
+// int32 cell index (the float-to-int conversion would be undefined); such
+// finite-but-absurd points are treated like non-finite ones. Slightly under
+// INT32_MAX so the erosion's +/-1 neighbor offsets stay in range too.
+constexpr double kMaxBinnableIndex = 2.0e9;
 
 struct CellKey
 {
@@ -146,7 +153,10 @@ void run_chunked(std::size_t count, int num_threads, const RangeFn & fn)
     fn(0, count);
     return;
   }
-  std::vector<std::thread> pool;
+  // jthread, not thread: if a spawn fails mid-loop, the destructors of the
+  // already-running workers join them during unwinding instead of calling
+  // std::terminate (the run_pass pool in cloud_mapper.cpp does the same).
+  std::vector<std::jthread> pool;
   pool.reserve(workers);
   const std::size_t chunk = (count + workers - 1) / workers;
   for (std::size_t w = 0; w < workers; ++w) {
@@ -154,10 +164,7 @@ void run_chunked(std::size_t count, int num_threads, const RangeFn & fn)
     const std::size_t end = std::min(begin + chunk, count);
     pool.emplace_back([&fn, begin, end]() { fn(begin, end); });
   }
-  for (auto & worker : pool) {
-    worker.join();
-  }
-}
+}  // jthread destructors join all workers here
 
 }  // namespace
 
@@ -214,13 +221,21 @@ struct InstanceOccupancyClassifier::Impl
     return found == grid.end() ? nullptr : &found->second;
   }
 
-  // Volume-of-interest test: finite, inside the radial bound around the
-  // scan's origin, and inside the height band over the scan's local ground
-  // level (origin z minus sensor_height).
+  // Volume-of-interest test: finite and binnable (the analysis quantizes x/y
+  // to int32 cell indices and z to int32 millimeters, so coordinates beyond
+  // those ranges are excluded like non-finite ones), inside the radial bound
+  // around the scan's origin, and inside the height band over the scan's
+  // local ground level (origin z minus sensor_height).
   [[nodiscard]] bool in_voi(
     const std::array<float, 3> & point, const std::array<double, 3> & origin) const
   {
     if (!finite_point(point)) {
+      return false;
+    }
+    if (
+      std::abs(static_cast<double>(point[0])) * inv_cell_size >= kMaxBinnableIndex ||
+      std::abs(static_cast<double>(point[1])) * inv_cell_size >= kMaxBinnableIndex ||
+      std::abs(static_cast<double>(point[2])) * kZQuant >= kMaxBinnableIndex) {
       return false;
     }
     const double dx = static_cast<double>(point[0]) - origin[0];
@@ -233,10 +248,12 @@ struct InstanceOccupancyClassifier::Impl
   }
 
   // Log-odds substituted for a point whose cell carries no dynamic evidence
-  // (ERASOR2's p_neg), clamped away from 0/1 so the logit stays finite.
+  // (ERASOR2's p_neg). The invariant is STRICTLY below 0.5 (at 0.5 the term
+  // stops dragging mixed instances toward keeping), so the upper clamp stays
+  // under it; the lower clamp keeps the logit finite.
   [[nodiscard]] double negative_log_odds() const
   {
-    const double p = std::clamp(config.negative_posterior, 1e-6, 0.5);
+    const double p = std::clamp(config.negative_posterior, 1e-6, 0.5 - 1e-6);
     return std::log(p / (1.0 - p));
   }
 };
@@ -253,10 +270,18 @@ void InstanceOccupancyClassifier::add_scan(
   std::size_t scan_id, std::span<const std::array<float, 3>> world_points,
   const std::array<double, 3> & sensor_origin)
 {
-  assert(scan_id < impl_->scans.size());
-  assert(!impl_->grid_ready);
+  // The phase contract is enforced with real checks, not asserts: a violation
+  // in a release build would otherwise read/write out of bounds.
+  if (scan_id >= impl_->scans.size()) {
+    throw std::invalid_argument("InstanceOccupancyClassifier::add_scan: scan_id out of range");
+  }
+  if (impl_->grid_ready) {
+    throw std::logic_error("InstanceOccupancyClassifier::add_scan: called after finalize_grid()");
+  }
   Impl::ScanData & scan = impl_->scans[scan_id];
-  assert(!scan.added);
+  if (scan.added) {
+    throw std::logic_error("InstanceOccupancyClassifier::add_scan: scan added twice");
+  }
   scan.added = true;
   scan.origin = sensor_origin;
   scan.point_count = world_points.size();
@@ -293,7 +318,9 @@ void InstanceOccupancyClassifier::add_scan(
 
 void InstanceOccupancyClassifier::finalize_grid(int num_threads)
 {
-  assert(!impl_->grid_ready);
+  if (impl_->grid_ready) {
+    throw std::logic_error("InstanceOccupancyClassifier::finalize_grid: called twice");
+  }
   const InstanceOccupancyConfig & config = impl_->config;
 
   // Assemble the read-only cell index from the shards.
@@ -392,11 +419,21 @@ void InstanceOccupancyClassifier::finalize_grid(int num_threads)
 void InstanceOccupancyClassifier::propose(
   std::size_t scan_id, std::span<const std::array<float, 3>> world_points)
 {
-  assert(impl_->grid_ready);
-  assert(scan_id < impl_->scans.size());
+  if (!impl_->grid_ready) {
+    throw std::logic_error("InstanceOccupancyClassifier::propose: called before finalize_grid()");
+  }
+  if (scan_id >= impl_->scans.size()) {
+    throw std::invalid_argument("InstanceOccupancyClassifier::propose: scan_id out of range");
+  }
   Impl::ScanData & scan = impl_->scans[scan_id];
-  assert(scan.added && !scan.proposed);
-  assert(scan.point_count == world_points.size());
+  if (!scan.added || scan.proposed) {
+    throw std::logic_error(
+      "InstanceOccupancyClassifier::propose: each added scan must be proposed exactly once");
+  }
+  if (scan.point_count != world_points.size()) {
+    throw std::invalid_argument(
+      "InstanceOccupancyClassifier::propose: point count differs from add_scan()");
+  }
   scan.proposed = true;
   if (world_points.empty()) {
     return;
@@ -509,10 +546,29 @@ void InstanceOccupancyClassifier::propose(
     const double prior_ratio =
       static_cast<double>(prior_cells) / static_cast<double>(footprint.size());
     if (prior_ratio > config.usc_prior_ratio && !high_cells.empty()) {
+      std::vector<std::uint32_t> carved;
+      double carved_log_odds_sum = 0.0;
       for (const std::uint32_t index : instance) {
         const auto & p = world_points[index];
-        if (high_cells.count(impl_->cell_of(p[0], p[1])) != 0U) {
+        const CellKey key = impl_->cell_of(p[0], p[1]);
+        if (high_cells.count(key) != 0U) {
           scan.verdicts[index] |= kDropBit;
+          carved.push_back(index);
+          carved_log_odds_sum += impl_->find_cell(key)->log_odds;
+        }
+      }
+      // The carved points form their own dynamic instance; like any other
+      // removed instance, it seeds the erosion when its average posterior
+      // clears the seed confidence (always true at the shipped defaults,
+      // where every carved cell already exceeds usc_high_posterior ==
+      // vor_seed_posterior). Without this, an under-segmented mover would
+      // leave its mis-segmented stragglers (wheels labeled ground, clipped
+      // returns) behind.
+      if (
+        !carved.empty() && sigmoid(carved_log_odds_sum / static_cast<double>(carved.size())) >
+                             config.vor_seed_posterior) {
+        for (const std::uint32_t index : carved) {
+          scan.seeds.push_back(world_points[index]);
         }
       }
     }
@@ -569,12 +625,17 @@ void InstanceOccupancyClassifier::propose(
 
 void InstanceOccupancyClassifier::finalize_proposals()
 {
-  assert(impl_->grid_ready);
-#ifndef NDEBUG
-  for (const Impl::ScanData & scan : impl_->scans) {
-    assert(scan.proposed);
+  if (!impl_->grid_ready) {
+    throw std::logic_error(
+      "InstanceOccupancyClassifier::finalize_proposals: called before finalize_grid()");
   }
-#endif
+  for (const Impl::ScanData & scan : impl_->scans) {
+    if (!scan.added || !scan.proposed) {
+      throw std::logic_error(
+        "InstanceOccupancyClassifier::finalize_proposals: every scan must be added and "
+        "proposed first (the erosion reads neighboring scans' seeds)");
+    }
+  }
   impl_->proposals_ready = true;
 }
 
@@ -582,11 +643,21 @@ std::size_t InstanceOccupancyClassifier::classify(
   std::size_t scan_id, std::span<const std::array<float, 3>> world_points,
   std::span<std::uint8_t> keep) const
 {
-  assert(impl_->proposals_ready);
-  assert(scan_id < impl_->scans.size());
-  assert(keep.size() >= world_points.size());
+  if (!impl_->proposals_ready) {
+    throw std::logic_error(
+      "InstanceOccupancyClassifier::classify: called before finalize_proposals()");
+  }
+  if (scan_id >= impl_->scans.size()) {
+    throw std::invalid_argument("InstanceOccupancyClassifier::classify: scan_id out of range");
+  }
+  if (keep.size() < world_points.size()) {
+    throw std::invalid_argument("InstanceOccupancyClassifier::classify: keep span too small");
+  }
   const Impl::ScanData & scan = impl_->scans[scan_id];
-  assert(scan.point_count == world_points.size());
+  if (scan.point_count != world_points.size()) {
+    throw std::invalid_argument(
+      "InstanceOccupancyClassifier::classify: point count differs from add_scan()");
+  }
 
   std::size_t dropped = 0;
   for (std::size_t i = 0; i < world_points.size(); ++i) {

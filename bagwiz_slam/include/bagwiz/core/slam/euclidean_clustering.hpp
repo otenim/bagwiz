@@ -38,7 +38,8 @@ struct EuclideanClusteringConfig
 };
 
 // Assign 1-based cluster ids to the masked-in points (`mask[i] != 0`); every
-// masked-out, non-finite, or too-small-component point gets id 0. Ids are
+// masked-out, non-finite (or too far out for the int32 voxel binning), or
+// too-small-component point gets id 0. Ids are
 // canonical: clusters are numbered in order of their smallest member index, so
 // the labeling depends only on the point set and mask, never on internal
 // iteration order. `mask.size()` and `cluster_ids.size()` must be >=

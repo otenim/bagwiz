@@ -52,9 +52,17 @@ struct CellKeyHash
   }
 };
 
-bool finite_point(const std::array<float, 3> & point)
+// Coordinates whose scaled magnitude exceeds this cannot be binned into an
+// int32 voxel index (the float-to-int conversion would be undefined); such
+// finite-but-absurd points are treated like non-finite ones.
+constexpr double kMaxBinnableIndex = 2.0e9;
+
+bool binnable_point(const std::array<float, 3> & point, double inv_tolerance)
 {
-  return std::isfinite(point[0]) && std::isfinite(point[1]) && std::isfinite(point[2]);
+  return std::isfinite(point[0]) && std::isfinite(point[1]) && std::isfinite(point[2]) &&
+         std::abs(static_cast<double>(point[0])) * inv_tolerance < kMaxBinnableIndex &&
+         std::abs(static_cast<double>(point[1])) * inv_tolerance < kMaxBinnableIndex &&
+         std::abs(static_cast<double>(point[2])) * inv_tolerance < kMaxBinnableIndex;
 }
 
 }  // namespace
@@ -85,7 +93,7 @@ std::size_t cluster_points(
   };
   std::unordered_map<CellKey, std::vector<std::uint32_t>, CellKeyHash> cells;
   for (std::size_t i = 0; i < points.size(); ++i) {
-    if (mask[i] == 0U || !finite_point(points[i])) {
+    if (mask[i] == 0U || !binnable_point(points[i], inv_tolerance)) {
       continue;
     }
     cells[cell_of(points[i])].push_back(static_cast<std::uint32_t>(i));
@@ -99,7 +107,7 @@ std::size_t cluster_points(
   std::vector<std::uint32_t> component;
   std::size_t cluster_count = 0;
   for (std::size_t seed = 0; seed < points.size(); ++seed) {
-    if (visited[seed] != 0U || mask[seed] == 0U || !finite_point(points[seed])) {
+    if (visited[seed] != 0U || mask[seed] == 0U || !binnable_point(points[seed], inv_tolerance)) {
       continue;
     }
     component.clear();

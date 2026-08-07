@@ -222,12 +222,12 @@ private:
       ->needs(remove_outliers_flag);
     auto * remove_dynamic_flag = sub->add_flag(
       "--remove-dynamic", slam_args_.remove_dynamic,
-      "Remove ghost points left by moving objects from the finished map (DUFOMap-style "
-      "void-region ray casting): every scan's rays mark the voxels they traverse as "
-      "seen-free, and a scan point falling in a voxel that was ever seen free is dropped "
-      "before the map merge. Off by default (the exported map is unchanged without it). "
-      "Filters the map only; the trajectory is untouched. Runs multithreaded under "
-      "--threads.");
+      "Remove ghost points left by moving objects from the finished map, using the "
+      "classifier picked by --dynamic-method (default: DUFOMap-style void-region ray "
+      "casting — every scan's rays mark the voxels they traverse as seen-free, and a "
+      "scan point falling in a voxel that was ever seen free is dropped before the map "
+      "merge). Off by default (the exported map is unchanged without it). Filters the "
+      "map only; the trajectory is untouched. Runs multithreaded under --threads.");
     sub
       ->add_option(
         "--dynamic-res", slam_args_.dynamic_resolution,

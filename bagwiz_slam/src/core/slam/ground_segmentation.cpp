@@ -107,9 +107,16 @@ std::array<double, 3> smallest_eigenvector(
   return {v[0][smallest], v[1][smallest], v[2][smallest]};
 }
 
-bool finite_point(const std::array<float, 3> & point)
+// Coordinates whose scaled magnitude exceeds this cannot be binned into an
+// int32 cell index (the float-to-int conversion would be undefined); such
+// finite-but-absurd points are treated like non-finite ones.
+constexpr double kMaxBinnableIndex = 2.0e9;
+
+bool binnable_point(const std::array<float, 3> & point, double inv_cell_size)
 {
-  return std::isfinite(point[0]) && std::isfinite(point[1]) && std::isfinite(point[2]);
+  return std::isfinite(point[0]) && std::isfinite(point[1]) && std::isfinite(point[2]) &&
+         std::abs(static_cast<double>(point[0])) * inv_cell_size < kMaxBinnableIndex &&
+         std::abs(static_cast<double>(point[1])) * inv_cell_size < kMaxBinnableIndex;
 }
 
 }  // namespace
@@ -125,11 +132,11 @@ std::size_t segment_ground(
   const std::size_t min_cell_points =
     std::max(static_cast<std::size_t>(std::max(config.min_cell_points, 0)), kMinFitPoints);
 
-  // Bin the finite points into square x-y cells; non-finite points are labeled
-  // non-ground up front and never join a fit.
+  // Bin the binnable points into square x-y cells; non-finite (or absurdly
+  // far) points are labeled non-ground up front and never join a fit.
   std::unordered_map<CellKey, std::vector<std::uint32_t>, CellKeyHash> cells;
   for (std::size_t i = 0; i < points.size(); ++i) {
-    if (!finite_point(points[i])) {
+    if (!binnable_point(points[i], inv_cell_size)) {
       ground[i] = 0U;
       continue;
     }

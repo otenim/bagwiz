@@ -68,8 +68,9 @@ struct GroundSegmentationConfig
 };
 
 // Label every point ground (1) or non-ground (0). `ground.size()` must be
-// >= `points.size()`; non-finite points are labeled non-ground. Returns the
-// number of ground points. Pure and single-threaded; the labeling depends only
+// >= `points.size()`; non-finite points — and finite ones too far out for the
+// int32 cell binning — are labeled non-ground. Returns the number of ground
+// points. Pure and single-threaded; the labeling depends only
 // on the point set (not its order), so concurrent calls on disjoint outputs
 // are safe.
 std::size_t segment_ground(
