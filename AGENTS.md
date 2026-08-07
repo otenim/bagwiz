@@ -186,9 +186,10 @@ govern source code or CLI behavior.
 - bagwiz is built and run through [pixi](https://pixi.sh); no system ROS 2
   install is required. pixi provisions ROS 2 from RoboStack (one conda channel
   per distro) and the C/C++ toolchain from conda-forge. Build with
-  `pixi run -e <distro> build-full` from the repository root, where `<distro>` is
-  `humble` or `jazzy`; a bare `pixi run build-full` targets
-  the default environment (Jazzy). Each distro builds into its own
+  `pixi run -e <distro> build` from the repository root, where `<distro>` is
+  `humble` or `jazzy`; a bare `pixi run build` targets
+  the default environment (Jazzy). Use `build-full` instead when you need the
+  `map`/SLAM command group. Each distro builds into its own
   `build/<distro>` and `install/<distro>`, so switching distros never reuses
   another distro's CMake cache.
 - Builds are a `{core, full} x {cpu, cuda}` matrix, but the CPU/CUDA choice is

@@ -56,7 +56,8 @@ bin="${BAGWIZ_REPO}/install/${distro}/bagwiz/bin/bagwiz"
 
 if [ ! -x "${bin}" ]; then
     echo "bagwiz: no build found for '${distro}' at ${bin}" >&2
-    echo "bagwiz: build it first: pixi run -e ${distro} build-full" >&2
+    echo "bagwiz: build it first: pixi run -e ${distro} build" >&2
+    echo "bagwiz:   (or build-full for the map/SLAM command group)" >&2
     exit 127
 fi
 
