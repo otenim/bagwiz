@@ -1054,7 +1054,8 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 // every argument one word to the right of a flat command.
 //
 //   slam:   `map`(0) `slam`(1) -i|--input <bag> [--pcd <topic>] -o|--output <root>
-//           [--backend <cpu|cuda|auto>] [--frame <frame_id>] [--imu <topic>]
+//           [--backend <cpu|cuda|auto>] [--dynamic-method <dufomap|erasor2>]
+//           [--frame <frame_id>] [--imu <topic>]
 //           [--gnss <topic>] [--color <topic>...] [--cam <topic>...]
 //           [--cam-info <image>=<info>...] [--visual-max-features <N>]
 //           [--color-min-dist <m>] [--color-keyframe-blur]
@@ -1063,7 +1064,9 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 //           [--no-progress] [--no-warmup-fill] [--no-cooldown-fill]
 //           [--no-color-propagate] [--fill-min-inliers <f>] [--submap-keyframes <N>]
 //           [--remove-outliers] [--outlier-r <m>] [--outlier-k <N>]
-//           [--remove-dynamic] [--dynamic-res <m>] [--dynamic-ds <m>] [--dynamic-dp <N>]
+//           [--remove-dynamic] [--dynamic-method <method>]
+//           [--dynamic-res <m>] [--dynamic-ds <m>] [--dynamic-dp <N>]
+//           [--dynamic-sensor-height <m>]
 //   viewer: `map`(0) `viewer`(1) -i|--input <map>
 //
 // At the action slot (word 1) the candidates are `slam` and `viewer` (or the
@@ -1110,7 +1113,9 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
          "--color-min-dist",
          "--dynamic-dp",
          "--dynamic-ds",
+         "--dynamic-method",
          "--dynamic-res",
+         "--dynamic-sensor-height",
          "--fill-min-inliers",
          "--frame",
          "--gnss",
@@ -1143,6 +1148,10 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
 
   if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--backend") {
     return matching({"auto", "cpu", "cuda"}, current);
+  }
+
+  if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--dynamic-method") {
+    return matching({"dufomap", "erasor2"}, current);
   }
 
   // --frame takes a frame id resolved through the bag's static TF, so it
