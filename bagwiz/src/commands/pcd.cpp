@@ -119,15 +119,23 @@ private:
   void configure_undistort(CLI::App & app)
   {
     auto * sub = app.add_subcommand(
-      "undistort", "Motion-deskew PointCloud2 topic(s) using an external pose topic + tf_static.");
+      "undistort",
+      "Motion-deskew PointCloud2 topic(s) using an external pose or twist topic + tf_static.");
     sub->add_option("-i,--input", undistort_args_.input_path, "Input bag (file or directory).")
       ->required()
       ->check(CLI::ExistingPath);
+    auto * pose_opt = sub->add_option(
+      "--pose", undistort_args_.pose_topic,
+      "Self-position topic (TFMessage / Odometry / PoseStamped / "
+      "PoseWithCovarianceStamped). Exactly one of --pose / --twist is required.");
     sub
       ->add_option(
-        "--pose", undistort_args_.pose_topic,
-        "Self-position topic (TFMessage / Odometry / PoseStamped / PoseWithCovarianceStamped).")
-      ->required();
+        "--twist", undistort_args_.twist_topic,
+        "Vehicle-velocity topic (Twist / TwistStamped / TwistWithCovarianceStamped), integrated "
+        "into the deskew motion. Alternative to --pose; exactly one of them is required. A bare "
+        "Twist has no header: its samples are stamped with the bag's log time and assumed to be "
+        "expressed in the --of frame.")
+      ->excludes(pose_opt);
     sub
       ->add_option(
         "--pcd", undistort_args_.pcd_topics, "PointCloud2 topic(s) to deskew (repeatable).")

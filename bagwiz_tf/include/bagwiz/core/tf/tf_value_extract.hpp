@@ -14,6 +14,8 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 
 #include <optional>
@@ -55,6 +57,22 @@ extract_pose_with_covariance_stamped_message(const cdr_walker::Value & message);
 // Decode nav_msgs/msg/Odometry (header, child_frame_id, pose.pose).
 // Twist is ignored by callers that only need trajectory pose samples.
 std::optional<nav_msgs::msg::Odometry> extract_odometry_message(const cdr_walker::Value & message);
+
+// Decode a geometry_msgs/msg/Twist (linear, angular). Returns std::nullopt
+// when the tree does not match.
+std::optional<geometry_msgs::msg::Twist> extract_twist_message(const cdr_walker::Value & message);
+
+// Decode a geometry_msgs/msg/TwistStamped (header, twist). Returns
+// std::nullopt when the tree does not match.
+std::optional<geometry_msgs::msg::TwistStamped> extract_twist_stamped_message(
+  const cdr_walker::Value & message);
+
+// Decode a geometry_msgs/msg/TwistWithCovarianceStamped. Only header and
+// twist.twist (inner geometry_msgs/Twist) are read — the covariance is not
+// consumed by callers — so the result is returned as a plain TwistStamped to
+// keep the caller side single-pathed across the two stamped twist types.
+std::optional<geometry_msgs::msg::TwistStamped> extract_twist_with_covariance_stamped_message(
+  const cdr_walker::Value & message);
 
 }  // namespace bagwiz::core
 

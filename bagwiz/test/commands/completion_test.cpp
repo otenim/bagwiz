@@ -248,6 +248,36 @@ std::filesystem::path write_traj_dump_mixed_fixture(const std::filesystem::path 
   return path;
 }
 
+// MCAP carrying the three twist (vehicle-velocity) types `pcd undistort
+// --twist` accepts (/cmd_vel Twist, /twist TwistStamped, /twist_cov
+// TwistWithCovarianceStamped) plus non-twist topics that must be excluded.
+// Topic metadata alone drives completion, so the payloads are arbitrary bytes.
+std::filesystem::path write_twist_topics_fixture(const std::filesystem::path & path)
+{
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "none";
+
+  constexpr std::array<std::byte, 4> kPayload{
+    std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
+  const auto bytes = std::span<const std::byte>(kPayload.data(), kPayload.size());
+
+  auto writer = bagwiz::io::open_write(path, options);
+  writer->declare_topic(make_topic("/cmd_vel", "geometry_msgs/msg/Twist"));
+  writer->declare_topic(make_topic("/twist", "geometry_msgs/msg/TwistStamped"));
+  writer->declare_topic(make_topic("/twist_cov", "geometry_msgs/msg/TwistWithCovarianceStamped"));
+  writer->declare_topic(make_topic("/odom", "nav_msgs/msg/Odometry"));
+  writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+  writer->write("/cmd_vel", 1'000'000'000, bytes);
+  writer->write("/twist", 2'000'000'000, bytes);
+  writer->write("/twist_cov", 3'000'000'000, bytes);
+  writer->write("/odom", 4'000'000'000, bytes);
+  writer->write("/points", 5'000'000'000, bytes);
+  writer->close();
+  return path;
+}
+
 // MCAP carrying one raw image topic (/image), one compressed image topic
 // (/image/compressed), and one non-image topic (/points). Used to verify
 // `generate video` <image_topic> completion offers both image types it operates on
@@ -1384,7 +1414,8 @@ TEST(FlagCompletionTest, PcdUndistortDashListsUndistortFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "pcd", "undistort", "-"}),
-    "--help\n--input\n--of\n--output\n--overwrite\n--pcd\n--pose\n--ref\n--threads\n-h\n-i\n-j\n-"
+    "--help\n--input\n--of\n--output\n--overwrite\n--pcd\n--pose\n--ref\n--threads\n--twist\n-h\n-"
+    "i\n-j\n-"
     "o\n-w\n");
 }
 
@@ -1418,6 +1449,36 @@ TEST_F(CompletionTest, PcdUndistortPoseRespectsPrefix)
       {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "-i", "~/fixture.mcap", "--pose",
        "/p"}),
     "/pose\n/pwc\n");
+}
+
+// `pcd undistort --twist <TAB>` completes the bag's topics of the three twist
+// types the flag accepts (Twist / TwistStamped / TwistWithCovarianceStamped),
+// excluding unsupported types, mirroring validate_undistort_topics.
+TEST_F(CompletionTest, PcdUndistortTwistCompletesTwistTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_twist_topics_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "-i", "~/fixture.mcap", "--twist",
+       ""}),
+    "/cmd_vel\n/twist\n/twist_cov\n");
+}
+
+// A typed prefix narrows the --twist candidates within the supported set.
+TEST_F(CompletionTest, PcdUndistortTwistRespectsPrefix)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_twist_topics_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "undistort", "-i", "~/fixture.mcap", "--twist",
+       "/t"}),
+    "/twist\n/twist_cov\n");
 }
 
 // `pcd undistort <bag> <pose_topic> --pcd <TAB>` completes PointCloud2 topics

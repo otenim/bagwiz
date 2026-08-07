@@ -13,6 +13,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/header.hpp>
 
@@ -314,6 +315,111 @@ extract_pose_with_covariance_stamped_impl(const cdr_walker::Value & message)
   return out;
 }
 
+bool fill_twist_object(const cdr::Object & twist_obj, geometry_msgs::msg::Twist & out)
+{
+  const auto * lin_v = find_field(twist_obj, "linear");
+  const auto * ang_v = find_field(twist_obj, "angular");
+  if (lin_v == nullptr || ang_v == nullptr) {
+    return false;
+  }
+  const auto * lin_obj = find_object(*lin_v);
+  const auto * ang_obj = find_object(*ang_v);
+  if (lin_obj == nullptr || ang_obj == nullptr) {
+    return false;
+  }
+  if (!read_xyz(*lin_obj, out.linear.x, out.linear.y, out.linear.z)) {
+    return false;
+  }
+  return read_xyz(*ang_obj, out.angular.x, out.angular.y, out.angular.z);
+}
+
+bool fill_twist_stamped_root(const cdr::Object & root, geometry_msgs::msg::TwistStamped & out)
+{
+  const auto * header_v = find_field(root, "header");
+  if (header_v == nullptr) {
+    return false;
+  }
+  const auto * header_obj = find_object(*header_v);
+  if (header_obj == nullptr) {
+    return false;
+  }
+  if (!fill_std_msgs_header(*header_obj, out.header)) {
+    return false;
+  }
+  const auto * twist_v = find_field(root, "twist");
+  if (twist_v == nullptr) {
+    return false;
+  }
+  const auto * twist_obj = find_object(*twist_v);
+  if (twist_obj == nullptr) {
+    return false;
+  }
+  return fill_twist_object(*twist_obj, out.twist);
+}
+
+bool fill_twist_with_covariance_stamped_root(
+  const cdr::Object & root, geometry_msgs::msg::TwistStamped & out)
+{
+  const auto * header_v = find_field(root, "header");
+  if (header_v == nullptr) {
+    return false;
+  }
+  const auto * header_obj = find_object(*header_v);
+  if (header_obj == nullptr) {
+    return false;
+  }
+  if (!fill_std_msgs_header(*header_obj, out.header)) {
+    return false;
+  }
+  // The outer `twist` field is a TwistWithCovariance; only its inner
+  // geometry_msgs/Twist (also named `twist`) is read, the covariance is not.
+  const auto * twc_v = find_field(root, "twist");
+  if (twc_v == nullptr) {
+    return false;
+  }
+  const auto * twc_obj = find_object(*twc_v);
+  if (twc_obj == nullptr) {
+    return false;
+  }
+  const auto * inner_v = find_field(*twc_obj, "twist");
+  if (inner_v == nullptr) {
+    return false;
+  }
+  const auto * inner_obj = find_object(*inner_v);
+  if (inner_obj == nullptr) {
+    return false;
+  }
+  return fill_twist_object(*inner_obj, out.twist);
+}
+
+std::optional<geometry_msgs::msg::TwistStamped> extract_twist_stamped_impl(
+  const cdr_walker::Value & message)
+{
+  const auto * root = find_object(message);
+  if (root == nullptr) {
+    return std::nullopt;
+  }
+  geometry_msgs::msg::TwistStamped out;
+  if (!fill_twist_stamped_root(*root, out)) {
+    return std::nullopt;
+  }
+  return out;
+}
+
+std::optional<geometry_msgs::msg::TwistStamped> extract_twist_with_covariance_stamped_impl(
+  const cdr_walker::Value & message)
+{
+  const auto * root = find_object(message);
+  if (root == nullptr) {
+    return std::nullopt;
+  }
+  geometry_msgs::msg::TwistStamped out;
+  if (!fill_twist_with_covariance_stamped_root(*root, out)) {
+    return std::nullopt;
+  }
+  return out;
+}
+
 std::optional<nav_msgs::msg::Odometry> extract_odometry_impl(const cdr_walker::Value & message)
 {
   const auto * root = find_object(message);
@@ -374,6 +480,31 @@ extract_pose_with_covariance_stamped_message(const cdr_walker::Value & message)
 std::optional<nav_msgs::msg::Odometry> extract_odometry_message(const cdr_walker::Value & message)
 {
   return extract_odometry_impl(message);
+}
+
+std::optional<geometry_msgs::msg::Twist> extract_twist_message(const cdr_walker::Value & message)
+{
+  const auto * root = find_object(message);
+  if (root == nullptr) {
+    return std::nullopt;
+  }
+  geometry_msgs::msg::Twist out;
+  if (!fill_twist_object(*root, out)) {
+    return std::nullopt;
+  }
+  return out;
+}
+
+std::optional<geometry_msgs::msg::TwistStamped> extract_twist_stamped_message(
+  const cdr_walker::Value & message)
+{
+  return extract_twist_stamped_impl(message);
+}
+
+std::optional<geometry_msgs::msg::TwistStamped> extract_twist_with_covariance_stamped_message(
+  const cdr_walker::Value & message)
+{
+  return extract_twist_with_covariance_stamped_impl(message);
 }
 
 }  // namespace bagwiz::core

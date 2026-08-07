@@ -16,6 +16,9 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 
 #include <gtest/gtest.h>
@@ -25,6 +28,7 @@
 #include <rmw/types.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -53,6 +57,10 @@ constexpr const char * kPointCloud2Type = "sensor_msgs/msg/PointCloud2";
 constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
 constexpr const char * kOdometryType = "nav_msgs/msg/Odometry";
 constexpr const char * kPoseStampedType = "geometry_msgs/msg/PoseStamped";
+constexpr const char * kTwistType = "geometry_msgs/msg/Twist";
+constexpr const char * kTwistStampedType = "geometry_msgs/msg/TwistStamped";
+constexpr const char * kTwistWithCovarianceStampedType =
+  "geometry_msgs/msg/TwistWithCovarianceStamped";
 
 bagwiz::io::CreateOptions mcap_options()
 {
@@ -222,6 +230,89 @@ void write_odometry_bag(const std::filesystem::path & path)
   w->close();
 }
 
+// make_edge variant with an arbitrary orientation (rotation given as a
+// quaternion) and no translation.
+geometry_msgs::msg::TransformStamped make_rotation_edge(
+  const std::string & parent, const std::string & child, double qz, double qw)
+{
+  geometry_msgs::msg::TransformStamped ts;
+  ts.header.frame_id = parent;
+  ts.child_frame_id = child;
+  ts.transform.rotation.z = qz;
+  ts.transform.rotation.w = qw;
+  return ts;
+}
+
+geometry_msgs::msg::Twist make_twist(double vx, double wz)
+{
+  geometry_msgs::msg::Twist twist;
+  twist.linear.x = vx;
+  twist.angular.z = wz;
+  return twist;
+}
+
+void stamp_header(std_msgs::msg::Header & header, const std::string & frame, std::int64_t stamp_ns)
+{
+  header.frame_id = frame;
+  header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
+  header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
+}
+
+// /twist: TwistStamped in `frame` carrying `twist` at every `stamp_ns` in
+// `stamps_ns`. /tf_static carries `static_edges` (possibly empty).
+void write_twist_stamped_bag(
+  const std::filesystem::path & path, const std::string & frame,
+  const geometry_msgs::msg::Twist & twist, const std::vector<std::int64_t> & stamps_ns,
+  const std::vector<geometry_msgs::msg::TransformStamped> & static_edges)
+{
+  auto w = bagwiz::io::open_write(path, mcap_options());
+  w->declare_topic(topic_info("/twist", kTwistStampedType));
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  for (const auto stamp_ns : stamps_ns) {
+    geometry_msgs::msg::TwistStamped ts;
+    stamp_header(ts.header, frame, stamp_ns);
+    ts.twist = twist;
+    write_payload(*w, "/twist", stamp_ns, serialize_typed(ts, kTwistStampedType));
+  }
+  write_payload(*w, "/tf_static", 0, bagwiz::core::serialize_tf_message(static_edges));
+  w->close();
+}
+
+// /twist: TwistWithCovarianceStamped in `frame` (covariance left zero) at every
+// stamp; /tf_static present but empty.
+void write_twist_with_covariance_bag(
+  const std::filesystem::path & path, const std::string & frame,
+  const geometry_msgs::msg::Twist & twist, const std::vector<std::int64_t> & stamps_ns)
+{
+  auto w = bagwiz::io::open_write(path, mcap_options());
+  w->declare_topic(topic_info("/twist", kTwistWithCovarianceStampedType));
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  for (const auto stamp_ns : stamps_ns) {
+    geometry_msgs::msg::TwistWithCovarianceStamped ts;
+    stamp_header(ts.header, frame, stamp_ns);
+    ts.twist.twist = twist;
+    write_payload(*w, "/twist", stamp_ns, serialize_typed(ts, kTwistWithCovarianceStampedType));
+  }
+  write_payload(*w, "/tf_static", 0, tf_payload_empty());
+  w->close();
+}
+
+// /twist: bare Twist (no header) at every stamp; the bag's log time is the
+// only stamp the builder can use. /tf_static present but empty.
+void write_bare_twist_bag(
+  const std::filesystem::path & path, const geometry_msgs::msg::Twist & twist,
+  const std::vector<std::int64_t> & stamps_ns)
+{
+  auto w = bagwiz::io::open_write(path, mcap_options());
+  w->declare_topic(topic_info("/twist", kTwistType));
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  for (const auto stamp_ns : stamps_ns) {
+    write_payload(*w, "/twist", stamp_ns, serialize_typed(twist, kTwistType));
+  }
+  write_payload(*w, "/tf_static", 0, tf_payload_empty());
+  w->close();
+}
+
 class PcdUndistortCommonTest : public ::testing::Test
 {
 protected:
@@ -330,8 +421,8 @@ TEST_F(PcdUndistortCommonTest, ValidateTopicsSuccess)
     w->close();
   }
   auto reader = bagwiz::io::open_read(bag_);
-  const bagwiz::io::TopicInfo * pose_ti =
-    bagwiz::commands::validate_undistort_topics(*reader, "/pose", {"/a", "/b"}, bag_, kLogger);
+  const bagwiz::io::TopicInfo * pose_ti = bagwiz::commands::validate_undistort_topics(
+    *reader, "/pose", /*motion_is_twist=*/false, {"/a", "/b"}, bag_, kLogger);
   ASSERT_NE(pose_ti, nullptr);
   EXPECT_EQ(pose_ti->name, "/pose");
   EXPECT_EQ(pose_ti->type, kTfMessageType);
@@ -348,17 +439,49 @@ TEST_F(PcdUndistortCommonTest, ValidateTopicsRejects)
   auto reader = bagwiz::io::open_read(bag_);
   // Pose topic missing.
   EXPECT_EQ(
-    bagwiz::commands::validate_undistort_topics(*reader, "/nope", {"/a"}, bag_, kLogger), nullptr);
+    bagwiz::commands::validate_undistort_topics(
+      *reader, "/nope", /*motion_is_twist=*/false, {"/a"}, bag_, kLogger),
+    nullptr);
   // Pose topic of an unsupported type.
   EXPECT_EQ(
-    bagwiz::commands::validate_undistort_topics(*reader, "/a", {"/a"}, bag_, kLogger), nullptr);
+    bagwiz::commands::validate_undistort_topics(
+      *reader, "/a", /*motion_is_twist=*/false, {"/a"}, bag_, kLogger),
+    nullptr);
   // --pcd topic missing.
   EXPECT_EQ(
-    bagwiz::commands::validate_undistort_topics(*reader, "/pose", {"/nope"}, bag_, kLogger),
+    bagwiz::commands::validate_undistort_topics(
+      *reader, "/pose", /*motion_is_twist=*/false, {"/nope"}, bag_, kLogger),
     nullptr);
   // --pcd topic of the wrong type.
   EXPECT_EQ(
-    bagwiz::commands::validate_undistort_topics(*reader, "/pose", {"/pose"}, bag_, kLogger),
+    bagwiz::commands::validate_undistort_topics(
+      *reader, "/pose", /*motion_is_twist=*/false, {"/pose"}, bag_, kLogger),
+    nullptr);
+}
+
+TEST_F(PcdUndistortCommonTest, ValidateTopicsTwistGate)
+{
+  {
+    auto w = bagwiz::io::open_write(bag_, mcap_options());
+    w->declare_topic(topic_info("/twist", kTwistStampedType));
+    w->declare_topic(topic_info("/pose", kPoseStampedType));
+    w->declare_topic(topic_info("/a", kPointCloud2Type));
+    w->close();
+  }
+  auto reader = bagwiz::io::open_read(bag_);
+  // Twist gate accepts a twist type and rejects a pose type...
+  const bagwiz::io::TopicInfo * twist_ti = bagwiz::commands::validate_undistort_topics(
+    *reader, "/twist", /*motion_is_twist=*/true, {"/a"}, bag_, kLogger);
+  ASSERT_NE(twist_ti, nullptr);
+  EXPECT_EQ(twist_ti->type, kTwistStampedType);
+  EXPECT_EQ(
+    bagwiz::commands::validate_undistort_topics(
+      *reader, "/pose", /*motion_is_twist=*/true, {"/a"}, bag_, kLogger),
+    nullptr);
+  // ... and the pose gate rejects a twist type.
+  EXPECT_EQ(
+    bagwiz::commands::validate_undistort_topics(
+      *reader, "/twist", /*motion_is_twist=*/false, {"/a"}, bag_, kLogger),
     nullptr);
 }
 
@@ -454,7 +577,7 @@ TEST_F(PcdUndistortCommonTest, TrajectoryFromTfMessageTopic)
   tf2::BufferCore buffer{kTfBufferCacheTime};
   const auto pose_ti = topic_info("/pose_tf", kTfMessageType);
   const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
-    bag_, pose_ti, "map", "base_link", buffer, kLogger);
+    bag_, pose_ti, "map", "base_link", /*motion_is_twist=*/false, buffer, kLogger);
   ASSERT_TRUE(built.ok()) << built.error;
   ASSERT_EQ(built.trajectory.size(), 2u);
   EXPECT_LT(built.trajectory[0].timestamp_ns, built.trajectory[1].timestamp_ns);
@@ -468,7 +591,7 @@ TEST_F(PcdUndistortCommonTest, TrajectoryFromPoseStampedUsesStaticBridge)
   tf2::BufferCore buffer{kTfBufferCacheTime};
   const auto pose_ti = topic_info("/pose", kPoseStampedType);
   const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
-    bag_, pose_ti, "map", "base_link", buffer, kLogger);
+    bag_, pose_ti, "map", "base_link", /*motion_is_twist=*/false, buffer, kLogger);
   ASSERT_TRUE(built.ok()) << built.error;
   ASSERT_EQ(built.trajectory.size(), 1u);
   // pose x=5 in "odom", bridged through the static map<-odom (tx=1) edge.
@@ -481,7 +604,7 @@ TEST_F(PcdUndistortCommonTest, TrajectoryFromOdometryTopic)
   tf2::BufferCore buffer{kTfBufferCacheTime};
   const auto pose_ti = topic_info("/odom", kOdometryType);
   const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
-    bag_, pose_ti, "map", "base_link", buffer, kLogger);
+    bag_, pose_ti, "map", "base_link", /*motion_is_twist=*/false, buffer, kLogger);
   ASSERT_TRUE(built.ok()) << built.error;
   ASSERT_EQ(built.trajectory.size(), 1u);
   EXPECT_NEAR(built.trajectory[0].tx, 3.0, 1e-6);
@@ -493,7 +616,7 @@ TEST_F(PcdUndistortCommonTest, TrajectoryFailsWithoutTfPath)
   tf2::BufferCore buffer{kTfBufferCacheTime};
   const auto pose_ti = topic_info("/pose_tf", kTfMessageType);
   const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
-    bag_, pose_ti, "map", "ghost", buffer, kLogger);
+    bag_, pose_ti, "map", "ghost", /*motion_is_twist=*/false, buffer, kLogger);
   EXPECT_FALSE(built.ok());
   EXPECT_FALSE(built.error.empty());
 }
@@ -504,7 +627,139 @@ TEST_F(PcdUndistortCommonTest, TrajectoryFailsWithoutStaticTfTopic)
   tf2::BufferCore buffer{kTfBufferCacheTime};
   const auto pose_ti = topic_info("/pose_tf", kTfMessageType);
   const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
-    bag_, pose_ti, "map", "base_link", buffer, kLogger);
+    bag_, pose_ti, "map", "base_link", /*motion_is_twist=*/false, buffer, kLogger);
+  EXPECT_FALSE(built.ok());
+  EXPECT_FALSE(built.error.empty());
+}
+
+TEST_F(PcdUndistortCommonTest, SupportedTwistTopicTypes)
+{
+  EXPECT_TRUE(bagwiz::commands::is_supported_twist_topic_type(kTwistType));
+  EXPECT_TRUE(bagwiz::commands::is_supported_twist_topic_type(kTwistStampedType));
+  EXPECT_TRUE(bagwiz::commands::is_supported_twist_topic_type(kTwistWithCovarianceStampedType));
+  EXPECT_FALSE(bagwiz::commands::is_supported_twist_topic_type(kPoseStampedType));
+  EXPECT_FALSE(bagwiz::commands::is_supported_twist_topic_type(kOdometryType));
+  EXPECT_FALSE(bagwiz::commands::is_supported_twist_topic_type(""));
+}
+
+TEST_F(PcdUndistortCommonTest, TwistTrajectoryConstantVelocity)
+{
+  // v = (1, 0, 0) m/s in --of, three samples 100 ms apart: the trajectory
+  // starts at identity and ends 0.2 m ahead with identity rotation.
+  write_twist_stamped_bag(
+    bag_, "base_link", make_twist(1.0, 0.0), {kT0Ns, kT0Ns + 100 * kMs, kT0Ns + 200 * kMs}, {});
+  tf2::BufferCore buffer{kTfBufferCacheTime};
+  const auto twist_ti = topic_info("/twist", kTwistStampedType);
+  const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, twist_ti, "map", "base_link", /*motion_is_twist=*/true, buffer, kLogger);
+  ASSERT_TRUE(built.ok()) << built.error;
+  ASSERT_EQ(built.trajectory.size(), 3u);
+  EXPECT_EQ(built.trajectory[0].timestamp_ns, kT0Ns);
+  EXPECT_NEAR(built.trajectory[0].tx, 0.0, 1e-12);
+  EXPECT_NEAR(built.trajectory[0].qw, 1.0, 1e-12);
+  EXPECT_NEAR(built.trajectory[1].tx, 0.1, 1e-12);
+  EXPECT_NEAR(built.trajectory[2].tx, 0.2, 1e-12);
+  EXPECT_NEAR(built.trajectory[2].ty, 0.0, 1e-12);
+  EXPECT_NEAR(built.trajectory[2].qw, 1.0, 1e-12);
+}
+
+TEST_F(PcdUndistortCommonTest, TwistTrajectoryConstantArcIsExact)
+{
+  // Constant body-frame twist v = (1, 0, 0), w = (0, 0, 1) over 1 s. Each
+  // interval is integrated with the exact constant-twist map, and those exact
+  // relative transforms compose to the exact overall arc regardless of the
+  // sample partition, so the end pose is (sin 1, 1 - cos 1) with a 1 rad
+  // rotation about z. (Exact agreement here is the algorithmically guaranteed
+  // kind: a fixed-order, per-element integration over immutable input.)
+  std::vector<std::int64_t> stamps;
+  for (int k = 0; k <= 10; ++k) {
+    stamps.push_back(kT0Ns + k * 100 * kMs);
+  }
+  write_twist_stamped_bag(bag_, "base_link", make_twist(1.0, 1.0), stamps, {});
+  tf2::BufferCore buffer{kTfBufferCacheTime};
+  const auto twist_ti = topic_info("/twist", kTwistStampedType);
+  const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, twist_ti, "map", "base_link", /*motion_is_twist=*/true, buffer, kLogger);
+  ASSERT_TRUE(built.ok()) << built.error;
+  ASSERT_EQ(built.trajectory.size(), 11u);
+  const auto & end = built.trajectory.back();
+  EXPECT_NEAR(end.tx, std::sin(1.0), 1e-9);
+  EXPECT_NEAR(end.ty, 1.0 - std::cos(1.0), 1e-9);
+  EXPECT_NEAR(end.tz, 0.0, 1e-12);
+  EXPECT_NEAR(end.qz, std::sin(0.5), 1e-9);
+  EXPECT_NEAR(end.qw, std::cos(0.5), 1e-9);
+}
+
+TEST_F(PcdUndistortCommonTest, TwistWithCovarianceTrajectory)
+{
+  // Same trajectory as the plain TwistStamped case; the covariance is ignored.
+  write_twist_with_covariance_bag(
+    bag_, "base_link", make_twist(2.0, 0.0), {kT0Ns, kT0Ns + 500 * kMs});
+  tf2::BufferCore buffer{kTfBufferCacheTime};
+  const auto twist_ti = topic_info("/twist", kTwistWithCovarianceStampedType);
+  const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, twist_ti, "map", "base_link", /*motion_is_twist=*/true, buffer, kLogger);
+  ASSERT_TRUE(built.ok()) << built.error;
+  ASSERT_EQ(built.trajectory.size(), 2u);
+  EXPECT_NEAR(built.trajectory.back().tx, 1.0, 1e-12);
+}
+
+TEST_F(PcdUndistortCommonTest, BareTwistUsesLogTime)
+{
+  // No header: sample stamps come from the bag's log time, and the twist is
+  // assumed to be in --of already.
+  write_bare_twist_bag(bag_, make_twist(1.0, 0.0), {kT0Ns, kT0Ns + 100 * kMs, kT0Ns + 200 * kMs});
+  tf2::BufferCore buffer{kTfBufferCacheTime};
+  const auto twist_ti = topic_info("/twist", kTwistType);
+  const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, twist_ti, "map", "base_link", /*motion_is_twist=*/true, buffer, kLogger);
+  ASSERT_TRUE(built.ok()) << built.error;
+  ASSERT_EQ(built.trajectory.size(), 3u);
+  EXPECT_EQ(built.trajectory[0].timestamp_ns, kT0Ns);
+  EXPECT_NEAR(built.trajectory.back().tx, 0.2, 1e-12);
+}
+
+TEST_F(PcdUndistortCommonTest, TwistFrameRotatedViaStaticTf)
+{
+  // Twist expressed in "sensor", 90 deg about z from base_link: v = (1, 0, 0)
+  // in sensor must integrate along +y in --of.
+  write_twist_stamped_bag(
+    bag_, "sensor", make_twist(1.0, 0.0), {kT0Ns, kT0Ns + 200 * kMs},
+    {make_rotation_edge("base_link", "sensor", std::sqrt(0.5), std::sqrt(0.5))});
+  tf2::BufferCore buffer{kTfBufferCacheTime};
+  const auto twist_ti = topic_info("/twist", kTwistStampedType);
+  const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, twist_ti, "map", "base_link", /*motion_is_twist=*/true, buffer, kLogger);
+  ASSERT_TRUE(built.ok()) << built.error;
+  ASSERT_EQ(built.trajectory.size(), 2u);
+  EXPECT_NEAR(built.trajectory.back().tx, 0.0, 1e-9);
+  EXPECT_NEAR(built.trajectory.back().ty, 0.2, 1e-9);
+}
+
+TEST_F(PcdUndistortCommonTest, TwistUnresolvableFrameFails)
+{
+  write_twist_stamped_bag(bag_, "ghost", make_twist(1.0, 0.0), {kT0Ns, kT1Ns}, {});
+  tf2::BufferCore buffer{kTfBufferCacheTime};
+  const auto twist_ti = topic_info("/twist", kTwistStampedType);
+  const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, twist_ti, "map", "base_link", /*motion_is_twist=*/true, buffer, kLogger);
+  EXPECT_FALSE(built.ok());
+  EXPECT_FALSE(built.error.empty());
+}
+
+TEST_F(PcdUndistortCommonTest, TwistNoSamplesFails)
+{
+  {
+    auto w = bagwiz::io::open_write(bag_, mcap_options());
+    w->declare_topic(topic_info("/twist", kTwistStampedType));
+    w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+    write_payload(*w, "/tf_static", 0, tf_payload_empty());
+    w->close();
+  }
+  tf2::BufferCore buffer{kTfBufferCacheTime};
+  const auto twist_ti = topic_info("/twist", kTwistStampedType);
+  const auto built = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, twist_ti, "map", "base_link", /*motion_is_twist=*/true, buffer, kLogger);
   EXPECT_FALSE(built.ok());
   EXPECT_FALSE(built.error.empty());
 }

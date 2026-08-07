@@ -101,12 +101,12 @@ thread count.
 ## `bagwiz pcd undistort`
 
 Motion-deskew (undistort) one or more `sensor_msgs/msg/PointCloud2` topics
-using an external pose topic as the motion source. `pcd undistort` never
-estimates motion itself — no SLAM, no scan matching — it only reads a
-pose/trajectory topic that is already in the bag (or joined into it
-beforehand, e.g. with `traj join`) and moves every point back to one
-reference time per scan. Given the same input, it always produces the same
-output.
+using an external pose or twist (vehicle-velocity) topic as the motion source.
+`pcd undistort` never estimates motion itself — no SLAM, no scan matching — it
+only reads a pose/trajectory/velocity topic that is already in the bag (or
+joined into it beforehand, e.g. with `traj join`) and moves every point back
+to one reference time per scan. Given the same input, it always produces the
+same output.
 
 This is the per-cloud counterpart to `pcd concat` above, which does not
 compensate for motion at all. Since deskew rewrites only xyz and per-point
@@ -116,7 +116,7 @@ intact for the downstream merge.
 ### Usage
 
 ```text
-bagwiz pcd undistort -i <input> --pose <pose_topic> --pcd <topic>... [OPTIONS]
+bagwiz pcd undistort -i <input> (--pose <pose_topic> | --twist <twist_topic>) --pcd <topic>... [OPTIONS]
 ```
 
 ### Examples
@@ -136,6 +136,11 @@ bagwiz pcd undistort -i drive.mcap --pose /localization/kinematic_state \
   --pcd /sensing/lidar/top/pointcloud /sensing/lidar/left/pointcloud \
   -o undistorted.mcap
 
+# Deskew from a vehicle-velocity topic (TwistWithCovarianceStamped) instead of
+# poses: the velocity is dead-reckoned into the relative motion.
+bagwiz pcd undistort -i drive.mcap --twist /vehicle/status/velocity_status \
+  --pcd /sensing/lidar/top/pointcloud
+
 # Composition workflow: derive a trajectory with SLAM, embed it as a topic,
 # then deskew against it.
 bagwiz map slam -i drive.mcap --pcd /points -o out/                 # -> out/traj.tum
@@ -145,23 +150,26 @@ bagwiz pcd undistort -i drive.mcap --pose /slam/tf --pcd /points -o undistorted.
 
 ### Options
 
-| Flag                    | Description                                                                                                                                                                                                         |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** Input bag (file or directory).                                                                                                                                                                        |
-| `--pose <pose_topic>`   | **Required.** Self-position source topic already in the bag. Type must be one of `tf2_msgs/msg/TFMessage`, `nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped`, `geometry_msgs/msg/PoseWithCovarianceStamped`. |
-| `--pcd <topic>`         | **Required.** PointCloud2 topic(s) to deskew. Variadic and repeatable — `--pcd /a /b` and `--pcd /a --pcd /b` are equivalent. At least one is required.                                                             |
-| `--ref <frame>`         | Reference frame the trajectory is resolved in (same convention as `traj dump`). Default: `map`.                                                                                                                     |
-| `--of <frame>`          | Tracked body frame. The trajectory is obtained as `T_ref_of` (e.g. `T_map_base_link`). Default: `base_link`.                                                                                                        |
-| `-o`, `--output <path>` | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                                                        |
-| `-w`, `--overwrite`     | Replace `-o/--output` if it already exists. Has no effect in in-place mode.                                                                                                                                         |
-| `-j`, `--threads <N>`   | Number of worker threads for Pass 2. Default: `8`. Accepts `0`–`256`; `0` uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; in-range values above hardware concurrency are capped to it. |
+| Flag                    | Description                                                                                                                                                                                                                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                           |
+| `--pose <pose_topic>`   | Self-position source topic already in the bag. Type must be one of `tf2_msgs/msg/TFMessage`, `nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped`, `geometry_msgs/msg/PoseWithCovarianceStamped`. Exactly one of `--pose` / `--twist` is required.                                 |
+| `--twist <twist_topic>` | Vehicle-velocity source topic already in the bag, integrated (dead-reckoned) into the deskew motion. Type must be one of `geometry_msgs/msg/Twist`, `geometry_msgs/msg/TwistStamped`, `geometry_msgs/msg/TwistWithCovarianceStamped`. Exactly one of `--pose` / `--twist` is required. |
+| `--pcd <topic>`         | **Required.** PointCloud2 topic(s) to deskew. Variadic and repeatable — `--pcd /a /b` and `--pcd /a --pcd /b` are equivalent. At least one is required.                                                                                                                                |
+| `--ref <frame>`         | Reference frame the trajectory is resolved in (same convention as `traj dump`). Default: `map`. Has no effect with `--twist` (a velocity source carries only relative motion).                                                                                                         |
+| `--of <frame>`          | Tracked body frame. The trajectory is obtained as `T_ref_of` (e.g. `T_map_base_link`). Default: `base_link`.                                                                                                                                                                           |
+| `-o`, `--output <path>` | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                                                                                                                           |
+| `-w`, `--overwrite`     | Replace `-o/--output` if it already exists. Has no effect in in-place mode.                                                                                                                                                                                                            |
+| `-j`, `--threads <N>`   | Number of worker threads for Pass 2. Default: `8`. Accepts `0`–`256`; `0` uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; in-range values above hardware concurrency are capped to it.                                                                    |
 
 ### Trajectory resolution
 
 Pass 1 resolves the trajectory. `<input>` must have a `...tf_static` topic —
-it is loaded together with `<pose_topic>` to resolve `--ref` → `--of`. Only
-`<pose_topic>` and the bag's static TF feed the trajectory; no other topic
-(e.g. a bag's own dynamic `/tf`) is read automatically. The composition
+it is loaded together with the motion-source topic to resolve `--ref` → `--of`
+(with `--pose`) or the twist frame (with `--twist`). Only the motion-source
+topic and the bag's static TF feed the trajectory; no other topic
+(e.g. a bag's own dynamic `/tf`) is read automatically. With `--pose`, the
+composition
 mirrors `traj dump`'s: for `TFMessage`, the `--ref` → `--of` chain is
 resolved against tf_static plus the edges carried on `<pose_topic>` itself,
 then sampled at every stamp published on that chain; for `Odometry` /
@@ -172,12 +180,31 @@ difference from `traj dump`: an unresolvable bridge is fatal here, where
 `traj dump` would just skip that one sample. An unresolvable `--ref` → `--of`
 overall is likewise fatal — checked before anything is written.
 
+With `--twist`, Pass 1 instead dead-reckons the velocity samples into a
+relative trajectory: starting from identity at the first sample, each interval
+between consecutive samples is advanced with a zero-order-hold constant-twist
+model (exact axis-angle rotation and SO(3) left-Jacobian translation under the
+sample's linear/angular velocity). Deskew only consumes the relative motion
+`T(t_ref)⁻¹·T(t_i)`, so the arbitrary integration origin cancels and `--ref`
+plays no role. For the stamped types (`TwistStamped`,
+`TwistWithCovarianceStamped`; the covariance is ignored) the samples are
+stamped with `header.stamp`, and a `header.frame_id` that is neither empty nor
+`--of` is rotated into `--of` via the bag's static TF (an unresolvable chain
+is fatal). A bare `Twist` has no header: samples are stamped with the bag's
+message reception (log) time — so accuracy additionally depends on the
+publisher→recorder latency being small — and the velocity is assumed to be
+expressed in the `--of` frame. Either way, accuracy follows the twist topic's
+rate and quality: where `--pose` deskews against measured poses, `--twist`
+deskews against integrated velocities, and any velocity bias accumulates over
+the scan duration.
+
 ### Per-topic extrinsics and time fields
 
 For every `--pcd` topic, the sensor extrinsic `E = T_of_C` (`C` = that topic's
 cloud `frame_id`) is resolved from the same frame sources as `--ref` → `--of`:
-the bag's `*tf_static`, plus `<pose_topic>` itself when it is a `TFMessage`
-topic (identity when `C == --of`). For a statically-mounted sensor — the
+the bag's `*tf_static`, plus the motion-source topic itself when it is a
+`TFMessage` topic (identity when `C == --of`). For a statically-mounted
+sensor — the
 normal case — this extrinsic comes from `tf_static` alone. A missing chain is
 fatal. Each topic's first message must also already carry a per-point time
 field (checked by name, count, and datatype: one of `t`, `time`, `time_stamp`,
@@ -238,10 +265,12 @@ Reproducibility": it is held strictly, at any thread count.
 | Situation                                                                                                                 | Result                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | No `--pcd` given                                                                                                          | Error.                                                                                                    |
-| `pose_topic` absent from `<input>`, or not one of the four supported types                                                | Error.                                                                                                    |
+| Neither `--pose` nor `--twist` given, or both                                                                             | Error.                                                                                                    |
+| The motion-source topic is absent from `<input>`, or not one of its supported types                                       | Error.                                                                                                    |
 | A `--pcd` topic absent from `<input>`, or not `PointCloud2`                                                               | Error.                                                                                                    |
 | `<input>` has no `...tf_static` topic                                                                                     | Fatal — needed to resolve `--ref` → `--of` and every `--pcd` topic's extrinsic.                           |
 | `--ref` → `--of` cannot be resolved from `pose_topic` + the bag's static TF                                               | Fatal.                                                                                                    |
+| A `--twist` topic's `header.frame_id` has no static TF chain to `--of`                                                    | Fatal.                                                                                                    |
 | A `--pcd` topic's first message has no per-point time field                                                               | Fatal.                                                                                                    |
 | A later `--pcd` cloud has no usable per-point time field                                                                  | Warning; cloud passed through un-deskewed.                                                                |
 | `--of` → a `--pcd` topic's cloud frame is not reachable via `*tf_static` + `<pose_topic>`                                 | Fatal.                                                                                                    |

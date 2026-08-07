@@ -37,6 +37,9 @@ namespace bagwiz::commands
 // The pose topic types the trajectory builder can consume.
 [[nodiscard]] bool is_supported_pose_topic_type(const std::string & type);
 
+// The twist (vehicle-velocity) topic types the trajectory builder can consume.
+[[nodiscard]] bool is_supported_twist_topic_type(const std::string & type);
+
 // The 3 pose-shaped topic types that carry their own body pose directly
 // (as opposed to TFMessage, which is a set of independent edges).
 enum class PoseComposeKind { kOdometry, kPoseStamped, kPoseWithCovarianceStamped };
@@ -59,13 +62,15 @@ struct PoseSample
 [[nodiscard]] bool decode_pose_sample(
   PoseComposeKind kind, const core::cdr_walker::Value & value, PoseSample & out);
 
-// Validate the pose topic (present, of a supported type) and every --pcd
-// topic (present, PointCloud2) against the bag's topic list, logging the
-// command's usual errors to `logger` on the first failure. Returns the pose
+// Validate the motion-source topic (present, of a supported type) and every
+// --pcd topic (present, PointCloud2) against the bag's topic list, logging the
+// command's usual errors to `logger` on the first failure. `motion_is_twist`
+// selects the type gate: twist types (is_supported_twist_topic_type) when true,
+// pose types (is_supported_pose_topic_type) when false. Returns the motion
 // topic's TopicInfo (aliasing the reader's internal list, valid until the
 // reader is destroyed), or nullptr after logging when validation fails.
 [[nodiscard]] const io::TopicInfo * validate_undistort_topics(
-  const io::BagReader & reader, const std::string & pose_topic,
+  const io::BagReader & reader, const std::string & motion_topic, bool motion_is_twist,
   const std::vector<std::string> & pcd_topics, const std::filesystem::path & bag_path,
   const char * logger);
 
@@ -80,12 +85,15 @@ struct TrajectoryBuildResult
 
 // Pass 1: load the bag's static TF into `buffer` (kept by the caller for the
 // extrinsic resolution that follows), build the --of -> --ref trajectory from
-// the pose topic — TFMessage edges, or pose / odometry samples composed with
-// static-TF bridges — sorted by stamp. Logs the command's errors to `logger`;
-// on failure returns with !ok() and `error` set.
+// the motion-source topic — TFMessage edges, pose / odometry samples composed
+// with static-TF bridges, or (when `motion_is_twist`) twist samples integrated
+// into a relative trajectory — sorted by stamp. With a twist source the motion
+// is relative, so `ref` is unused. Logs the command's errors to `logger`; on
+// failure returns with !ok() and `error` set.
 [[nodiscard]] TrajectoryBuildResult build_sorted_of_ref_trajectory(
-  const std::filesystem::path & input_path, const io::TopicInfo & pose_ti, const std::string & ref,
-  const std::string & of, tf2::BufferCore & buffer, const char * logger);
+  const std::filesystem::path & input_path, const io::TopicInfo & motion_ti,
+  const std::string & ref, const std::string & of, bool motion_is_twist, tf2::BufferCore & buffer,
+  const char * logger);
 
 // find_point_time_field only reads `.fields`, so a header-only peek (no point
 // data copy) is enough to tell whether a --pcd topic has a usable per-point

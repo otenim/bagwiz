@@ -363,12 +363,16 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_pcd_concat_common_test ${bagwiz_test_libs} fmt::fmt)
 
+  # rmw + geometry_msgs are linked for the typed round-trip through
+  # rmw_serialize (the TwistStamped fixture; pcd_undistort_common_test idiom).
   ament_add_gtest(bagwiz_pcd_undistort_command_test
     test/commands/pcd_undistort_test.cpp
     src/commands/pcd_undistort.cpp
     src/commands/pcd_undistort_common.cpp)
   target_include_directories(bagwiz_pcd_undistort_command_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(bagwiz_pcd_undistort_command_test ${bagwiz_test_libs} fmt::fmt)
+  target_link_libraries(
+    bagwiz_pcd_undistort_command_test ${bagwiz_test_libs} fmt::fmt
+    ${geometry_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
 
   # pcd_undistort_common.hpp lives in src/commands (CLI-internal, not
   # installed), so this test adds src/commands to its include path
