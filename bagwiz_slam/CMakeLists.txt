@@ -129,6 +129,7 @@ add_library(bagwiz_slam
   src/core/slam/ground_segmentation.cpp
   src/core/slam/gnss_sample.cpp
   src/core/slam/imu_sample.cpp
+  src/core/slam/instance_occupancy.cpp
   src/core/slam/lidar_scan.cpp
   src/core/slam/map_colorizer.cpp
   src/core/slam/map_viewer_open.cpp
@@ -456,6 +457,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_slam_euclidean_clustering_test test/core/slam/euclidean_clustering_test.cpp)
   target_link_libraries(bagwiz_slam_euclidean_clustering_test bagwiz_slam)
+
+  ament_add_gtest(bagwiz_slam_instance_occupancy_test test/core/slam/instance_occupancy_test.cpp)
+  target_link_libraries(bagwiz_slam_instance_occupancy_test bagwiz_slam)
 
   ament_add_gtest(bagwiz_slam_imu_sample_test test/core/slam/imu_sample_test.cpp)
   target_link_libraries(bagwiz_slam_imu_sample_test bagwiz_slam)
