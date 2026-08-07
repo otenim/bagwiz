@@ -248,8 +248,13 @@ TEST(CameraInfoProcessorSkeleton, NonTargetPassesThroughWithoutDeserializing)
   // passthrough proves non-target topics never touch the rmw round-trip.
   CountingProcessor processor({"/ci"}, nullptr);
   const std::vector<std::byte> payload{std::byte{0x01}, std::byte{0x02}};
+  bagwiz::io::TopicInfo topic;
+  topic.name = "/other";
+  bagwiz::io::RawMessage msg;
+  msg.topic = &topic;
+  msg.payload = payload;
   std::vector<std::byte> out;
-  EXPECT_EQ(processor.transform("/other", payload, out), TransformAction::kPassthrough);
+  EXPECT_EQ(processor.transform(msg, out), TransformAction::kPassthrough);
   EXPECT_TRUE(out.empty());
   EXPECT_EQ(processor.mutations(), 0);
 }

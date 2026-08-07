@@ -343,11 +343,10 @@ public:
   }
   [[nodiscard]] bool transforms() const override { return true; }
   [[nodiscard]] pipeline::TransformAction transform(
-    const std::string & in_topic, std::span<const std::byte> in,
-    std::vector<std::byte> & out) const override
+    const bagwiz::io::RawMessage & msg, std::vector<std::byte> & out) const override
   {
-    if (in_topic == "/foo") {
-      out.assign(in.begin(), in.end());
+    if (msg.topic->name == "/foo") {
+      out.assign(msg.payload.begin(), msg.payload.end());
       out.push_back(std::byte{0xFF});
       return pipeline::TransformAction::kWrite;
     }
@@ -365,11 +364,10 @@ public:
   }
   [[nodiscard]] bool transforms() const override { return true; }
   [[nodiscard]] pipeline::TransformAction transform(
-    const std::string & in_topic, std::span<const std::byte> /*in*/,
-    std::vector<std::byte> & /*out*/) const override
+    const bagwiz::io::RawMessage & msg, std::vector<std::byte> & /*out*/) const override
   {
-    return in_topic == "/bar" ? pipeline::TransformAction::kSkip
-                              : pipeline::TransformAction::kPassthrough;
+    return msg.topic->name == "/bar" ? pipeline::TransformAction::kSkip
+                                     : pipeline::TransformAction::kPassthrough;
   }
 };
 

@@ -127,8 +127,7 @@ public:
   [[nodiscard]] bool transforms() const override { return true; }
 
   [[nodiscard]] core::pipeline::TransformAction transform(
-    const std::string & in_topic, std::span<const std::byte> in,
-    std::vector<std::byte> & out) const override;
+    const io::RawMessage & msg, std::vector<std::byte> & out) const override;
 
 protected:
   // Overwrite the fields this command rewrites on one target-topic message,

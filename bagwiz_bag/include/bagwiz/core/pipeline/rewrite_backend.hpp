@@ -83,14 +83,16 @@ public:
   [[nodiscard]] virtual bool transforms() const { return false; }
 
   // Produce the OUTPUT payload for a kept message. Only called when transforms()
-  // is true. The implementation decodes/converts `in` into `out` and returns a
-  // TransformAction (write `out`, pass `in` through verbatim, or skip). Runs on
-  // the same thread that reads (the producer thread under PipelinedBackend), so
-  // a stateful decoder it owns is never shared across threads. `out` is provided
-  // cleared and may be grown/reused across calls.
+  // is true. `msg` is the full input message (topic, receive time, payload) so a
+  // transform can depend on the receive time (e.g. `stamp sync` writes it into
+  // header.stamp); its views are only valid for the duration of the call. The
+  // implementation decodes/converts `msg.payload` into `out` and returns a
+  // TransformAction (write `out`, pass the input through verbatim, or skip).
+  // Runs on the same thread that reads (the producer thread under
+  // PipelinedBackend), so a stateful decoder it owns is never shared across
+  // threads. `out` is provided cleared and may be grown/reused across calls.
   [[nodiscard]] virtual TransformAction transform(
-    const std::string & /*in_topic*/, std::span<const std::byte> /*in*/,
-    std::vector<std::byte> & /*out*/) const
+    const io::RawMessage & /*msg*/, std::vector<std::byte> & /*out*/) const
   {
     return TransformAction::kPassthrough;
   }

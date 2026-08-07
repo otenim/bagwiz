@@ -20,9 +20,9 @@
 #include <unordered_set>
 #include <vector>
 
-// header.stamp helpers for `bagwiz trim --stamp header` (CLI-internal, lives
-// next to trim.cpp; tests add src/commands to their include path — the
-// traj_common idiom).
+// header.stamp helpers shared by `bagwiz trim --stamp header` and
+// `bagwiz stamp sync` (CLI-internal, lives next to trim.cpp; tests add
+// src/commands to their include path — the traj_common idiom).
 namespace bagwiz::commands
 {
 
@@ -40,6 +40,16 @@ namespace bagwiz::commands
 // encapsulation plus the stamp.
 [[nodiscard]] std::optional<std::int64_t> read_leading_header_stamp_ns(
   std::span<const std::byte> payload);
+
+// Overwrite the leading std_msgs/Header stamp of a CDR-encapsulated ROS 2
+// message with `stamp_ns`, honoring the payload's encapsulation endianness.
+// The caller must have verified the type leads with a Header
+// (schema_leads_with_header). Returns false — leaving the payload untouched —
+// when it is too short to hold the encapsulation plus the stamp, or when
+// `stamp_ns` is not representable as a builtin_interfaces/Time (negative, or
+// its seconds overflow int32).
+[[nodiscard]] bool write_leading_header_stamp_ns(
+  std::span<std::byte> payload, std::int64_t stamp_ns);
 
 // Result of classifying a bag's topics by leading-Header presence.
 struct HeaderedTopics

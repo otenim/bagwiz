@@ -1085,6 +1085,12 @@ TEST(FlagCompletionTest, TopicSubcommandListsDropKeepAndRename)
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "topic", ""}), "drop\nkeep\nrename\n");
 }
 
+// `bagwiz stamp <TAB>` lists the command group's sole action verb.
+TEST(FlagCompletionTest, StampSubcommandListsSync)
+{
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "stamp", ""}), "sync\n");
+}
+
 // `bagwiz map <TAB>` lists the command group's action verbs (slam, viewer),
 // sorted.
 TEST(FlagCompletionTest, MapSubcommandListsSlamAndViewer)
@@ -1473,6 +1479,22 @@ TEST(FlagCompletionTest, TopicDropDashListsDropFlags)
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "topic", "drop", "-"}),
     "--help\n--input\n--output\n--overwrite\n--topics\n-h\n-i\n-o\n-t\n-w\n");
+}
+
+// `bagwiz stamp -` is the command-group slot; only the implicit help flags
+// appear (sync's own flags live one slot deeper).
+TEST(FlagCompletionTest, StampParentDashListsHelpFlags)
+{
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "stamp", "-"}), "--help\n-h\n");
+}
+
+// `stamp sync -` surfaces the action's flags (--input/-i, --output/-o,
+// --overwrite/-w) plus the implicit help flags, sorted.
+TEST(FlagCompletionTest, StampSyncDashListsSyncFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "stamp", "sync", "-"}),
+    "--help\n--input\n--output\n--overwrite\n-h\n-i\n-o\n-w\n");
 }
 
 // `keep` binds the same way as `drop`.

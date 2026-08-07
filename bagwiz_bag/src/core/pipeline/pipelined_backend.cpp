@@ -82,7 +82,7 @@ RewriteCounts read_loop(
       xform_buf.clear();
       const TransformAction action = [&] {
         auto s = prof.time(Stage::kProcess);
-        return processor.transform(raw.topic->name, raw.payload, xform_buf);
+        return processor.transform(raw, xform_buf);
       }();
       if (action == TransformAction::kSkip) {
         prof.add_message(in_size, 0);
