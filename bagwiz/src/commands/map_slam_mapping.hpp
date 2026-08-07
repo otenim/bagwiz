@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 // Internals of `map slam`'s mapping run, split out of map_slam.cpp so the
 // config fill, the progress setup, the output writing, and the run summary
@@ -48,6 +49,16 @@ namespace bagwiz::commands
 //     LiDAR-map post-processors (ray-cast scans / dense-neighborhood filter)
 //     and meaningless on a sparse landmark map.
 [[nodiscard]] std::string validate_mode_flags(const MapSlamArgs & args);
+
+// Whether a PointCloud2 frame_id looks like a vehicle or world frame rather
+// than a single sensor's own frame (exact match against the conventional
+// names: base_link, base_footprint, map, odom). Such a frame means the topic
+// is a concatenated/fused cloud whose per-point emitter is unknown, so
+// `--remove-dynamic` with the dufomap method would ray-cast from wrong
+// origins and silently corrupt the map — the caller warns and points at
+// --dynamic-method erasor2. Heuristic on purpose (frame naming is
+// convention), hence a warning, never a refusal.
+[[nodiscard]] bool is_vehicle_like_frame(std::string_view frame_id);
 
 // Fill the CloudMapperConfig from the parsed CLI arguments.
 // `gnss_antenna_offset` is the antenna lever-arm (T_cloud_gnss.translation)

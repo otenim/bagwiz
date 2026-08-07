@@ -175,6 +175,24 @@ struct MapSlamArgs
   // to ~d_p * dynamic_resolution cannot delete static points. 0 disables the
   // guard; higher is more conservative.
   int dynamic_neighborhood = 1;
+  // Dynamic-removal method for remove_dynamic: "dufomap" is the void-region
+  // ray casting above (the most accurate choice, but only geometrically valid
+  // when the --pcd topic is a single-sensor frame), "erasor2" the
+  // instance-aware pseudo-occupancy method, which needs no per-point ray
+  // origin and is the choice for concatenated multi-LiDAR topics.
+  std::string dynamic_method = "dufomap";
+  // Sensor height in meters over the local ground, anchoring the erasor2
+  // method's height band. Defaults to 0 because erasor2 targets vehicle-frame
+  // concatenated topics whose origin sits at ground level (e.g. Autoware
+  // base_link); set the mount height when the topic is a raw sensor frame.
+  double dynamic_sensor_height = 0.0;
+  // Presence records the CLI layer fills so validate_mode_flags can reject
+  // tuning options passed to the method they do not affect (CLI11 cannot
+  // express value-conditional exclusions): whether any of --dynamic-res /
+  // --dynamic-ds / --dynamic-dp was given, and whether --dynamic-sensor-height
+  // was.
+  bool dynamic_dufomap_tuning_given = false;
+  bool dynamic_sensor_height_given = false;
   // Overwrite the output file(s) if they already exist.
   bool overwrite = false;
   // After writing map.pcd, serve it over a loopback HTTP server and open the

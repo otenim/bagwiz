@@ -252,6 +252,29 @@ private:
         "0 disables the guard; higher is more conservative on static points.")
       ->check(CLI::Range(0, 8))
       ->needs(remove_dynamic_flag);
+    sub
+      ->add_option(
+        "--dynamic-method", slam_args_.dynamic_method,
+        "Classifier behind --remove-dynamic (default dufomap). dufomap is the void-region "
+        "ray casting described above: the most accurate choice, but only geometrically "
+        "valid when every point of the --pcd topic was emitted from that topic's frame "
+        "origin (a single-sensor topic). erasor2 (ERASOR2-style instance-aware "
+        "pseudo-occupancy) casts no rays and needs only one pose per cloud, so it is the "
+        "choice for concatenated multi-LiDAR topics (e.g. an Autoware concatenate output "
+        "in base_link), where dufomap would silently carve wrong free space. "
+        "--dynamic-res/--dynamic-ds/--dynamic-dp tune dufomap only; "
+        "--dynamic-sensor-height tunes erasor2 only.")
+      ->check(CLI::IsMember({"dufomap", "erasor2"}))
+      ->needs(remove_dynamic_flag);
+    sub
+      ->add_option(
+        "--dynamic-sensor-height", slam_args_.dynamic_sensor_height,
+        "Sensor height in meters over the local ground, anchoring the height band of "
+        "--dynamic-method erasor2 (default 0: a vehicle-frame concatenated topic's "
+        "origin, e.g. Autoware base_link, sits at ground level). Set the mount height "
+        "when the --pcd topic is a raw single-sensor frame.")
+      ->check(CLI::NonNegativeNumber)
+      ->needs(remove_dynamic_flag);
     sub->add_flag(
       "-w,--overwrite", slam_args_.overwrite, "Overwrite the output file(s) if they already exist");
     sub->add_flag(
@@ -293,7 +316,16 @@ private:
         "'cuda' is rejected and 'auto' resolves to CPU. The two backends' numbers are "
         "not bit-identical.")
       ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
-    sub->callback([this]() { selected_ = Subcommand::kSlam; });
+    sub->callback([this, sub]() {
+      selected_ = Subcommand::kSlam;
+      // Presence records for validate_mode_flags: CLI11 cannot express "option
+      // A is only valid when option B holds value V", so the per-method tuning
+      // options are checked after parse, on whether they were given at all.
+      slam_args_.dynamic_dufomap_tuning_given = sub->count("--dynamic-res") > 0 ||
+                                                sub->count("--dynamic-ds") > 0 ||
+                                                sub->count("--dynamic-dp") > 0;
+      slam_args_.dynamic_sensor_height_given = sub->count("--dynamic-sensor-height") > 0;
+    });
   }
 
   void configure_viewer(CLI::App & app)

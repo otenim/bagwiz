@@ -31,6 +31,7 @@
 namespace
 {
 using bagwiz::commands::build_mapper_config;
+using bagwiz::commands::is_vehicle_like_frame;
 using bagwiz::commands::MapSlamArgs;
 using bagwiz::commands::remove_isolated_map_points;
 using bagwiz::commands::resolve_scan_progress;
@@ -172,6 +173,22 @@ TEST(BuildMapperConfig, CopiesTheArguments)
   EXPECT_DOUBLE_EQ(config.gnss_antenna_offset[0], 4.0);
   EXPECT_DOUBLE_EQ(config.gnss_antenna_offset[1], 5.0);
   EXPECT_DOUBLE_EQ(config.gnss_antenna_offset[2], 6.0);
+}
+
+TEST(BuildMapperConfig, MapsTheDynamicMethodAndSensorHeight)
+{
+  auto args = make_args();
+  args.dynamic_method = "erasor2";
+  args.dynamic_sensor_height = 1.5;
+  const auto config = build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {});
+  EXPECT_EQ(config.dynamic_method, bagwiz::core::slam::DynamicRemovalMethod::kErasor2);
+  EXPECT_DOUBLE_EQ(config.dynamic_erasor.sensor_height, 1.5);
+}
+
+TEST(BuildMapperConfig, DefaultsToTheDufomapMethod)
+{
+  const auto config = build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {});
+  EXPECT_EQ(config.dynamic_method, bagwiz::core::slam::DynamicRemovalMethod::kDufomap);
 }
 
 TEST(BuildMapperConfig, LidarOnlyWithoutGnss)
@@ -466,6 +483,57 @@ TEST(ValidateModeFlags, LidarRunIsValid)
 {
   const auto args = make_args();
   EXPECT_TRUE(validate_mode_flags(args).empty());
+}
+
+// The --dynamic-* tuning options each affect exactly one method; passing one
+// to the other method must be an error, not a silent no-op.
+TEST(ValidateModeFlags, DufomapTuningRejectedWithErasor2)
+{
+  auto args = make_args();
+  args.dynamic_method = "erasor2";
+  args.dynamic_dufomap_tuning_given = true;
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("--dynamic-res"), std::string::npos) << error;
+  EXPECT_NE(error.find("erasor2"), std::string::npos) << error;
+}
+
+TEST(ValidateModeFlags, SensorHeightRejectedWithDufomap)
+{
+  auto args = make_args();  // make_args leaves dynamic_method = "dufomap"
+  args.dynamic_sensor_height_given = true;
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("--dynamic-sensor-height"), std::string::npos) << error;
+  EXPECT_NE(error.find("erasor2"), std::string::npos) << error;
+}
+
+TEST(ValidateModeFlags, Erasor2WithItsOwnTuningIsValid)
+{
+  auto args = make_args();
+  args.dynamic_method = "erasor2";
+  args.dynamic_sensor_height = 1.5;
+  args.dynamic_sensor_height_given = true;
+  EXPECT_TRUE(validate_mode_flags(args).empty());
+}
+
+// ---------------------------------------------------------------------------
+// is_vehicle_like_frame: the heuristic behind the dufomap-on-a-concatenated-
+// topic warning.
+// ---------------------------------------------------------------------------
+
+TEST(IsVehicleLikeFrame, MatchesVehicleAndWorldFrames)
+{
+  EXPECT_TRUE(is_vehicle_like_frame("base_link"));
+  EXPECT_TRUE(is_vehicle_like_frame("base_footprint"));
+  EXPECT_TRUE(is_vehicle_like_frame("map"));
+  EXPECT_TRUE(is_vehicle_like_frame("odom"));
+}
+
+TEST(IsVehicleLikeFrame, PassesSensorFrames)
+{
+  EXPECT_FALSE(is_vehicle_like_frame("velodyne_top"));
+  EXPECT_FALSE(is_vehicle_like_frame("hesai_front_upper"));
+  EXPECT_FALSE(is_vehicle_like_frame("lidar"));
+  EXPECT_FALSE(is_vehicle_like_frame(""));
 }
 
 // LiDAR + --cam without --imu is the Phase 2 combination (visual constraints
