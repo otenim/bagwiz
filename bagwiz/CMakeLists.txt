@@ -24,7 +24,7 @@ endif()
 # wrapper library). SLAM is the default `pixi run build-full` (humble/jazzy):
 # it builds the GLIM stack into install/<distro>/glim-deps via
 # scripts/build-glim-deps.sh and passes -DBAGWIZ_WITH_SLAM=ON plus that prefix
-# on CMAKE_PREFIX_PATH. (The `build-core` task leaves this OFF.)
+# on CMAKE_PREFIX_PATH. (The `build` task leaves this OFF.)
 option(BAGWIZ_WITH_SLAM "Build the in-process GLIM `bagwiz map slam` command" OFF)
 # GPU fast path for `bagwiz map slam --backend cuda` (CUDA odometry + VGICP_GPU mapping +
 # GPU export voxelization). OFF by default; implies BAGWIZ_WITH_SLAM. Enabled via
@@ -39,7 +39,7 @@ endif()
 # The viewer (a cpp-httplib loopback server + embedded Three.js assets + a
 # browser launch) is entirely GLIM-free, so it gets its own option that simply
 # DEFAULTS to BAGWIZ_WITH_SLAM: a SLAM build (the default `pixi run build-full`
-# on humble/jazzy) gains the viewer, a core build (`build-core` or
+# on humble/jazzy) gains the viewer, a core build (`build` or
 # BAGWIZ_WITH_SLAM=OFF) pulls in neither cpp-httplib nor the viewer code, and
 # the viewer can be built on its own with -DBAGWIZ_WITH_MAP_VIEWER=ON (no GLIM
 # needed). The implementation lives in bagwiz_slam; this package only forwards

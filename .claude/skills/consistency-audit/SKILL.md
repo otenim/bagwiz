@@ -83,7 +83,7 @@ Determine the target set from the request:
 - `all` or no argument → every registered command plus the global/README surface.
 
 A build is optional. The audit runs from source alone. Only if you want to diff
-live help do you need a build: `pixi run -e humble build-core`, then
+live help do you need a build: `pixi run -e humble build`, then
 `scripts/bagwiz-run.sh <cmd> [<sub>] --help`. Treat live `--help` as a
 convenience cross-check, not the ground truth — the `configure*()` source is.
 
@@ -135,7 +135,7 @@ Match existing Markdown and comment style. Keep edits minimal and factual.
 
 ### Phase 3 — Verify
 
-- `pixi run -e humble build-core` — comment edits live in compiled sources, so this
+- `pixi run -e humble build` — comment edits live in compiled sources, so this
   both proves nothing broke and catches any accidental logic edit. (Use the same
   `-e <distro>` the developer is working in.)
 - If live help was used: re-run `scripts/bagwiz-run.sh <cmd> --help` and confirm
@@ -162,7 +162,7 @@ Then follow the repo's git rules in `AGENTS.md`:
 - [ ] `docs/CODEMAPS/*` left alone (regenerate via `update-codemaps`, not edited).
 - [ ] Main context fed structured findings only, never raw command sources.
 - [ ] Shared files (README, completion.cpp) edited by a single agent.
-- [ ] `pixi run -e <distro> build-core` passes; pre-commit hooks not bypassed.
+- [ ] `pixi run -e <distro> build` passes; pre-commit hooks not bypassed.
 - [ ] English-only prose; AGENTS.md git/PR workflow followed.
 
 ## Scaling notes

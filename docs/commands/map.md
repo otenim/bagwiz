@@ -21,7 +21,7 @@ pixi run -e humble build-full   # or: jazzy
 The first `build-full` builds the GLIM dependency stack (GTSAM, gtsam_points,
 GLIM) into `install/<distro>/glim-deps` — a slow one-time step (tens of minutes) —
 then compiles bagwiz with SLAM enabled. Later builds reuse the cached deps and are
-fast. The **core** build (`pixi run -e <distro> build-core`) omits the `map`
+fast. The **core** build (`pixi run -e <distro> build`) omits the `map`
 command group entirely and skips the GLIM stack, so it is much faster but does
 not expose `bagwiz map slam`.
 

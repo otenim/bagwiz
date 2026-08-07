@@ -186,25 +186,26 @@ govern source code or CLI behavior.
 - bagwiz is built and run through [pixi](https://pixi.sh); no system ROS 2
   install is required. pixi provisions ROS 2 from RoboStack (one conda channel
   per distro) and the C/C++ toolchain from conda-forge. Build with
-  `pixi run -e <distro> build-full` from the repository root, where `<distro>` is
-  `humble` or `jazzy`; a bare `pixi run build-full` targets
-  the default environment (Jazzy). Each distro builds into its own
+  `pixi run -e <distro> build` from the repository root, where `<distro>` is
+  `humble` or `jazzy`; a bare `pixi run build` targets
+  the default environment (Jazzy). Use `build-full` instead when you need the
+  `map`/SLAM command group. Each distro builds into its own
   `build/<distro>` and `install/<distro>`, so switching distros never reuses
   another distro's CMake cache.
 - Builds are a `{core, full} x {cpu, cuda}` matrix, but the CPU/CUDA choice is
   derived from the active pixi environment. `build-full` is the default full
   build: on `humble`/`jazzy` it builds the GLIM stack (via
   `scripts/bagwiz-build.sh` → `scripts/build-glim-deps.sh`) and links the `map`
-  command group (`bagwiz map slam`). `build-core` builds every command group
+  command group (`bagwiz map slam`). `build` builds every command group
   EXCEPT `map`, with no GLIM stack — the fast build, on any distro. The CUDA
   SLAM build is `pixi run -e <distro>-cuda build-full` (humble-cuda/jazzy-cuda;
-  needs an NVIDIA GPU); `build-core` in a `*-cuda` env is the core build inside a
+  needs an NVIDIA GPU); `build` in a `*-cuda` env is the core build inside a
   `*-cuda` env.
 - Run the tests with `pixi run -e <distro> test-core` / `test-full` and the built
   binary with `pixi run -e <distro> run -- <args>` (or `pixi shell -e <distro>`
   then `bagwiz`). `pixi run install` does NOT build — it installs an optional
   `bagwiz` launcher on `PATH` plus shell completion for your current shell, in one
-  step (always overwriting existing copies), wiring them to whatever `build-core`
+  step (always overwriting existing copies), wiring them to whatever `build`
   or `build-full` already produced in that environment (build first, or it errors
   with the command to run). It runs the binary in its pixi-managed ROS
   environment. See `scripts/bagwiz-install.sh`. `run` targets the full build
@@ -214,7 +215,7 @@ govern source code or CLI behavior.
   requires a different command line. The task definitions live in `pixi.toml`.
   Both build tasks take an optional second positional arg forwarded to colcon's
   `--parallel-workers` (pixi task args are positional-only, so the build type
-  comes first: `pixi run build-core Release 8`); unset means the default of
+  comes first: `pixi run build Release 8`); unset means the default of
   half the physical CPU cores, and `BAGWIZ_BUILD_PARALLELISM` sets the same cap.
   `BAGWIZ_BUILD_TYPE` likewise selects the CMake build type when no positional
   arg is given.

@@ -27,19 +27,19 @@ install needed.
    has CPU and CUDA environments.
 
    ```bash
-   pixi run -e humble build-core   # basic features
+   pixi run -e humble build        # basic features
    pixi run -e humble build-full   # includes advanced features such as `map`
    ```
 
    Use `build-full` only when you need features like `bagwiz map`. The default
-   environment is Jazzy, so `pixi run build-core` is equivalent to
-   `pixi run -e jazzy build-core`.
+   environment is Jazzy, so `pixi run build` is equivalent to
+   `pixi run -e jazzy build`.
 
    Builds compile through ccache and Ninja (both provided by the pixi
    environment), so repeated builds — including the first build in a fresh git
    worktree — reuse previously compiled objects. To cap build parallelism on
    memory-constrained hosts, append the worker count after the build type, e.g.
-   `pixi run build-core Release 8`; it is forwarded to colcon's
+   `pixi run build Release 8`; it is forwarded to colcon's
    `--parallel-workers` (default: half the physical CPU cores). Both knobs have
    env-var forms too: `BAGWIZ_BUILD_PARALLELISM=8` and `BAGWIZ_BUILD_TYPE=Debug`.
 

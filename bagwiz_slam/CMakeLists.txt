@@ -61,7 +61,7 @@ endif()
 # CMake warn "Manually-specified variables were not used" per package. They are
 # consumed only here and in bagwiz (the CLI's `map` command group). SLAM is the
 # default `pixi run build-full` (humble/jazzy), which builds the GLIM stack into
-# install/<distro>/glim-deps via scripts/build-glim-deps.sh. (The `build-core`
+# install/<distro>/glim-deps via scripts/build-glim-deps.sh. (The `build`
 # task leaves this OFF.) The GLIM types stay confined to cloud_mapper.cpp
 # (pimpl); the `map` command group and its `slam` action are GLIM-free.
 option(BAGWIZ_WITH_SLAM "Build the in-process GLIM `bagwiz map slam` command" OFF)
@@ -78,7 +78,7 @@ endif()
 # The viewer (a cpp-httplib loopback server + embedded Three.js assets + a
 # browser launch) is entirely GLIM-free, so it gets its own option that simply
 # DEFAULTS to BAGWIZ_WITH_SLAM: a SLAM build (the default `pixi run build-full`
-# on humble/jazzy) gains the viewer, a core build (`build-core` or
+# on humble/jazzy) gains the viewer, a core build (`build` or
 # BAGWIZ_WITH_SLAM=OFF) pulls in neither cpp-httplib nor this code, and the
 # viewer can be built and tested on its own with -DBAGWIZ_WITH_MAP_VIEWER=ON
 # (no GLIM needed).
