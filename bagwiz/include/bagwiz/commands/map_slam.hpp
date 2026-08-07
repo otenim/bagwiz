@@ -157,11 +157,11 @@ struct MapSlamArgs
   // Minimum number of OTHER map points within outlier_radius a point needs to
   // survive remove_outliers.
   int outlier_min_neighbors = 5;
-  // Remove ghost points left by moving objects from the exported map (DUFOMap-
-  // style void-region ray casting): after the global optimization, every scan's
-  // rays mark the voxels they traverse as seen-free, and a scan point falling in
-  // a voxel that was ever seen free is dropped before the map merge. Off by
-  // default. Filters the map only; the trajectory is untouched.
+  // Remove ghost points left by moving objects from the exported map, using the
+  // classifier dynamic_method selects (see below): after the global
+  // optimization the per-scan frames are classified and the rejected points are
+  // dropped before the map merge. Off by default. Filters the map only; the
+  // trajectory is untouched.
   bool remove_dynamic = false;
   // Voxel side in meters of the free-space grid for remove_dynamic. Independent
   // of input_resolution: coarser costs less memory and absorbs more pose noise;

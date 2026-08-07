@@ -131,17 +131,22 @@ struct InstanceOccupancyConfig
   // when its footprint exceeds usc_area [m^2], more than usc_prior_ratio of
   // its footprint cells hold no evidence at all, and some cells exceed
   // usc_high_posterior — then only the points on those high cells are
-  // dropped. Area and ratio from ERASOR2; the high-cell threshold is
-  // unpublished (implementation default = vor_seed_posterior).
+  // dropped. Those carved points form their own dynamic instance and seed the
+  // volumetric erosion like any other confident removal, so an under-segmented
+  // mover does not leave its mis-segmented stragglers behind. Area and ratio
+  // from ERASOR2; the high-cell threshold is unpublished (implementation
+  // default = vor_seed_posterior).
   double usc_area = 56.0;
   double usc_prior_ratio = 0.25;
   double usc_high_posterior = 0.953;
 
-  // Volumetric erosion: instances whose average posterior exceeds this seed
-  // the erosion (ERASOR2's p_v), and every static-side point within
-  // sqrt(3) * voxel_size of a seed point from the surrounding
-  // [-vor_window, +vor_window] scans is dropped with it (ERASOR2 uses a
-  // 3-scan window, i.e. 1).
+  // Volumetric erosion: a removal whose average posterior exceeds this seeds
+  // the erosion (ERASOR2's p_v) — a whole dropped instance or an
+  // under-segmentation carve-out — as do the unclustered strays on proposed
+  // cells that already lie within the erosion radius of such a seed (ERASOR2's
+  // U_t^Q). Every static-side point within sqrt(3) * voxel_size of a seed point
+  // from the surrounding [-vor_window, +vor_window] scans is dropped with it
+  // (ERASOR2 uses a 3-scan window, i.e. 1).
   double vor_seed_posterior = 0.953;
   int vor_window = 1;
 
