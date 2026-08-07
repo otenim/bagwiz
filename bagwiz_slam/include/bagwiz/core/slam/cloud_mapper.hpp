@@ -124,12 +124,12 @@ struct CloudMapperConfig
   // Default 15 == GLIM stock, so the default trajectory is unchanged. Must be > 0.
   int submap_max_keyframes = 15;
 
-  // Remove ghost points left by moving objects from the exported map (DUFOMap-
-  // style void-region ray casting, see core/slam/dynamic_removal.hpp): after the
-  // global optimization, every scan's rays mark the voxels they traverse as
-  // seen-free, and a scan point falling in a voxel that was ever seen free is
-  // dropped before the export voxel merge. Filters the map only; the trajectory
-  // is untouched. Off by default (the exported map is unchanged without it).
+  // Remove ghost points left by moving objects from the exported map, using the
+  // classifier dynamic_method selects (see DynamicRemovalMethod): after the
+  // global optimization the stashed per-scan frames are classified and the
+  // points rejected as dynamic are dropped before the export voxel merge.
+  // Filters the map only; the trajectory is untouched. Off by default (the
+  // exported map is unchanged without it).
   bool remove_dynamic_points = false;
 
   // Voxel side [m] of the free-space grid used by remove_dynamic_points.
