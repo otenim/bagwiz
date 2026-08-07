@@ -30,7 +30,7 @@ jobs:
       - name: Set up pixi
         uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          pixi-version: v0.70.2
+          pixi-version: v0.73.0
           environments: ${{ matrix.distro }}
 
       # `build-full` is a SLAM build on humble/jazzy: it builds the GLIM stack (GTSAM
