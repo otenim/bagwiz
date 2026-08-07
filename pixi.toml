@@ -21,12 +21,21 @@
 [workspace]
 name = "bagwiz"
 version = "0.1.0"
+# Rich platform entries (the linux-64-cuda entry below) require pixi 0.71+.
+requires-pixi = ">=0.71"
 # conda-forge supplies the C/C++ toolchain and the few non-ROS libraries
 # (GeographicLib, SQLite, nlohmann_json). Each distro feature adds its own
 # higher-priority robostack-<distro> channel so the ROS packages come from
 # RoboStack and win ties over conda-forge.
 channels = ["conda-forge"]
-platforms = ["linux-64"]
+# The bare "linux-64" entry serves the CPU environments (auto-detected virtual
+# packages). The named rich entry pins __cuda = 12 (host driver supports CUDA
+# 12.x) so the conda CUDA runtime packages solve; only the gpu feature binds to
+# it, so CPU environments stay CUDA-free.
+platforms = [
+  "linux-64",
+  { name = "linux-64-cuda", platform = "linux-64", cuda = "12" },
+]
 
 # ---------------------------------------------------------------------------
 # Default feature: distro-agnostic build toolchain + non-ROS libraries. It is
@@ -244,15 +253,15 @@ eigen = "3.4.*"
 # cusolver/cublas — gtsam_points' GPU code uses cusolver) so the GPU SLAM build
 # is fully pixi-managed (no system /usr/local/cuda). Combined with a distro
 # feature into a *-cuda environment; CPU environments stay CUDA-free and lean.
-# system-requirements.cuda declares the host driver supports CUDA 12.x so the
-# conda CUDA runtime packages solve.
+# Bound to the linux-64-cuda platform entry (see [workspace] platforms), which
+# declares __cuda = 12 so the conda CUDA runtime packages solve.
 # ---------------------------------------------------------------------------
+[feature.gpu]
+platforms = ["linux-64-cuda"]
+
 [feature.gpu.dependencies]
 cuda-toolkit = "12.8.*"
 cuda-version = "12.8.*"
-
-[feature.gpu.system-requirements]
-cuda = "12"
 
 # ---------------------------------------------------------------------------
 # One environment per distro. Each solves independently against its own
