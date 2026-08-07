@@ -496,23 +496,37 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
     BAGWIZ_LOG_ERROR(kLogger, "pcd undistort: --pcd needs at least 1 topic");
     return 1;
   }
+  // CLI11 enforces --pose/--twist are not both given (excludes); the runner
+  // enforces the other half of the xor.
+  const bool motion_is_twist = !args.twist_topic.empty();
+  if (!motion_is_twist && args.pose_topic.empty()) {
+    BAGWIZ_LOG_ERROR(kLogger, "pcd undistort: exactly one of --pose / --twist is required");
+    return 1;
+  }
+  const std::string & motion_topic = motion_is_twist ? args.twist_topic : args.pose_topic;
   const std::string ref = args.ref_frame.value_or(kDefaultRefFrame);
   const std::string of = args.of_frame.value_or(kDefaultOfFrame);
+  if (motion_is_twist && args.ref_frame.has_value()) {
+    // A twist source only carries relative motion, so the frame the trajectory
+    // is expressed in never enters the deskew math.
+    BAGWIZ_LOG_WARN(kLogger, "pcd undistort: --ref has no effect with --twist; ignoring it");
+  }
 
   auto reader = io::open_read_or_log(args.input_path, kLogger);
   if (!reader) {
     return 1;
   }
   reader->populate_schemas();
-  const io::TopicInfo * pose_ti =
-    validate_undistort_topics(*reader, args.pose_topic, args.pcd_topics, args.input_path, kLogger);
-  if (pose_ti == nullptr) {
+  const io::TopicInfo * motion_ti = validate_undistort_topics(
+    *reader, motion_topic, motion_is_twist, args.pcd_topics, args.input_path, kLogger);
+  if (motion_ti == nullptr) {
     return 1;
   }
 
   // ---- Pass 1: static TF + the --of -> --ref trajectory ---------------------
   tf2::BufferCore buffer{kTfBufferCacheTime};
-  auto built = build_sorted_of_ref_trajectory(args.input_path, *pose_ti, ref, of, buffer, kLogger);
+  auto built = build_sorted_of_ref_trajectory(
+    args.input_path, *motion_ti, ref, of, motion_is_twist, buffer, kLogger);
   if (!built.ok()) {
     return 1;
   }

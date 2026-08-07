@@ -18,15 +18,16 @@ namespace bagwiz::commands
 {
 
 // Parsed arguments for `bagwiz pcd undistort`. Deskews one or more PointCloud2
-// topics using a pose topic as the motion source, resolved through the bag's
-// static TF (no dynamic /tf; SLAM-free).
+// topics using a pose or twist topic as the motion source, resolved through the
+// bag's static TF (no dynamic /tf; SLAM-free).
 struct PcdUndistortArgs
 {
-  std::filesystem::path input_path;                  // -i,--input
-  std::string pose_topic;                            // --pose (motion source)
-  std::vector<std::string> pcd_topics;               // --pcd (>=1)
-  std::optional<std::string> ref_frame;              // --ref; empty => "map"
-  std::optional<std::string> of_frame;               // --of;  empty => "base_link"
+  std::filesystem::path input_path;      // -i,--input
+  std::string pose_topic;                // --pose (motion source)
+  std::string twist_topic;               // --twist (motion source; exactly one of --pose/--twist)
+  std::vector<std::string> pcd_topics;   // --pcd (>=1)
+  std::optional<std::string> ref_frame;  // --ref; empty => "map"
+  std::optional<std::string> of_frame;   // --of;  empty => "base_link"
   std::optional<std::filesystem::path> output_path;  // -o; empty => in-place
   bool overwrite = false;                            // -w
   std::optional<int> threads;  // -j,--threads; omit => 8, 0 => hardware concurrency, 1 => sync

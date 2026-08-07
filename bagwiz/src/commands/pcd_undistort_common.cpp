@@ -19,6 +19,7 @@
 #include "bagwiz/io/topics.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -40,6 +41,10 @@ constexpr const char * kOdometryType = "nav_msgs/msg/Odometry";
 constexpr const char * kPoseStampedType = "geometry_msgs/msg/PoseStamped";
 constexpr const char * kPoseWithCovarianceStampedType =
   "geometry_msgs/msg/PoseWithCovarianceStamped";
+constexpr const char * kTwistType = "geometry_msgs/msg/Twist";
+constexpr const char * kTwistStampedType = "geometry_msgs/msg/TwistStamped";
+constexpr const char * kTwistWithCovarianceStampedType =
+  "geometry_msgs/msg/TwistWithCovarianceStamped";
 
 // TFMessage pose topic: delegate to the shared bagwiz_tf sampler
 // (core::sample_tf_message_trajectory), which replays the topic's transforms
@@ -213,12 +218,268 @@ TrajectoryBuildResult build_trajectory_from_pose_topic(
   return out;
 }
 
+// ---- twist-source trajectory building ----------------------------------------
+
+// Minimal quaternion (x, y, z, w; ROS / tf2 Hamilton convention) used by the
+// twist dead reckoning below. Plain doubles keep this independent of tf2's
+// transform math; the trajectory it feeds (TrajectoryPose) uses the same
+// convention.
+struct Quat
+{
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+  double w = 1.0;
+};
+
+Quat quat_mul(const Quat & a, const Quat & b)
+{
+  return {
+    a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+
+Quat quat_normalized(const Quat & q)
+{
+  const double n = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+  return {q.x / n, q.y / n, q.z / n, q.w / n};
+}
+
+// Rotate vector (vx, vy, vz) by q via q * (v,0) * q^-1 (q must be normalized).
+void quat_rotate(
+  const Quat & q, double vx, double vy, double vz, double & ox, double & oy, double & oz)
+{
+  // t = 2 * cross(q.xyz, v)
+  const double tx = 2.0 * (q.y * vz - q.z * vy);
+  const double ty = 2.0 * (q.z * vx - q.x * vz);
+  const double tz = 2.0 * (q.x * vy - q.y * vx);
+  // v' = v + q.w * t + cross(q.xyz, t)
+  ox = vx + q.w * tx + (q.y * tz - q.z * ty);
+  oy = vy + q.w * ty + (q.z * tx - q.x * tz);
+  oz = vz + q.w * tz + (q.x * ty - q.y * tx);
+}
+
+// One decoded twist sample, already expressed in the --of frame.
+struct TwistSample
+{
+  std::int64_t stamp_ns = 0;
+  double vx = 0.0;
+  double vy = 0.0;
+  double vz = 0.0;
+  double wx = 0.0;
+  double wy = 0.0;
+  double wz = 0.0;
+};
+
+// Advance (p, q) by one zero-order-hold constant-twist interval: the twist
+// (v, w) is treated as constant in the body frame over [0, dt]. The rotation
+// increment is the axis-angle exponential of w*dt; the translation increment
+// is the exact integral of the rotating velocity, dt * J(w*dt) * v with the
+// SO(3) left Jacobian J. Below the small-angle threshold, 1-cos and
+// theta-sin lose all double precision, so the first-order forms (dp = v*dt,
+// dq from phi/2) are used — the dropped terms are O(theta) relative and
+// irrelevant at that magnitude.
+void integrate_constant_twist(
+  const TwistSample & s, double dt, double & px, double & py, double & pz, Quat & q)
+{
+  constexpr double kSmallAngle = 1e-8;
+  const double angle_x = s.wx * dt;
+  const double angle_y = s.wy * dt;
+  const double angle_z = s.wz * dt;
+  const double theta = std::sqrt(angle_x * angle_x + angle_y * angle_y + angle_z * angle_z);
+
+  Quat dq;
+  double dpx, dpy, dpz;
+  if (theta < kSmallAngle) {
+    dq = quat_normalized({angle_x * 0.5, angle_y * 0.5, angle_z * 0.5, 1.0});
+    dpx = s.vx * dt;
+    dpy = s.vy * dt;
+    dpz = s.vz * dt;
+  } else {
+    const double half = 0.5 * theta;
+    const double k = std::sin(half) / theta;
+    dq = {angle_x * k, angle_y * k, angle_z * k, std::cos(half)};
+    const double a = (1.0 - std::cos(theta)) / (theta * theta);
+    const double b = (theta - std::sin(theta)) / (theta * theta * theta);
+    // J(phi) * v = v + a * (phi x v) + b * (phi x (phi x v))
+    const double c1x = angle_y * s.vz - angle_z * s.vy;
+    const double c1y = angle_z * s.vx - angle_x * s.vz;
+    const double c1z = angle_x * s.vy - angle_y * s.vx;
+    const double c2x = angle_y * c1z - angle_z * c1y;
+    const double c2y = angle_z * c1x - angle_x * c1z;
+    const double c2z = angle_x * c1y - angle_y * c1x;
+    dpx = dt * (s.vx + a * c1x + b * c2x);
+    dpy = dt * (s.vy + a * c1y + b * c2y);
+    dpz = dt * (s.vz + a * c1z + b * c2z);
+  }
+
+  double wx, wy, wz;
+  quat_rotate(q, dpx, dpy, dpz, wx, wy, wz);
+  px += wx;
+  py += wy;
+  pz += wz;
+  q = quat_normalized(quat_mul(q, dq));
+}
+
+// Twist motion source (Twist / TwistStamped / TwistWithCovarianceStamped):
+// dead-reckon the velocity samples into a relative trajectory, identity at the
+// first sample. The deskew kernel only consumes T(t_ref)^-1 * T(t_i), which is
+// invariant to the fixed frame a trajectory is expressed in, so the arbitrary
+// integration origin is fine and --ref plays no role here. Stamped types carry
+// the frame the twist is expressed in; a frame that is neither empty nor --of
+// is rotated into --of via the bag's static TF, with an unresolvable chain
+// fatal (mirrors the pose-topic bridge policy: static-only TF means a failure
+// is a configuration problem, not transient noise). A bare Twist has no
+// header: samples are stamped with the bag's log time and assumed to already
+// be in the --of frame.
+TrajectoryBuildResult build_trajectory_from_twist_topic(
+  const std::filesystem::path & input_path, const io::TopicInfo & twist_ti, const std::string & of,
+  tf2::BufferCore & buffer)
+{
+  TrajectoryBuildResult out;
+  const bool is_bare = (twist_ti.type == kTwistType);
+
+  std::unique_ptr<io::BagReader> reader;
+  try {
+    reader = io::open_read(input_path);
+  } catch (const std::exception & e) {
+    out.error = std::string("failed to reopen bag for twist topic: ") + e.what();
+    return out;
+  }
+  reader->populate_schemas();
+  io::ReadFilter filter;
+  filter.topics = {twist_ti.name};
+  reader->set_filter(filter);
+
+  auto open = core::decoder::open_decoder(twist_ti);
+  if (!open.ok()) {
+    out.error = "could not open decoder for twist topic '" + twist_ti.name + "': " + open.error;
+    return out;
+  }
+
+  // Lazily resolved static-TF rotation per twist frame (twist frame -> --of).
+  std::unordered_map<std::string, Quat> frame_rotations;
+  std::vector<TwistSample> samples;
+  io::RawMessage raw;
+  try {
+    while (reader->next(raw)) {
+      if (raw.topic->name != twist_ti.name) {
+        continue;
+      }
+      const auto decoded = open.decoder->decode(raw.payload);
+      if (!decoded.ok()) {
+        out.error = "failed to decode message on '" + twist_ti.name + "': " + decoded.error;
+        return out;
+      }
+
+      TwistSample sample;
+      std::string frame;  // empty: bare Twist, or assumed --of
+      if (is_bare) {
+        const auto twist = core::extract_twist_message(*decoded.value);
+        if (!twist.has_value()) {
+          continue;  // unparsable sample; tolerated like the pose path's skip
+        }
+        sample.stamp_ns = raw.timestamp_ns;
+        sample.vx = twist->linear.x;
+        sample.vy = twist->linear.y;
+        sample.vz = twist->linear.z;
+        sample.wx = twist->angular.x;
+        sample.wy = twist->angular.y;
+        sample.wz = twist->angular.z;
+      } else {
+        const auto ts = (twist_ti.type == kTwistStampedType)
+                          ? core::extract_twist_stamped_message(*decoded.value)
+                          : core::extract_twist_with_covariance_stamped_message(*decoded.value);
+        if (!ts.has_value()) {
+          continue;
+        }
+        sample.stamp_ns = static_cast<std::int64_t>(ts->header.stamp.sec) * 1'000'000'000LL +
+                          static_cast<std::int64_t>(ts->header.stamp.nanosec);
+        sample.vx = ts->twist.linear.x;
+        sample.vy = ts->twist.linear.y;
+        sample.vz = ts->twist.linear.z;
+        sample.wx = ts->twist.angular.x;
+        sample.wy = ts->twist.angular.y;
+        sample.wz = ts->twist.angular.z;
+        frame = ts->header.frame_id;
+      }
+
+      if (!frame.empty() && frame != of) {
+        const auto [it, inserted] = frame_rotations.try_emplace(frame);
+        if (inserted) {
+          const auto resolved = core::pointcloud::resolve_static_extrinsic(buffer, of, frame);
+          if (!resolved.missing.empty()) {
+            out.error = "--of '" + of + "' has no static TF chain to twist topic '" +
+                        twist_ti.name + "'s frame '" + frame + "'";
+            return out;
+          }
+          if (!resolved.ok()) {
+            out.error = "--of '" + of + "' -> twist frame '" + frame +
+                        "' TF lookup failed: " + resolved.lookup_error;
+            return out;
+          }
+          const auto & r = resolved.transform.transform.rotation;
+          it->second = quat_normalized({r.x, r.y, r.z, r.w});
+        }
+        double rx, ry, rz;
+        quat_rotate(it->second, sample.vx, sample.vy, sample.vz, rx, ry, rz);
+        sample.vx = rx;
+        sample.vy = ry;
+        sample.vz = rz;
+        quat_rotate(it->second, sample.wx, sample.wy, sample.wz, rx, ry, rz);
+        sample.wx = rx;
+        sample.wy = ry;
+        sample.wz = rz;
+      }
+      samples.push_back(sample);
+    }
+  } catch (const std::exception & e) {
+    out.error = "error reading twist topic '" + twist_ti.name + "': " + e.what();
+    return out;
+  }
+
+  if (samples.empty()) {
+    out.error = "no twist samples decoded from twist topic '" + twist_ti.name + "'";
+    return out;
+  }
+  std::sort(samples.begin(), samples.end(), [](const auto & a, const auto & b) {
+    return a.stamp_ns < b.stamp_ns;
+  });
+
+  out.trajectory.reserve(samples.size());
+  core::TrajectoryPose pose;
+  pose.timestamp_ns = samples.front().stamp_ns;
+  pose.qw = 1.0;
+  out.trajectory.push_back(pose);
+  double px = 0.0, py = 0.0, pz = 0.0;
+  Quat q;
+  for (std::size_t k = 0; k + 1 < samples.size(); ++k) {
+    const double dt = static_cast<double>(samples[k + 1].stamp_ns - samples[k].stamp_ns) * 1e-9;
+    integrate_constant_twist(samples[k], dt, px, py, pz, q);
+    pose.timestamp_ns = samples[k + 1].stamp_ns;
+    pose.tx = px;
+    pose.ty = py;
+    pose.tz = pz;
+    pose.qx = q.x;
+    pose.qy = q.y;
+    pose.qz = q.z;
+    pose.qw = q.w;
+    out.trajectory.push_back(pose);
+  }
+  return out;
+}
+
 }  // namespace
 
 bool is_supported_pose_topic_type(const std::string & type)
 {
   return type == kTfMessageType || type == kOdometryType || type == kPoseStampedType ||
          type == kPoseWithCovarianceStampedType;
+}
+
+bool is_supported_twist_topic_type(const std::string & type)
+{
+  return type == kTwistType || type == kTwistStampedType || type == kTwistWithCovarianceStampedType;
 }
 
 PoseComposeKind pose_compose_kind(const std::string & type)
@@ -268,19 +529,27 @@ bool decode_pose_sample(
 }
 
 const io::TopicInfo * validate_undistort_topics(
-  const io::BagReader & reader, const std::string & pose_topic,
+  const io::BagReader & reader, const std::string & motion_topic, bool motion_is_twist,
   const std::vector<std::string> & pcd_topics, const std::filesystem::path & bag_path,
   const char * logger)
 {
-  const io::TopicInfo * pose_ti = io::find_topic_or_log(reader, pose_topic, bag_path, logger);
-  if (pose_ti == nullptr) {
+  const io::TopicInfo * motion_ti = io::find_topic_or_log(reader, motion_topic, bag_path, logger);
+  if (motion_ti == nullptr) {
     return nullptr;
   }
-  if (!is_supported_pose_topic_type(pose_ti->type)) {
+  if (motion_is_twist) {
+    if (!is_supported_twist_topic_type(motion_ti->type)) {
+      BAGWIZ_LOG_ERROR(
+        logger, "Topic '%s' has unsupported type '%s'. Supported: %s, %s, %s.",
+        motion_topic.c_str(), motion_ti->type.c_str(), kTwistType, kTwistStampedType,
+        kTwistWithCovarianceStampedType);
+      return nullptr;
+    }
+  } else if (!is_supported_pose_topic_type(motion_ti->type)) {
     BAGWIZ_LOG_ERROR(
       logger, "Topic '%s' has unsupported type '%s'. Supported: %s, %s, %s, %s.",
-      pose_topic.c_str(), pose_ti->type.c_str(), kTfMessageType, kOdometryType, kPoseStampedType,
-      kPoseWithCovarianceStampedType);
+      motion_topic.c_str(), motion_ti->type.c_str(), kTfMessageType, kOdometryType,
+      kPoseStampedType, kPoseWithCovarianceStampedType);
     return nullptr;
   }
   for (const auto & topic : pcd_topics) {
@@ -295,12 +564,13 @@ const io::TopicInfo * validate_undistort_topics(
       return nullptr;
     }
   }
-  return pose_ti;
+  return motion_ti;
 }
 
 TrajectoryBuildResult build_sorted_of_ref_trajectory(
-  const std::filesystem::path & input_path, const io::TopicInfo & pose_ti, const std::string & ref,
-  const std::string & of, tf2::BufferCore & buffer, const char * logger)
+  const std::filesystem::path & input_path, const io::TopicInfo & motion_ti,
+  const std::string & ref, const std::string & of, bool motion_is_twist, tf2::BufferCore & buffer,
+  const char * logger)
 {
   TrajectoryBuildResult out;
   if (const auto error = core::load_static_tf_buffer(input_path, buffer); error.has_value()) {
@@ -315,15 +585,25 @@ TrajectoryBuildResult build_sorted_of_ref_trajectory(
     return out;
   }
 
-  out = (pose_ti.type == kTfMessageType)
-          ? build_trajectory_from_tf_message(input_path, pose_ti, ref, of, buffer)
-          : build_trajectory_from_pose_topic(
-              input_path, pose_ti, pose_compose_kind(pose_ti.type), ref, of, buffer);
-  if (!out.ok()) {
-    BAGWIZ_LOG_ERROR(
-      logger, "pcd undistort: could not resolve --of '%s' -> --ref '%s' from pose topic '%s': %s",
-      of.c_str(), ref.c_str(), pose_ti.name.c_str(), out.error.c_str());
-    return out;
+  if (motion_is_twist) {
+    out = build_trajectory_from_twist_topic(input_path, motion_ti, of, buffer);
+    if (!out.ok()) {
+      BAGWIZ_LOG_ERROR(
+        logger, "pcd undistort: could not build the motion trajectory from twist topic '%s': %s",
+        motion_ti.name.c_str(), out.error.c_str());
+      return out;
+    }
+  } else {
+    out = (motion_ti.type == kTfMessageType)
+            ? build_trajectory_from_tf_message(input_path, motion_ti, ref, of, buffer)
+            : build_trajectory_from_pose_topic(
+                input_path, motion_ti, pose_compose_kind(motion_ti.type), ref, of, buffer);
+    if (!out.ok()) {
+      BAGWIZ_LOG_ERROR(
+        logger, "pcd undistort: could not resolve --of '%s' -> --ref '%s' from pose topic '%s': %s",
+        of.c_str(), ref.c_str(), motion_ti.name.c_str(), out.error.c_str());
+      return out;
+    }
   }
   std::sort(out.trajectory.begin(), out.trajectory.end(), [](const auto & a, const auto & b) {
     return a.timestamp_ns < b.timestamp_ns;

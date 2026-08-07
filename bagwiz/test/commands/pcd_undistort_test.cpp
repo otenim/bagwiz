@@ -8,13 +8,19 @@
 
 #include "bagwiz/commands/pcd_undistort.hpp"
 
+#include "bagwiz/core/introspection/introspection_loader.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 
 #include <gtest/gtest.h>
+#include <rcutils/allocator.h>
+#include <rmw/rmw.h>
+#include <rmw/serialized_message.h>
+#include <rmw/types.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -320,6 +326,73 @@ PcdUndistortArgs base_args(const std::filesystem::path & in, const std::filesyst
   return a;
 }
 
+// Typed-message CDR round-trip through the introspection typesupport (the
+// pcd_undistort_common_test idiom), for the TwistStamped fixture below.
+template <typename T>
+std::vector<std::byte> serialize_typed(const T & msg, const char * type_name)
+{
+  auto intro = bagwiz::core::load_introspection(type_name);
+  EXPECT_TRUE(intro.ok()) << intro.error;
+
+  rmw_serialized_message_t serialized = rmw_get_zero_initialized_serialized_message();
+  rcutils_allocator_t alloc = rcutils_get_default_allocator();
+  EXPECT_EQ(rmw_serialized_message_init(&serialized, 0, &alloc), RMW_RET_OK);
+  EXPECT_EQ(rmw_serialize(&msg, intro.typesupport, &serialized), RMW_RET_OK);
+  std::vector<std::byte> out(serialized.buffer_length);
+  if (serialized.buffer_length > 0) {
+    std::memcpy(out.data(), serialized.buffer, serialized.buffer_length);
+  }
+  rmw_serialized_message_fini(&serialized);
+  return out;
+}
+
+// The twist-source counterpart of write_undistort_input:
+//   /twist     geometry_msgs/msg/TwistStamped, frame base_link, a constant
+//              v=(10,0,0) m/s at t0 and t1 — dead-reckoned, base_link covers
+//              the same +1m over the 100ms span as the pose fixture
+//   /tf_static tf2_msgs/msg/TFMessage, present but carrying no edges
+//   /points    the same single point as write_undistort_input (local x=0,
+//              per-point relative time 0.1s, header.stamp = t0)
+//   /other     an unrelated PointCloud2 topic for the copy-through check
+void write_undistort_input_twist(const std::filesystem::path & path)
+{
+  auto w = bagwiz::io::open_write(path, mcap_options());
+  {
+    bagwiz::io::TopicInfo t;
+    t.name = "/twist";
+    t.type = "geometry_msgs/msg/TwistStamped";
+    t.serialization_format = "cdr";
+    w->declare_topic(t);
+  }
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  w->declare_topic(pcd_topic_info("/points"));
+  w->declare_topic(pcd_topic_info("/other"));
+
+  for (const auto stamp_ns : {kPoseT0Ns, kPoseT1Ns}) {
+    geometry_msgs::msg::TwistStamped ts;
+    ts.header.frame_id = "base_link";
+    ts.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
+    ts.header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
+    ts.twist.linear.x = 10.0;
+    const auto p = serialize_typed(ts, "geometry_msgs/msg/TwistStamped");
+    w->write("/twist", stamp_ns, std::span<const std::byte>(p.data(), p.size()));
+  }
+  {
+    const std::vector<geometry_msgs::msg::TransformStamped> no_edges;
+    const auto s = bagwiz::core::serialize_tf_message(no_edges);
+    w->write("/tf_static", 0, std::span<const std::byte>(s.data(), s.size()));
+  }
+  {
+    const auto pts = serialize_cloud(kPoseT0Ns, "base_link", 0.0f, 0.1f);
+    w->write("/points", kPoseT0Ns, std::span<const std::byte>(pts.data(), pts.size()));
+  }
+  {
+    const auto other = serialize_cloud(kPoseT0Ns, "some_other_frame", 42.0f, std::nullopt);
+    w->write("/other", kPoseT0Ns, std::span<const std::byte>(other.data(), other.size()));
+  }
+  w->close();
+}
+
 class PcdUndistortTest : public ::testing::Test
 {
 protected:
@@ -470,4 +543,38 @@ TEST_F(PcdUndistortTest, SyncAndParallelOutputsAreIdentical)
   EXPECT_EQ(read_raw_payloads(sync_out, "/points_a"), read_raw_payloads(par_out, "/points_a"));
   EXPECT_EQ(read_raw_payloads(sync_out, "/points_b"), read_raw_payloads(par_out, "/points_b"));
   EXPECT_EQ(read_raw_payloads(sync_out, "/other"), read_raw_payloads(par_out, "/other"));
+}
+
+// The --twist counterpart of DeskewsTargetTopicAndPreservesOthers: a constant
+// 10 m/s forward twist dead-reckons base_link +1m over the same 100ms span, so
+// the lone point lands at x=+1 exactly as with the pose source.
+TEST_F(PcdUndistortTest, DeskewsWithTwistTopic)
+{
+  write_undistort_input_twist(in_);
+  const auto other_before = read_raw_payloads(in_, "/other");
+  const auto twist_before = read_raw_payloads(in_, "/twist");
+  ASSERT_EQ(other_before.size(), 1u);
+  ASSERT_EQ(twist_before.size(), 2u);
+
+  auto a = base_args(in_, out_);
+  a.pose_topic.clear();
+  a.twist_topic = "/twist";
+  ASSERT_EQ(run_pcd_undistort(a), 0);
+
+  const auto x = read_first_point_x(out_, "/points");
+  ASSERT_TRUE(x.has_value());
+  EXPECT_NEAR(*x, 1.0f, 1e-4f);
+
+  EXPECT_EQ(read_raw_payloads(out_, "/other"), other_before);
+  EXPECT_EQ(read_raw_payloads(out_, "/twist"), twist_before);
+}
+
+// CLI11 only enforces that --pose and --twist are not both given; the runner
+// owns the other half of the xor.
+TEST_F(PcdUndistortTest, MissingMotionSourceIsFatal)
+{
+  write_undistort_input(in_, /*with_time_field=*/true);
+  auto a = base_args(in_, out_);
+  a.pose_topic.clear();
+  EXPECT_EQ(run_pcd_undistort(a), 1);
 }
