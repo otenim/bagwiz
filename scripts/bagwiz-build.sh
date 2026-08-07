@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bagwiz-build.sh - build bagwiz via colcon, picking the {core,full} profile from
 # --core and the CPU/CUDA profile from the active pixi environment. Invoked by the
-# pixi build tasks (build-core / build-full; see pixi.toml); not meant to be run on
+# pixi build tasks (build / build-full; see pixi.toml); not meant to be run on
 # its own, since it relies on the pixi environment's activated ROS 2 + conda
 # toolchain.
 #
@@ -12,9 +12,9 @@
 # is derived from the environment name: a *-cuda env (humble-cuda/jazzy-cuda) builds
 # CUDA, any other env builds CPU. The profiles:
 #
-#   * build-core (--core) in a CPU env   -> core bagwiz, NO `map`/SLAM, no GLIM
+#   * build (--core) in a CPU env        -> core bagwiz, NO `map`/SLAM, no GLIM
 #                                           stack. The fast build. Any distro.
-#   * build-core (--core) in a *-cuda env-> same core binary (core links no CUDA),
+#   * build (--core) in a *-cuda env     -> same core binary (core links no CUDA),
 #                                           built into the *-cuda env's base; the
 #                                           symmetric core entry of the cpu/cuda
 #                                           matrix. humble-cuda/jazzy-cuda.
@@ -27,7 +27,7 @@
 # Each pixi environment builds into its OWN base (build/<env>, install/<env>) keyed
 # on $PIXI_ENVIRONMENT_NAME, so switching `-e <env>` never reuses another env's
 # colcon/CMake cache (which would silently link the wrong ROS or CUDA libraries).
-# build-core and build-full SHARE a base (e.g. install/humble), so every profile
+# build and build-full SHARE a base (e.g. install/humble), so every profile
 # passes BAGWIZ_WITH_SLAM/_CUDA/_MAP_VIEWER explicitly: that forces the CMake cache
 # to the intended profile and stops a prior full build from leaving `map` compiled
 # into a later core build (or vice versa). The trailing symlink keeps
@@ -177,9 +177,9 @@ fi
 cmake_args=(-DCMAKE_BUILD_TYPE="${build_type}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)
 
 if [ "${cuda}" -eq 1 ] && [ "${core}" -eq 1 ]; then
-    # build-core in a *-cuda env: a core build that targets the *-cuda env's base
+    # build in a *-cuda env: a core build that targets the *-cuda env's base
     # (install/<env>), giving the cpu/cuda matrix a symmetric core entry. It links
-    # NO CUDA (core has no `map`/SLAM), so it is byte-identical to build-core in a
+    # NO CUDA (core has no `map`/SLAM), so it is byte-identical to build in a
     # CPU env -- the only difference is the install base. The *-cuda env and its
     # nvcc were already validated above.
     #
@@ -225,7 +225,7 @@ elif [ "${slam}" -eq 1 ]; then
         "-DCMAKE_PREFIX_PATH=${REPO}/install/${ENV_NAME}/glim-deps"
     )
 else
-    # build-core (CPU): core profile, no `map`/SLAM. Force the toggles OFF so a
+    # build (CPU): core profile, no `map`/SLAM. Force the toggles OFF so a
     # prior full build in this same base cannot leave `map` compiled into this
     # core build.
     cmake_args+=(

@@ -45,13 +45,13 @@ fi
 # The built binary, by explicit per-distro path (same path the `run` task uses).
 # For the GPU build, target a *-cuda environment (e.g. `pixi run -e humble-cuda
 # install`). `pixi run install` no longer builds: it
-# wires the launcher to whatever build-core or build-full already produced here,
+# wires the launcher to whatever build or build-full already produced here,
 # so require that a binary exists and point at how to build one if it does not.
 built_binary="${REPO_DIR}/install/${BAGWIZ_LAUNCH_DISTRO}/bagwiz/bin/bagwiz"
 if [[ ! -x ${built_binary} ]]; then
     echo "[install] No build found for '${BAGWIZ_LAUNCH_DISTRO}' at" >&2
     echo "[install]   ${built_binary}" >&2
-    echo "[install] Build it first: pixi run -e ${BAGWIZ_LAUNCH_DISTRO} build-core" >&2
+    echo "[install] Build it first: pixi run -e ${BAGWIZ_LAUNCH_DISTRO} build" >&2
     echo "[install]   (or build-full for the map/SLAM command group)" >&2
     exit 1
 fi

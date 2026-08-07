@@ -98,7 +98,7 @@ scripts = ["scripts/pixi-activate.sh"]
 # command group (in-process GLIM SLAM); "core" = every other command group, with NO
 # GLIM/SLAM stack built (the fast build):
 #
-#   * build-core   core bagwiz only (no `map`). No GLIM stack. Any distro. In a
+#   * build        core bagwiz only (no `map`). No GLIM stack. Any distro. In a
 #                  *-cuda env it builds the same core binary into that env's base.
 #   * build-full   core + `map` SLAM. CPU SLAM in a CPU env; CUDA SLAM
 #                  (BAGWIZ_WITH_SLAM_CUDA=ON) in a *-cuda env. Builds the GLIM deps
@@ -107,17 +107,17 @@ scripts = ["scripts/pixi-activate.sh"]
 # test-core/test-full mirror the two builds. `run` operates on the full build
 # (build-full) in whichever env it is invoked: a *-cuda env runs the CUDA build, a
 # CPU env the CPU build. `install` does NOT build — it wires the launcher to
-# whatever is already built (build-core or build-full) in that env's base.
+# whatever is already built (build or build-full) in that env's base.
 
-# Core build (no `map` command group): the fast build, no GLIM/SLAM stack. Any distro.
-# In a *-cuda env it builds the same core binary into that env's install base.
-# Both build tasks take optional positional args: the CMake build type, then a
-# cap for colcon's --parallel-workers (pixi task args are positional-only, so
-# the build type must be spelled out first): `pixi run build-core Release 8`.
-# Unset defaults: Release, and half the physical CPU cores. Both knobs also
-# have env vars: BAGWIZ_BUILD_TYPE=Debug and BAGWIZ_BUILD_PARALLELISM=8 (the
+# Core build (no `map` command group): the fast build, no GLIM/SLAM stack, and the
+# default entry point. Any distro. In a *-cuda env it builds the same core binary
+# into that env's install base. Both build tasks take optional positional args: the
+# CMake build type, then a cap for colcon's --parallel-workers (pixi task args are
+# positional-only, so the build type must be spelled out first): `pixi run build
+# Release 8`. Unset defaults: Release, and half the physical CPU cores. Both knobs
+# also have env vars: BAGWIZ_BUILD_TYPE=Debug and BAGWIZ_BUILD_PARALLELISM=8 (the
 # positional args win when both are given).
-[tasks.build-core]
+[tasks.build]
 args = [{ arg = "build_type", default = "" }, { arg = "parallel_workers", default = "" }]
 cmd = 'bash scripts/bagwiz-build.sh{% if build_type %} {{ build_type }}{% endif %} --core{% if parallel_workers %} --parallel-workers {{ parallel_workers }}{% endif %}'
 
@@ -130,9 +130,9 @@ cmd = 'bash scripts/bagwiz-build.sh{% if build_type %} {{ build_type }}{% endif 
 args = [{ arg = "build_type", default = "" }, { arg = "parallel_workers", default = "" }]
 cmd = 'bash scripts/bagwiz-build.sh{% if build_type %} {{ build_type }}{% endif %}{% if parallel_workers %} --parallel-workers {{ parallel_workers }}{% endif %}'
 
-# Test the core build (build-core).
+# Test the core build (build).
 [tasks.test-core]
-depends-on = ["build-core"]
+depends-on = ["build"]
 cmd = 'colcon test --build-base "build/$PIXI_ENVIRONMENT_NAME" --install-base "install/$PIXI_ENVIRONMENT_NAME" --event-handlers console_direct+ && colcon test-result --test-result-base "build/$PIXI_ENVIRONMENT_NAME" --verbose'
 
 # Test the full build (build-full). In a *-cuda env this also exercises the
@@ -155,8 +155,8 @@ cmd = 'install/$PIXI_ENVIRONMENT_NAME/bagwiz/bin/bagwiz'
 # tab completion for your current shell. Both are ALWAYS overwritten if they
 # already exist, so re-running after a rebuild just refreshes them. Unlike `run`,
 # install does NOT build: it wires the launcher to whatever is ALREADY built at
-# install/$PIXI_ENVIRONMENT_NAME (from build-core OR build-full), so a fast
-# build-core install stays core and a re-install skips the compile. Build first if
+# install/$PIXI_ENVIRONMENT_NAME (from build OR build-full), so a fast
+# build install stays core and a re-install skips the compile. Build first if
 # nothing is there — the script errors with the exact command. The launcher
 # targets this env's build; set BAGWIZ_INSTALL_DIR to override the destination.
 # Run in a *-cuda env to point the launcher at the CUDA build. See
