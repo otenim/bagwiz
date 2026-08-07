@@ -69,8 +69,8 @@ std::optional<geometry_msgs::msg::TwistStamped> extract_twist_stamped_message(
 
 // Decode a geometry_msgs/msg/TwistWithCovarianceStamped. Only header and
 // twist.twist (inner geometry_msgs/Twist) are read — the covariance is not
-// consumed by callers — so the result is returned as a plain TwistStamped to
-// keep the caller side single-pathed across the two stamped twist types.
+// consumed by callers — so the result is returned as a plain TwistStamped,
+// giving callers one common shape across the two stamped twist types.
 std::optional<geometry_msgs::msg::TwistStamped> extract_twist_with_covariance_stamped_message(
   const cdr_walker::Value & message);
 

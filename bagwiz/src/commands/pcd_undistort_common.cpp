@@ -283,31 +283,31 @@ void integrate_constant_twist(
   const TwistSample & s, double dt, double & px, double & py, double & pz, Quat & q)
 {
   constexpr double kSmallAngle = 1e-8;
-  const double phix = s.wx * dt;
-  const double phiy = s.wy * dt;
-  const double phiz = s.wz * dt;
-  const double theta = std::sqrt(phix * phix + phiy * phiy + phiz * phiz);
+  const double angle_x = s.wx * dt;
+  const double angle_y = s.wy * dt;
+  const double angle_z = s.wz * dt;
+  const double theta = std::sqrt(angle_x * angle_x + angle_y * angle_y + angle_z * angle_z);
 
   Quat dq;
   double dpx, dpy, dpz;
   if (theta < kSmallAngle) {
-    dq = quat_normalized({phix * 0.5, phiy * 0.5, phiz * 0.5, 1.0});
+    dq = quat_normalized({angle_x * 0.5, angle_y * 0.5, angle_z * 0.5, 1.0});
     dpx = s.vx * dt;
     dpy = s.vy * dt;
     dpz = s.vz * dt;
   } else {
     const double half = 0.5 * theta;
     const double k = std::sin(half) / theta;
-    dq = {phix * k, phiy * k, phiz * k, std::cos(half)};
+    dq = {angle_x * k, angle_y * k, angle_z * k, std::cos(half)};
     const double a = (1.0 - std::cos(theta)) / (theta * theta);
     const double b = (theta - std::sin(theta)) / (theta * theta * theta);
     // J(phi) * v = v + a * (phi x v) + b * (phi x (phi x v))
-    const double c1x = phiy * s.vz - phiz * s.vy;
-    const double c1y = phiz * s.vx - phix * s.vz;
-    const double c1z = phix * s.vy - phiy * s.vx;
-    const double c2x = phiy * c1z - phiz * c1y;
-    const double c2y = phiz * c1x - phix * c1z;
-    const double c2z = phix * c1y - phiy * c1x;
+    const double c1x = angle_y * s.vz - angle_z * s.vy;
+    const double c1y = angle_z * s.vx - angle_x * s.vz;
+    const double c1z = angle_x * s.vy - angle_y * s.vx;
+    const double c2x = angle_y * c1z - angle_z * c1y;
+    const double c2y = angle_z * c1x - angle_x * c1z;
+    const double c2z = angle_x * c1y - angle_y * c1x;
     dpx = dt * (s.vx + a * c1x + b * c2x);
     dpy = dt * (s.vy + a * c1y + b * c2y);
     dpz = dt * (s.vz + a * c1z + b * c2z);
