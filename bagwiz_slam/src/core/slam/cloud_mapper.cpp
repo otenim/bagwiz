@@ -18,6 +18,7 @@
 #include "bagwiz/core/slam/glim_estimator.hpp"
 #include "bagwiz/core/slam/gnss_alignment.hpp"
 #include "bagwiz/core/slam/gnss_sample.hpp"
+#include "bagwiz/core/slam/instance_occupancy.hpp"
 #include "bagwiz/core/slam/lidar_scan.hpp"
 #include "bagwiz/core/slam/scan_match_fill.hpp"
 #include "bagwiz/core/slam/warmup_fill.hpp"
@@ -1633,10 +1634,14 @@ struct CloudMapper::Impl
   }
 
   // Drop moving-object ghost points from the stashed frames before fill_map
-  // reads them (config.remove_dynamic_points): carve every frame's rays into a
-  // VoidRegionClassifier, then classify each frame's world points and compact
-  // the survivors in place, so every fill_map variant (streaming / parallel /
-  // GPU) exports the cleaned frames unchanged.
+  // reads them (config.remove_dynamic_points): classify every frame's world
+  // points with the configured method and compact the survivors in place, so
+  // every fill_map variant (streaming / parallel / GPU) exports the cleaned
+  // frames unchanged. kDufomap carves every frame's rays into a
+  // VoidRegionClassifier; kErasor2 drives the instance-aware pseudo-occupancy
+  // passes, which need only the per-frame origin — the valid choice when the
+  // input is a concatenated multi-LiDAR topic whose per-point emitter is
+  // unknown.
   void remove_dynamic_points(CloudMap & result)
   {
     struct Job
@@ -1660,13 +1665,6 @@ struct CloudMapper::Impl
     if (jobs.empty()) {
       return;
     }
-
-    VoidRegionConfig void_config;
-    void_config.voxel_size = config.dynamic_voxel_size;
-    void_config.sensor_offset = config.dynamic_sensor_offset;
-    void_config.neighborhood = config.dynamic_neighborhood;
-    void_config.max_ray_length = config.range_max;
-    VoidRegionClassifier classifier(void_config);
 
     // One frame's stashed points, dequantized and placed at the frame's
     // globally-optimized world pose (the same transform fill_map applies).
@@ -1703,7 +1701,7 @@ struct CloudMapper::Impl
         const std::size_t lo = jobs.size() * static_cast<std::size_t>(t) / nthreads;
         const std::size_t hi = jobs.size() * static_cast<std::size_t>(t + 1) / nthreads;
         for (std::size_t j = lo; j < hi; ++j) {
-          body(jobs[j], buffer, keep, static_cast<std::size_t>(t));
+          body(jobs[j], j, buffer, keep, static_cast<std::size_t>(t));
         }
       };
       std::vector<std::exception_ptr> errors(static_cast<std::size_t>(nthreads), nullptr);
@@ -1729,28 +1727,79 @@ struct CloudMapper::Impl
       }
     };
 
-    run_pass([&](
-               const Job & job, std::vector<std::array<float, 3>> & buffer,
-               std::vector<std::uint8_t> &, std::size_t) {
-      build_world_buffer(job, buffer);
-      const Eigen::Vector3d origin = job.T_world_frame.translation();
-      classifier.integrate(buffer, {origin.x(), origin.y(), origin.z()});
-    });
+    if (config.dynamic_method == DynamicRemovalMethod::kErasor2) {
+      // The stashed frames are ordered by time (submaps in creation order,
+      // frames in insertion order within each), so the job index doubles as
+      // the temporal scan index the classifier's erosion window runs over.
+      // voxel_size and max_radius follow the mapper's own export voxel and
+      // sensing crop, mirroring how the ray path truncates at range_max.
+      InstanceOccupancyConfig erasor_config = config.dynamic_erasor;
+      erasor_config.voxel_size = config.input_resolution;
+      erasor_config.max_radius = config.range_max;
+      InstanceOccupancyClassifier classifier(erasor_config, jobs.size());
 
-    classifier.finalize(nthreads);
+      run_pass([&](
+                 const Job & job, std::size_t j, std::vector<std::array<float, 3>> & buffer,
+                 std::vector<std::uint8_t> &, std::size_t) {
+        build_world_buffer(job, buffer);
+        const Eigen::Vector3d origin = job.T_world_frame.translation();
+        classifier.add_scan(j, buffer, {origin.x(), origin.y(), origin.z()});
+      });
 
-    run_pass([&](
-               const Job & job, std::vector<std::array<float, 3>> & buffer,
-               std::vector<std::uint8_t> & keep, std::size_t t) {
-      build_world_buffer(job, buffer);
-      keep.assign(buffer.size(), 1U);
-      const std::size_t removed = classifier.classify(buffer, keep);
-      input_counts[t] += buffer.size();
-      removed_counts[t] += removed;
-      if (removed != 0) {
-        compact_frame(*job.ref, keep);
-      }
-    });
+      classifier.finalize_grid(nthreads);
+
+      run_pass([&](
+                 const Job & job, std::size_t j, std::vector<std::array<float, 3>> & buffer,
+                 std::vector<std::uint8_t> &, std::size_t) {
+        build_world_buffer(job, buffer);
+        classifier.propose(j, buffer);
+      });
+
+      classifier.finalize_proposals();
+
+      run_pass([&](
+                 const Job & job, std::size_t j, std::vector<std::array<float, 3>> & buffer,
+                 std::vector<std::uint8_t> & keep, std::size_t t) {
+        build_world_buffer(job, buffer);
+        keep.assign(buffer.size(), 1U);
+        const std::size_t removed = classifier.classify(j, buffer, keep);
+        input_counts[t] += buffer.size();
+        removed_counts[t] += removed;
+        if (removed != 0) {
+          compact_frame(*job.ref, keep);
+        }
+      });
+    } else {
+      VoidRegionConfig void_config;
+      void_config.voxel_size = config.dynamic_voxel_size;
+      void_config.sensor_offset = config.dynamic_sensor_offset;
+      void_config.neighborhood = config.dynamic_neighborhood;
+      void_config.max_ray_length = config.range_max;
+      VoidRegionClassifier classifier(void_config);
+
+      run_pass([&](
+                 const Job & job, std::size_t, std::vector<std::array<float, 3>> & buffer,
+                 std::vector<std::uint8_t> &, std::size_t) {
+        build_world_buffer(job, buffer);
+        const Eigen::Vector3d origin = job.T_world_frame.translation();
+        classifier.integrate(buffer, {origin.x(), origin.y(), origin.z()});
+      });
+
+      classifier.finalize(nthreads);
+
+      run_pass([&](
+                 const Job & job, std::size_t, std::vector<std::array<float, 3>> & buffer,
+                 std::vector<std::uint8_t> & keep, std::size_t t) {
+        build_world_buffer(job, buffer);
+        keep.assign(buffer.size(), 1U);
+        const std::size_t removed = classifier.classify(buffer, keep);
+        input_counts[t] += buffer.size();
+        removed_counts[t] += removed;
+        if (removed != 0) {
+          compact_frame(*job.ref, keep);
+        }
+      });
+    }
 
     for (std::size_t t = 0; t < static_cast<std::size_t>(nthreads); ++t) {
       result.dynamic_input_point_count += input_counts[t];

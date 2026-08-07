@@ -1157,7 +1157,8 @@ TEST(FlagCompletionTest, MapSlamDashListsSlamFlags)
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "map", "slam", "-"}),
     "--backend\n--cam\n--cam-info\n--color\n--color-keyframe-blur\n--color-min-dist\n--dynamic-"
-    "dp\n--dynamic-ds\n--dynamic-res\n--fill-min-inliers\n--frame\n--gnss\n--help\n--imu\n--"
+    "dp\n--dynamic-ds\n--dynamic-method\n--dynamic-res\n--dynamic-sensor-height\n--fill-min-"
+    "inliers\n--frame\n--gnss\n--help\n--imu\n--"
     "input\n--input-res\n--max-range\n--min-range\n--no-color-propagate\n--no-cooldown-fill\n--no-"
     "progress\n--no-warmup-fill\n--outlier-k\n--outlier-r\n--output\n--overwrite\n--pcd\n--remove-"
     "dynamic\n--remove-outliers\n--submap-keyframes\n--threads\n--viewer\n--visual-max-features\n"
@@ -1170,6 +1171,14 @@ TEST(FlagCompletionTest, MapSlamBackendListsModes)
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "5", "bagwiz", "map", "slam", "--backend"}),
     "auto\ncpu\ncuda\n");
+}
+
+// `map slam --dynamic-method <TAB>` lists the two removal methods.
+TEST(FlagCompletionTest, MapSlamDynamicMethodListsMethods)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "5", "bagwiz", "map", "slam", "--dynamic-method"}),
+    "dufomap\nerasor2\n");
 }
 
 // `map slam <input> <pcd_topic>` completes the topic slot from the bag's

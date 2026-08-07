@@ -48,6 +48,18 @@ std::string validate_mode_flags(const MapSlamArgs & args)
     return "either --pcd (LiDAR SLAM) or --cam (camera-only visual-inertial SLAM) is required";
   }
   if (!camera_only) {
+    // The --dynamic-* tuning options each affect exactly one removal method;
+    // passing one to the other method would be a silent no-op, so refuse it.
+    // Checked in LiDAR mode only: in camera-only mode --remove-dynamic itself
+    // is rejected below, which is the guidance that matters there.
+    if (args.dynamic_method == "erasor2" && args.dynamic_dufomap_tuning_given) {
+      return "--dynamic-res / --dynamic-ds / --dynamic-dp tune the dufomap method's "
+             "free-space grid and have no effect with --dynamic-method erasor2";
+    }
+    if (args.dynamic_method != "erasor2" && args.dynamic_sensor_height_given) {
+      return "--dynamic-sensor-height anchors the erasor2 method's height band and has "
+             "no effect with the dufomap method (pass --dynamic-method erasor2)";
+    }
     return "";  // LiDAR mode: every camera/feature flag keeps its existing meaning
   }
   if (!args.color_topics.empty()) {
@@ -75,6 +87,13 @@ std::string validate_mode_flags(const MapSlamArgs & args)
   return "";
 }
 
+// cppcheck-suppress passedByValue  // std::string_view is a cheap value type
+bool is_vehicle_like_frame(std::string_view frame_id)
+{
+  return frame_id == "base_link" || frame_id == "base_footprint" || frame_id == "map" ||
+         frame_id == "odom";
+}
+
 core::slam::CloudMapperConfig build_mapper_config(
   const MapSlamArgs & args, const std::optional<core::slam::SensorTransform> & t_lidar_imu,
   bool use_gpu, const std::array<double, 3> & gnss_antenna_offset,
@@ -90,6 +109,12 @@ core::slam::CloudMapperConfig build_mapper_config(
   config.dynamic_voxel_size = args.dynamic_resolution;
   config.dynamic_sensor_offset = args.dynamic_sensor_offset;
   config.dynamic_neighborhood = args.dynamic_neighborhood;
+  // The CLI restricts --dynamic-method to the two member names, so anything
+  // that is not "erasor2" is the dufomap default.
+  config.dynamic_method = args.dynamic_method == "erasor2"
+                            ? core::slam::DynamicRemovalMethod::kErasor2
+                            : core::slam::DynamicRemovalMethod::kDufomap;
+  config.dynamic_erasor.sensor_height = args.dynamic_sensor_height;
   config.t_lidar_imu = t_lidar_imu;
   config.num_threads = resolve_threads(args.num_threads);
   config.enable_gnss = !args.gnss_topic.empty();

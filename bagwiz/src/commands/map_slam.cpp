@@ -251,6 +251,25 @@ public:
       return 1;
     }
 
+    // The dufomap removal ray-casts every scan from the cloud frame's origin,
+    // which is only geometrically valid for a single-sensor topic. A
+    // vehicle/world frame_id means a concatenated multi-LiDAR cloud whose
+    // per-point sensor is unrecoverable, so the carved free space is wrong in
+    // both directions (it eats static structure AND misses true ghosts). The
+    // naming test is a convention-based heuristic, hence a warning, not an
+    // error.
+    if (
+      args_.remove_dynamic && args_.dynamic_method != "erasor2" && !camera_only_ &&
+      is_vehicle_like_frame(anchor_frame_)) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "--remove-dynamic (dufomap) ray-casts every scan from the origin of frame '%s', "
+        "which looks like a vehicle/world frame rather than a single sensor's: for a "
+        "concatenated multi-LiDAR topic the cleaned map is unreliable. Consider "
+        "--dynamic-method erasor2, which needs no per-point ray origin.",
+        anchor_frame_.c_str());
+    }
+
     // Validate / create the output root before any heavy work. A file at the
     // path is an error; an existing directory is accepted so the user can target a
     // project folder, and individual output files are guarded by prepare_output_path.
@@ -1265,11 +1284,18 @@ private:
     // The dynamic-point removal ran inside finish() (on the per-scan frames,
     // before the export merge); surface its outcome the way the outlier
     // removal below logs its own.
-    if (args_.remove_dynamic) {
+    if (args_.remove_dynamic && args_.dynamic_method == "erasor2") {
       BAGWIZ_LOG_INFO(
         kLogger,
-        "Dynamic-point removal dropped %zu of %zu scan point(s) in %.1fs (voxel %.2f m, "
-        "d_s %.2f m, d_p %d)",
+        "Dynamic-point removal (erasor2) dropped %zu of %zu scan point(s) in %.1fs "
+        "(sensor height %.2f m)",
+        map.dynamic_removed_point_count, map.dynamic_input_point_count, map.dynamic_removal_seconds,
+        args_.dynamic_sensor_height);
+    } else if (args_.remove_dynamic) {
+      BAGWIZ_LOG_INFO(
+        kLogger,
+        "Dynamic-point removal (dufomap) dropped %zu of %zu scan point(s) in %.1fs "
+        "(voxel %.2f m, d_s %.2f m, d_p %d)",
         map.dynamic_removed_point_count, map.dynamic_input_point_count, map.dynamic_removal_seconds,
         args_.dynamic_resolution, args_.dynamic_sensor_offset, args_.dynamic_neighborhood);
     }

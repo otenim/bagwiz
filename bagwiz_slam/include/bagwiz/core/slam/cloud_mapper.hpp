@@ -10,6 +10,7 @@
 #define BAGWIZ__CORE__SLAM__CLOUD_MAPPER_HPP_
 
 #include "bagwiz/core/slam/imu_sample.hpp"
+#include "bagwiz/core/slam/instance_occupancy.hpp"
 #include "bagwiz/core/slam/lidar_scan.hpp"
 #include "bagwiz/core/slam/sensor_transform.hpp"
 #include "bagwiz/core/slam/visual_observation.hpp"
@@ -43,6 +44,17 @@
 // the global optimization, and obtain the map + trajectory.
 namespace bagwiz::core::slam
 {
+
+// Which classifier remove_dynamic_points runs. kDufomap is the DUFOMap-style
+// void-region ray casting (core/slam/dynamic_removal.hpp) — the most accurate
+// choice, but geometrically valid only when every point of the selected cloud
+// topic was emitted from that topic's frame origin (a single-sensor topic).
+// kErasor2 is the ERASOR2-style instance-aware pseudo-occupancy method
+// (core/slam/instance_occupancy.hpp), which needs no per-point ray origin and
+// is therefore the choice for concatenated multi-LiDAR topics (e.g. an
+// Autoware concatenate output in base_link), where the ray-cast method would
+// silently carve wrong void regions.
+enum class DynamicRemovalMethod { kDufomap, kErasor2 };
 
 // Point-cloud resolution/extent control for CloudMapper. `input_resolution` is
 // the single "map resolution" knob: it sets GLIM's LiDAR preprocessor downsample
@@ -134,6 +146,16 @@ struct CloudMapperConfig
   // error of up to ~d_p * dynamic_voxel_size cannot delete static points.
   // 0 disables the guard; higher is more conservative. Must be >= 0.
   int dynamic_neighborhood = 1;
+
+  // Which classifier remove_dynamic_points runs; the fields above tune the
+  // kDufomap method, dynamic_erasor tunes kErasor2.
+  DynamicRemovalMethod dynamic_method = DynamicRemovalMethod::kDufomap;
+
+  // Tuning for the kErasor2 method. Two fields are overridden at use: the
+  // erosion-driving voxel_size is tied to input_resolution (the voxel the map
+  // is actually merged at) and max_radius to range_max (the sensing crop, the
+  // same bound the kDufomap rays are truncated at).
+  InstanceOccupancyConfig dynamic_erasor;
 
   // GNSS global constraint (ported from glim_ext's gnss_global). When true, GNSS
   // points fed via insert_gnss() add horizontal translation priors on the submap

@@ -242,6 +242,71 @@ TEST(CloudMapper, RemoveDynamicPointsDropsATransientBlob)
   EXPECT_TRUE(wall_present);
 }
 
+// The same transient-blob scene through the erasor2 method: no ray casting is
+// involved, so the ghost must vanish purely from the instance-aware
+// pseudo-occupancy evidence (the blob's cells hold a tall map profile that 90
+// later scans observe as flat floor). The dufomap test above already proves
+// the blob persists without removal, so no second control run here.
+TEST(CloudMapper, RemoveDynamicPointsErasor2DropsATransientBlob)
+{
+  constexpr std::int64_t kDtNs = 100'000'000;  // 10 Hz
+  constexpr double kBlobX = 2.0;
+  constexpr double kBlobY = 0.0;
+  constexpr double kBlobZ = 0.7;
+
+  slam::CloudMapperConfig config;
+  config.remove_dynamic_points = true;
+  config.dynamic_method = slam::DynamicRemovalMethod::kErasor2;
+  // The synthetic floor grid is ~0.53 m pitch, so 2 m analysis cells are
+  // needed to clear the per-cell minimum point count; the sensor sits 1 m
+  // over the floor; and 1 m as the near/far cutoff lets the blob 2 m out take
+  // the far threshold (the near one demands ~46 vacated observations).
+  config.dynamic_erasor.cell_size = 2.0;
+  config.dynamic_erasor.sensor_height = 1.0;
+  config.dynamic_erasor.near_far_distance = 1.0;
+
+  slam::CloudMapper mapper(config);
+  std::int64_t stamp = 1'000'000'000'000'000'000LL;
+  for (int i = 0; i < 120; ++i) {
+    slam::LidarScan scan = make_room_scan(stamp);
+    if (i < 30) {
+      for (int a = -1; a <= 1; ++a) {
+        for (int b = -1; b <= 1; ++b) {
+          for (int c = -1; c <= 1; ++c) {
+            scan.points.push_back({kBlobX + 0.08 * a, kBlobY + 0.08 * b, kBlobZ + 0.08 * c});
+          }
+        }
+      }
+    }
+    mapper.insert(scan);
+    stamp += kDtNs;
+  }
+  const slam::CloudMap cleaned = mapper.finish();
+
+  ASSERT_FALSE(cleaned.points.empty());
+  std::size_t near_blob = 0;
+  for (const auto & p : cleaned.points) {
+    const double dx = p[0] - kBlobX;
+    const double dy = p[1] - kBlobY;
+    const double dz = p[2] - kBlobZ;
+    if (dx * dx + dy * dy + dz * dz < 0.4 * 0.4) {
+      ++near_blob;
+    }
+  }
+  EXPECT_EQ(near_blob, 0U) << "ghost points survived the erasor2 removal";
+  EXPECT_GT(cleaned.dynamic_removed_point_count, 0U);
+  EXPECT_GT(cleaned.dynamic_input_point_count, cleaned.dynamic_removed_point_count);
+  // The room itself survives: the +x wall is still populated.
+  bool wall_present = false;
+  for (const auto & p : cleaned.points) {
+    if (p[0] > 4.5F) {
+      wall_present = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(wall_present);
+}
+
 // IMU specific force for a level, static sensor whose frame is the LiDAR frame
 // rotated 180 deg about X (the real Tamagawa mounting): gravity is "down" =
 // LiDAR -z, so the LiDAR-frame specific force is (0,0,+g); rotating it into the
