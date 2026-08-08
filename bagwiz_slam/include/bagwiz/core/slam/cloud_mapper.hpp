@@ -251,8 +251,10 @@ struct CloudMapperConfig
   bool camera_only = false;
 
   // Anchor-window period [ns] of the camera-only odometry's observation
-  // grouping (VisualInertialOdometryConfig::anchor_period_ns). Set to the
-  // first camera's nominal frame period; ignored unless camera_only.
+  // grouping (VisualInertialOdometryConfig::anchor_period_ns), i.e. the first
+  // camera's frame period. The CLI resolves it — --visual-anchor-period, or
+  // the anchor topic's derived median frame interval (issue #17); the default
+  // only backstops a failed derivation. Ignored unless camera_only.
   std::int64_t visual_anchor_period_ns = 100'000'000;
 
   // Camera-only keyframe gate: a grouped observation set becomes a keyframe

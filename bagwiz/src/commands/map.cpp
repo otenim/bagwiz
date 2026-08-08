@@ -123,6 +123,14 @@ private:
         "= stronger constraints and more CPU; fewer = faster.")
       ->check(CLI::PositiveNumber)
       ->needs(cam_opt);
+    sub
+      ->add_option(
+        "--visual-anchor-period", slam_args_.visual_anchor_period,
+        "Camera-only anchor-window period as <number><unit> (e.g. 100ms, 0.1s): the "
+        "cross-camera grouping window keyed to the first --cam camera's frames. "
+        "Default: derived from that topic's median frame interval. Camera-only mode "
+        "only (rejected with --pcd).")
+      ->needs(cam_opt);
     sub->add_option(
       "--cam-info", slam_args_.camera_info_overrides,
       "Explicit CameraInfo topic per camera, as <image_topic>=<info_topic> (several "

@@ -1057,6 +1057,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 //           [--backend <cpu|cuda|auto>] [--frame <frame_id>] [--imu <topic>]
 //           [--gnss <topic>] [--color <topic>...] [--cam <topic>...]
 //           [--cam-info <image>=<info>...] [--visual-max-features <N>]
+//           [--visual-anchor-period <duration>]
 //           [--color-min-dist <m>] [--color-keyframe-blur]
 //           [--input-res <m>] [--min-range <m>] [--max-range <m>]
 //           [-j|--threads <N>] [--viewer] [-w|--overwrite]
@@ -1137,6 +1138,7 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
          "--submap-keyframes",
          "--threads",
          "--viewer",
+         "--visual-anchor-period",
          "--visual-max-features",
          "-i",
          "-j",
