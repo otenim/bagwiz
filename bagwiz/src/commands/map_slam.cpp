@@ -78,7 +78,6 @@ constexpr const char * kLogger = "bagwiz.cmd.map";
 constexpr const char * kPointCloud2Type = "sensor_msgs/msg/PointCloud2";
 constexpr const char * kImuType = "sensor_msgs/msg/Imu";
 constexpr const char * kNavSatFixType = "sensor_msgs/msg/NavSatFix";
-constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
 // Static transforms are timeless; a year-long cache dwarfs any bag and matches
 // `tf static calc` buffer sizing.
 constexpr std::chrono::hours kTfBufferCacheTime{24 * 365};
@@ -749,14 +748,14 @@ private:
 
     std::vector<std::string> static_topics;
     for (const auto & t : reader->topics()) {
-      if (t.type == kTfMessageType && core::is_static_tf_topic(t.name)) {
+      if (core::is_static_tf_topic(t)) {
         static_topics.push_back(t.name);
       }
     }
     if (static_topics.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger,
-        "Bag has no static TF topic (…tf_static); cannot resolve %.*s. "
+        "Bag has no static TF topic (…/tf_static); cannot resolve %.*s. "
         "Provide a bag whose /tf_static contains the needed transforms.",
         static_cast<int>(purpose.size()), purpose.data());
       return false;
@@ -768,7 +767,7 @@ private:
 
     std::unordered_map<std::string, std::unique_ptr<core::decoder::Decoder>> decoders;
     for (const auto & info : reader->topics()) {
-      if (info.type != kTfMessageType || !core::is_static_tf_topic(info.name)) {
+      if (!core::is_static_tf_topic(info)) {
         continue;
       }
       auto open = core::decoder::open_decoder(info);
@@ -885,7 +884,7 @@ private:
     return true;
   }
 
-  // True if the bag carries at least one static TF topic (…tf_static). Lets the
+  // True if the bag carries at least one static TF topic (…/tf_static). Lets the
   // GNSS lever-arm resolution skip build_static_tf_buffer's hard-error path (which
   // is fatal for the IMU extrinsic) and degrade gracefully instead.
   bool bag_has_static_tf()
@@ -897,7 +896,7 @@ private:
       return false;
     }
     for (const auto & t : reader->topics()) {
-      if (t.type == kTfMessageType && core::is_static_tf_topic(t.name)) {
+      if (core::is_static_tf_topic(t)) {
         return true;
       }
     }
@@ -939,7 +938,7 @@ private:
     if (!bag_has_static_tf()) {
       BAGWIZ_LOG_WARN(
         kLogger,
-        "Bag has no static TF (…tf_static) to resolve the GNSS antenna lever-arm ('%s' <- '%s'); "
+        "Bag has no static TF (…/tf_static) to resolve the GNSS antenna lever-arm ('%s' <- '%s'); "
         "GNSS constraints use the raw antenna position.",
         cloud_frame.c_str(), gnss_frame.c_str());
       return kZero;

@@ -28,8 +28,6 @@ namespace bagwiz::core
 namespace
 {
 
-constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
-
 // Open one decoder per static TF topic in `reader`. Throws std::runtime_error
 // if a decoder cannot be constructed (no embedded schema and no typesupport).
 std::unordered_map<std::string, std::unique_ptr<decoder::Decoder>> open_static_tf_decoders(
@@ -37,7 +35,7 @@ std::unordered_map<std::string, std::unique_ptr<decoder::Decoder>> open_static_t
 {
   std::unordered_map<std::string, std::unique_ptr<decoder::Decoder>> decoder_by_topic;
   for (const auto & topic_info : reader.topics()) {
-    if (topic_info.type != kTfMessageType || !is_static_tf_topic(topic_info.name)) {
+    if (!is_static_tf_topic(topic_info)) {
       continue;
     }
     auto open = decoder::open_decoder(topic_info);
@@ -78,7 +76,7 @@ std::vector<StaticTopicTransforms> collect_static_tf(
 
   std::vector<std::string> static_topics;
   for (const auto & t : reader->topics()) {
-    if (t.type == kTfMessageType && is_static_tf_topic(t.name)) {
+    if (is_static_tf_topic(t)) {
       static_topics.push_back(t.name);
     }
   }

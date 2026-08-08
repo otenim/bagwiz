@@ -16,25 +16,35 @@ namespace bagwiz::core
 namespace
 {
 
-constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
-constexpr std::string_view kTfStaticSuffix = "tf_static";
+// Leaf-segment form: anchoring on the '/' keeps sibling names like
+// "/xtf_static" out; the bare "tf_static" (no namespace) is matched separately.
+constexpr std::string_view kTfStaticLeaf = "tf_static";
+constexpr std::string_view kTfStaticSuffix = "/tf_static";
 
 }  // namespace
 
 bool is_static_tf_topic(std::string_view topic_name)
 {
+  if (topic_name == kTfStaticLeaf) {
+    return true;
+  }
   return topic_name.size() >= kTfStaticSuffix.size() &&
          topic_name.compare(
            topic_name.size() - kTfStaticSuffix.size(), kTfStaticSuffix.size(), kTfStaticSuffix) ==
            0;
 }
 
+bool is_static_tf_topic(const io::TopicInfo & topic)
+{
+  return topic.type == kTfMessageTypeName && is_static_tf_topic(std::string_view{topic.name});
+}
+
 std::vector<TfTopic> collect_tf_topics(const io::BagReader & reader)
 {
   std::vector<TfTopic> topics;
   for (const auto & t : reader.topics()) {
-    if (t.type == kTfMessageType) {
-      topics.push_back({t.name, is_static_tf_topic(t.name)});
+    if (t.type == kTfMessageTypeName) {
+      topics.push_back({t.name, is_static_tf_topic(std::string_view{t.name})});
     }
   }
   return topics;

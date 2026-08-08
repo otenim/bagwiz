@@ -54,7 +54,9 @@ constexpr std::size_t kSecondCommandArgWord = 2;
 constexpr std::size_t kThirdCommandArgWord = 3;
 constexpr std::size_t kFourthCommandArgWord = 4;
 
-constexpr std::string_view kTfMessageType = "tf2_msgs/msg/TFMessage";
+// Alias of the canonical constant so the constexpr type arrays below can seed
+// from it without qualifying every entry.
+constexpr std::string_view kTfMessageType = core::kTfMessageTypeName;
 
 // Message types `traj dump` can process. This MUST mirror the supported set
 // dispatched in src/commands/traj.cpp (TrajCommand::run_dump); keep the two in
@@ -473,9 +475,10 @@ std::vector<std::string> top_level_candidates(const std::string_view & prefix)
 // only if its type is one of the listed types (e.g. `tf tree`'s single
 // TFMessage type, or `traj dump`'s supported set); an empty `allowed_types`
 // offers every topic. When `static_only` is true a topic must additionally be
-// a static TF topic (name ending in `tf_static`, the same test every bagwiz
-// static-TF reader applies), which pairs with a TFMessage `allowed_types` to
-// offer exactly the bag's static TF topics. Best-effort: a bag that fails to
+// a static TF topic (core::is_static_tf_topic — TFMessage type with
+// `tf_static` as the name's final path segment, the same test every bagwiz
+// static-TF reader applies), so it alone offers exactly the bag's static TF
+// topics. Best-effort: a bag that fails to
 // open yields no candidates and the shell's default file completion takes over.
 std::vector<std::string> complete_topics(
   const std::filesystem::path & input_path, const std::string_view & prefix,
@@ -506,7 +509,7 @@ std::vector<std::string> complete_topics(
         std::find(allowed_types.begin(), allowed_types.end(), topic.type) == allowed_types.end()) {
         continue;
       }
-      if (static_only && !core::is_static_tf_topic(topic.name)) {
+      if (static_only && !core::is_static_tf_topic(topic)) {
         continue;
       }
       result.push_back(topic.name);
@@ -527,7 +530,7 @@ constexpr std::size_t kFrameIdScanMessageCap = 5000;
 
 // Walks the bag's tf2_msgs/msg/TFMessage topics once and returns the
 // sorted, deduplicated set of header.frame_id / child_frame_id values
-// it observed. When `static_only` is true only *tf_static topics are
+// it observed. When `static_only` is true only */tf_static topics are
 // scanned (for `tf static calc`, which resolves the static tree); otherwise
 // every TF topic contributes. Reads at most `kFrameIdScanMessageCap`
 // messages so completion stays responsive on large bags. Swallows every
@@ -555,7 +558,7 @@ std::vector<std::string> collect_tf_frame_ids(
 
     std::vector<std::string> tf_topic_names;
     for (const auto & t : reader->topics()) {
-      if (t.type == kTfMessageType && (!static_only || core::is_static_tf_topic(t.name))) {
+      if (t.type == kTfMessageType && (!static_only || core::is_static_tf_topic(t))) {
         tf_topic_names.push_back(t.name);
       }
     }
@@ -572,7 +575,7 @@ std::vector<std::string> collect_tf_frame_ids(
       if (topic_info.type != kTfMessageType) {
         continue;
       }
-      if (static_only && !core::is_static_tf_topic(topic_info.name)) {
+      if (static_only && !core::is_static_tf_topic(topic_info)) {
         continue;
       }
       auto open = core::decoder::open_decoder(topic_info);
@@ -869,7 +872,7 @@ std::vector<std::string> complete_tf_static_flags_only(
 }
 
 // `calc` surfaces `-i`/`--input`/`--json`/`--of`/`--ref` for any `-` word. Its
-// `--of`/`--ref` value slots complete from the bag's static `*tf_static` frame
+// `--of`/`--ref` value slots complete from the bag's static `*/tf_static` frame
 // ids only, since `tf static calc` resolves the static tree.
 std::vector<std::string> complete_tf_static_calc(
   const CompletionRequest & request, const std::string & current)

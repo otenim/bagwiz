@@ -216,6 +216,42 @@ std::filesystem::path write_mixed_tf_mcap_fixture(const std::filesystem::path & 
   return path;
 }
 
+// Self-describing MCAP carrying `/tf_static` plus `/xtf_static` — a TFMessage
+// topic whose name merely ends with the letters "tf_static" without having it
+// as its final path segment, so it is dynamic TF under the static-TF
+// definition. Used to verify that static-only topic completion applies the
+// anchored leaf-segment rule.
+std::filesystem::path write_lookalike_static_tf_fixture(const std::filesystem::path & path)
+{
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "none";
+
+  bagwiz::io::TopicInfo tf_static_topic;
+  tf_static_topic.name = "/tf_static";
+  tf_static_topic.type = "tf2_msgs/msg/TFMessage";
+  tf_static_topic.serialization_format = "cdr";
+  tf_static_topic.schema_encoding = "ros2msg";
+  tf_static_topic.schema_text = bagwiz::core::kTfMessageWireSchema;
+
+  bagwiz::io::TopicInfo lookalike_topic = tf_static_topic;
+  lookalike_topic.name = "/xtf_static";
+
+  std::vector<geometry_msgs::msg::TransformStamped> transforms;
+  transforms.push_back(make_edge("map", "odom"));
+  const auto cdr = bagwiz::core::serialize_tf_message(transforms);
+  const auto tf_bytes = std::span<const std::byte>(cdr.data(), cdr.size());
+
+  auto writer = bagwiz::io::open_write(path, options);
+  writer->declare_topic(tf_static_topic);
+  writer->declare_topic(lookalike_topic);
+  writer->write("/tf_static", 1'000'000'000LL, tf_bytes);
+  writer->write("/xtf_static", 1'000'000'000LL, tf_bytes);
+  writer->close();
+  return path;
+}
+
 // MCAP carrying one topic of each message type `traj dump` supports (/odom,
 // /pose, /pwc, /tf) plus two unsupported topics (/img, /points). Used to
 // verify that `traj dump` <topic> completion offers only the supported types.
@@ -982,6 +1018,22 @@ TEST_F(CompletionTest, TfStaticUpdateTopicFlagRespectsPrefix)
       {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "update", "-i", "~/mixed.mcap", "-t",
        "/points"}),
     "");
+}
+
+// The static-only candidates apply the anchored leaf-segment rule: a TFMessage
+// topic whose name merely ends with the letters "tf_static" (/xtf_static) is
+// dynamic TF and stays out.
+TEST_F(CompletionTest, TfStaticUpdateTopicFlagExcludesLookalikeNames)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_lookalike_static_tf_fixture(tmp_dir_ / "lookalike.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "update", "-i", "~/lookalike.mcap",
+       "-t"}),
+    "/tf_static\n");
 }
 
 // A typed prefix narrows the static --of frame-id candidates.

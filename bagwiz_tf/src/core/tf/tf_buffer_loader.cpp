@@ -24,13 +24,6 @@
 namespace bagwiz::core
 {
 
-namespace
-{
-
-constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
-
-}  // namespace
-
 std::optional<std::string> load_tf_buffer(
   const std::filesystem::path & input, tf2::BufferCore & buffer)
 {
@@ -43,7 +36,7 @@ std::optional<std::string> load_tf_buffer(
 
   std::vector<const io::TopicInfo *> tf_topics;
   for (const auto & t : reader->topics()) {
-    if (t.type == kTfMessageType) {
+    if (t.type == kTfMessageTypeName) {
       tf_topics.push_back(&t);
     }
   }
@@ -78,7 +71,7 @@ std::optional<std::string> load_tf_buffer(
         return "failed to decode TF message on '" + raw.topic->name + "': " + decoded.error;
       }
       const auto transforms = extract_tf_message(*decoded.value);
-      const bool is_static = is_static_tf_topic(raw.topic->name);
+      const bool is_static = is_static_tf_topic(*raw.topic);
       for (const auto & t : transforms) {
         buffer.setTransform(t, "bagwiz", is_static);
       }
@@ -101,7 +94,7 @@ std::optional<std::string> load_static_tf_buffer(
 
   std::vector<const io::TopicInfo *> static_topics;
   for (const auto & t : reader->topics()) {
-    if (t.type == kTfMessageType && is_static_tf_topic(t.name)) {
+    if (is_static_tf_topic(t)) {
       static_topics.push_back(&t);
     }
   }
@@ -110,7 +103,7 @@ std::optional<std::string> load_static_tf_buffer(
     // flags (pcd concat's --frame, pcd undistort's --ref/--of, ...), so it
     // must not bake any one of them into the message. Callers that want
     // flag-specific context should prepend their own.
-    return "bag has no static TF topic (…tf_static)";
+    return "bag has no static TF topic (…/tf_static)";
   }
 
   io::ReadFilter filter;
@@ -164,7 +157,7 @@ void replay_tf_topics(
   // by the decoder factory rather than by the caller.
   std::unordered_map<std::string, std::unique_ptr<decoder::Decoder>> decoder_by_topic;
   for (const auto & topic_info : reader.topics()) {
-    if (topic_info.type != kTfMessageType) {
+    if (topic_info.type != kTfMessageTypeName) {
       continue;
     }
     if (is_static_by_topic.find(topic_info.name) == is_static_by_topic.end()) {

@@ -17,8 +17,9 @@ namespace bagwiz::commands
 
 // Implements `bagwiz tf static cp --src <src> --dst <dst> [-o <output>] [--force]
 // [-w|--overwrite]`:
-// copy every static TF topic (name ends with "tf_static", type
-// tf2_msgs/msg/TFMessage) from <src> into <dst>, preserving each topic's
+// copy every static TF topic (core::is_static_tf_topic: type
+// tf2_msgs/msg/TFMessage with "tf_static" as the name's final path segment)
+// from <src> into <dst>, preserving each topic's
 // original name. Each copied topic is written as a single TFMessage stamped at
 // <dst>'s start time (both the message receive-time and every header.stamp).
 //

@@ -24,13 +24,6 @@
 namespace bagwiz::commands
 {
 
-namespace
-{
-
-constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
-
-}  // namespace
-
 void scan_overlay_inputs(
   const std::filesystem::path & input, const std::vector<std::string> & pcd_topics,
   const std::atomic<bool> & cancel, const std::function<void(double)> & progress,
@@ -52,7 +45,7 @@ void scan_overlay_inputs(
 
   io::ReadFilter filter;
   for (const auto & t : reader->topics()) {
-    if (t.type != kTfMessageType) {
+    if (t.type != core::kTfMessageTypeName) {
       continue;
     }
     filter.topics.push_back(t.name);
@@ -71,7 +64,7 @@ void scan_overlay_inputs(
 
   std::unordered_map<std::string, std::unique_ptr<core::decoder::Decoder>> decoders;
   for (const auto & t : reader->topics()) {
-    if (t.type != kTfMessageType) {
+    if (t.type != core::kTfMessageTypeName) {
       continue;
     }
     auto open = core::decoder::open_decoder(t);
@@ -118,7 +111,7 @@ void scan_overlay_inputs(
         out.error = "failed to decode TF message on '" + raw.topic->name + "': " + decoded.error;
         return;
       }
-      const bool is_static = core::is_static_tf_topic(raw.topic->name);
+      const bool is_static = core::is_static_tf_topic(*raw.topic);
       for (const auto & t : core::extract_tf_message(*decoded.value)) {
         out.tf_buffer.setTransform(t, "bagwiz", is_static);
       }

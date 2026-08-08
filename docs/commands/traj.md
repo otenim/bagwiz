@@ -17,7 +17,7 @@ Samples poses from one bag topic and writes TUM. **Every output row is the pose
 of the tracked frame `--of` expressed in the reference frame `--ref`** — the
 same convention as `lookupTransform(--ref, --of, t)`. The result is composed
 from the message's own pose and the bag's TF tree (static + dynamic), so a
-rigid-body offset such as `base_link → sensor` from `*tf_static` is applied
+rigid-body offset such as `base_link → sensor` from `*/tf_static` is applied
 automatically.
 
 ### Usage
@@ -93,7 +93,7 @@ Twist and covariance are never written to TUM.
 
 All TF lookups are resolved against a single TF buffer built from **every**
 `tf2_msgs/msg/TFMessage` topic in the bag (dynamic `/tf` and any topic whose
-name ends with `tf_static` are merged automatically; static topics are inserted
+final path segment is `tf_static` are merged automatically; static topics are inserted
 as static transforms, the rest as dynamic). The message poses themselves are
 **not** inserted into this buffer — they are composed with it — so the input
 topic never conflicts with or re-parents the bag's existing TF tree.
@@ -207,7 +207,7 @@ flowchart TB
 ### TF topic: how sampling works
 
 1. The bag is scanned once. Every `tf2_msgs/msg/TFMessage` topic is loaded into
-   a single TF buffer; topics whose name ends with `tf_static` are inserted as
+   a single TF buffer; topics whose final path segment is `tf_static` are inserted as
    static transforms, the rest as dynamic.
 2. The chain `--ref → … → --of` is resolved against the buffer (a stable
    topology is assumed; resolution happens once).
@@ -223,7 +223,7 @@ flowchart TB
 1. If any TF lookup is needed (`--ref` is set, or Odometry has `--of` set),
    the bag is scanned once and every
    `tf2_msgs/msg/TFMessage` topic is loaded into a single TF buffer
-   (`*tf_static` as static, the rest as dynamic). A pure raw dump (no flags)
+   (`*/tf_static` as static, the rest as dynamic). A pure raw dump (no flags)
    skips this and needs no TF in the bag.
 2. Messages are read from the chosen topic in bag order — one output row per
    message that decodes successfully.

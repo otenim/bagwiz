@@ -232,8 +232,8 @@ source ~/.config/fish/completions/bagwiz.fish
     offered at every value of the variadic run. The flag is optional; omitting
     it merges every TF topic in the bag
   - `bagwiz tf static update -i <input> ... -t/--topic <topic>` — restricted to
-    the bag's **static** TF topics: `tf2_msgs/msg/TFMessage` whose name ends in
-    `tf_static`. The flag homes newly added edges, and an edge landing on a
+    the bag's **static** TF topics: `tf2_msgs/msg/TFMessage` whose name has
+    `tf_static` as its final path segment. The flag homes newly added edges, and an edge landing on a
     dynamic TF topic such as `/tf` would be invisible to every bagwiz static-TF
     reader, so dynamic TF topics are deliberately omitted. The flag also accepts
     a brand-new topic name, which simply has no candidate to offer
@@ -271,16 +271,16 @@ source ~/.config/fish/completions/bagwiz.fish
   - `bagwiz traj join -i <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
   - `bagwiz pcd undistort -i <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
   - `bagwiz tf static calc -i <input> ... --ref <FRAME>` / `--of <FRAME>`
-    (**only** static `*tf_static` topics, since `tf static calc` resolves the
+    (**only** static `*/tf_static` topics, since `tf static calc` resolves the
     static tree)
   - `bagwiz tf static drop -i <input> ... --frame <FRAME>` (**only** static
-    `*tf_static` topics, for the same reason: `--frame` names a frame of the
+    `*/tf_static` topics, for the same reason: `--frame` names a frame of the
     bag's static TF tree)
 
   The bag is opened lazily and only the first ~5000 TF messages are scanned
   so per-keystroke latency stays bounded on large bags. When the bag opens
   cleanly but carries no matching TF data — no TF at all, or, for
-  `tf static calc`, no static `*tf_static` topic — no candidates are emitted
+  `tf static calc`, no static `*/tf_static` topic — no candidates are emitted
   and the shell's default file completion takes over, exactly as when the bag
   path does not exist or the input slot is itself a flag. FILE-mode-compressed
   bags (`*.db3.zstd`, or a directory bag with `compression_mode: FILE`) also
