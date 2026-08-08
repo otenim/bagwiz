@@ -53,8 +53,8 @@ int run_tf_static_join(
   if (!core::is_static_tf_topic(topic)) {
     BAGWIZ_LOG_WARN(
       kLogger,
-      "Topic '%s' does not end with 'tf_static', so bagwiz's static-TF readers will treat it as a "
-      "dynamic TF topic and skip it.",
+      "Topic '%s' does not have 'tf_static' as its final path segment, so bagwiz's static-TF "
+      "readers will treat it as a dynamic TF topic and skip it.",
       topic.c_str());
   }
 

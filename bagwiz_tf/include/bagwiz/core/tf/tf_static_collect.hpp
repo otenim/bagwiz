@@ -15,8 +15,9 @@
 #include <string>
 #include <vector>
 
-// Reads a bag's static TF (topics whose name ends with "tf_static", type
-// tf2_msgs/msg/TFMessage) into plain TransformStamped structs. Unlike
+// Reads a bag's static TF (core::is_static_tf_topic: type tf2_msgs/msg/TFMessage
+// with "tf_static" as the name's final path segment) into plain
+// TransformStamped structs. Unlike
 // tf_buffer_loader, which feeds a tf2::BufferCore and so keeps only the
 // resolved tree, this hands back the raw transforms per topic — what commands
 // that re-serialise or re-render the static TF need (`bagwiz tf static cp`,

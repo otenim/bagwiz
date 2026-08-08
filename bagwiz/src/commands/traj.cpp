@@ -438,7 +438,7 @@ private:
     if (core::is_static_tf_topic(args.topic)) {
       BAGWIZ_LOG_ERROR(
         kLogger,
-        "Topic '%s' looks like a static TF topic (name ends with 'tf_static'). "
+        "Topic '%s' looks like a static TF topic (final path segment is 'tf_static'). "
         "Pass the dynamic /tf-style topic instead; static TF in the bag is loaded automatically.",
         args.topic.c_str());
       return 1;
@@ -523,7 +523,7 @@ private:
     return 0;
   }
 
-  // Build the full TF tree (every TFMessage topic in the bag: *tf_static as
+  // Build the full TF tree (every TFMessage topic in the bag: */tf_static as
   // static, the rest as dynamic) into `tf_buffer`. Returns false (after
   // logging) when a lookup is requested but the bag carries no TF to resolve
   // it. A no-op (returns true) when `need_tree` is false.

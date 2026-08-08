@@ -202,7 +202,7 @@ the scan duration.
 
 For every `--pcd` topic, the sensor extrinsic `E = T_of_C` (`C` = that topic's
 cloud `frame_id`) is resolved from the same frame sources as `--ref` → `--of`:
-the bag's `*tf_static`, plus the motion-source topic itself when it is a
+the bag's `*/tf_static`, plus the motion-source topic itself when it is a
 `TFMessage` topic (identity when `C == --of`). For a statically-mounted
 sensor — the
 normal case — this extrinsic comes from `tf_static` alone. A missing chain is
@@ -273,7 +273,7 @@ Reproducibility": it is held strictly, at any thread count.
 | A `--twist` topic's `header.frame_id` has no static TF chain to `--of`                                                    | Fatal.                                                                                                    |
 | A `--pcd` topic's first message has no per-point time field                                                               | Fatal.                                                                                                    |
 | A later `--pcd` cloud has no usable per-point time field                                                                  | Warning; cloud passed through un-deskewed.                                                                |
-| `--of` → a `--pcd` topic's cloud frame is not reachable via `*tf_static` + `<pose_topic>`                                 | Fatal.                                                                                                    |
+| `--of` → a `--pcd` topic's cloud frame is not reachable via `*/tf_static` + `<pose_topic>`                                | Fatal.                                                                                                    |
 | A cloud reaching the rewrite step is malformed (big-endian, missing/misshapen x/y/z, or an inconsistent point/row layout) | Aborts the run (a cloud that merely fails to _parse_ is copied through unchanged with a warning instead). |
 | `-o` output path already exists without `-w`/`--overwrite`                                                                | Error.                                                                                                    |
 

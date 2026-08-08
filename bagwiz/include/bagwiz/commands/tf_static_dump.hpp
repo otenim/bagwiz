@@ -16,8 +16,9 @@ namespace bagwiz::commands
 {
 
 // Implements `bagwiz tf static dump -i <input> [-o <output>] [-w|--overwrite]`:
-// write the bag's static TF tree (topics whose name ends with "tf_static", type
-// tf2_msgs/msg/TFMessage) as the nested parent -> child -> {x,y,z,roll,pitch,
+// write the bag's static TF tree (core::is_static_tf_topic: type
+// tf2_msgs/msg/TFMessage with "tf_static" as the name's final path segment) as
+// the nested parent -> child -> {x,y,z,roll,pitch,
 // yaw} YAML that static-transform publisher configs use. Rotations are RPY in
 // radians in tf2's fixed-axis convention, so a consumer's
 // tf2::Quaternion::setRPY reproduces the bag's quaternion; header.stamp has no

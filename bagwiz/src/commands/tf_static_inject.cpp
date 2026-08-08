@@ -307,7 +307,7 @@ int edit_static_tf_pass(
       declare_new_topics.push_back(st.name);
       continue;
     }
-    if (existing->type != kTfMessageType || !core::is_static_tf_topic(st.name)) {
+    if (!core::is_static_tf_topic(*existing)) {
       BAGWIZ_LOG_ERROR(
         logger,
         "Topic '%s' exists in the destination with type '%s'; %s rewrites only "

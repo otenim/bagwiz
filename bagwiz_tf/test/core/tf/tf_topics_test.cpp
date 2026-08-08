@@ -47,13 +47,15 @@ geometry_msgs::msg::TransformStamped make_edge(
   return ts;
 }
 
-// Writes a bag with a dynamic /tf topic, a static /tf_static topic, and one
-// non-TF topic (/chatter).
+// Writes a bag with a dynamic /tf topic, a static /tf_static topic, a TF topic
+// whose name only resembles a static one (/xtf_static — the leaf segment is
+// not "tf_static", so it is dynamic), and one non-TF topic (/chatter).
 void write_mixed_bag(const std::filesystem::path & path)
 {
   auto w = bagwiz::io::open_write(path, mcap_options());
   w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf"));
   w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/xtf_static"));
   bagwiz::io::TopicInfo string_topic;
   string_topic.name = "/chatter";
   string_topic.type = "std_msgs/msg/String";
@@ -65,16 +67,17 @@ void write_mixed_bag(const std::filesystem::path & path)
   const auto payload = bagwiz::core::serialize_tf_message(edges);
   w->write("/tf", 0, std::span<const std::byte>(payload.data(), payload.size()));
   w->write("/tf_static", 0, std::span<const std::byte>(payload.data(), payload.size()));
+  w->write("/xtf_static", 0, std::span<const std::byte>(payload.data(), payload.size()));
   w->close();
 }
 
-TEST(IsStaticTfTopic, StaticSuffixMatches)
+TEST(IsStaticTfTopic, LeafSegmentMatches)
 {
   EXPECT_TRUE(is_static_tf_topic("/tf_static"));
   EXPECT_TRUE(is_static_tf_topic("/foo/tf_static"));
-  // The test is a pure suffix match: no leading '/' is required.
+  // The bare relative name is its own leaf segment, so no leading '/' is
+  // required.
   EXPECT_TRUE(is_static_tf_topic("tf_static"));
-  EXPECT_TRUE(is_static_tf_topic("xtf_static"));
 }
 
 TEST(IsStaticTfTopic, NonStaticNames)
@@ -84,6 +87,32 @@ TEST(IsStaticTfTopic, NonStaticNames)
   EXPECT_FALSE(is_static_tf_topic("/tf_stat"));
   EXPECT_FALSE(is_static_tf_topic("/tf_static2"));
   EXPECT_FALSE(is_static_tf_topic("tf_stat"));
+  // The rule is anchored to the final path segment, so a name that merely ends
+  // with the letters "tf_static" does not qualify.
+  EXPECT_FALSE(is_static_tf_topic("xtf_static"));
+  EXPECT_FALSE(is_static_tf_topic("/xtf_static"));
+  EXPECT_FALSE(is_static_tf_topic("/foo/xtf_static"));
+  // Nor does a name where "tf_static" is an intermediate segment.
+  EXPECT_FALSE(is_static_tf_topic("/tf_static/child"));
+}
+
+TEST(IsStaticTfTopic, TopicInfoOverloadRequiresTypeAndName)
+{
+  bagwiz::io::TopicInfo topic;
+  topic.name = "/tf_static";
+  topic.type = "tf2_msgs/msg/TFMessage";
+  EXPECT_TRUE(is_static_tf_topic(topic));
+
+  // The right name with the wrong type is not a static TF topic.
+  topic.type = "std_msgs/msg/String";
+  EXPECT_FALSE(is_static_tf_topic(topic));
+
+  // The right type with a non-qualifying name is dynamic TF.
+  topic.type = "tf2_msgs/msg/TFMessage";
+  topic.name = "/tf";
+  EXPECT_FALSE(is_static_tf_topic(topic));
+  topic.name = "/xtf_static";
+  EXPECT_FALSE(is_static_tf_topic(topic));
 }
 
 TEST(CollectTfTopics, PicksTfTopicsWithStaticFlag)
@@ -100,9 +129,11 @@ TEST(CollectTfTopics, PicksTfTopicsWithStaticFlag)
   for (const auto & t : topics) {
     is_static_by_name.emplace(t.name, t.is_static);
   }
-  ASSERT_EQ(is_static_by_name.size(), 2);  // /chatter (non-TF) is excluded
+  ASSERT_EQ(is_static_by_name.size(), 3);  // /chatter (non-TF) is excluded
   EXPECT_FALSE(is_static_by_name.at("/tf"));
   EXPECT_TRUE(is_static_by_name.at("/tf_static"));
+  // Only the exact "tf_static" leaf segment counts as static.
+  EXPECT_FALSE(is_static_by_name.at("/xtf_static"));
 
   std::filesystem::remove(bag);
 }
