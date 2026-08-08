@@ -369,9 +369,11 @@ struct CloudMap
   std::vector<std::array<std::uint8_t, 3>> colors;
 
   // Camera-only odometry diagnostics (VisualInertialOdometry::Stats): how
-  // many grouped observations the cross-camera grouping dropped (uncovered
-  // windows, late arrivals past a silent camera) and how many keyframes the
-  // estimator produced. Both 0 outside camera-only mode.
+  // many grouped observations the cross-camera grouping dropped and how many
+  // keyframes the estimator produced. Drops mean a stamp no anchor-camera
+  // window covers — a mid-run anchor frame drop, or the benign stream-extent
+  // mismatch at the bag's head/tail; the grouping never drops for lag. Both
+  // counts 0 outside camera-only mode.
   std::int64_t visual_dropped_observation_count = 0;
   std::int64_t visual_odom_keyframe_count = 0;
 
@@ -422,6 +424,15 @@ public:
   // estimator's single-threaded contract holds across concurrent callers);
   // per-camera streams must be stamp-non-decreasing across calls.
   void insert_visual_observations(std::span<const VisualObservation> observations);
+
+  // Per-frame heartbeat for a camera frame that yielded no observations
+  // (decode failure, zero surviving tracks). Camera-only mode only (a no-op
+  // otherwise): advances the camera's grouping stream head so one camera with
+  // systematically undecodable or featureless frames cannot stall the other
+  // cameras' window releases for the rest of the bag. Same thread-safety and
+  // stamp-monotonicity contract as insert_visual_observations; camera_id
+  // indexes config.visual_cameras.
+  void note_visual_frame(std::int32_t camera_id, std::int64_t stamp_ns);
 
   // Feed one scan. Scans must arrive in non-decreasing timestamp order. A scan
   // with no per-point time is fed with explicit zero per-point times (treated

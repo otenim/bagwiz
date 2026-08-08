@@ -304,8 +304,10 @@ void log_mapping_summary(
       BAGWIZ_LOG_WARN(
         logger,
         "%" PRId64
-        " visual observation(s) were dropped by the cross-camera grouping (uncovered "
-        "windows or a silent camera); check the --cam topics' frame rates",
+        " visual observation(s) were dropped by the cross-camera grouping (stamps the "
+        "anchor camera's frames left uncovered — mid-run frame drops on the first --cam "
+        "topic, or the benign case: other cameras' frames before its first / after its "
+        "last frame at the bag's edges)",
         map.visual_dropped_observation_count);
     }
   } else {
