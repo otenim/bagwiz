@@ -110,6 +110,29 @@ struct Stats
   std::size_t tracks_too_short = 0;      // dropped: < 3 associated observations
   std::size_t tracks_triangulation_failed = 0;
   std::size_t tracks_gated = 0;  // dropped by the LiDAR-support gate
+
+  // Issue #18 diagnosis: why triangulateSafe rejected, one count per failed
+  // track (the four sum to tracks_triangulation_failed).
+  std::size_t tri_degenerate = 0;
+  std::size_t tri_behind_camera = 0;
+  std::size_t tri_outlier = 0;
+  std::size_t tri_far_point = 0;
+  // Per-submap-subset discriminator over the same failed tracks: re-run
+  // triangulateSafe on each submap's own observations. All subsets valid but
+  // the joint set failed -> the submaps' T_world_origin disagree
+  // (inter-submap inconsistency confirmed). A failed subset is
+  // indeterminate — near-zero parallax within one submap legitimately reads
+  // DEGENERATE, so it is NOT evidence against inconsistency. Too-small: some
+  // submap contributed < 2 observations, nothing to discriminate with.
+  std::size_t fail_subsets_all_ok = 0;
+  // fail_subset_* split the failed-subset case by WHY the subsets fail:
+  // every failed subset DEGENERATE = the track simply lacks baseline within
+  // each side (a geometry limit); any failed subset non-degenerate = the
+  // side's own composed poses disagree with its observations (per-frame
+  // trajectory error inside a submap).
+  std::size_t fail_subset_degenerate = 0;
+  std::size_t fail_subset_nondegenerate = 0;
+  std::size_t fail_subset_too_small = 0;
 };
 
 // Interpolate the LiDAR pose at stamp t (seconds) inside `view`'s frame span:
