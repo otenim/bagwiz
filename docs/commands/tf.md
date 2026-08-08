@@ -7,9 +7,10 @@ TF inspection and static-TF editing on a ROS 2 rosbag.
 | [`tree`](#bagwiz-tf-tree)               | Merge one or more `tf2_msgs/msg/TFMessage` topics into one TF frame tree, colored by static vs dynamic (`static` / `dynamic` selectors supported).           |
 | [`static calc`](#bagwiz-tf-static-calc) | Resolve the pose of `--of` expressed in `--ref` using only the bag's static TF tree; print translation/quaternion/RPY or JSON.                               |
 | [`static cp`](#bagwiz-tf-static-cp)     | Copy every static TF topic from `<src>` into `<dst>` (in place, or to a new bag via `-o`), preserving topic names and stamping each at `<dst>`'s start time. |
+| [`static drop`](#bagwiz-tf-static-drop) | Remove frames (each with its whole subtree) from the static TF tree via `--frame`, preserving the topic layout.                                              |
 | [`static dump`](#bagwiz-tf-static-dump) | Write the bag's static TF tree as nested `parent: child: {x, y, z, roll, pitch, yaw}` YAML (RPY in radians) to `-o`, or to stdout.                           |
-| [`static edit`](#bagwiz-tf-static-edit) | Edit the static TF tree edge by edge: add/update edges from such a YAML and/or drop frames (with their subtrees) via `--prune`, preserving the topic layout. |
 | [`static join`](#bagwiz-tf-static-join) | The inverse of `static dump`: embed such a YAML into the bag as one latched `/tf_static` message stamped at the bag's start time.                            |
+| [`static update`](#bagwiz-tf-static-update) | Add or update static TF edges from such a YAML: an existing child is updated in its own topic, a new child added under `-t`, preserving the topic layout. |
 
 ROS 1 `*.bag` inputs are not supported.
 
@@ -172,10 +173,11 @@ Colors are also omitted when stdout is not a TTY (same effect as `NO_COLOR` for 
 
 `static` is a command group for working with the bag's static TF tree. Its
 actions are `calc` (resolve a transform, below), [`cp`](#bagwiz-tf-static-cp)
-(copy static TF between bags), [`dump`](#bagwiz-tf-static-dump) (write the static
-tree as a publisher-config YAML), [`edit`](#bagwiz-tf-static-edit) (add, update,
-or remove individual edges), and [`join`](#bagwiz-tf-static-join) (embed such
-a YAML into a bag), so the full invocation is
+(copy static TF between bags), [`drop`](#bagwiz-tf-static-drop) (remove frames
+and their subtrees), [`dump`](#bagwiz-tf-static-dump) (write the static tree as a
+publisher-config YAML), [`join`](#bagwiz-tf-static-join) (embed such a YAML into
+a bag), and [`update`](#bagwiz-tf-static-update) (add or update individual
+edges), so the full invocation is
 `bagwiz tf static calc ...`. Running `bagwiz tf static` without an action prints
 an error and the group's help.
 
@@ -522,56 +524,40 @@ double-quoted scalar. Ordinary ROS frame ids (`base_link`,
 
 ---
 
-## `bagwiz tf static edit`
+## `bagwiz tf static drop`
 
-Edge-granular edits to the bag's static TF tree, where [`join`](#bagwiz-tf-static-join)
-only creates a topic or replaces one wholesale: add a frame, fix one transform's
-values, re-parent a frame, or remove a frame, without touching the rest of the
-tree.
+Remove frames from the bag's static TF tree, each together with its whole
+subtree, without touching the rest of the tree. The counterpart of
+[`update`](#bagwiz-tf-static-update), which adds and edits edges;
+[`join`](#bagwiz-tf-static-join), by contrast, only creates a topic or replaces
+one wholesale.
 
-Two edit kinds, combinable in one run:
-
-- `--yaml <file>` — a publisher-config YAML (the schema
-  [`static dump`](#bagwiz-tf-static-dump) writes). Each of its edges is **added**
-  when its child is new to the tree, and applied as an **update** when the child
-  already exists: the edge is rewritten in place with the config's values, and a
-  differing parent re-parents it (logged). The config is parsed as strictly as
-  `join` parses it, including the [nesting](#nesting) and validation rules.
-- `--prune <frame>` — repeatable. Names a _child_ frame: the edge above it is
-  removed together with the frame's whole subtree, and every dropped edge is
-  logged. The frame must exist as a child in the bag's static TF tree; a typo,
-  an unknown frame, or a root (a frame that parents edges but has no parent
-  itself) aborts the run before anything is written.
-
-Prune applies first, so `--prune drs_base_link` together with a `--yaml` that
-re-declares `drs_base_link` replaces that subtree with the config's version.
-After both phases the merged tree is validated as a forest, so an update that
-would close a cycle aborts with the input untouched.
+`--frame <frame>` is **repeatable**. Each names a _child_ frame: the edge above
+it is removed together with the frame's whole subtree, and every dropped edge is
+logged. The frame must exist as a child in the bag's static TF tree; a typo, an
+unknown frame, or a root (a frame that parents edges but has no parent itself)
+aborts the run before anything is written. When several `--frame`s are given, the
+subtrees are resolved against the tree as loaded, so listing a frame and one of
+its descendants together is well defined. After the removals the merged tree is
+re-validated as a forest.
 
 ### Usage
 
 ```text
-bagwiz tf static edit -i <input> [--yaml <file>] [--prune <frame>...] [-t <topic>] [-o <output>] [-w|--overwrite]
+bagwiz tf static drop -i <input> --frame <frame>... [-o <output>] [-w|--overwrite]
 ```
 
 ### Examples
 
 ```bash
-# Add an oxts_link between drs_base_link and imu_link, leaving the rest of the
-# tree alone — the edit join refused to do without dropping /tf_static first.
-bagwiz tf static edit -i capture.mcap --yaml oxts_link.yaml
-
-# Fix one transform's values (lidar_front already exists under drs_base_link).
-bagwiz tf static edit -i capture.mcap --yaml corrected_lidar.yaml
-
 # Remove a frame and everything below it.
-bagwiz tf static edit -i capture.mcap --prune oxts_link
+bagwiz tf static drop -i capture.mcap --frame oxts_link
 
-# Replace a subtree: drop it and re-add the corrected version in one run.
-bagwiz tf static edit -i capture.mcap --prune drs_base_link --yaml corrected_rig.yaml
+# Remove several subtrees in one run.
+bagwiz tf static drop -i capture.mcap --frame lidar_front --frame lidar_rear
 
 # Write a new bag instead of touching the input.
-bagwiz tf static edit -i capture.mcap --yaml oxts_link.yaml -o edited.mcap
+bagwiz tf static drop -i capture.mcap --frame oxts_link -o edited.mcap
 ```
 
 ### Options
@@ -579,35 +565,24 @@ bagwiz tf static edit -i capture.mcap --yaml oxts_link.yaml -o edited.mcap
 | Flag                    | Description                                                                                                               |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <bag>`   | Input bag (file or directory).                                                                                            |
-| `--yaml <file>`         | Publisher-config YAML whose edges are added or applied as updates.                                                        |
-| `--prune <frame>`       | Child frame whose edge and subtree are removed; repeatable.                                                               |
-| `-t`, `--topic <name>`  | Topic newly added transforms are embedded under (default `/tf_static`), declared if absent.                               |
+| `--frame <frame>`       | Child frame whose edge and subtree are removed; repeatable. At least one is required.                                     |
 | `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#output-modes). |
 | `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                |
 
-At least one of `--yaml` / `--prune` is required.
-
-`--prune` and `-t`/`--topic` support TAB completion. `--prune` offers frame ids
-from the bag's static `*tf_static` topics, like [`calc`](#bagwiz-tf-static-calc)'s
-`--of`/`--ref`. `-t` offers the bag's static TF topics themselves — a
-`tf2_msgs/msg/TFMessage` topic whose name ends in `tf_static`. A dynamic TF topic
-such as `/tf` is deliberately left out: an edge written there is invisible to
-every bagwiz static-TF reader, so `dump` and `calc` would not see it. The flag
-still accepts a brand-new topic name, which simply has no candidate to offer (see
+`--frame` supports TAB completion, offering frame ids from the bag's static
+`*tf_static` topics, like [`calc`](#bagwiz-tf-static-calc)'s `--of`/`--ref` (see
 [`bagwiz complete`](complete.md)).
 
 ### Topic layout is preserved
 
-Unlike `join`, `edit` does not merge the bag's static topics into one. An update
-lands in whichever topic carries the edge (e.g. a `lidar_front` fix goes to
-`/sensing/tf_static` when that is where the edge lives), and each touched topic
-is rewritten as one latched message stamped at the bag's start time — written
-ahead of the copied stream, for the same row-order reason as
-[`join`](#bagwiz-tf-static-join)'s timestamp handling. Untouched static topics
-and every non-TF topic pass
-through unchanged. Only edges created by `--yaml` go to `-t`/`--topic`, which is
-declared when the bag does not have it yet. A topic pruned down to no edges
-keeps its declaration but carries no message.
+Unlike `join`, `drop` does not merge the bag's static topics into one. A removal
+lands in whichever topic carries the edge (e.g. a `lidar_front` edge living in
+`/sensing/tf_static` is dropped there), and each touched topic is rewritten as
+one latched message stamped at the bag's start time — written ahead of the copied
+stream, for the same row-order reason as [`join`](#bagwiz-tf-static-join)'s
+timestamp handling. Untouched static topics and every non-TF topic pass through
+unchanged. A topic pruned down to no edges keeps its declaration but carries no
+message.
 
 ---
 
@@ -623,9 +598,10 @@ Together the two close the loop: `dump` recovers a config from a recorded rig, a
 is wrong. A bag trimmed to start after `/tf_static` was last published, for
 instance, has no static tree at all until you join one back in.
 
-`join` writes the config as the topic's _whole_ content: to add, update, or
-remove individual edges of a tree the bag already carries, use
-[`static edit`](#bagwiz-tf-static-edit) instead.
+`join` writes the config as the topic's _whole_ content: to add or update
+individual edges of a tree the bag already carries, use
+[`static update`](#bagwiz-tf-static-update); to remove individual frames, use
+[`static drop`](#bagwiz-tf-static-drop).
 
 ### Usage
 
@@ -800,6 +776,80 @@ publishes under. The YAML carries no topic name, so a default is needed; pass
 `tf_static` is accepted but warns, because every bagwiz static-TF reader
 (`tf static dump`, `tf static calc`, `tf tree -t static`, `tf static cp`) selects
 topics by that suffix and would treat the topic as dynamic.
+
+---
+
+## `bagwiz tf static update`
+
+Edge-granular add/update of the bag's static TF tree, where
+[`join`](#bagwiz-tf-static-join) only creates a topic or replaces one wholesale:
+add a frame, fix one transform's values, or re-parent a frame, without touching
+the rest of the tree. The counterpart of [`drop`](#bagwiz-tf-static-drop), which
+removes frames.
+
+`--yaml <file>` is a publisher-config YAML (the schema
+[`static dump`](#bagwiz-tf-static-dump) writes). Each of its edges is **added**
+when its child is new to the tree, and applied as an **update** when the child
+already exists: the edge is rewritten in place with the config's values, and a
+differing parent re-parents it (logged). The config is parsed as strictly as
+`join` parses it, including the [nesting](#nesting) and validation rules. After
+the edits the merged tree is validated as a forest, so an update that would close
+a cycle aborts with the input untouched.
+
+### Usage
+
+```text
+bagwiz tf static update -i <input> --yaml <file> [-t <topic>] [-o <output>] [-w|--overwrite]
+```
+
+### Examples
+
+```bash
+# Add an oxts_link, leaving the rest of the tree alone — what join could not do
+# without dropping /tf_static first.
+bagwiz tf static update -i capture.mcap --yaml oxts_link.yaml
+
+# Fix one transform's values (lidar_front already exists under drs_base_link).
+bagwiz tf static update -i capture.mcap --yaml corrected_lidar.yaml
+
+# Write a new bag instead of touching the input.
+bagwiz tf static update -i capture.mcap --yaml oxts_link.yaml -o edited.mcap
+```
+
+To replace a subtree, drop it and re-add the corrected version:
+
+```bash
+bagwiz tf static drop -i capture.mcap --frame drs_base_link -o tmp.mcap
+bagwiz tf static update -i tmp.mcap --yaml corrected_rig.yaml
+```
+
+### Options
+
+| Flag                    | Description                                                                                                               |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <bag>`   | Input bag (file or directory).                                                                                            |
+| `--yaml <file>`         | **Required.** Publisher-config YAML whose edges are added or applied as updates.                                          |
+| `-t`, `--topic <name>`  | Topic newly added transforms are embedded under (default `/tf_static`), declared if absent.                              |
+| `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#output-modes). |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                |
+
+`-t`/`--topic` supports TAB completion, offering the bag's static TF topics — a
+`tf2_msgs/msg/TFMessage` topic whose name ends in `tf_static`. A dynamic TF topic
+such as `/tf` is deliberately left out: an edge written there is invisible to
+every bagwiz static-TF reader, so `dump` and `calc` would not see it. The flag
+still accepts a brand-new topic name, which simply has no candidate to offer (see
+[`bagwiz complete`](complete.md)).
+
+### Topic layout is preserved
+
+Unlike `join`, `update` does not merge the bag's static topics into one. An
+update lands in whichever topic carries the edge (e.g. a `lidar_front` fix goes to
+`/sensing/tf_static` when that is where the edge lives), and each touched topic is
+rewritten as one latched message stamped at the bag's start time — written ahead
+of the copied stream, for the same row-order reason as
+[`join`](#bagwiz-tf-static-join)'s timestamp handling. Untouched static topics and
+every non-TF topic pass through unchanged. Only newly added edges go to
+`-t`/`--topic`, which is declared when the bag does not have it yet.
 
 ## Exit status
 

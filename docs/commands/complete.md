@@ -146,7 +146,8 @@ source ~/.config/fish/completions/bagwiz.fish
     (`cam-info replace`, `cam-info recompute-p`, `cam-info dump`, `check broken`,
     `convert format`, `generate video`, `map slam`, `map viewer`,
     `pcd concat`, `pcd undistort`, `tf static calc`, `tf static cp`,
-    `tf static dump`, `tf static edit`, `tf static join`, `tf tree`, `topic drop`, `topic keep`,
+    `tf static drop`, `tf static dump`, `tf static join`, `tf static update`,
+    `tf tree`, `topic drop`, `topic keep`,
     `topic rename`, `traj dump`, `traj join`);
     `cam-info replace -<TAB>` surfaces `--frame-id`, `--output`/`-o`,
     `--topics`/`-t`, and `-w`/`--overwrite`; `check broken -<TAB>` surfaces
@@ -163,12 +164,14 @@ source ~/.config/fish/completions/bagwiz.fish
     `-w`/`--overwrite`; `tf static join -<TAB>` adds `--yaml`, `--topic`/`-t` and
     `--force` to that set (its `--yaml` value is a file path and `--topic` names a
     topic being created, so neither carries bagwiz candidates — both fall through
-    to the shell); `tf static edit -<TAB>` surfaces the `join` set minus `--force`
-    plus `--prune` (its `--yaml` likewise falls through to the shell, while
-    `--prune` completes frame ids and `--topic`/`-t` completes static TF topics —
-    see the sections below).
+    to the shell); `tf static drop -<TAB>` surfaces `--input`/`-i`,
+    `--output`/`-o`, `-w`/`--overwrite` and `--frame` (its `--frame` completes
+    static frame ids — see the sections below); `tf static update -<TAB>` surfaces
+    the `join` set minus `--force` (its `--yaml` likewise falls through to the
+    shell, while `--topic`/`-t` completes static TF topics — see the sections
+    below).
     `tf static` is itself a command group, so `tf static <TAB>` completes its
-    actions (`calc`, `cp`, `dump`, `edit`, `join`) and `tf static -<TAB>` lists just the help flags.
+    actions (`calc`, `cp`, `drop`, `dump`, `join`, `update`) and `tf static -<TAB>` lists just the help flags.
     `cam-info`, `check`, `generate`, `map`, `pcd`, and `topic` are likewise
     command groups: `cam-info <TAB>` completes `replace`, `recompute-p`, `dump`, `check <TAB>`
     completes `broken`, `generate <TAB>` completes `video`, `map <TAB>`
@@ -228,7 +231,7 @@ source ~/.config/fish/completions/bagwiz.fish
     `tf2_msgs/msg/TFMessage` topics (the only type `tf tree` can render),
     offered at every value of the variadic run. The flag is optional; omitting
     it merges every TF topic in the bag
-  - `bagwiz tf static edit -i <input> ... -t/--topic <topic>` — restricted to
+  - `bagwiz tf static update -i <input> ... -t/--topic <topic>` — restricted to
     the bag's **static** TF topics: `tf2_msgs/msg/TFMessage` whose name ends in
     `tf_static`. The flag homes newly added edges, and an edge landing on a
     dynamic TF topic such as `/tf` would be invisible to every bagwiz static-TF
@@ -270,8 +273,8 @@ source ~/.config/fish/completions/bagwiz.fish
   - `bagwiz tf static calc -i <input> ... --ref <FRAME>` / `--of <FRAME>`
     (**only** static `*tf_static` topics, since `tf static calc` resolves the
     static tree)
-  - `bagwiz tf static edit -i <input> ... --prune <FRAME>` (**only** static
-    `*tf_static` topics, for the same reason: `--prune` names a frame of the
+  - `bagwiz tf static drop -i <input> ... --frame <FRAME>` (**only** static
+    `*tf_static` topics, for the same reason: `--frame` names a frame of the
     bag's static TF tree)
 
   The bag is opened lazily and only the first ~5000 TF messages are scanned

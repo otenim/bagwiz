@@ -10,7 +10,9 @@
 
 #include "bagwiz/core/bag/bag_copy.hpp"
 #include "bagwiz/core/bag/bag_topic_plan.hpp"
+#include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/tf/tf_forest_check.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/core/tf/tf_topics.hpp"
 #include "bagwiz/io/bag_open.hpp"
@@ -22,10 +24,12 @@
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace bagwiz::commands
@@ -306,9 +310,9 @@ int edit_static_tf_pass(
     if (existing->type != kTfMessageType || !core::is_static_tf_topic(st.name)) {
       BAGWIZ_LOG_ERROR(
         logger,
-        "Topic '%s' exists in the destination with type '%s'; tf static edit rewrites only "
+        "Topic '%s' exists in the destination with type '%s'; %s rewrites only "
         "static tf2_msgs/msg/TFMessage topics.",
-        st.name.c_str(), existing->type.c_str());
+        st.name.c_str(), existing->type.c_str(), options.label.c_str());
       return 1;
     }
     suppress.insert(st.name);
@@ -376,6 +380,47 @@ int edit_static_tf_pass(
     " static TF topic(s) at stamp %" PRId64 ".",
     options.label.c_str(), counts.copied, counts.suppressed, *rewritten, start_ns);
   return 0;
+}
+
+int rewrite_touched_static_topics(
+  const std::filesystem::path & input_path, const std::vector<core::StaticTopicTransforms> & topics,
+  const std::unordered_set<std::string> & touched,
+  const std::optional<std::filesystem::path> & output_path, bool overwrite,
+  const core::BagRewriteOptions & rewrite_opts, const StaticTfInjectOptions & inject_opts)
+{
+  // The merged result must still be a forest: each command validates its own
+  // input, but an add/update that re-parents an existing frame can close a cycle
+  // against edges the bag already carries.
+  std::set<std::pair<std::string, std::string>> merged_edges;
+  for (const auto & st : topics) {
+    for (const auto & t : st.transforms) {
+      merged_edges.emplace(t.header.frame_id, t.child_frame_id);
+    }
+  }
+  if (const auto err = core::validate_tf_forest(merged_edges, "after applying the edit")) {
+    BAGWIZ_LOG_ERROR(rewrite_opts.logger, "%s", err->c_str());
+    return 1;
+  }
+
+  // Rewrite in bag topic order (a brand-new -t sorts last, as appended).
+  std::vector<core::StaticTopicTransforms> touched_topics;
+  for (const auto & st : topics) {
+    if (touched.count(st.name) != 0) {
+      touched_topics.push_back(st);
+    }
+  }
+  if (touched_topics.empty()) {
+    // Every accepted edit touches a topic, so this is reached only when the
+    // input carried nothing to apply; a no-op must not rewrite the bag.
+    BAGWIZ_LOG_INFO(
+      rewrite_opts.logger, "%s: no edge changed; nothing to write.", inject_opts.label.c_str());
+    return 0;
+  }
+
+  return core::run_bag_rewrite(
+    input_path, output_path, overwrite, rewrite_opts, [&](const io::WriterFactory & open_writer) {
+      return edit_static_tf_pass(input_path, touched_topics, inject_opts, open_writer);
+    });
 }
 
 }  // namespace bagwiz::commands

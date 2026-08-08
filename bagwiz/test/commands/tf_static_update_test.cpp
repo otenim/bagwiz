@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/commands/tf_static_edit.hpp"
+#include "bagwiz/commands/tf_static_update.hpp"
 
 #include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
@@ -31,7 +31,7 @@
 namespace
 {
 
-using bagwiz::commands::run_tf_static_edit;
+using bagwiz::commands::run_tf_static_update;
 
 constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
 
@@ -171,13 +171,13 @@ bool topic_present(const std::filesystem::path & path, const std::string & topic
   return false;
 }
 
-class TfStaticEditTest : public ::testing::Test
+class TfStaticUpdateTest : public ::testing::Test
 {
 protected:
   void SetUp() override
   {
     tmp_dir_ = std::filesystem::temp_directory_path() /
-               ("bagwiz_tf_static_edit_" +
+               ("bagwiz_tf_static_update_" +
                 std::to_string(::testing::UnitTest::GetInstance()->current_test_info()->line()));
     std::filesystem::remove_all(tmp_dir_);
     std::filesystem::create_directories(tmp_dir_);
@@ -186,7 +186,7 @@ protected:
 
   std::filesystem::path write_yaml(const std::string & contents) const
   {
-    const auto path = tmp_dir_ / "edit.yaml";
+    const auto path = tmp_dir_ / "update.yaml";
     std::ofstream(path) << contents;
     return path;
   }
@@ -209,7 +209,7 @@ protected:
   std::filesystem::path tmp_dir_;
 };
 
-TEST_F(TfStaticEditTest, AddsAnEdgeToABagWithoutStaticTf)
+TEST_F(TfStaticUpdateTest, AddsAnEdgeToABagWithoutStaticTf)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   const auto out = tmp_dir_ / "out.mcap";
@@ -217,7 +217,7 @@ TEST_F(TfStaticEditTest, AddsAnEdgeToABagWithoutStaticTf)
   write_bag(bag, kStart);
   const auto yaml = write_yaml(one_edge_yaml("base_link", "drs_base_link", "1.0"));
 
-  ASSERT_EQ(run_tf_static_edit(bag, yaml, {}, "/tf_static", out, /*overwrite=*/false), 0);
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/tf_static", out, /*overwrite=*/false), 0);
 
   const auto edited = read_tf_topic(out, "/tf_static");
   ASSERT_TRUE(edited.present);
@@ -230,14 +230,14 @@ TEST_F(TfStaticEditTest, AddsAnEdgeToABagWithoutStaticTf)
   EXPECT_FALSE(topic_present(bag, "/tf_static"));
 }
 
-TEST_F(TfStaticEditTest, AddsANewChildAlongsideExistingEdges)
+TEST_F(TfStaticUpdateTest, AddsANewChildAlongsideExistingEdges)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   const auto out = tmp_dir_ / "out.mcap";
   write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}});
   const auto yaml = write_yaml(one_edge_yaml("drs_base_link", "oxts_link", "3.0"));
 
-  ASSERT_EQ(run_tf_static_edit(bag, yaml, {}, "/tf_static", out, /*overwrite=*/false), 0);
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/tf_static", out, /*overwrite=*/false), 0);
 
   const auto edited = read_tf_topic(out, "/tf_static");
   ASSERT_EQ(edited.transforms.size(), 3U);
@@ -253,7 +253,7 @@ TEST_F(TfStaticEditTest, AddsANewChildAlongsideExistingEdges)
   EXPECT_TRUE(topic_present(out, "/clock"));
 }
 
-TEST_F(TfStaticEditTest, UpdatesAnExistingEdgeInPlace)
+TEST_F(TfStaticUpdateTest, UpdatesAnExistingEdgeInPlace)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   const auto out = tmp_dir_ / "out.mcap";
@@ -261,7 +261,7 @@ TEST_F(TfStaticEditTest, UpdatesAnExistingEdgeInPlace)
   // Same parent, same child, new translation: an update, not an addition.
   const auto yaml = write_yaml(one_edge_yaml("drs_base_link", "lidar_front", "9.0"));
 
-  ASSERT_EQ(run_tf_static_edit(bag, yaml, {}, "/tf_static", out, /*overwrite=*/false), 0);
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/tf_static", out, /*overwrite=*/false), 0);
 
   const auto edited = read_tf_topic(out, "/tf_static");
   ASSERT_EQ(edited.transforms.size(), 2U);
@@ -271,7 +271,7 @@ TEST_F(TfStaticEditTest, UpdatesAnExistingEdgeInPlace)
   EXPECT_DOUBLE_EQ(edited.transforms[1].transform.translation.x, 9.0);
 }
 
-TEST_F(TfStaticEditTest, ReparentsAnExistingChild)
+TEST_F(TfStaticUpdateTest, ReparentsAnExistingChild)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   const auto out = tmp_dir_ / "out.mcap";
@@ -279,7 +279,7 @@ TEST_F(TfStaticEditTest, ReparentsAnExistingChild)
   // lidar_front moves from drs_base_link to base_link.
   const auto yaml = write_yaml(one_edge_yaml("base_link", "lidar_front", "2.0"));
 
-  ASSERT_EQ(run_tf_static_edit(bag, yaml, {}, "/tf_static", out, /*overwrite=*/false), 0);
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/tf_static", out, /*overwrite=*/false), 0);
 
   const auto edited = read_tf_topic(out, "/tf_static");
   ASSERT_EQ(edited.transforms.size(), 2U);
@@ -287,89 +287,7 @@ TEST_F(TfStaticEditTest, ReparentsAnExistingChild)
   EXPECT_EQ(edited.transforms[1].header.frame_id, "base_link");
 }
 
-TEST_F(TfStaticEditTest, PrunesALeaf)
-{
-  const auto bag = tmp_dir_ / "bag.mcap";
-  const auto out = tmp_dir_ / "out.mcap";
-  write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}});
-
-  ASSERT_EQ(
-    run_tf_static_edit(bag, std::nullopt, {"lidar_front"}, "/tf_static", out, /*overwrite=*/false),
-    0);
-
-  const auto edited = read_tf_topic(out, "/tf_static");
-  ASSERT_EQ(edited.transforms.size(), 1U);
-  EXPECT_EQ(edited.transforms[0].child_frame_id, "drs_base_link");
-}
-
-TEST_F(TfStaticEditTest, PrunesASubtree)
-{
-  const auto bag = tmp_dir_ / "bag.mcap";
-  const auto out = tmp_dir_ / "out.mcap";
-  // base_link -> drs_base_link -> {lidar_front, lidar_rear}: pruning
-  // drs_base_link drops all three edges.
-  const std::vector<geometry_msgs::msg::TransformStamped> edges{
-    make_edge("base_link", "drs_base_link", 1.0), make_edge("drs_base_link", "lidar_front", 2.0),
-    make_edge("drs_base_link", "lidar_rear", 3.0)};
-  write_bag(bag, 1'000'000'000LL, {{"/tf_static", edges}});
-
-  ASSERT_EQ(
-    run_tf_static_edit(
-      bag, std::nullopt, {"drs_base_link"}, "/tf_static", out, /*overwrite=*/false),
-    0);
-
-  // The topic survives as a bare declaration with no messages, and the rest of
-  // the bag is intact.
-  const auto edited = read_tf_topic(out, "/tf_static");
-  EXPECT_TRUE(edited.present);
-  EXPECT_EQ(edited.message_count, 0);
-  EXPECT_TRUE(topic_present(out, "/clock"));
-}
-
-TEST_F(TfStaticEditTest, PruneOfAMissingFrameFails)
-{
-  const auto bag = tmp_dir_ / "bag.mcap";
-  const auto out = tmp_dir_ / "out.mcap";
-  write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}});
-
-  EXPECT_EQ(
-    run_tf_static_edit(bag, std::nullopt, {"oxts_link"}, "/tf_static", out, /*overwrite=*/false),
-    1);
-  EXPECT_FALSE(std::filesystem::exists(out));
-}
-
-TEST_F(TfStaticEditTest, PruneOfARootFails)
-{
-  const auto bag = tmp_dir_ / "bag.mcap";
-  const auto out = tmp_dir_ / "out.mcap";
-  write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}});
-
-  // base_link parents edges but is nobody's child: --prune cannot name it.
-  EXPECT_EQ(
-    run_tf_static_edit(bag, std::nullopt, {"base_link"}, "/tf_static", out, /*overwrite=*/false),
-    1);
-  EXPECT_FALSE(std::filesystem::exists(out));
-}
-
-TEST_F(TfStaticEditTest, PruneThenReaddReplacesTheSubtree)
-{
-  const auto bag = tmp_dir_ / "bag.mcap";
-  const auto out = tmp_dir_ / "out.mcap";
-  write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}});
-  // Prune drs_base_link (dropping lidar_front with it) and re-add it with a
-  // different child in one run.
-  const auto yaml = write_yaml(one_edge_yaml("base_link", "drs_base_link", "7.0"));
-
-  ASSERT_EQ(
-    run_tf_static_edit(bag, yaml, {"drs_base_link"}, "/tf_static", out, /*overwrite=*/false), 0);
-
-  const auto edited = read_tf_topic(out, "/tf_static");
-  ASSERT_EQ(edited.transforms.size(), 1U);
-  EXPECT_EQ(edited.transforms[0].child_frame_id, "drs_base_link");
-  EXPECT_DOUBLE_EQ(edited.transforms[0].transform.translation.x, 7.0);
-}
-
-TEST_F(TfStaticEditTest, EditsLandInTheTopicThatCarriesTheEdge)
+TEST_F(TfStaticUpdateTest, UpdatesLandInTheTopicThatCarriesTheEdge)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   const auto out = tmp_dir_ / "out.mcap";
@@ -383,7 +301,7 @@ TEST_F(TfStaticEditTest, EditsLandInTheTopicThatCarriesTheEdge)
     one_edge_yaml("drs_base_link", "lidar_front", "9.0") + "\n" +
     one_edge_yaml("drs_base_link", "oxts_link", "3.0"));
 
-  ASSERT_EQ(run_tf_static_edit(bag, yaml, {}, "/tf_static", out, /*overwrite=*/false), 0);
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/tf_static", out, /*overwrite=*/false), 0);
 
   // /tf_static: its own edge untouched, plus the appended new child.
   const auto base = read_tf_topic(out, "/tf_static");
@@ -401,7 +319,7 @@ TEST_F(TfStaticEditTest, EditsLandInTheTopicThatCarriesTheEdge)
   EXPECT_EQ(sensing.message_count, 1);
 }
 
-TEST_F(TfStaticEditTest, AnEditClosingACycleFails)
+TEST_F(TfStaticUpdateTest, AnUpdateClosingACycleFails)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   const auto out = tmp_dir_ / "out.mcap";
@@ -410,14 +328,14 @@ TEST_F(TfStaticEditTest, AnEditClosingACycleFails)
   // cycle against the edges the bag already carries.
   const auto yaml = write_yaml(one_edge_yaml("lidar_front", "drs_base_link", "1.0"));
 
-  EXPECT_EQ(run_tf_static_edit(bag, yaml, {}, "/tf_static", out, /*overwrite=*/false), 1);
+  EXPECT_EQ(run_tf_static_update(bag, yaml, "/tf_static", out, /*overwrite=*/false), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
 // The rewritten topic's message carries the bag's lowest timestamp, so it must
 // also hold the lowest storage position — the same row-order constraint the
 // join path documents (Foxglove reads a .db3 in row order).
-TEST_F(TfStaticEditTest, RewrittenStaticTfIsEmittedInTimestampOrder)
+TEST_F(TfStaticUpdateTest, RewrittenStaticTfIsEmittedInTimestampOrder)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   const auto out = tmp_dir_ / "out.mcap";
@@ -425,7 +343,7 @@ TEST_F(TfStaticEditTest, RewrittenStaticTfIsEmittedInTimestampOrder)
   write_bag(bag, kStart, {{"/tf_static", sample_edges()}});
   const auto yaml = write_yaml(one_edge_yaml("drs_base_link", "oxts_link", "3.0"));
 
-  ASSERT_EQ(run_tf_static_edit(bag, yaml, {}, "/tf_static", out, /*overwrite=*/false), 0);
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/tf_static", out, /*overwrite=*/false), 0);
 
   const auto edited = read_tf_topic(out, "/tf_static");
   ASSERT_TRUE(edited.present);
@@ -438,27 +356,27 @@ TEST_F(TfStaticEditTest, RewrittenStaticTfIsEmittedInTimestampOrder)
   }
 }
 
-TEST_F(TfStaticEditTest, RewritesTheBagInPlaceWithoutOutput)
+TEST_F(TfStaticUpdateTest, RewritesTheBagInPlaceWithoutOutput)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}});
   const auto yaml = write_yaml(one_edge_yaml("drs_base_link", "oxts_link", "3.0"));
 
-  ASSERT_EQ(run_tf_static_edit(bag, yaml, {}, "/tf_static", std::nullopt, /*overwrite=*/false), 0);
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/tf_static", std::nullopt, /*overwrite=*/false), 0);
 
   const auto edited = read_tf_topic(bag, "/tf_static");
   ASSERT_EQ(edited.transforms.size(), 3U);
   EXPECT_TRUE(topic_present(bag, "/clock"));
 }
 
-TEST_F(TfStaticEditTest, HonoursACustomTopicForNewChildren)
+TEST_F(TfStaticUpdateTest, HonoursACustomTopicForNewChildren)
 {
   const auto bag = tmp_dir_ / "bag.mcap";
   const auto out = tmp_dir_ / "out.mcap";
   write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}});
   const auto yaml = write_yaml(one_edge_yaml("drs_base_link", "oxts_link", "3.0"));
 
-  ASSERT_EQ(run_tf_static_edit(bag, yaml, {}, "/oxts/tf_static", out, /*overwrite=*/false), 0);
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/oxts/tf_static", out, /*overwrite=*/false), 0);
 
   // The new child is homed under -t, declared fresh; the existing topic is
   // untouched.
@@ -468,16 +386,6 @@ TEST_F(TfStaticEditTest, HonoursACustomTopicForNewChildren)
   EXPECT_EQ(oxts.transforms[0].child_frame_id, "oxts_link");
   const auto base = read_tf_topic(out, "/tf_static");
   ASSERT_EQ(base.transforms.size(), 2U);
-}
-
-TEST_F(TfStaticEditTest, NeitherYamlNorPruneIsAUsageError)
-{
-  const auto bag = tmp_dir_ / "bag.mcap";
-  const auto out = tmp_dir_ / "out.mcap";
-  write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}});
-
-  EXPECT_EQ(run_tf_static_edit(bag, std::nullopt, {}, "/tf_static", out, /*overwrite=*/false), 1);
-  EXPECT_FALSE(std::filesystem::exists(out));
 }
 
 }  // namespace

@@ -69,7 +69,7 @@ constexpr std::array<std::string_view, 4> kTrajDumpSupportedTypes{{
 
 // The lone tf2_msgs/msg/TFMessage type as a span, shared by every completion
 // that offers TF topics: `tf tree`'s `--topics` (the only type it renders) and
-// `tf static edit`'s `--topic` (further narrowed to static topics there).
+// `tf static update`'s `--topic` (further narrowed to static topics there).
 constexpr std::array<std::string_view, 1> kTfMessageTypes{{kTfMessageType}};
 
 // Pose topic types `pcd undistort --pose` accepts. This MUST mirror
@@ -833,21 +833,23 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
   return {};
 }
 
-// `tf static` is a command group with five actions, `calc`, `cp`, `dump`,
-// `edit`, and `join`. The action verb adds one positional slot, shifting every
-// argument one word to the right of the flat `tf` subcommands.
+// `tf static` is a command group with six actions, `calc`, `cp`, `drop`,
+// `dump`, `join`, and `update`. The action verb adds one positional slot,
+// shifting every argument one word to the right of the flat `tf` subcommands.
 //
-//   calc: `tf`(0) `static`(1) `calc`(2) -i|--input <bag> --of <frame> --ref <frame> [--json]
-//   cp:   `tf`(0) `static`(1) `cp`(2)   --src <bag> --dst <bag> [-o <out>] [--force]
-//                                       [-w|--overwrite]
-//   dump: `tf`(0) `static`(1) `dump`(2) -i|--input <bag> [-o <out>] [-w|--overwrite]
-//   edit: `tf`(0) `static`(1) `edit`(2) -i|--input <bag> [--yaml <file>] [--prune <frame>...]
-//                                       [-t <topic>] [-o <out>] [-w|--overwrite]
-//   join: `tf`(0) `static`(1) `join`(2) -i|--input <bag> --yaml <file> [-t <topic>]
-//                                       [-o <out>] [--force] [-w|--overwrite]
+//   calc:   `tf`(0) `static`(1) `calc`(2)   -i|--input <bag> --of <frame> --ref <frame> [--json]
+//   cp:     `tf`(0) `static`(1) `cp`(2)     --src <bag> --dst <bag> [-o <out>] [--force]
+//                                           [-w|--overwrite]
+//   drop:   `tf`(0) `static`(1) `drop`(2)   -i|--input <bag> --frame <frame>... [-o <out>]
+//                                           [-w|--overwrite]
+//   dump:   `tf`(0) `static`(1) `dump`(2)   -i|--input <bag> [-o <out>] [-w|--overwrite]
+//   join:   `tf`(0) `static`(1) `join`(2)   -i|--input <bag> --yaml <file> [-t <topic>]
+//                                           [-o <out>] [--force] [-w|--overwrite]
+//   update: `tf`(0) `static`(1) `update`(2) -i|--input <bag> --yaml <file> [-t <topic>]
+//                                           [-o <out>] [-w|--overwrite]
 //
-// At the action slot (word 2) the candidates are `calc` / `cp` / `dump` /
-// `edit` / `join`; past it each action completes on its own, in the
+// At the action slot (word 2) the candidates are `calc` / `cp` / `drop` /
+// `dump` / `join` / `update`; past it each action completes on its own, in the
 // `complete_tf_static_*` helpers below.
 
 // A `tf static` action whose only candidates are its own flags: at a `-` word
@@ -888,35 +890,51 @@ std::vector<std::string> complete_tf_static_calc(
   return {};
 }
 
-// `edit` surfaces the `join` flag set minus `--force` plus `--prune`. Its
-// `--yaml` is a file path and falls through to the shell; `--prune` completes
-// static frame ids like `calc`'s `--of`/`--ref`. Unlike `join`'s, `edit`'s
-// `--topic` value slot does complete, from the bag's static TF topics only: it
-// homes newly added edges, and an edge landing on a non-static TF topic would
-// be invisible to every static-TF reader, so the dynamic `/tf` is deliberately
-// not offered. The flag still accepts a brand-new topic name, which simply has
-// no candidate to offer.
-std::vector<std::string> complete_tf_static_edit(
+// `drop` surfaces `-i`/`-o`/`--overwrite` plus `--frame`. Its `--frame` value
+// slot completes static frame ids like `calc`'s `--of`/`--ref`: it names a frame
+// of the bag's static TF tree to remove.
+std::vector<std::string> complete_tf_static_drop(
+  const CompletionRequest & request, const std::string & current)
+{
+  if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
+    return matching(
+      with_help({"--frame", "--input", "--output", "--overwrite", "-i", "-o", "-w"}), current);
+  }
+  if (request.cursor_word > 0) {
+    const auto & previous = request.words[request.cursor_word - 1];
+    if (previous == "--frame") {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
+    }
+  }
+  return {};
+}
+
+// `update` surfaces the `join` flag set minus `--force`. Its `--yaml` is a file
+// path and falls through to the shell. Unlike `join`'s, `update`'s `--topic`
+// value slot does complete, from the bag's static TF topics only: it homes newly
+// added edges, and an edge landing on a non-static TF topic would be invisible to
+// every static-TF reader, so the dynamic `/tf` is deliberately not offered. The
+// flag still accepts a brand-new topic name, which simply has no candidate to
+// offer.
+std::vector<std::string> complete_tf_static_update(
   const CompletionRequest & request, const std::string & current)
 {
   if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
     return matching(
       with_help(
-        {"--input", "--output", "--overwrite", "--prune", "--topic", "--yaml", "-i", "-o", "-t",
-         "-w"}),
+        {"--input", "--output", "--overwrite", "--topic", "--yaml", "-i", "-o", "-t", "-w"}),
       current);
   }
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
-    const bool on_prune = previous == "--prune";
-    const bool on_topic = is_one_of(previous, kSingleTopicFlags);
-    if (on_prune || on_topic) {
+    if (is_one_of(previous, kSingleTopicFlags)) {
       const auto bag_arg = find_input_bag(request);
       if (!bag_arg) {
         return {};
-      }
-      if (on_prune) {
-        return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
       }
       return complete_topics(
         expand_current_user_home(*bag_arg), current, kTfMessageTypes, /*static_only=*/true);
@@ -932,7 +950,7 @@ std::vector<std::string> complete_tf_static(
     if (current.starts_with("-")) {
       return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
     }
-    return matching({"calc", "cp", "dump", "edit", "join"}, current);
+    return matching({"calc", "cp", "drop", "dump", "join", "update"}, current);
   }
 
   // Reaching here implies cursor_word > kSecondCommandArgWord, so words[2]
@@ -946,18 +964,21 @@ std::vector<std::string> complete_tf_static(
     return complete_tf_static_flags_only(
       request, current, {"--dst", "--force", "--output", "--overwrite", "--src", "-o", "-w"});
   }
+  if (action == "drop") {
+    return complete_tf_static_drop(request, current);
+  }
   if (action == "dump") {
     return complete_tf_static_flags_only(
       request, current, {"--input", "--output", "--overwrite", "-i", "-o", "-w"});
-  }
-  if (action == "edit") {
-    return complete_tf_static_edit(request, current);
   }
   if (action == "join") {
     return complete_tf_static_flags_only(
       request, current,
       {"--force", "--input", "--output", "--overwrite", "--topic", "--yaml", "-i", "-o", "-t",
        "-w"});
+  }
+  if (action == "update") {
+    return complete_tf_static_update(request, current);
   }
   return {};
 }
