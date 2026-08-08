@@ -191,6 +191,7 @@
     "relaxable",
     "relwithdebinfo",
     "renderable",
+    "reparents",
     "reprojection",
     "reserialized",
     "rgba",

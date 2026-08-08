@@ -16,12 +16,14 @@
 #include <string>
 #include <vector>
 
-// CLI-internal (not installed): the one rewrite pass that writes latched static
-// TF topics into a bag, shared by `bagwiz tf static cp` (transforms read from a
-// donor bag) and `bagwiz tf static join` (transforms read from a YAML config).
-// Both differ only in where the transforms come from, and getting the write
-// ORDER wrong is a silent, hard-to-spot bug, so the pass itself lives in one
-// place. Follows the src-local shared-header idiom of traj_common.hpp /
+// CLI-internal (not installed): the rewrite passes that write latched static
+// TF topics into a bag. `inject_static_tf_pass` writes whole topics from
+// scratch, shared by `bagwiz tf static cp` (transforms read from a donor bag)
+// and `bagwiz tf static join` (transforms read from a YAML config);
+// `edit_static_tf_pass` rewrites a caller-selected set of topics to carry an
+// edited transform list each, for `bagwiz tf static edit`. Getting the write
+// ORDER wrong is a silent, hard-to-spot bug, so the passes live in one place.
+// Follows the src-local shared-header idiom of traj_common.hpp /
 // pcd_concat_common.hpp.
 namespace bagwiz::commands
 {
@@ -63,6 +65,22 @@ struct StaticTfInjectOptions
 // or an I/O error).
 int inject_static_tf_pass(
   const std::filesystem::path & dst_path, const std::vector<core::StaticTopicTransforms> & topics,
+  const StaticTfInjectOptions & options, const io::WriterFactory & open_writer);
+
+// One full pass over `dst_path` that rewrites each topic in `touched` to carry
+// exactly `transforms` — the edge-granular counterpart of inject_static_tf_pass,
+// for `bagwiz tf static edit`. A touched topic already in the bag must be a
+// static `tf2_msgs/msg/TFMessage` topic (its messages are suppressed and
+// replaced by one message holding the given transforms, written BEFORE the
+// stream copy for the row-order reason inject_static_tf_pass documents); a
+// touched topic absent from the bag is declared new. A touched topic whose
+// transforms are empty keeps its declaration but gets no message. Untouched
+// topics stream-copy through unchanged. `options.replace_existing_topic` is not
+// consulted: the caller selected the touched set explicitly, so there is no
+// conflict to force past. Returns the process exit code: 0 on success, 1 after
+// logging any failure.
+int edit_static_tf_pass(
+  const std::filesystem::path & dst_path, const std::vector<core::StaticTopicTransforms> & touched,
   const StaticTfInjectOptions & options, const io::WriterFactory & open_writer);
 
 }  // namespace bagwiz::commands
