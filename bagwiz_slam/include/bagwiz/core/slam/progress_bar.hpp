@@ -50,18 +50,20 @@ class ScanProgress
 {
 public:
   // total <= 0 selects the indeterminate bar. `enabled` false makes this a
-  // complete no-op (no terminal output is ever produced).
-  ScanProgress(std::int64_t total, bool enabled);
+  // complete no-op (no terminal output is ever produced). `unit` names the
+  // item the postfix counts ("scans" in LiDAR modes, "frames" in camera-only
+  // mode, which has no LiDAR scans to count).
+  ScanProgress(std::int64_t total, bool enabled, std::string unit = "scans");
   ~ScanProgress();
   ScanProgress(const ScanProgress &) = delete;
   ScanProgress & operator=(const ScanProgress &) = delete;
   ScanProgress(ScanProgress &&) = delete;
   ScanProgress & operator=(ScanProgress &&) = delete;
 
-  // Report `processed` messages read so far, with `scans` decoded scans shown
-  // as postfix. Redraws are throttled (per-mille change or ~50 ms) so a high
-  // IMU rate cannot flood stderr.
-  void update(std::int64_t processed, std::int64_t scans);
+  // Report `processed` messages read so far, with `count` items of the
+  // configured unit shown as postfix. Redraws are throttled (per-mille change
+  // or ~50 ms) so a high IMU rate cannot flood stderr.
+  void update(std::int64_t processed, std::int64_t count);
 
   // Finalize the bar (100% / completed) and drop to a fresh line. Idempotent.
   void done();
