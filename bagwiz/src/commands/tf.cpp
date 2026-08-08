@@ -10,6 +10,7 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/tf_static_cp.hpp"
 #include "bagwiz/commands/tf_static_dump.hpp"
+#include "bagwiz/commands/tf_static_edit.hpp"
 #include "bagwiz/commands/tf_static_join.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/base/str_utils.hpp"
@@ -399,6 +400,10 @@ std::string format_category_legend(bool use_color)
 //                tf2 fixed-axis) to -o, or to stdout when -o is omitted. Every
 //                static topic is merged; two topics giving one child different
 //                parents aborts the run.
+//   static edit  Edit the static TF tree edge by edge: add/update edges from
+//                --yaml and/or drop frames (with their subtrees) via --prune.
+//                Each touched static topic is rewritten in place; the per-topic
+//                layout is preserved.
 //   static join  The inverse of `static dump`: read that YAML and embed it into
 //                the bag as one latched TFMessage on -t (default /tf_static),
 //                stamped at the bag's start time. In place, or to a new bag
@@ -427,6 +432,8 @@ public:
         return run_static_cp();
       case Subcommand::kStaticDump:
         return run_static_dump();
+      case Subcommand::kStaticEdit:
+        return run_static_edit();
       case Subcommand::kStaticJoin:
         return run_static_join();
       case Subcommand::kNone:
@@ -437,7 +444,15 @@ public:
   }
 
 private:
-  enum class Subcommand { kNone, kTree, kStaticCalc, kStaticCp, kStaticDump, kStaticJoin };
+  enum class Subcommand {
+    kNone,
+    kTree,
+    kStaticCalc,
+    kStaticCp,
+    kStaticDump,
+    kStaticEdit,
+    kStaticJoin
+  };
   Subcommand selected_ = Subcommand::kNone;
 
   struct TreeArgs
@@ -479,6 +494,16 @@ private:
     bool force = false;
     bool overwrite = false;
   } static_join_args_;
+
+  struct StaticEditArgs
+  {
+    std::filesystem::path input_path;
+    std::optional<std::filesystem::path> yaml_path;
+    std::vector<std::string> prune_frames;
+    std::string topic = kDefaultStaticTfTopic;
+    std::optional<std::filesystem::path> output_path;
+    bool overwrite = false;
+  } static_edit_args_;
 
   void configure_tree(CLI::App & app)
   {
@@ -633,7 +658,8 @@ private:
 
   // `static` is a command group, not a leaf: its actions live under
   // `static calc` (resolve a transform), `static cp` (copy static TF between
-  // bags), `static dump` (write the static tree as YAML), and `static join`
+  // bags), `static dump` (write the static tree as YAML), `static edit`
+  // (edge-granular add/update/prune of the static tree), and `static join`
   // (read that YAML back into a bag). Modeling it as a group
   // (require_subcommand(1)) keeps room for further static-tree queries and keeps
   // `bagwiz tf static` from doing anything without an explicit verb.
@@ -644,6 +670,7 @@ private:
     configure_static_calc(*group);
     configure_static_cp(*group);
     configure_static_dump(*group);
+    configure_static_edit(*group);
     configure_static_join(*group);
   }
 
@@ -742,6 +769,41 @@ private:
       "-w,--overwrite", static_join_args_.overwrite,
       "Replace an existing -o/--output path. Has no effect in in-place mode.");
     sub->callback([this]() { selected_ = Subcommand::kStaticJoin; });
+  }
+
+  void configure_static_edit(CLI::App & group)
+  {
+    auto * sub = group.add_subcommand(
+      "edit",
+      "Edit the bag's static TF tree edge by edge: add or update edges from --yaml (the schema "
+      "`static dump` writes) and/or remove frames with their subtrees via --prune. Each touched "
+      "static topic is rewritten as one latched TFMessage; untouched topics keep their messages.");
+    sub->add_option("-i,--input", static_edit_args_.input_path, "Bag path (file or directory)")
+      ->required()
+      ->check(CLI::ExistingPath);
+    sub
+      ->add_option(
+        "--yaml", static_edit_args_.yaml_path,
+        "Static TF YAML whose edges are added (new child, homed under -t/--topic) or applied as "
+        "updates (existing child, edited in its own topic; a differing parent re-parents it).")
+      ->check(CLI::ExistingFile);
+    sub->add_option(
+      "--prune", static_edit_args_.prune_frames,
+      "Child frame whose edge and whole subtree are removed; repeatable. The frame must exist as "
+      "a child in the bag's static TF tree.");
+    sub
+      ->add_option(
+        "-t,--topic", static_edit_args_.topic,
+        "Topic that newly added transforms are embedded under (declared if absent). Existing "
+        "edges are always edited in the topic that carries them.")
+      ->capture_default_str();
+    sub->add_option(
+      "-o,--output", static_edit_args_.output_path,
+      "Write the result to this new bag instead of rewriting <input> in place.");
+    sub->add_flag(
+      "-w,--overwrite", static_edit_args_.overwrite,
+      "Replace an existing -o/--output path. Has no effect in in-place mode.");
+    sub->callback([this]() { selected_ = Subcommand::kStaticEdit; });
   }
 
   int run_static_calc()
@@ -861,6 +923,18 @@ private:
   {
     const auto & args = static_dump_args_;
     return run_tf_static_dump(args.input_path, args.output_path, args.overwrite);
+  }
+
+  int run_static_edit()
+  {
+    const auto & args = static_edit_args_;
+    if (!args.yaml_path.has_value() && args.prune_frames.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "Nothing to do: pass --yaml and/or --prune.");
+      return 1;
+    }
+    return run_tf_static_edit(
+      args.input_path, args.yaml_path, args.prune_frames, args.topic, args.output_path,
+      args.overwrite);
   }
 
   int run_static_join()
