@@ -508,8 +508,10 @@ by default).
 On an interactive terminal, a determinate progress bar tracks the
 bag-read/feed phase on stderr, and an indeterminate "Finalizing map" spinner
 is shown during finalization (global optimization, endpoint fill, and map
-export). Both are auto-suppressed when stderr is not a terminal or `NO_COLOR`
-is set.
+export). The bar's postfix counts the mode's primary feed: decoded LiDAR
+scans (`N scans`) in LiDAR modes, dispatched camera frames (`N frames`,
+summed over all `--cam` topics) in camera-only mode. Both are auto-suppressed
+when stderr is not a terminal or `NO_COLOR` is set.
 
 ---
 

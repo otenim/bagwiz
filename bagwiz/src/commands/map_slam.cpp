@@ -990,12 +990,14 @@ private:
   // called with the camera's index into args_.cam_topics (its
   // VisualObservation::camera_id) and the raw message, whose payload it must
   // copy if it outlives the call. Returns false on a fatal read error or when
-  // no scan decoded (both logged); otherwise fills the counters.
+  // no scan decoded (both logged); otherwise fills the counters (`images`
+  // counts the --cam messages dispatched to `on_image`).
   template <typename ScanFn, typename ImuFn, typename GnssFn, typename ImageFn>
   bool process_messages(
     io::BagReader & reader, ScanFn && on_scan, ImuFn && on_imu, GnssFn && on_gnss,
     ImageFn && on_image, core::slam::ScanProgress & progress, std::int64_t & scans,
-    std::int64_t & skipped, std::int64_t & imu_count, std::int64_t & gnss_count)
+    std::int64_t & skipped, std::int64_t & imu_count, std::int64_t & gnss_count,
+    std::int64_t & images)
   {
     io::ReadFilter filter;
     // Camera-only mode has no cloud topic to stream; the pass is IMU (+GNSS)
@@ -1062,13 +1064,21 @@ private:
           const auto camera = visual_cameras.find(raw.topic->name);
           if (camera != visual_cameras.end()) {
             on_image(camera->second, raw);
+            ++images;
           }
         }
-        progress.update(processed, scans);
+        // The postfix tracks the mode's primary feed: decoded scans in LiDAR
+        // modes, dispatched camera frames in camera-only mode (no scans).
+        progress.update(processed, camera_only_ ? images : scans);
       }
     } catch (const std::exception & e) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "read error after %s scans: %s", std::to_string(scans).c_str(), e.what());
+      if (camera_only_) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "read error after %s frames: %s", std::to_string(images).c_str(), e.what());
+      } else {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "read error after %s scans: %s", std::to_string(scans).c_str(), e.what());
+      }
       return false;
     }
     // No decodable scans is fatal in LiDAR modes. Camera-only mode is fed by
@@ -1311,12 +1321,16 @@ private:
     const auto progress_setup =
       resolve_scan_progress(reader, args_, ::isatty(STDERR_FILENO) != 0, kLogger);
     const bool progress_on = progress_setup.enabled;
-    core::slam::ScanProgress progress(progress_setup.total_msgs, progress_on);
+    // Camera-only mode has no scans to count; the postfix shows dispatched
+    // camera frames instead.
+    core::slam::ScanProgress progress(
+      progress_setup.total_msgs, progress_on, camera_only_ ? "frames" : "scans");
 
     std::int64_t scans = 0;
     std::int64_t skipped = 0;
     std::int64_t imu_count = 0;
     std::int64_t gnss_count = 0;
+    std::int64_t images = 0;
     if (!process_messages(
           reader, [&](const core::slam::LidarScan & s) { mapper.insert(s); },
           [&](const core::slam::ImuSample & i) { mapper.insert_imu(i); }, on_gnss,
@@ -1329,7 +1343,7 @@ private:
               core::image::image_capture_stamp_ns(raw.topic->type, raw.payload, raw.timestamp_ns),
               raw.topic->type, std::vector<std::byte>(raw.payload.begin(), raw.payload.end()));
           },
-          progress, scans, skipped, imu_count, gnss_count)) {
+          progress, scans, skipped, imu_count, gnss_count, images)) {
       return 1;
     }
     progress.done();
