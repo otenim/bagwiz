@@ -818,7 +818,7 @@ TEST(FlagCompletionTest, TfStaticSubcommandListsEveryAction)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "static", ""}),
-    "calc\ncp\ndump\njoin\n");
+    "calc\ncp\ndump\nedit\njoin\n");
 }
 
 // `tf static -` is the command-group slot; `--json` lives under `calc`, so only
@@ -867,6 +867,17 @@ TEST(FlagCompletionTest, TfStaticJoinDashListsJoinFlags)
     "--force\n--help\n--input\n--output\n--overwrite\n--topic\n--yaml\n-h\n-i\n-o\n-t\n-w\n");
 }
 
+// `tf static edit -` is the join set minus --force plus --prune. --yaml is a file
+// path, so it falls through to the shell; --prune values complete from the bag's
+// static frame ids and --topic from its static TF topics (see
+// TfStaticEditPruneFlagListsStaticFrameIds / TfStaticEditTopicFlagListsStaticTfTopics).
+TEST(FlagCompletionTest, TfStaticEditDashListsEditFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "edit", "-"}),
+    "--help\n--input\n--output\n--overwrite\n--prune\n--topic\n--yaml\n-h\n-i\n-o\n-t\n-w\n");
+}
+
 // `tf static calc <bag> --of <TAB>` lists only frame ids from the bag's static
 // TF (*tf_static) topics, since `tf static calc` resolves the static tree. The
 // mixed fixture's /tf_static carries map→odom→base_link.
@@ -895,6 +906,72 @@ TEST_F(CompletionTest, TfStaticCalcRefFlagListsStaticFrameIds)
       {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calc", "-i", "~/mixed.mcap",
        "--ref"}),
     "base_link\nmap\nodom\n");
+}
+
+// `tf static edit --prune <TAB>` completes from the same static frame ids as
+// `calc`'s --of/--ref: prune names a frame of the bag's static TF tree.
+TEST_F(CompletionTest, TfStaticEditPruneFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap",
+       "--prune"}),
+    "base_link\nmap\nodom\n");
+}
+
+// `tf static edit -t <TAB>` completes from the bag's *tf_static topics only. The
+// flag homes newly added edges, and an edge written to a non-static TF topic is
+// invisible to every bagwiz static-TF reader (collect_static_tf skips it), so
+// offering one would only steer the user into a dead end. The mixed fixture's
+// /tf carries TFMessage but is not static, so it stays out of the candidates.
+TEST_F(CompletionTest, TfStaticEditTopicFlagListsStaticTfTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap", "-t"}),
+    "/tf_static\n");
+}
+
+// The long form shares the short form's static-only topic source.
+TEST_F(CompletionTest, TfStaticEditLongTopicFlagListsStaticTfTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap",
+       "--topic"}),
+    "/tf_static\n");
+}
+
+// A typed prefix narrows the static -t topic candidates, and a prefix matching
+// only the non-static /tf yields nothing rather than falling back to it.
+TEST_F(CompletionTest, TfStaticEditTopicFlagRespectsPrefix)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap", "-t",
+       "/tf_s"}),
+    "/tf_static\n");
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap", "-t",
+       "/points"}),
+    "");
 }
 
 // A typed prefix narrows the static --of frame-id candidates.

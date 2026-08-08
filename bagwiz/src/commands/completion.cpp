@@ -67,8 +67,10 @@ constexpr std::array<std::string_view, 4> kTrajDumpSupportedTypes{{
   "nav_msgs/msg/Odometry",
 }};
 
-// `tf tree` renders only tf2_msgs/msg/TFMessage topics.
-constexpr std::array<std::string_view, 1> kTfTreeSupportedTypes{{kTfMessageType}};
+// The lone tf2_msgs/msg/TFMessage type as a span, shared by every completion
+// that offers TF topics: `tf tree`'s `--topics` (the only type it renders) and
+// `tf static edit`'s `--topic` (further narrowed to static topics there).
+constexpr std::array<std::string_view, 1> kTfMessageTypes{{kTfMessageType}};
 
 // Pose topic types `pcd undistort --pose` accepts. This MUST mirror
 // is_supported_pose_topic_type() in src/commands/pcd_undistort_common.cpp
@@ -171,7 +173,7 @@ constexpr std::array<TopicArgBinding, 11> kTopicBindings{{
   // `traj dump -i <bag> -t <topic>`
   {"traj", "dump", kInputFlags, kSingleTopicFlags, kTrajDumpSupportedTypes, false},
   // `tf tree -i <bag> [-t/--topics <topic>...]`
-  {"tf", "tree", kInputFlags, kTopicsFlags, kTfTreeSupportedTypes, true},
+  {"tf", "tree", kInputFlags, kTopicsFlags, kTfMessageTypes, true},
   // `topic drop|keep -i <bag> -t/--topics <selector>...`
   {"topic", "drop", kInputFlags, kTopicsFlags, {}, true},
   {"topic", "keep", kInputFlags, kTopicsFlags, {}, true},
@@ -235,6 +237,14 @@ std::optional<CompletionShell> parse_shell(const std::string_view & name)
 bool starts_with(std::string_view value, std::string_view prefix)
 {
   return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
+}
+
+// True when `word` equals one of `candidates`. Lets a branch test a whole flag
+// alias set (e.g. kSingleTopicFlags) against the named constant instead of
+// repeating the spellings as literals.
+bool is_one_of(std::string_view word, std::span<const std::string_view> candidates)
+{
+  return std::find(candidates.begin(), candidates.end(), word) != candidates.end();
 }
 
 std::string basename(std::string_view path)
@@ -462,11 +472,14 @@ std::vector<std::string> top_level_candidates(const std::string_view & prefix)
 // start with `prefix`. When `allowed_types` is non-empty, a topic is offered
 // only if its type is one of the listed types (e.g. `tf tree`'s single
 // TFMessage type, or `traj dump`'s supported set); an empty `allowed_types`
-// offers every topic. Best-effort: a bag that fails to open yields no
-// candidates and the shell's default file completion takes over.
+// offers every topic. When `static_only` is true a topic must additionally be
+// a static TF topic (name ending in `tf_static`, the same test every bagwiz
+// static-TF reader applies), which pairs with a TFMessage `allowed_types` to
+// offer exactly the bag's static TF topics. Best-effort: a bag that fails to
+// open yields no candidates and the shell's default file completion takes over.
 std::vector<std::string> complete_topics(
   const std::filesystem::path & input_path, const std::string_view & prefix,
-  std::span<const std::string_view> allowed_types)
+  std::span<const std::string_view> allowed_types, bool static_only = false)
 {
   std::vector<std::string> result;
   const auto expanded = expand_current_user_home(input_path);
@@ -491,6 +504,9 @@ std::vector<std::string> complete_topics(
       if (
         !allowed_types.empty() &&
         std::find(allowed_types.begin(), allowed_types.end(), topic.type) == allowed_types.end()) {
+        continue;
+      }
+      if (static_only && !core::is_static_tf_topic(topic.name)) {
         continue;
       }
       result.push_back(topic.name);
@@ -635,6 +651,20 @@ std::optional<std::string_view> find_flag_value(
     }
   }
   return std::nullopt;
+}
+
+// The bag path behind -i/--input, or nullopt when it is absent, empty, or
+// itself a flag — all shapes of a half-typed command line that cannot name a
+// bag. Every bag-backed completion needs exactly this check before opening the
+// bag, and offers nothing when it fails so the shell's default file completion
+// takes over.
+std::optional<std::string_view> find_input_bag(const CompletionRequest & request)
+{
+  const auto bag_arg = find_flag_value(request, kInputFlags);
+  if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+    return std::nullopt;
+  }
+  return bag_arg;
 }
 
 // True when the cursor sits in a value slot owned by `flag`. Unlike a plain
@@ -793,8 +823,8 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
       return matching({"tf"}, current);
     }
     if (previous == "--of" || previous == "--ref") {
-      const auto bag_arg = find_flag_value(request, kInputFlags);
-      if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
         return {};
       }
       return complete_frame_id_value(*bag_arg, current);
@@ -803,26 +833,98 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
   return {};
 }
 
-// `tf static` is a command group with four actions, `calc`, `cp`, `dump`, and
-// `join`. The action verb adds one positional slot, shifting every argument one
-// word to the right of the flat `tf` subcommands.
+// `tf static` is a command group with five actions, `calc`, `cp`, `dump`,
+// `edit`, and `join`. The action verb adds one positional slot, shifting every
+// argument one word to the right of the flat `tf` subcommands.
 //
 //   calc: `tf`(0) `static`(1) `calc`(2) -i|--input <bag> --of <frame> --ref <frame> [--json]
 //   cp:   `tf`(0) `static`(1) `cp`(2)   --src <bag> --dst <bag> [-o <out>] [--force]
 //                                       [-w|--overwrite]
 //   dump: `tf`(0) `static`(1) `dump`(2) -i|--input <bag> [-o <out>] [-w|--overwrite]
+//   edit: `tf`(0) `static`(1) `edit`(2) -i|--input <bag> [--yaml <file>] [--prune <frame>...]
+//                                       [-t <topic>] [-o <out>] [-w|--overwrite]
 //   join: `tf`(0) `static`(1) `join`(2) -i|--input <bag> --yaml <file> [-t <topic>]
 //                                       [-o <out>] [--force] [-w|--overwrite]
 //
-// At the action slot (word 2) the candidates are `calc` / `cp` / `dump` / `join`.
-// For `calc`, `-i`/`--input`/`--json`/`--of`/`--ref` are offered for any `-` word,
-// and the `--of`/`--ref` value slots complete from the bag's static `*tf_static`
-// frame ids only. For `cp`, the `--src`/`--dst`/`--output`/`--force` flags are
-// surfaced;
-// for `dump`, `--input`/`--output`/`--overwrite`; for `join`, those plus
-// `--yaml`, `--topic`, and `--force`. `join`'s `--yaml` and `--topic` values are
-// a file path and a new topic name respectively, so neither carries bagwiz
-// candidates: both fall through to the shell's own completion.
+// At the action slot (word 2) the candidates are `calc` / `cp` / `dump` /
+// `edit` / `join`; past it each action completes on its own, in the
+// `complete_tf_static_*` helpers below.
+
+// A `tf static` action whose only candidates are its own flags: at a `-` word
+// offer `flags` (plus the common help flags), anywhere else offer nothing so
+// the shell's default completion takes over. `cp`, `dump`, and `join` are all
+// of this shape — none of their value slots carries bagwiz candidates, since
+// they name bags, file paths, or (for `join`'s `--topic`) a topic being
+// created.
+std::vector<std::string> complete_tf_static_flags_only(
+  const CompletionRequest & request, const std::string & current,
+  std::initializer_list<std::string_view> flags)
+{
+  if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
+    return matching(with_help(flags), current);
+  }
+  return {};
+}
+
+// `calc` surfaces `-i`/`--input`/`--json`/`--of`/`--ref` for any `-` word. Its
+// `--of`/`--ref` value slots complete from the bag's static `*tf_static` frame
+// ids only, since `tf static calc` resolves the static tree.
+std::vector<std::string> complete_tf_static_calc(
+  const CompletionRequest & request, const std::string & current)
+{
+  if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
+    return matching(with_help({"--input", "--json", "--of", "--ref", "-i"}), current);
+  }
+  if (request.cursor_word > 0) {
+    const auto & previous = request.words[request.cursor_word - 1];
+    if (previous == "--of" || previous == "--ref") {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
+    }
+  }
+  return {};
+}
+
+// `edit` surfaces the `join` flag set minus `--force` plus `--prune`. Its
+// `--yaml` is a file path and falls through to the shell; `--prune` completes
+// static frame ids like `calc`'s `--of`/`--ref`. Unlike `join`'s, `edit`'s
+// `--topic` value slot does complete, from the bag's static TF topics only: it
+// homes newly added edges, and an edge landing on a non-static TF topic would
+// be invisible to every static-TF reader, so the dynamic `/tf` is deliberately
+// not offered. The flag still accepts a brand-new topic name, which simply has
+// no candidate to offer.
+std::vector<std::string> complete_tf_static_edit(
+  const CompletionRequest & request, const std::string & current)
+{
+  if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
+    return matching(
+      with_help(
+        {"--input", "--output", "--overwrite", "--prune", "--topic", "--yaml", "-i", "-o", "-t",
+         "-w"}),
+      current);
+  }
+  if (request.cursor_word > 0) {
+    const auto & previous = request.words[request.cursor_word - 1];
+    const bool on_prune = previous == "--prune";
+    const bool on_topic = is_one_of(previous, kSingleTopicFlags);
+    if (on_prune || on_topic) {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      if (on_prune) {
+        return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
+      }
+      return complete_topics(
+        expand_current_user_home(*bag_arg), current, kTfMessageTypes, /*static_only=*/true);
+    }
+  }
+  return {};
+}
+
 std::vector<std::string> complete_tf_static(
   const CompletionRequest & request, const std::string & current)
 {
@@ -830,7 +932,7 @@ std::vector<std::string> complete_tf_static(
     if (current.starts_with("-")) {
       return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
     }
-    return matching({"calc", "cp", "dump", "join"}, current);
+    return matching({"calc", "cp", "dump", "edit", "join"}, current);
   }
 
   // Reaching here implies cursor_word > kSecondCommandArgWord, so words[2]
@@ -838,48 +940,25 @@ std::vector<std::string> complete_tf_static(
   const auto & action = request.words[kSecondCommandArgWord];
 
   if (action == "calc") {
-    if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
-      return matching(with_help({"--input", "--json", "--of", "--ref", "-i"}), current);
-    }
-    if (request.cursor_word > 0) {
-      const auto & previous = request.words[request.cursor_word - 1];
-      if (previous == "--of" || previous == "--ref") {
-        const auto bag_arg = find_flag_value(request, kInputFlags);
-        if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
-          return {};
-        }
-        return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
-      }
-    }
-    return {};
+    return complete_tf_static_calc(request, current);
   }
-
   if (action == "cp") {
-    if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
-      return matching(
-        with_help({"--dst", "--force", "--output", "--overwrite", "--src", "-o", "-w"}), current);
-    }
-    return {};
+    return complete_tf_static_flags_only(
+      request, current, {"--dst", "--force", "--output", "--overwrite", "--src", "-o", "-w"});
   }
-
   if (action == "dump") {
-    if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
-      return matching(with_help({"--input", "--output", "--overwrite", "-i", "-o", "-w"}), current);
-    }
-    return {};
+    return complete_tf_static_flags_only(
+      request, current, {"--input", "--output", "--overwrite", "-i", "-o", "-w"});
   }
-
+  if (action == "edit") {
+    return complete_tf_static_edit(request, current);
+  }
   if (action == "join") {
-    if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
-      return matching(
-        with_help(
-          {"--force", "--input", "--output", "--overwrite", "--topic", "--yaml", "-i", "-o", "-t",
-           "-w"}),
-        current);
-    }
-    return {};
+    return complete_tf_static_flags_only(
+      request, current,
+      {"--force", "--input", "--output", "--overwrite", "--topic", "--yaml", "-i", "-o", "-t",
+       "-w"});
   }
-
   return {};
 }
 
@@ -1025,8 +1104,8 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
       if (request.cursor_word == 0 || request.words[request.cursor_word - 1] != flag) {
         return std::optional<std::vector<std::string>>{};
       }
-      const auto bag_arg = find_flag_value(request, kInputFlags);
-      if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
         return std::optional<std::vector<std::string>>{std::vector<std::string>{}};
       }
       return std::optional<std::vector<std::string>>{
@@ -1156,8 +1235,8 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
   // --frame takes a frame id resolved through the bag's static TF, so it
   // completes from the bag's static-TF frame ids, like `tf static calc`.
   if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--frame") {
-    const auto bag_arg = find_flag_value(request, kInputFlags);
-    if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+    const auto bag_arg = find_input_bag(request);
+    if (!bag_arg) {
       return {};
     }
     return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
@@ -1199,8 +1278,8 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
       if (current.find('=') != std::string::npos || request.words[request.cursor_word - 1] == "=") {
         return {};
       }
-      const auto bag_arg = find_flag_value(request, kInputFlags);
-      if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
         return {};
       }
       auto topics = complete_topics(expand_current_user_home(*bag_arg), current, kImageTopicTypes);
@@ -1212,8 +1291,8 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
       return {};
     }
   }
-  const auto bag_arg = find_flag_value(request, kInputFlags);
-  if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+  const auto bag_arg = find_input_bag(request);
+  if (!bag_arg) {
     return {};
   }
   return complete_topics(expand_current_user_home(*bag_arg), current, flag_topic_types);
@@ -1261,8 +1340,8 @@ std::vector<std::string> complete_trim(const CompletionRequest & request)
   // Complete the value of `--align` from the bag's topic list. Bail out when
   // the -i/--input value is missing or holds a flag.
   if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--align") {
-    const auto bag_arg = find_flag_value(request, kInputFlags);
-    if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+    const auto bag_arg = find_input_bag(request);
+    if (!bag_arg) {
       return {};
     }
     return complete_topics(expand_current_user_home(*bag_arg), current, {});
@@ -1288,8 +1367,8 @@ std::vector<std::string> complete_walk(const CompletionRequest & request)
   // Complete the value of `--cam-info` from the bag's CameraInfo topics. Bail out
   // when the -i/--input value is missing or holds a flag.
   if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--cam-info") {
-    const auto bag_arg = find_flag_value(request, kInputFlags);
-    if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+    const auto bag_arg = find_input_bag(request);
+    if (!bag_arg) {
       return {};
     }
     return complete_topics(expand_current_user_home(*bag_arg), current, kCameraInfoType);
@@ -1508,22 +1587,22 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
     if (previous == "--of" || previous == "--ref") {
-      const auto bag_arg = find_flag_value(request, kInputFlags);
-      if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
         return {};
       }
       return complete_frame_id_value(*bag_arg, current);
     }
     if (previous == "--pose") {
-      const auto bag_arg = find_flag_value(request, kInputFlags);
-      if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
         return {};
       }
       return complete_topics(expand_current_user_home(*bag_arg), current, kUndistortPoseTopicTypes);
     }
     if (previous == "--twist") {
-      const auto bag_arg = find_flag_value(request, kInputFlags);
-      if (!bag_arg || bag_arg->empty() || bag_arg->starts_with("-")) {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
         return {};
       }
       return complete_topics(
