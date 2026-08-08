@@ -35,10 +35,16 @@ namespace bagwiz::core::slam
 ///   drop. This is exposure-pattern agnostic: simultaneous triggers land near the
 ///   anchor stamp, LiDAR-synced staggered triggers spread across the window; both
 ///   are pure stamp arithmetic.
-/// - A group is ready when every camera's stream head has passed its window end,
-///   OR when any stream head is `max_lag_periods` periods past it (a silent
-///   camera must not stall the pipeline; its late observations for an
-///   already-popped group are dropped and counted).
+/// - A group is ready only when EVERY camera's stream head has passed its
+///   window end — only then is its content provably complete. There is no
+///   time-based early release: readiness driven by how far OTHER cameras had
+///   advanced would make the output depend on cross-camera arrival order,
+///   i.e. on thread scheduling (issue #16). Nothing is ever dropped for lag.
+/// - Heads advance on observations AND on `note_frame` heartbeats, so frames
+///   that yield no observations (decode failure, textureless view) do not
+///   stall readiness. Only a camera producing no frames at all defers the
+///   remaining groups to `finish()` — buffered for the rest of the bag, a
+///   deliberate memory/latency trade for determinism.
 /// - `pop_ready()`/`finish()` return groups in anchor order; `finish()` flushes
 ///   everything including pending observations (assign-or-drop with full
 ///   knowledge — no more anchors will arrive).
@@ -56,12 +62,18 @@ public:
     std::int32_t anchor_camera_id = 0;
     std::int64_t period_ns = 100'000'000;
     std::size_t camera_count = 1;
-    std::int64_t max_lag_periods = 5;
   };
 
   explicit GroupingBuffer(Config config);
 
   void insert(std::span<const VisualObservation> observations);
+
+  /// Per-frame heartbeat: advance `camera_id`'s stream head to `stamp_ns`
+  /// without contributing an observation. Call once per camera frame whose
+  /// tracking yielded nothing (decode failure, zero surviving tracks) so the
+  /// camera still gates readiness. Same monotonicity contract as `insert`;
+  /// out-of-range ids are ignored. Never opens a window.
+  void note_frame(std::int32_t camera_id, std::int64_t stamp_ns);
 
   [[nodiscard]] std::vector<ObservationGroup> pop_ready();
 
@@ -78,6 +90,7 @@ private:
   std::int64_t dropped_ = 0;
 
   void assign(const VisualObservation & o);
+  void drain_pending(std::int64_t anchor_head);
   [[nodiscard]] std::vector<ObservationGroup> take_groups_up_to(std::int64_t anchor_limit);
 };
 

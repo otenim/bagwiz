@@ -193,6 +193,11 @@ void VisualFeed::run_worker(std::size_t cam)
         decode_ns += ns_since(t);
         if (!decoded.ok()) {
           count_failure(decoded.error.c_str());
+          // Heartbeat despite the failed decode: the frame still proves this
+          // camera's stream has reached item.stamp_ns. Without it, a camera
+          // with systematically undecodable payloads would freeze its
+          // grouping head and stall every other camera's window releases.
+          mapper_.note_visual_frame(static_cast<std::int32_t>(cam), item.stamp_ns);
           continue;
         }
         const auto & raster = *decoded.raster;
@@ -202,11 +207,17 @@ void VisualFeed::run_worker(std::size_t cam)
         track_ns += ns_since(t);
       }
       mapper_.insert_visual_observations(observations);
+      // Unconditional heartbeat AFTER the insert (the head must never lead
+      // this camera's delivered observations): a tracked frame can still
+      // yield zero observations (textureless view, all KLT tracks lost),
+      // which inserts an empty batch and advances nothing.
+      mapper_.note_visual_frame(static_cast<std::int32_t>(cam), item.stamp_ns);
     } catch (const std::exception & e) {
       // A decode or frontend throw must not escape this thread (that
       // terminates the process); the run continues with whatever the other
       // frames yield.
       count_failure(e.what());
+      mapper_.note_visual_frame(static_cast<std::int32_t>(cam), item.stamp_ns);
     }
   }
   failures_[cam] = failures;

@@ -77,6 +77,15 @@ public:
     std::span<const VisualObservation> observations,
     std::vector<glim::EstimationFrame::ConstPtr> & marginalized_states);
 
+  // Per-frame heartbeat for a frame that yielded no observations (decode
+  // failure, zero surviving tracks): advances the camera's grouping head so
+  // the other cameras' windows keep releasing, then runs the same
+  // pop-and-process loop as insert_visual_observations (an advanced head can
+  // make earlier windows ready).
+  void note_frame(
+    std::int32_t camera_id, std::int64_t stamp_ns,
+    std::vector<glim::EstimationFrame::ConstPtr> & marginalized_states);
+
   // Flush grouping and hand out every keyframe still in the window (end of
   // sequence), oldest first -- the OdometryEstimationBase contract.
   std::vector<glim::EstimationFrame::ConstPtr> get_remaining_frames() override;
@@ -95,6 +104,12 @@ private:
   // velocity, bias, plus a sparse IMU-local landmark cloud triangulated from
   // its folded observations.
   glim::EstimationFrame::Ptr to_estimation_frame(const vio::MarginalizedKeyframe & kf);
+
+  // Shared tail of insert_visual_observations / note_frame: pop every ready
+  // group, run it through the gates, fire the marginalization callback, and
+  // refresh latest_frame_ when a keyframe was accepted.
+  glim::EstimationFrame::ConstPtr pop_and_process(
+    std::vector<glim::EstimationFrame::ConstPtr> & marginalized_states);
 
   // Run one group through the init gate (gravity alignment) and the
   // keyframe gate (displacement), pushing accepted groups into the window

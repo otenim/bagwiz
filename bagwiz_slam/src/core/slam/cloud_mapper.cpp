@@ -826,7 +826,26 @@ struct CloudMapper::Impl
     const std::lock_guard<std::mutex> lock(camera_feed_mutex);
     visual_observations.insert(visual_observations.end(), observations.begin(), observations.end());
     std::vector<glim::EstimationFrame::ConstPtr> marginalized;
+    // A camera recovering from a long stall can hand this call a large group
+    // backlog: every accepted keyframe's window solve then runs back-to-back
+    // under camera_feed_mutex, blocking the IMU feed and the other cameras
+    // for the burst. Bounded (the displacement gate caps accepted keyframes)
+    // and self-clearing, so tolerated rather than chunked.
     vio->insert_visual_observations(observations, marginalized);
+    for (const auto & frame : marginalized) {
+      feed_sub_mapping(frame);
+    }
+    drain_submaps();
+  }
+
+  // Heartbeat twin of consume_visual for a frame with no observations: no
+  // buffer append (nothing to buffer), but the head advance can make earlier
+  // windows ready, so the marginalization/sub-mapping route is identical.
+  void consume_visual_heartbeat(std::int32_t camera_id, std::int64_t stamp_ns)
+  {
+    const std::lock_guard<std::mutex> lock(camera_feed_mutex);
+    std::vector<glim::EstimationFrame::ConstPtr> marginalized;
+    vio->note_frame(camera_id, stamp_ns, marginalized);
     for (const auto & frame : marginalized) {
       feed_sub_mapping(frame);
     }
@@ -2470,6 +2489,16 @@ void CloudMapper::insert_visual_observations(std::span<const VisualObservation> 
   const std::lock_guard<std::mutex> lock(impl_->visual_mutex);
   impl_->visual_observations.insert(
     impl_->visual_observations.end(), observations.begin(), observations.end());
+}
+
+void CloudMapper::note_visual_frame(std::int32_t camera_id, std::int64_t stamp_ns)
+{
+  // Only the camera-only grouping keeps per-camera stream heads; in LiDAR
+  // modes an observation-less frame carries no information at all.
+  if (!impl_->config.camera_only) {
+    return;
+  }
+  impl_->consume_visual_heartbeat(camera_id, stamp_ns);
 }
 
 void CloudMapper::insert(const LidarScan & scan)

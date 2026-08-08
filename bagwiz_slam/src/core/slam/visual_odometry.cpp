@@ -134,7 +134,24 @@ glim::EstimationFrame::ConstPtr VisualInertialOdometry::insert_visual_observatio
   std::vector<glim::EstimationFrame::ConstPtr> & marginalized_states)
 {
   grouping_.insert(observations);
+  return pop_and_process(marginalized_states);
+}
 
+void VisualInertialOdometry::note_frame(
+  std::int32_t camera_id, std::int64_t stamp_ns,
+  std::vector<glim::EstimationFrame::ConstPtr> & marginalized_states)
+{
+  // Frame heartbeat (see GroupingBuffer::note_frame): a frame with no
+  // observations still advances its camera's head, which can make earlier
+  // windows ready — so the pop-and-process loop runs here exactly as it does
+  // for an observation batch.
+  grouping_.note_frame(camera_id, stamp_ns);
+  pop_and_process(marginalized_states);
+}
+
+glim::EstimationFrame::ConstPtr VisualInertialOdometry::pop_and_process(
+  std::vector<glim::EstimationFrame::ConstPtr> & marginalized_states)
+{
   const std::size_t batch_start = marginalized_states.size();
   bool any_keyframe_accepted = false;
   for (const ObservationGroup & group : grouping_.pop_ready()) {
