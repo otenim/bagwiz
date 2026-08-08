@@ -799,8 +799,8 @@ private:
       ->check(CLI::ExistingPath);
     sub->add_option(
       "--frame", static_drop_args_.frames,
-      "Child frame whose edge and whole subtree are removed; repeatable. The frame must exist as "
-      "a child in the bag's static TF tree.");
+      "Child frame whose edge and whole subtree are removed; repeatable, at least one required. "
+      "The frame must exist as a child in the bag's static TF tree.");
     sub->add_option(
       "-o,--output", static_drop_args_.output_path,
       "Write the result to this new bag instead of rewriting <input> in place.");

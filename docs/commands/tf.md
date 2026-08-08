@@ -2,15 +2,15 @@
 
 TF inspection and static-TF editing on a ROS 2 rosbag.
 
-| Subcommand                              | What it does                                                                                                                                                 |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`tree`](#bagwiz-tf-tree)               | Merge one or more `tf2_msgs/msg/TFMessage` topics into one TF frame tree, colored by static vs dynamic (`static` / `dynamic` selectors supported).           |
-| [`static calc`](#bagwiz-tf-static-calc) | Resolve the pose of `--of` expressed in `--ref` using only the bag's static TF tree; print translation/quaternion/RPY or JSON.                               |
-| [`static cp`](#bagwiz-tf-static-cp)     | Copy every static TF topic from `<src>` into `<dst>` (in place, or to a new bag via `-o`), preserving topic names and stamping each at `<dst>`'s start time. |
-| [`static drop`](#bagwiz-tf-static-drop) | Remove frames (each with its whole subtree) from the static TF tree via `--frame`, preserving the topic layout.                                              |
-| [`static dump`](#bagwiz-tf-static-dump) | Write the bag's static TF tree as nested `parent: child: {x, y, z, roll, pitch, yaw}` YAML (RPY in radians) to `-o`, or to stdout.                           |
-| [`static join`](#bagwiz-tf-static-join) | The inverse of `static dump`: embed such a YAML into the bag as one latched `/tf_static` message stamped at the bag's start time.                            |
-| [`static update`](#bagwiz-tf-static-update) | Add or update static TF edges from such a YAML: an existing child is updated in its own topic, a new child added under `-t`, preserving the topic layout. |
+| Subcommand                                  | What it does                                                                                                                                                 |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`tree`](#bagwiz-tf-tree)                   | Merge one or more `tf2_msgs/msg/TFMessage` topics into one TF frame tree, colored by static vs dynamic (`static` / `dynamic` selectors supported).           |
+| [`static calc`](#bagwiz-tf-static-calc)     | Resolve the pose of `--of` expressed in `--ref` using only the bag's static TF tree; print translation/quaternion/RPY or JSON.                               |
+| [`static cp`](#bagwiz-tf-static-cp)         | Copy every static TF topic from `<src>` into `<dst>` (in place, or to a new bag via `-o`), preserving topic names and stamping each at `<dst>`'s start time. |
+| [`static drop`](#bagwiz-tf-static-drop)     | Remove frames (each with its whole subtree) from the static TF tree via `--frame`, preserving the topic layout.                                              |
+| [`static dump`](#bagwiz-tf-static-dump)     | Write the bag's static TF tree as nested `parent: child: {x, y, z, roll, pitch, yaw}` YAML (RPY in radians) to `-o`, or to stdout.                           |
+| [`static join`](#bagwiz-tf-static-join)     | The inverse of `static dump`: embed such a YAML into the bag as one latched `/tf_static` message stamped at the bag's start time.                            |
+| [`static update`](#bagwiz-tf-static-update) | Add or update static TF edges from such a YAML: an existing child is updated in its own topic, a new child added under `-t`, preserving the topic layout.    |
 
 ROS 1 `*.bag` inputs are not supported.
 
@@ -562,12 +562,12 @@ bagwiz tf static drop -i capture.mcap --frame oxts_link -o edited.mcap
 
 ### Options
 
-| Flag                    | Description                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <bag>`   | Input bag (file or directory).                                                                                            |
-| `--frame <frame>`       | Child frame whose edge and subtree are removed; repeatable. At least one is required.                                     |
-| `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#output-modes). |
-| `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                |
+| Flag                    | Description                                                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <bag>`   | **Required.** Input bag (file or directory).                                                                                       |
+| `--frame <frame>`       | Child frame whose edge and subtree are removed; repeatable. At least one is required.                                              |
+| `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#bagwiz-tf-static-join). |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                         |
 
 `--frame` supports TAB completion, offering frame ids from the bag's static
 `*tf_static` topics, like [`calc`](#bagwiz-tf-static-calc)'s `--of`/`--ref` (see
@@ -825,13 +825,13 @@ bagwiz tf static update -i tmp.mcap --yaml corrected_rig.yaml
 
 ### Options
 
-| Flag                    | Description                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <bag>`   | Input bag (file or directory).                                                                                            |
-| `--yaml <file>`         | **Required.** Publisher-config YAML whose edges are added or applied as updates.                                          |
-| `-t`, `--topic <name>`  | Topic newly added transforms are embedded under (default `/tf_static`), declared if absent.                              |
-| `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#output-modes). |
-| `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                |
+| Flag                    | Description                                                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <bag>`   | **Required.** Input bag (file or directory).                                                                                       |
+| `--yaml <file>`         | **Required.** Publisher-config YAML whose edges are added or applied as updates.                                                   |
+| `-t`, `--topic <name>`  | Topic newly added transforms are embedded under (default `/tf_static`), declared if absent.                                        |
+| `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#bagwiz-tf-static-join). |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                         |
 
 `-t`/`--topic` supports TAB completion, offering the bag's static TF topics — a
 `tf2_msgs/msg/TFMessage` topic whose name ends in `tf_static`. A dynamic TF topic
