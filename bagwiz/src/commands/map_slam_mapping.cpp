@@ -17,6 +17,7 @@
 
 #include <fmt/core.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstdlib>
@@ -60,6 +61,10 @@ std::string validate_mode_flags(const MapSlamArgs & args)
       return "--dynamic-sensor-height anchors the erasor2 method's height band and has "
              "no effect with the dufomap method (pass --dynamic-method erasor2)";
     }
+    if (!args.visual_anchor_period.empty()) {
+      return "--visual-anchor-period sets the camera-only grouping's anchor window and "
+             "has no effect with --pcd (the LiDAR modes group nothing by camera period)";
+    }
     return "";  // LiDAR mode: every camera/feature flag keeps its existing meaning
   }
   if (!args.color_topics.empty()) {
@@ -94,10 +99,33 @@ bool is_vehicle_like_frame(std::string_view frame_id)
          frame_id == "odom";
 }
 
+std::int64_t median_frame_period_ns(std::span<const std::int64_t> stamps_ns)
+{
+  if (stamps_ns.size() < 2) {
+    return 0;
+  }
+  std::vector<std::int64_t> deltas;
+  deltas.reserve(stamps_ns.size() - 1);
+  for (std::size_t i = 1; i < stamps_ns.size(); ++i) {
+    const std::int64_t delta = stamps_ns[i] - stamps_ns[i - 1];
+    if (delta > 0) {
+      deltas.push_back(delta);
+    }
+  }
+  if (deltas.empty()) {
+    return 0;
+  }
+  // nth_element instead of a full sort: only the median position matters.
+  const std::size_t mid = deltas.size() / 2;
+  std::nth_element(deltas.begin(), deltas.begin() + static_cast<std::ptrdiff_t>(mid), deltas.end());
+  return deltas[mid];
+}
+
 core::slam::CloudMapperConfig build_mapper_config(
   const MapSlamArgs & args, const std::optional<core::slam::SensorTransform> & t_lidar_imu,
   bool use_gpu, const std::array<double, 3> & gnss_antenna_offset,
-  std::span<const core::slam::SensorTransform> visual_cameras)
+  std::span<const core::slam::SensorTransform> visual_cameras,
+  const std::int64_t visual_anchor_period_ns)
 {
   core::slam::CloudMapperConfig config;
   config.input_resolution = args.input_resolution;
@@ -131,6 +159,10 @@ core::slam::CloudMapperConfig build_mapper_config(
   // exports a sparse landmark map. validate_mode_flags (called first by
   // run_map_slam) guarantees --cam and --imu are set in this mode.
   config.camera_only = args.cloud_topic.empty();
+  // Resolved by the caller — --visual-anchor-period or the anchor camera
+  // topic's derived median frame period (issue #17); the mapper ignores it
+  // outside camera-only mode.
+  config.visual_anchor_period_ns = visual_anchor_period_ns;
   return config;
 }
 

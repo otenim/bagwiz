@@ -60,6 +60,12 @@ namespace bagwiz::commands
 // convention), hence a warning, never a refusal.
 [[nodiscard]] bool is_vehicle_like_frame(std::string_view frame_id);
 
+// Median of the positive consecutive deltas of `stamps_ns` (nanoseconds,
+// arrival order), or 0 when fewer than two stamps or no positive delta
+// exists. The camera-only anchor period derivation: robust to frame drops (a
+// doubled delta) and stamp jitter, where span/count averaging is not.
+[[nodiscard]] std::int64_t median_frame_period_ns(std::span<const std::int64_t> stamps_ns);
+
 // Fill the CloudMapperConfig from the parsed CLI arguments.
 // `gnss_antenna_offset` is the antenna lever-arm (T_cloud_gnss.translation)
 // the caller resolved from the bag's static TF so the GNSS prior constrains
@@ -69,10 +75,15 @@ namespace bagwiz::commands
 // frame) in --cam listing order, so a row index is the
 // VisualObservation::camera_id the visual frontends stamp; empty (no --cam)
 // leaves the visual constraints off.
+// `visual_anchor_period_ns` is the resolved camera-only anchor-window period
+// (issue #17: --visual-anchor-period, or the anchor topic's derived median
+// frame period) — required explicitly so no caller can silently ride the
+// CloudMapperConfig default; ignored by the mapper outside camera-only mode.
 [[nodiscard]] core::slam::CloudMapperConfig build_mapper_config(
   const MapSlamArgs & args, const std::optional<core::slam::SensorTransform> & t_lidar_imu,
   bool use_gpu, const std::array<double, 3> & gnss_antenna_offset,
-  std::span<const core::slam::SensorTransform> visual_cameras);
+  std::span<const core::slam::SensorTransform> visual_cameras,
+  std::int64_t visual_anchor_period_ns);
 
 // Inputs for the ScanProgress construction: whether the live bar renders at
 // all, and the total message count it runs against (0 = indeterminate).

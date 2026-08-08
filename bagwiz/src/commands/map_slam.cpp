@@ -8,6 +8,7 @@
 
 #include "bagwiz/commands/map_slam.hpp"
 
+#include "bagwiz/core/base/duration_parse.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/decoder/decoder.hpp"
@@ -387,6 +388,74 @@ private:
         args_.cloud_topic.c_str(), std::to_string(cloud_fail).c_str());
       return false;
     }
+    return true;
+  }
+
+  // Resolve the camera-only anchor-window period (issue #17): the
+  // --visual-anchor-period override when given, otherwise the median
+  // inter-frame interval of the first --cam topic — computed over the SAME
+  // capture stamps the grouping windows (image_capture_stamp_ns: header
+  // stamp, receive-stamp fallback), so a sim-time bag derives consistently.
+  // Returns false only on an unparseable or non-positive override (logged);
+  // a failed derivation warns and keeps `period_ns` (the config default).
+  bool resolve_visual_anchor_period(std::int64_t & period_ns)
+  {
+    if (!args_.visual_anchor_period.empty()) {
+      const auto ns =
+        core::parse_duration_ns(args_.visual_anchor_period, core::DurationUnitPolicy::RequireUnit);
+      if (!ns.has_value() || *ns <= 0) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "could not parse --visual-anchor-period '%s' (expected a positive <number><unit>, "
+          "e.g. 100ms, 0.1s)",
+          args_.visual_anchor_period.c_str());
+        return false;
+      }
+      period_ns = *ns;
+      BAGWIZ_LOG_INFO(
+        kLogger, "Visual anchor period: %.1f ms (from --visual-anchor-period)",
+        static_cast<double>(period_ns) / 1e6);
+      return true;
+    }
+    // Derivation reads the anchor topic through a fresh reader (the caller's
+    // reader serves the feed loop; see peek_cloud_frame for the pattern).
+    std::unique_ptr<io::BagReader> reader;
+    try {
+      reader = io::open_read(args_.input_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "Could not reopen %s to derive the anchor period (%s); keeping the %.1f ms "
+        "default (override with --visual-anchor-period)",
+        args_.input_path.c_str(), e.what(), static_cast<double>(period_ns) / 1e6);
+      return true;
+    }
+    io::ReadFilter filter;
+    filter.topics.push_back(args_.cam_topics.front());
+    reader->set_filter(filter);
+    // ~12 s of frames at 10 Hz: ample for a stable median, cheap to decode
+    // (image_capture_stamp_ns reads only the leading header).
+    constexpr std::size_t kMaxPeriodProbeStamps = 120;
+    std::vector<std::int64_t> stamps;
+    stamps.reserve(kMaxPeriodProbeStamps);
+    io::RawMessage raw;
+    while (stamps.size() < kMaxPeriodProbeStamps && reader->next(raw)) {
+      stamps.push_back(
+        core::image::image_capture_stamp_ns(raw.topic->type, raw.payload, raw.timestamp_ns));
+    }
+    const std::int64_t derived = median_frame_period_ns(stamps);
+    if (derived <= 0) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "Could not derive the anchor camera's frame period from '%s' (fewer than two usable "
+        "frames); keeping the %.1f ms default (override with --visual-anchor-period)",
+        args_.cam_topics.front().c_str(), static_cast<double>(period_ns) / 1e6);
+      return true;
+    }
+    period_ns = derived;
+    BAGWIZ_LOG_INFO(
+      kLogger, "Visual anchor period: %.1f ms (median frame period of '%s')",
+      static_cast<double>(period_ns) / 1e6, args_.cam_topics.front().c_str());
     return true;
   }
 
@@ -1189,8 +1258,15 @@ private:
     for (const std::size_t cam : cam_indices_) {
       visual_cameras.push_back(t_cloud_cams_[cam]);
     }
-    const core::slam::CloudMapperConfig config =
-      build_mapper_config(args_, t_lidar_imu, use_gpu_, gnss_antenna_offset, visual_cameras);
+    // Camera-only anchor-window period: flag override or bag-derived (issue
+    // #17). LiDAR modes skip the resolution — the mapper ignores the value
+    // and validate_mode_flags already rejected the flag there.
+    std::int64_t visual_anchor_period_ns = core::slam::CloudMapperConfig{}.visual_anchor_period_ns;
+    if (camera_only_ && !resolve_visual_anchor_period(visual_anchor_period_ns)) {
+      return 1;
+    }
+    const core::slam::CloudMapperConfig config = build_mapper_config(
+      args_, t_lidar_imu, use_gpu_, gnss_antenna_offset, visual_cameras, visual_anchor_period_ns);
 
     // Resolve the optional --frame remapping up front. The trajectory is expressed
     // in the anchor frame (the PointCloud2 frame_id, or cam0's frame in

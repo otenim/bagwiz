@@ -84,6 +84,13 @@ struct MapSlamArgs
   // per frame; fewer = faster. Must be > 0. Passing --visual-max-features
   // without --cam is a CLI error.
   int visual_max_features = 200;
+  // Camera-only anchor-window period override (--visual-anchor-period), a
+  // unit-suffixed duration string ("100ms", "0.1s"); parsed at run time under
+  // DurationUnitPolicy::RequireUnit and must be positive. Empty (the default)
+  // derives the period from the first cam_topics camera's header stamps
+  // (median inter-frame interval). Camera-only mode only: with --pcd the
+  // period parameterizes nothing, so validate_mode_flags rejects it.
+  std::string visual_anchor_period;
   // Explicit CameraInfo topic overrides, each entry keyed as
   // "<image_topic>=<info_topic>" (--cam-info). Serves both camera roles
   // (color_topics and cam_topics). Cameras without an entry auto-resolve their
