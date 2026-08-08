@@ -9,11 +9,14 @@
 #ifndef COMMANDS__TF_STATIC_INJECT_HPP_
 #define COMMANDS__TF_STATIC_INJECT_HPP_
 
+#include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/tf/tf_static_collect.hpp"
 #include "bagwiz/io/bag_open.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 // CLI-internal (not installed): the rewrite passes that write latched static
@@ -21,8 +24,9 @@
 // scratch, shared by `bagwiz tf static cp` (transforms read from a donor bag)
 // and `bagwiz tf static join` (transforms read from a YAML config);
 // `edit_static_tf_pass` rewrites a caller-selected set of topics to carry an
-// edited transform list each, for `bagwiz tf static edit`. Getting the write
-// ORDER wrong is a silent, hard-to-spot bug, so the passes live in one place.
+// edited transform list each, for `bagwiz tf static drop` and `bagwiz tf static
+// update`. Getting the write ORDER wrong is a silent, hard-to-spot bug, so the
+// passes live in one place.
 // Follows the src-local shared-header idiom of traj_common.hpp /
 // pcd_concat_common.hpp.
 namespace bagwiz::commands
@@ -69,8 +73,9 @@ int inject_static_tf_pass(
 
 // One full pass over `dst_path` that rewrites each topic in `touched` to carry
 // exactly `transforms` — the edge-granular counterpart of inject_static_tf_pass,
-// for `bagwiz tf static edit`. A touched topic already in the bag must be a
-// static `tf2_msgs/msg/TFMessage` topic (its messages are suppressed and
+// for `bagwiz tf static drop` and `bagwiz tf static update`. A touched topic
+// already in the bag must be a static `tf2_msgs/msg/TFMessage` topic (its
+// messages are suppressed and
 // replaced by one message holding the given transforms, written BEFORE the
 // stream copy for the row-order reason inject_static_tf_pass documents); a
 // touched topic absent from the bag is declared new. A touched topic whose
@@ -82,6 +87,22 @@ int inject_static_tf_pass(
 int edit_static_tf_pass(
   const std::filesystem::path & dst_path, const std::vector<core::StaticTopicTransforms> & touched,
   const StaticTfInjectOptions & options, const io::WriterFactory & open_writer);
+
+// The shared tail of `tf static drop` and `tf static update`, which differ only
+// in how they mutate `topics` (drop removes edges, update adds/updates them).
+// Validates the edited `topics` as a forest (an add/update or a re-parent can
+// close a cycle against edges the bag already carries), selects the subset of
+// `topics` named in `touched`, and rewrites exactly those via edit_static_tf_pass
+// (`input_path`/`output_path`/`overwrite` handed straight to core::run_bag_rewrite).
+// `touched` empty is a no-op that writes nothing and returns 0 after logging under
+// `options.label`. The caller logs its own edit-count summary on success. Returns
+// the process exit code: 0 on success, 1 after logging any failure (the edit broke
+// the forest, or the rewrite failed).
+int rewrite_touched_static_topics(
+  const std::filesystem::path & input_path, const std::vector<core::StaticTopicTransforms> & topics,
+  const std::unordered_set<std::string> & touched,
+  const std::optional<std::filesystem::path> & output_path, bool overwrite,
+  const core::BagRewriteOptions & rewrite_opts, const StaticTfInjectOptions & inject_opts);
 
 }  // namespace bagwiz::commands
 

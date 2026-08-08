@@ -180,10 +180,11 @@ add_executable(bagwiz
   src/commands/traj_common.cpp
   src/commands/tf.cpp
   src/commands/tf_static_cp.cpp
+  src/commands/tf_static_drop.cpp
   src/commands/tf_static_dump.cpp
-  src/commands/tf_static_edit.cpp
   src/commands/tf_static_inject.cpp
   src/commands/tf_static_join.cpp
+  src/commands/tf_static_update.cpp
   src/commands/topic.cpp
   src/commands/topic_drop.cpp
   src/commands/topic_keep.cpp
@@ -340,14 +341,23 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_tf_static_join_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_tf_static_join_test ${bagwiz_test_libs} fmt::fmt yaml-cpp)
 
+  # `tf static drop` removes frames; it reuses the shared inject pass but parses
+  # no YAML, so no yaml-cpp link is needed for the command itself.
+  ament_add_gtest(bagwiz_tf_static_drop_test
+    test/commands/tf_static_drop_test.cpp
+    src/commands/tf_static_drop.cpp
+    src/commands/tf_static_inject.cpp)
+  target_include_directories(bagwiz_tf_static_drop_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_tf_static_drop_test ${bagwiz_test_libs} fmt::fmt)
+
   # Same shape as the join test above: the command parses --yaml with yaml-cpp
   # and the test writes the fixture configs.
-  ament_add_gtest(bagwiz_tf_static_edit_test
-    test/commands/tf_static_edit_test.cpp
-    src/commands/tf_static_edit.cpp
+  ament_add_gtest(bagwiz_tf_static_update_test
+    test/commands/tf_static_update_test.cpp
+    src/commands/tf_static_update.cpp
     src/commands/tf_static_inject.cpp)
-  target_include_directories(bagwiz_tf_static_edit_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(bagwiz_tf_static_edit_test ${bagwiz_test_libs} fmt::fmt yaml-cpp)
+  target_include_directories(bagwiz_tf_static_update_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_tf_static_update_test ${bagwiz_test_libs} fmt::fmt yaml-cpp)
 
   # yaml-cpp is linked only so the test can parse the emitted YAML back; the
   # command emits it directly (see core/tf/tf_static_tree_yaml.cpp).

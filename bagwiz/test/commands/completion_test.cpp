@@ -818,7 +818,7 @@ TEST(FlagCompletionTest, TfStaticSubcommandListsEveryAction)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "static", ""}),
-    "calc\ncp\ndump\nedit\njoin\n");
+    "calc\ncp\ndrop\ndump\njoin\nupdate\n");
 }
 
 // `tf static -` is the command-group slot; `--json` lives under `calc`, so only
@@ -867,15 +867,24 @@ TEST(FlagCompletionTest, TfStaticJoinDashListsJoinFlags)
     "--force\n--help\n--input\n--output\n--overwrite\n--topic\n--yaml\n-h\n-i\n-o\n-t\n-w\n");
 }
 
-// `tf static edit -` is the join set minus --force plus --prune. --yaml is a file
-// path, so it falls through to the shell; --prune values complete from the bag's
-// static frame ids and --topic from its static TF topics (see
-// TfStaticEditPruneFlagListsStaticFrameIds / TfStaticEditTopicFlagListsStaticTfTopics).
-TEST(FlagCompletionTest, TfStaticEditDashListsEditFlags)
+// `tf static drop -` surfaces -i/-o/--overwrite plus --frame. --frame values
+// complete from the bag's static frame ids (see
+// TfStaticDropFrameFlagListsStaticFrameIds).
+TEST(FlagCompletionTest, TfStaticDropDashListsDropFlags)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "edit", "-"}),
-    "--help\n--input\n--output\n--overwrite\n--prune\n--topic\n--yaml\n-h\n-i\n-o\n-t\n-w\n");
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "drop", "-"}),
+    "--frame\n--help\n--input\n--output\n--overwrite\n-h\n-i\n-o\n-w\n");
+}
+
+// `tf static update -` is the join set minus --force. --yaml is a file path, so it
+// falls through to the shell; --topic values complete from the bag's static TF
+// topics (see TfStaticUpdateTopicFlagListsStaticTfTopics).
+TEST(FlagCompletionTest, TfStaticUpdateDashListsUpdateFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "update", "-"}),
+    "--help\n--input\n--output\n--overwrite\n--topic\n--yaml\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `tf static calc <bag> --of <TAB>` lists only frame ids from the bag's static
@@ -908,9 +917,9 @@ TEST_F(CompletionTest, TfStaticCalcRefFlagListsStaticFrameIds)
     "base_link\nmap\nodom\n");
 }
 
-// `tf static edit --prune <TAB>` completes from the same static frame ids as
-// `calc`'s --of/--ref: prune names a frame of the bag's static TF tree.
-TEST_F(CompletionTest, TfStaticEditPruneFlagListsStaticFrameIds)
+// `tf static drop --frame <TAB>` completes from the same static frame ids as
+// `calc`'s --of/--ref: --frame names a frame of the bag's static TF tree.
+TEST_F(CompletionTest, TfStaticDropFrameFlagListsStaticFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -918,17 +927,17 @@ TEST_F(CompletionTest, TfStaticEditPruneFlagListsStaticFrameIds)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap",
-       "--prune"}),
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "drop", "-i", "~/mixed.mcap",
+       "--frame"}),
     "base_link\nmap\nodom\n");
 }
 
-// `tf static edit -t <TAB>` completes from the bag's *tf_static topics only. The
+// `tf static update -t <TAB>` completes from the bag's *tf_static topics only. The
 // flag homes newly added edges, and an edge written to a non-static TF topic is
 // invisible to every bagwiz static-TF reader (collect_static_tf skips it), so
 // offering one would only steer the user into a dead end. The mixed fixture's
 // /tf carries TFMessage but is not static, so it stays out of the candidates.
-TEST_F(CompletionTest, TfStaticEditTopicFlagListsStaticTfTopics)
+TEST_F(CompletionTest, TfStaticUpdateTopicFlagListsStaticTfTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -936,12 +945,13 @@ TEST_F(CompletionTest, TfStaticEditTopicFlagListsStaticTfTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap", "-t"}),
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "update", "-i", "~/mixed.mcap",
+       "-t"}),
     "/tf_static\n");
 }
 
 // The long form shares the short form's static-only topic source.
-TEST_F(CompletionTest, TfStaticEditLongTopicFlagListsStaticTfTopics)
+TEST_F(CompletionTest, TfStaticUpdateLongTopicFlagListsStaticTfTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -949,14 +959,14 @@ TEST_F(CompletionTest, TfStaticEditLongTopicFlagListsStaticTfTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap",
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "update", "-i", "~/mixed.mcap",
        "--topic"}),
     "/tf_static\n");
 }
 
 // A typed prefix narrows the static -t topic candidates, and a prefix matching
 // only the non-static /tf yields nothing rather than falling back to it.
-TEST_F(CompletionTest, TfStaticEditTopicFlagRespectsPrefix)
+TEST_F(CompletionTest, TfStaticUpdateTopicFlagRespectsPrefix)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -964,12 +974,12 @@ TEST_F(CompletionTest, TfStaticEditTopicFlagRespectsPrefix)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap", "-t",
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "update", "-i", "~/mixed.mcap", "-t",
        "/tf_s"}),
     "/tf_static\n");
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "edit", "-i", "~/mixed.mcap", "-t",
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "update", "-i", "~/mixed.mcap", "-t",
        "/points"}),
     "");
 }
