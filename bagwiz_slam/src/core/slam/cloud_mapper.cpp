@@ -1455,6 +1455,13 @@ struct CloudMapper::Impl
     params.obs_sigma = config.visual_obs_sigma;
     params.max_obs_per_track = config.visual_max_obs_per_track;
     params.gate_distance = config.visual_gate_distance;
+    if (config.camera_only) {
+      // Camera-only drift handling (issue #18; see the config fields): trim
+      // crossing tracks to near-crossing geometry and widen the seed gate.
+      // LiDAR modes keep the defaults (no trim, 3 sigma).
+      params.crossing_trim_span_s = config.visual_crossing_trim_span;
+      params.seed_outlier_sigmas = config.visual_seed_outlier_sigmas;
+    }
 
     const auto build_start = std::chrono::steady_clock::now();
     const visual::Stats stats = visual::build_visual_factors(

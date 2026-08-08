@@ -76,6 +76,19 @@ struct Params
   double obs_sigma = 1.0e-3;
   int max_obs_per_track = 16;  // <= 0 keeps every observation (no cap)
   double gate_distance = 1.0;  // <= 0 disables the LiDAR gate
+
+  // Issue #18 (camera-only drift handling; the LiDAR defaults leave both off):
+  // Trim a crossing track to +/- this many seconds around its crossing stamp
+  // before subsampling, so the seed triangulates only near-crossing geometry.
+  // Composed-pose error grows with the distance from the crossing (VIO drift
+  // is span-proportional), so the far observations are the ones a seed gate
+  // trips on. <= 0 disables (single-submap tracks are never trimmed).
+  double crossing_trim_span_s = 0.0;
+  // Seed-triangulation reprojection gate, in obs_sigma units. 3.0 is
+  // calibrated for scan-matched per-frame trajectories; a camera-only
+  // trajectory carries drift-level error that needs a wider gate (measured
+  // ~18 sigma median for +/-0.5 s-trimmed tracks on the reference bag).
+  double seed_outlier_sigmas = 3.0;
 };
 
 // What identifies one tracked feature. VisualObservation::track_id is unique
