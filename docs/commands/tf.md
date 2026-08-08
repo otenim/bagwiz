@@ -2,9 +2,18 @@
 
 TF inspection and static-TF editing on a ROS 2 rosbag.
 
+Throughout bagwiz, a topic is a **static TF topic** iff its type is
+`tf2_msgs/msg/TFMessage` **and** its name's final path segment is exactly
+`tf_static` — the name is `tf_static` or ends with `/tf_static` (e.g.
+`/tf_static`, `/sensing/tf_static`). A name that merely ends with the letters
+`tf_static` (e.g. `/xtf_static`) does not qualify and is treated as dynamic TF,
+as is every other `TFMessage` topic. The topic's recorded QoS
+(`offered_qos_profiles`) is not consulted. Every static-TF reader, writer, and
+TAB-completion path below applies this one definition.
+
 | Subcommand                                  | What it does                                                                                                                                                 |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`tree`](#bagwiz-tf-tree)                   | Merge one or more `tf2_msgs/msg/TFMessage` topics into one TF frame tree, colored by static vs dynamic (`static` / `dynamic` selectors supported).           |
+| [`tree`](#bagwiz-tf-tree)                   | Merge one or more `tf2_msgs/msg/TFMessage` topics into one TF frame tree, colored by static vs dynamic.                                                      |
 | [`static calc`](#bagwiz-tf-static-calc)     | Resolve the pose of `--of` expressed in `--ref` using only the bag's static TF tree; print translation/quaternion/RPY or JSON.                               |
 | [`static cp`](#bagwiz-tf-static-cp)         | Copy every static TF topic from `<src>` into `<dst>` (in place, or to a new bag via `-o`), preserving topic names and stamping each at `<dst>`'s start time. |
 | [`static drop`](#bagwiz-tf-static-drop)     | Remove frames (each with its whole subtree) from the static TF tree via `--frame`, preserving the topic layout.                                              |
@@ -21,7 +30,7 @@ ROS 1 `*.bag` inputs are not supported.
 Merges one or more `tf2_msgs/msg/TFMessage` topics (`-t`/`--topics`) into a
 single TF frame tree built from the union of their distinct parent→child
 edges, in one pass over the selected topics. In the merged tree each edge is
-colored by whether it came from a **static** (`*tf_static`) or a **dynamic**
+colored by whether it came from a **static** (`*/tf_static`) or a **dynamic**
 topic. When the tree contains both kinds, a legend is printed and each child
 frame is colored and tagged `[S]` (static) or `[D]` (dynamic); when only one
 kind is present the tree is drawn plain and the header names the category,
@@ -30,7 +39,7 @@ e.g. `═══ TF tree (static) ═══`.
 ### Usage
 
 ```text
-bagwiz tf tree -i <input> [-t|--topics <topic-or-selector>...]
+bagwiz tf tree -i <input> [-t|--topics <topic>...]
 ```
 
 ### Examples
@@ -39,14 +48,11 @@ bagwiz tf tree -i <input> [-t|--topics <topic-or-selector>...]
 # Merge every TF topic in the bag.
 bagwiz tf tree -i capture.mcap
 
-# Only the static (*tf_static) tree.
-bagwiz tf tree -i capture.mcap -t static
+# Only the static tree.
+bagwiz tf tree -i capture.mcap -t /tf_static
 
 # Only the dynamic tree.
-bagwiz tf tree -i capture.mcap -t dynamic
-
-# All dynamic topics plus /extra_tf.
-bagwiz tf tree -i capture.mcap -t dynamic /extra_tf
+bagwiz tf tree -i capture.mcap -t /tf
 
 # Explicit merge of two topics.
 bagwiz tf tree -i capture.mcap -t /tf /tf_static
@@ -54,31 +60,16 @@ bagwiz tf tree -i capture.mcap -t /tf /tf_static
 
 ### Options
 
-| Flag                    | Description                                                                                                                                                                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                                                                                      |
-| `-t`, `--topics <t>...` | Zero or more `tf2_msgs/msg/TFMessage` topics and/or the selectors `static` / `dynamic` (e.g. `/tf /tf_static`, `static`, `dynamic /extra_tf`; see [Topic selectors](#topic-selectors)). When omitted, all TF topics in the bag are merged. |
+| Flag                    | Description                                                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                             |
+| `-t`, `--topics <t>...` | Zero or more `tf2_msgs/msg/TFMessage` topics to merge (e.g. `/tf /tf_static`). When omitted, all TF topics in the bag are merged. |
 
-### Topic selectors
-
-`-t`/`--topics` accepts two reserved selectors in addition to literal topic
-names:
-
-- `static` — expands to **every** `*tf_static` topic in the bag.
-- `dynamic` — expands to every non-static TF topic in the bag.
-
-They compose with each other and with literal names. For example
-`tf tree -i bag -t dynamic /extra_tf` merges all dynamic TF topics plus
-`/extra_tf`, and `tf tree -i bag -t static` shows the merged static tree alone.
-(ROS topic names start with `/`, so the bare words `static` / `dynamic` never
-collide with a real topic.) When `-t`/`--topics` is omitted, bagwiz defaults to
-**every** `tf2_msgs/msg/TFMessage` topic in the bag.
-
-Any other token must name a `tf2_msgs/msg/TFMessage` topic that exists in the
-bag; an unknown literal exits with an error listing the offending names and the
+Every `-t` value must name a `tf2_msgs/msg/TFMessage` topic that exists in the
+bag; an unknown name exits with an error listing the offending names and the
 bag's available TF topics on stderr.
 
-Literal `<topic>` names support TAB completion: only `tf2_msgs/msg/TFMessage`
+`<topic>` names support TAB completion: only `tf2_msgs/msg/TFMessage`
 topics in the input bag are offered as candidates (see
 [`bagwiz complete`](complete.md)). A topic repeated on the command line is
 treated once.
@@ -118,7 +109,7 @@ When it contains **both** static and dynamic edges it writes:
    `[S]` / `[D]` tag for its edge's category, and on a TTY the child name is
    drawn in that category's color.
 
-Single-category output, e.g. `tf tree -i capture.mcap -t dynamic` (plain):
+Single-category output, e.g. `tf tree -i capture.mcap -t /tf` (plain):
 
 ```text
 ═══ TF tree (dynamic) ═══
@@ -182,7 +173,7 @@ edges), so the full invocation is
 an error and the group's help.
 
 Resolves the pose of `--of` expressed in the `--ref` frame using **only** the
-bag's static TF (topics whose name ends with `tf_static`). Dynamic `/tf` topics
+bag's [static TF topics](#bagwiz-tf). Dynamic `/tf` topics
 are intentionally ignored. The transform is composed across the whole static
 chain, so `--of` and `--ref` need not be directly adjacent — any two frames
 connected through the static tree work. The printed `transform:` line names the
@@ -223,7 +214,7 @@ bagwiz tf static calc -i capture.mcap --of base_link --ref lidar --json
 
 `--of` and `--ref` support TAB completion. Because `tf static calc` resolves
 only the static tree, the candidates are restricted to frame ids found in the
-bag's static `*tf_static` topics (see [`bagwiz complete`](complete.md)).
+bag's static `*/tf_static` topics (see [`bagwiz complete`](complete.md)).
 
 ### Direction convention
 
@@ -311,9 +302,8 @@ consumers should not rely on key ordering:
 
 ## `bagwiz tf static cp`
 
-Copies every static TF topic (a `tf2_msgs/msg/TFMessage` topic whose name ends
-with `tf_static`) from `<src>` into `<dst>`, preserving each topic's original
-name. Dynamic `/tf` topics in `<src>` are ignored. Each copied topic is written
+Copies every [static TF topic](#bagwiz-tf) from `<src>` into `<dst>`,
+preserving each topic's original name. Dynamic `/tf` topics in `<src>` are ignored. Each copied topic is written
 as a single `TFMessage`: a static topic that was re-published several times in
 `<src>` collapses to one latched message carrying the final transform per
 `child_frame_id`.
@@ -388,8 +378,8 @@ always an error, regardless of `--force`.
 
 ## `bagwiz tf static dump`
 
-Writes the bag's static TF tree (every `tf2_msgs/msg/TFMessage` topic whose name
-ends with `tf_static`) as the nested `parent: child: {x, y, z, roll, pitch, yaw}`
+Writes the bag's static TF tree (every [static TF topic](#bagwiz-tf) in the
+bag) as the nested `parent: child: {x, y, z, roll, pitch, yaw}`
 YAML that static-transform publisher configs use — the inverse of reading such a
 config and broadcasting it. Dynamic `/tf` topics are ignored.
 
@@ -488,8 +478,8 @@ large bags.
 
 The consequence is that an edge introduced only by a _later_ message is not
 dumped, which happens when several broadcasters publish disjoint subsets to one
-topic. Compare against [`tf tree -t static`](#bagwiz-tf-tree), which reads the
-whole topic, if you suspect that.
+topic. Compare against [`tf tree -t /tf_static`](#bagwiz-tf-tree), which reads
+the whole topic, if you suspect that.
 
 ### Merging and dropped data
 
@@ -570,7 +560,7 @@ bagwiz tf static drop -i capture.mcap --frame oxts_link -o edited.mcap
 | `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                         |
 
 `--frame` supports TAB completion, offering frame ids from the bag's static
-`*tf_static` topics, like [`calc`](#bagwiz-tf-static-calc)'s `--of`/`--ref` (see
+`*/tf_static` topics, like [`calc`](#bagwiz-tf-static-calc)'s `--of`/`--ref` (see
 [`bagwiz complete`](complete.md)).
 
 ### Topic layout is preserved
@@ -772,10 +762,11 @@ rather than [`static cp`](#bagwiz-tf-static-cp)'s combined flag:
 
 `-t`/`--topic` defaults to `/tf_static`, the name a static transform broadcaster
 publishes under. The YAML carries no topic name, so a default is needed; pass
-`-t` to write e.g. `/sensing/tf_static` instead. A name that does not end with
-`tf_static` is accepted but warns, because every bagwiz static-TF reader
-(`tf static dump`, `tf static calc`, `tf tree -t static`, `tf static cp`) selects
-topics by that suffix and would treat the topic as dynamic.
+`-t` to write e.g. `/sensing/tf_static` instead. A name whose final path
+segment is not `tf_static` is accepted but warns, because every bagwiz
+static-TF reader (`tf static dump`, `tf static calc`, `tf tree`'s static
+coloring, `tf static cp`) applies the [static TF definition](#bagwiz-tf) and
+would treat the topic as dynamic.
 
 ---
 
@@ -833,8 +824,8 @@ bagwiz tf static update -i tmp.mcap --yaml corrected_rig.yaml
 | `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#bagwiz-tf-static-join). |
 | `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                         |
 
-`-t`/`--topic` supports TAB completion, offering the bag's static TF topics — a
-`tf2_msgs/msg/TFMessage` topic whose name ends in `tf_static`. A dynamic TF topic
+`-t`/`--topic` supports TAB completion, offering the bag's
+[static TF topics](#bagwiz-tf). A dynamic TF topic
 such as `/tf` is deliberately left out: an edge written there is invisible to
 every bagwiz static-TF reader, so `dump` and `calc` would not see it. The flag
 still accepts a brand-new topic name, which simply has no candidate to offer (see

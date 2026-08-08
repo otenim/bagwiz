@@ -115,7 +115,7 @@ std::string tf_colored_tree_root_line(const std::string & text, bool use_color)
 }
 
 // Category of an edge for coloring: a child is reached either via a static
-// (*tf_static) topic or a dynamic one. The two-way classification is what
+// (*/tf_static) topic or a dynamic one. The two-way classification is what
 // `tf tree` colors by; -1 means "do not classify" (a single-category tree is
 // rendered plain).
 enum class EdgeCategory { kNone = -1, kDynamic = 0, kStatic = 1 };
@@ -282,55 +282,29 @@ std::string sorted_frames_csv(const tf2::BufferCore & buffer)
   return core::join_csv(frames);
 }
 
-// Reserved <topics> selectors. "static" expands to every *tf_static topic,
-// "dynamic" to every non-static TF topic. ROS topic names start with '/', so
-// these bare words never collide with a real topic name.
-constexpr const char * kSelectStatic = "static";
-constexpr const char * kSelectDynamic = "dynamic";
-
-// Expand the requested <topics> tokens into concrete TfTopics, deduplicated by
-// name (first appearance wins). "static" / "dynamic" expand to all static /
-// dynamic TF topics in the bag (and compose with literal topic names); any
-// other token must name a TFMessage topic that exists. On an unknown literal,
-// logs the offending names + the bag's available TF topics and returns false.
+// Resolve the requested <topics> names into concrete TfTopics, deduplicated by
+// name (first appearance wins). Every token must name a TFMessage topic that
+// exists in the bag. On an unknown name, logs the offending names + the bag's
+// available TF topics and returns false.
 bool select_tree_topics(
   const std::vector<std::string> & requested, const std::vector<core::TfTopic> & tf_topics,
   std::vector<core::TfTopic> & selected_out)
 {
   std::unordered_set<std::string> added;
-  auto add_topic = [&](const core::TfTopic & t) {
-    if (added.insert(t.name).second) {
-      selected_out.push_back(t);
-    }
-  };
 
   std::vector<std::string> unknown;
   for (const auto & token : requested) {
-    if (token == kSelectStatic) {
-      for (const auto & t : tf_topics) {
-        if (t.is_static) {
-          add_topic(t);
-        }
+    const core::TfTopic * match = nullptr;
+    for (const auto & t : tf_topics) {
+      if (t.name == token) {
+        match = &t;
+        break;
       }
-    } else if (token == kSelectDynamic) {
-      for (const auto & t : tf_topics) {
-        if (!t.is_static) {
-          add_topic(t);
-        }
-      }
-    } else {
-      const core::TfTopic * match = nullptr;
-      for (const auto & t : tf_topics) {
-        if (t.name == token) {
-          match = &t;
-          break;
-        }
-      }
-      if (match != nullptr) {
-        add_topic(*match);
-      } else {
-        unknown.push_back(token);
-      }
+    }
+    if (match == nullptr) {
+      unknown.push_back(token);
+    } else if (added.insert(match->name).second) {
+      selected_out.push_back(*match);
     }
   }
 
@@ -345,9 +319,7 @@ bool select_tree_topics(
   }
   std::sort(available.begin(), available.end());
   BAGWIZ_LOG_ERROR(
-    kLogger,
-    "Not a tf2_msgs/msg/TFMessage topic in the bag (nor the 'static' / 'dynamic' selector): %s",
-    core::join_csv(unknown).c_str());
+    kLogger, "Not a tf2_msgs/msg/TFMessage topic in the bag: %s", core::join_csv(unknown).c_str());
   BAGWIZ_LOG_ERROR(kLogger, "Available TF topics: %s", core::join_csv(available).c_str());
   return false;
 }
@@ -386,9 +358,9 @@ std::string format_category_legend(bool use_color)
 // -----------
 //   tree         Merge one or more tf2_msgs/msg/TFMessage <topics> into one
 //                validated TF frame tree; on a TTY edges are colored by static
-//                vs dynamic. The 'static' / 'dynamic' selectors pick all static
-//                / dynamic TF topics. A merge conflict (same child via different
-//                parents, or both static and dynamic) aborts with an error.
+//                vs dynamic. Omitting <topics> merges every TF topic in the
+//                bag. A merge conflict (same child via different parents, or
+//                both static and dynamic) aborts with an error.
 //   static calc  Resolve <of>'s pose in <ref> using only the
 //                bag's static TF tree, and print translation / quaternion / RPY
 //                (or JSON). 'static' is a command group; 'calc' is its action.
@@ -529,8 +501,7 @@ private:
     sub->add_option(
       "-t,--topics", tree_args_.topics,
       "tf2_msgs/msg/TFMessage topic(s) to merge and render; defaults to all TF topics in the bag "
-      "when omitted. The selectors 'static' and 'dynamic' expand to all static (*tf_static) / "
-      "dynamic TF topics respectively and may be combined with literal topic names.");
+      "when omitted.");
     sub->callback([this]() { selected_ = Subcommand::kTree; });
   }
 
@@ -567,26 +538,14 @@ private:
     }
 
     // With no explicit <topics>, default to every TF topic in the bag.
-    // Otherwise expand the tokens: "static" / "dynamic" select all static /
-    // dynamic TF topics (and compose with literal names); any other token must
-    // be a TFMessage topic that exists. select_tree_topics logs the unknown
-    // names + available TF topics on failure.
+    // Otherwise every token must be a TFMessage topic that exists;
+    // select_tree_topics logs the unknown names + available TF topics on
+    // failure. Either way `selected` ends up non-empty: the bag was checked to
+    // carry at least one TF topic, and every accepted token adds one.
     std::vector<core::TfTopic> selected;
     if (requested.empty()) {
       selected = tf_topics;
     } else if (!select_tree_topics(requested, tf_topics, selected)) {
-      return 1;
-    }
-    if (selected.empty()) {
-      std::vector<std::string> available;
-      available.reserve(tf_topics.size());
-      for (const auto & t : tf_topics) {
-        available.push_back(t.name);
-      }
-      std::sort(available.begin(), available.end());
-      BAGWIZ_LOG_ERROR(
-        kLogger, "No TF topics matched <topics> %s. Available TF topics: %s",
-        core::join_csv(requested).c_str(), core::join_csv(available).c_str());
       return 1;
     }
 
@@ -860,7 +819,7 @@ private:
     }
 
     // This subcommand resolves transforms purely from the static tree, so
-    // dynamic /tf topics are intentionally ignored: only *tf_static topics
+    // dynamic /tf topics are intentionally ignored: only */tf_static topics
     // are fed into the buffer (as static entries).
     std::vector<core::TfTopic> static_topics;
     for (const auto & t : core::collect_tf_topics(*reader)) {
