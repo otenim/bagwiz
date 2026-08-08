@@ -95,7 +95,9 @@ constexpr std::size_t kMinObservations = 3;
 constexpr double kLandmarkDistanceThreshold = 150.0;
 
 // Reject a track whose worst reprojection error exceeds this many obs_sigma.
-// This is what removes moving objects and drifted tracks.
+// This is what removes moving objects and drifted tracks. Used by the
+// landmark export; factor construction reads Params::seed_outlier_sigmas
+// (same 3.0 default, widened in camera-only mode — issue #18).
 constexpr double kOutlierSigmas = 3.0;
 
 // Observations are undistorted NORMALIZED image coordinates, so every rig camera
@@ -186,6 +188,53 @@ TrackGroups group_by_track(std::span<const VisualObservation> observations)
       });
   }
   return groups;
+}
+
+// Issue #18: trim a crossing track to +/-span_s around its crossing stamp —
+// the midpoint between the last observation in one submap and the first in
+// the next. Composed-pose drift grows with distance from the crossing, so
+// keeping only near-crossing observations is what lets the seed gate judge
+// the constraint geometry rather than the track's accumulated drift. No-op
+// for span_s <= 0 and for single-submap tracks; a track spanning three or
+// more submaps trims around its FIRST crossing only (with track life roughly
+// half a submap span, such tracks are vanishingly rare). Runs BEFORE
+// subsampling, so the kept window retains full observation density.
+std::vector<const VisualObservation *> trim_to_crossing(
+  const std::vector<const VisualObservation *> & group, double span_s,
+  std::span<const SubmapView> views)
+{
+  if (span_s <= 0.0 || group.size() < 2) {
+    return group;
+  }
+  std::optional<std::size_t> prev_view;
+  const VisualObservation * prev_obs = nullptr;
+  std::int64_t crossing_ns = 0;
+  bool found = false;
+  for (const VisualObservation * obs : group) {
+    const auto view = submap_for_stamp(views, static_cast<double>(obs->stamp_ns) * 1.0e-9);
+    if (!view.has_value()) {
+      continue;  // inter-submap gap: not usable as a crossing endpoint
+    }
+    if (prev_view.has_value() && *view != *prev_view) {
+      crossing_ns = prev_obs->stamp_ns + (obs->stamp_ns - prev_obs->stamp_ns) / 2;
+      found = true;
+      break;
+    }
+    prev_view = *view;
+    prev_obs = obs;
+  }
+  if (!found) {
+    return group;  // single-submap track: nothing to trim around
+  }
+  const auto limit_ns = static_cast<std::int64_t>(span_s * 1.0e9);
+  std::vector<const VisualObservation *> kept;
+  kept.reserve(group.size());
+  for (const VisualObservation * obs : group) {
+    if (std::llabs(obs->stamp_ns - crossing_ns) <= limit_ns) {
+      kept.push_back(obs);
+    }
+  }
+  return kept;
 }
 
 // Thin a long track down to `max_obs` evenly spaced observations. First and last
@@ -415,9 +464,12 @@ Stats build_visual_factors(
   std::vector<gtsam::NonlinearFactor::shared_ptr> & out)
 {
   const auto calibration = normalized_calibration();
+  // The seed gate width comes from Params (issue #18): 3 sigma against a
+  // scan-matched trajectory, wider in camera-only mode where the composed
+  // per-frame poses carry drift-level error.
   const gtsam::TriangulationParameters seed_params(
     kRankTolerance, /*enableEPI=*/false, kLandmarkDistanceThreshold,
-    kOutlierSigmas * params.obs_sigma);
+    params.seed_outlier_sigmas * params.obs_sigma);
 
   const auto factor_params = make_smart_projection_params();
   const auto noise = gtsam::noiseModel::Isotropic::Sigma(2, params.obs_sigma);
@@ -437,8 +489,11 @@ Stats build_visual_factors(
 
   std::unordered_map<std::size_t, VoxelSet> voxel_cache;  // per call, per submap
   for (const TrackKey & key : keys) {
-    const std::vector<TrackObs> track =
-      associate(subsample(groups.at(key), params.max_obs_per_track), t_lidar_cams, submaps);
+    const std::vector<TrackObs> track = associate(
+      subsample(
+        trim_to_crossing(groups.at(key), params.crossing_trim_span_s, submaps),
+        params.max_obs_per_track),
+      t_lidar_cams, submaps);
     if (distinct_views(track) < 2) {
       ++stats.tracks_single_submap;  // constrains nothing: one key only
       continue;

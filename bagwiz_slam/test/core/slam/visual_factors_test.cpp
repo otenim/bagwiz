@@ -535,6 +535,84 @@ TEST(VisualFactorsTest, FactorsImproveAPerturbedPose)
   EXPECT_LT(rotation_error, 0.5 * M_PI / 180.0);
 }
 
+// Issue #18 fix: drift accumulates along a track's life, so the observations
+// FAR from the submap crossing carry the largest composed-pose error. Corrupt
+// exactly those (the endpoint frames at 0 s and 3 s), leaving the
+// near-crossing observations exact: untrimmed, the seed gate rejects every
+// track on its worst observation; with the crossing trim the corrupted
+// endpoints never reach the seed and every factor builds from the exact
+// near-crossing geometry.
+TEST(VisualFactorsTest, CrossingTrimExcludesFarObservationsFromTheSeed)
+{
+  Scene scene = make_scene(wall_landmarks(), wall_landmarks(), false);
+  for (auto & obs : scene.observations) {
+    if (obs.stamp_ns == 0 || obs.stamp_ns == 3'000'000'000) {
+      obs.x += 0.05;  // 50 sigma: far beyond any plausible seed gate
+    }
+  }
+  visual::Params params;
+  params.gate_distance = 0.0;
+
+  std::vector<gtsam::NonlinearFactor::shared_ptr> untrimmed;
+  const visual::Stats before = build(scene, params, untrimmed);
+  EXPECT_EQ(before.factors, 0u);
+  EXPECT_EQ(before.tracks_triangulation_failed, 20u);
+
+  // Crossing stamp = midpoint of the last submap-A observation (1.0 s) and
+  // the first submap-B observation (2.0 s) = 1.5 s; +/-1.1 s keeps the
+  // 0.5/1.0/2.0/2.5 s observations and excludes the corrupted endpoints.
+  params.crossing_trim_span_s = 1.1;
+  std::vector<gtsam::NonlinearFactor::shared_ptr> trimmed;
+  const visual::Stats after = build(scene, params, trimmed);
+  EXPECT_EQ(after.factors, 20u);
+  EXPECT_EQ(after.tracks_triangulation_failed, 0u);
+  EXPECT_EQ(trimmed.size(), 20u);
+}
+
+// An over-tight trim degrades gracefully: a +/-0.6 s window around the 1.5 s
+// crossing keeps only the 1.0/2.0 s observations — two distinct submaps but
+// below kMinObservations — so the track falls into the existing too-short
+// gate rather than crashing or building a two-observation factor.
+TEST(VisualFactorsTest, OverTightTrimFallsIntoTheExistingGates)
+{
+  const Scene scene = make_scene(wall_landmarks(), wall_landmarks(), false);
+  visual::Params params;
+  params.gate_distance = 0.0;
+  params.crossing_trim_span_s = 0.6;
+  std::vector<gtsam::NonlinearFactor::shared_ptr> factors;
+  const visual::Stats stats = build(scene, params, factors);
+  EXPECT_EQ(stats.factors, 0u);
+  EXPECT_EQ(stats.tracks_too_short, 20u);
+}
+
+// Issue #18 fix: the seed gate is configurable because a camera-only
+// per-frame trajectory carries drift-level error the LiDAR-calibrated
+// 3-sigma default misreads as outliers. A 0.25 m rigid offset on submap B
+// puts every crossing track's worst residual past 3 sigma (the weakest
+// track's is ~5) but well under 30: the default rejects everything, the
+// relaxed camera-only seed admits it.
+TEST(VisualFactorsTest, SeedOutlierSigmasRelaxesTheGate)
+{
+  Scene scene = make_scene(wall_landmarks(), wall_landmarks(), false);
+  Eigen::Isometry3d drifted = scene.views.back().T_world_origin;
+  drifted.translation() += Eigen::Vector3d(0.0, 0.25, 0.0);
+  scene.views.back().T_world_origin = drifted;
+
+  visual::Params params;
+  params.gate_distance = 0.0;
+
+  std::vector<gtsam::NonlinearFactor::shared_ptr> strict;
+  const visual::Stats before = build(scene, params, strict);
+  EXPECT_EQ(before.factors, 0u);
+  EXPECT_EQ(before.tracks_triangulation_failed, 20u);
+
+  params.seed_outlier_sigmas = 30.0;
+  std::vector<gtsam::NonlinearFactor::shared_ptr> relaxed;
+  const visual::Stats after = build(scene, params, relaxed);
+  EXPECT_EQ(after.factors, 20u);
+  EXPECT_EQ(after.tracks_triangulation_failed, 0u);
+}
+
 // Issue #18 diagnosis instrumentation: when the SCENE ITSELF carries an
 // inter-submap pose error (unlike FactorsImproveAPerturbedPose, which
 // perturbs only the optimizer's initial values), the seed triangulation

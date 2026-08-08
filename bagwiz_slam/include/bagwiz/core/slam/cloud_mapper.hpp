@@ -267,6 +267,19 @@ struct CloudMapperConfig
   // smoother before marginalization. Ignored unless camera_only.
   int visual_max_window_keyframes = 10;
 
+  // Camera-only visual-constraint seeding (issue #18). The VIO trajectory the
+  // observations are composed against drifts span-proportionally (~2-4% of
+  // distance on the reference bag), so an untrimmed crossing track's seed
+  // residual reads ~100x obs_sigma — the LiDAR-calibrated 3-sigma gate then
+  // rejects every crossing track and camera-only runs build zero factors.
+  // Trim each crossing track to +/-visual_crossing_trim_span seconds around
+  // its submap-crossing stamp (drift shrinks with the span; measured ~18
+  // sigma median at 0.5 s) and widen the seed gate to
+  // visual_seed_outlier_sigmas. Both ignored unless camera_only — the LiDAR
+  // path keeps its scan-matched trajectory and validated 3-sigma seed.
+  double visual_crossing_trim_span = 0.5;  // s
+  double visual_seed_outlier_sigmas = 30.0;
+
   // Number of CPU threads passed to GLIM and to the scan-matching endpoint
   // fill's per-registration work (covariance estimation + GICP
   // correspondences). Must be positive. 1 is the deterministic path.
