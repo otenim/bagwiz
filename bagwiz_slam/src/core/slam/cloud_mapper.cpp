@@ -1467,6 +1467,20 @@ struct CloudMapper::Impl
       "single-submap, %zu too-short, %zu untriangulable, %zu unsupported by LiDAR) in %.1fs",
       stats.factors, stats.tracks_total, views.size(), stats.tracks_single_submap,
       stats.tracks_too_short, stats.tracks_triangulation_failed, stats.tracks_gated, build_seconds);
+    if (stats.tracks_triangulation_failed > 0) {
+      // Issue #18 diagnosis: why triangulateSafe rejected, and whether the
+      // per-submap subsets still triangulate (all-ok = the submaps' poses
+      // disagree; a failed subset is indeterminate — see visual::Stats).
+      BAGWIZ_LOG_INFO(
+        kLogger,
+        "untriangulable breakdown: %zu degenerate, %zu behind-camera, %zu outlier, %zu far; "
+        "per-submap subsets: %zu all-ok (inter-submap inconsistency), %zu degenerate-only "
+        "(no baseline within a side), %zu non-degenerate (per-frame trajectory error), "
+        "%zu too small to judge",
+        stats.tri_degenerate, stats.tri_behind_camera, stats.tri_outlier, stats.tri_far_point,
+        stats.fail_subsets_all_ok, stats.fail_subset_degenerate, stats.fail_subset_nondegenerate,
+        stats.fail_subset_too_small);
+    }
     return stats.factors;
   }
 

@@ -535,6 +535,64 @@ TEST(VisualFactorsTest, FactorsImproveAPerturbedPose)
   EXPECT_LT(rotation_error, 0.5 * M_PI / 180.0);
 }
 
+// Issue #18 diagnosis instrumentation: when the SCENE ITSELF carries an
+// inter-submap pose error (unlike FactorsImproveAPerturbedPose, which
+// perturbs only the optimizer's initial values), the seed triangulation
+// composes each observation's ray through its own submap's wrong
+// T_world_origin, the rays stop intersecting, and every crossing track fails
+// the gate. The failure-status counters must attribute the loss, and the
+// per-submap-subset discriminator must recognize it as inter-submap
+// inconsistency: each submap's own observations still triangulate (their
+// shared origin error cancels), only the joint set fails.
+TEST(VisualFactorsTest, InterSubmapPoseErrorFailsCrossingTracksAndIsAttributed)
+{
+  Scene scene = make_scene(wall_landmarks(), wall_landmarks(), true);
+  // 0.5 m sideways + 3 deg yaw on submap B: far beyond the 3-sigma
+  // reprojection gate at these distances, small enough that nothing goes
+  // behind a camera.
+  Eigen::Isometry3d drifted = scene.views.back().T_world_origin;
+  drifted.translation() += Eigen::Vector3d(0.0, 0.5, 0.0);
+  drifted.linear() =
+    Eigen::AngleAxisd(3.0 * M_PI / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix() *
+    drifted.linear();
+  scene.views.back().T_world_origin = drifted;
+
+  visual::Params params;
+  params.gate_distance = 0.0;  // isolate triangulation from the LiDAR gate
+
+  std::vector<gtsam::NonlinearFactor::shared_ptr> factors;
+  const visual::Stats stats = build(scene, params, factors);
+
+  EXPECT_EQ(stats.factors, 0u);
+  EXPECT_EQ(stats.tracks_triangulation_failed, 20u);
+  // Every failure carries exactly one triangulateSafe status.
+  EXPECT_EQ(
+    stats.tri_degenerate + stats.tri_behind_camera + stats.tri_outlier + stats.tri_far_point, 20u);
+  // The discriminator: both submaps' own subsets are self-consistent, so
+  // every failure is attributed to inter-submap inconsistency.
+  EXPECT_EQ(stats.fail_subsets_all_ok, 20u);
+  EXPECT_EQ(stats.fail_subset_degenerate, 0u);
+  EXPECT_EQ(stats.fail_subset_nondegenerate, 0u);
+  EXPECT_EQ(stats.fail_subset_too_small, 0u);
+}
+
+// The unperturbed control: with exact geometry nothing fails, so every new
+// counter stays zero (they only ever count failed tracks).
+TEST(VisualFactorsTest, ExactSceneLeavesTheFailureCountersZero)
+{
+  const Scene scene = make_scene(wall_landmarks(), wall_landmarks(), true);
+  const visual::Params params;
+  std::vector<gtsam::NonlinearFactor::shared_ptr> factors;
+  const visual::Stats stats = build(scene, params, factors);
+  EXPECT_EQ(stats.tracks_triangulation_failed, 0u);
+  EXPECT_EQ(
+    stats.tri_degenerate + stats.tri_behind_camera + stats.tri_outlier + stats.tri_far_point, 0u);
+  EXPECT_EQ(
+    stats.fail_subsets_all_ok + stats.fail_subset_degenerate + stats.fail_subset_nondegenerate +
+      stats.fail_subset_too_small,
+    0u);
+}
+
 // The camera-only sparse-map export: one landmark per qualifying track,
 // re-triangulated at the submaps' poses. Track selection mirrors factor
 // construction, so the same scene yields exactly the 20 wall points — in

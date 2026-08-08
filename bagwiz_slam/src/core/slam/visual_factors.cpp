@@ -19,7 +19,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -267,6 +269,62 @@ gtsam::TriangulationResult triangulate_world(
   return gtsam::triangulateSafe(world_cams, measurements, params);
 }
 
+// Issue #18 diagnosis: attribute one triangulateSafe failure. Counts the
+// failure status, then re-triangulates each submap's own observation subset
+// with the same params — within one subset every ray composes through the
+// SAME T_world_origin, so an inter-submap pose error cancels out of the
+// subset geometry. Every subset valid while the joint set failed therefore
+// confirms the submaps' poses disagree; see the Stats comment for how the
+// other two subset outcomes read. Runs only on failed tracks, so it costs
+// nothing while triangulation is healthy.
+void classify_triangulation_failure(
+  const std::vector<TrackObs> & track, std::span<const SubmapView> views,
+  const gtsam::Cal3_S2::shared_ptr & calibration, const gtsam::TriangulationParameters & params,
+  const gtsam::TriangulationResult & result, Stats & stats)
+{
+  if (result.degenerate()) {
+    ++stats.tri_degenerate;
+  } else if (result.behindCamera()) {
+    ++stats.tri_behind_camera;
+  } else if (result.outlier()) {
+    ++stats.tri_outlier;
+  } else {
+    ++stats.tri_far_point;
+  }
+
+  std::map<std::size_t, std::vector<TrackObs>> by_view;
+  for (const TrackObs & obs : track) {
+    by_view[obs.view].push_back(obs);
+  }
+  bool any_too_small = false;
+  bool any_failed = false;
+  bool any_failed_nondegenerate = false;
+  for (const auto & entry : by_view) {
+    const std::vector<TrackObs> & subset = entry.second;
+    if (subset.size() < 2) {
+      any_too_small = true;
+      continue;
+    }
+    const gtsam::TriangulationResult subset_result =
+      triangulate_world(subset, views, calibration, params);
+    if (!subset_result.valid()) {
+      any_failed = true;
+      if (!subset_result.degenerate()) {
+        any_failed_nondegenerate = true;
+      }
+    }
+  }
+  if (any_too_small) {
+    ++stats.fail_subset_too_small;
+  } else if (any_failed_nondegenerate) {
+    ++stats.fail_subset_nondegenerate;
+  } else if (any_failed) {
+    ++stats.fail_subset_degenerate;
+  } else {
+    ++stats.fail_subsets_all_ok;
+  }
+}
+
 // Whether the gate has host geometry to judge this submap with at all. A
 // gtsam_points cloud can be GPU-resident — num_points > 0 while the host
 // `points` array is null — and an empty cloud supports nothing anywhere, so
@@ -394,6 +452,7 @@ Stats build_visual_factors(
       triangulate_world(track, submaps, calibration, seed_params);
     if (!point.valid()) {
       ++stats.tracks_triangulation_failed;
+      classify_triangulation_failure(track, submaps, calibration, seed_params, point, stats);
       continue;
     }
     if (
