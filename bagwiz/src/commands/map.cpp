@@ -131,6 +131,16 @@ private:
         "Default: derived from that topic's median frame interval. Camera-only mode "
         "only (rejected with --pcd).")
       ->needs(cam_opt);
+    sub
+      ->add_flag(
+        "--visual-final-ba", slam_args_.visual_final_ba,
+        "Camera-only final batch bundle adjustment (off by default): after the global "
+        "optimization, re-estimate every keyframe pose against ALL visual observations "
+        "and the IMU stream in one batch solve (projection factors plus IMU "
+        "preintegration factors), refining the trajectory's first and last keyframes, "
+        "which the windowed odometry leaves weakest, and re-triangulate the sparse "
+        "landmark map at the refined poses. Camera-only mode only (rejected with --pcd).")
+      ->needs(cam_opt);
     sub->add_option(
       "--cam-info", slam_args_.camera_info_overrides,
       "Explicit CameraInfo topic per camera, as <image_topic>=<info_topic> (several "

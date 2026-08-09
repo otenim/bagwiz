@@ -639,6 +639,28 @@ TEST(ValidateModeFlags, VisualAnchorPeriodAcceptedInCameraOnlyMode)
   EXPECT_TRUE(validate_mode_flags(args).empty());
 }
 
+TEST(ValidateModeFlags, VisualFinalBaRejectedInLidarMode)
+{
+  // The final batch BA refines the camera-only keyframe trajectory; with
+  // --pcd the LiDAR trajectory is already scan-matched and there is nothing
+  // for it to refine, so refuse it like the other camera-only flags.
+  auto args = make_args();
+  args.cam_topics = {"/cam0/image_raw"};
+  args.visual_final_ba = true;
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("--visual-final-ba"), std::string::npos) << error;
+}
+
+TEST(ValidateModeFlags, VisualFinalBaAcceptedInCameraOnlyMode)
+{
+  auto args = make_args();
+  args.cloud_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  args.remove_dynamic = false;
+  args.visual_final_ba = true;
+  EXPECT_TRUE(validate_mode_flags(args).empty());
+}
+
 TEST(ValidateModeFlags, CameraOnlyWithoutImuIsAnError)
 {
   auto args = make_args();

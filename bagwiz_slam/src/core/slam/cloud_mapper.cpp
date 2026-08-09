@@ -23,8 +23,9 @@
 #include "bagwiz/core/slam/scan_match_fill.hpp"
 #include "bagwiz/core/slam/warmup_fill.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
-#include "visual_factors.hpp"   // NOLINT(build/include_subdir) src-local shared header
-#include "visual_odometry.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "visual_factors.hpp"     // NOLINT(build/include_subdir) src-local shared header
+#include "visual_odometry.hpp"    // NOLINT(build/include_subdir) src-local shared header
+#include "visual_refinement.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -625,6 +626,23 @@ struct CloudMapper::Impl
   std::mutex visual_mutex;
   std::vector<VisualObservation> visual_observations;
 
+  // Camera-only mode with config.visual_final_ba only: the raw IMU stream,
+  // buffered so the finish()-time final batch BA can build its IMU factors
+  // (see visual_refinement.hpp). Appended under camera_feed_mutex by
+  // consume_imu_camera_only() and consumed only in finish(), after every
+  // producer thread joined — the same contract as visual_observations.
+  std::vector<BackpropImu> camera_only_imu_log;
+
+  // Camera-only mode with config.visual_final_ba only: the odometry's own
+  // per-keyframe state estimates (v_world_imu, imu_bias), captured when the
+  // VIO marginalizes the keyframe out of its window. The refinement seeds its
+  // velocity/bias states from these (see RefinementKeyframe::has_state_seed) —
+  // zero-seeded biases were measured to warp the whole trajectory on real
+  // IMUs (a 0.1+ m/s^2 bias cannot be re-derived within the walk budget).
+  // Keyed by frame stamp (ns); same thread contract as camera_only_imu_log.
+  std::map<std::int64_t, std::pair<Eigen::Vector3d, Eigen::Matrix<double, 6, 1>>>
+    camera_only_state_seeds;
+
   // Camera-only mode only: serializes the visual-inertial feed. insert_imu()
   // and insert_visual_observations() may arrive on different threads (the bag
   // reader and the per-camera frontend workers), but VisualInertialOdometry
@@ -811,6 +829,9 @@ struct CloudMapper::Impl
     double stamp, const Eigen::Vector3d & acc, const Eigen::Vector3d & gyro)
   {
     const std::lock_guard<std::mutex> lock(camera_feed_mutex);
+    if (config.visual_final_ba) {
+      camera_only_imu_log.push_back(BackpropImu{stamp, acc, gyro});
+    }
     consume_imu(stamp, acc, gyro);
   }
 
@@ -833,9 +854,22 @@ struct CloudMapper::Impl
     // and self-clearing, so tolerated rather than chunked.
     vio->insert_visual_observations(observations, marginalized);
     for (const auto & frame : marginalized) {
+      note_state_seed(frame);
       feed_sub_mapping(frame);
     }
     drain_submaps();
+  }
+
+  // Capture the odometry's per-keyframe velocity/bias estimates for the
+  // finish()-time refinement's state seeds (camera_only_state_seeds; see its
+  // comment). Cheap; gated on visual_final_ba like the IMU log.
+  void note_state_seed(const glim::EstimationFrame::ConstPtr & frame)
+  {
+    if (!config.visual_final_ba) {
+      return;
+    }
+    camera_only_state_seeds[static_cast<std::int64_t>(std::llround(frame->stamp * 1e9))] =
+      std::make_pair(frame->v_world_imu, frame->imu_bias);
   }
 
   // Heartbeat twin of consume_visual for a frame with no observations: no
@@ -847,6 +881,7 @@ struct CloudMapper::Impl
     std::vector<glim::EstimationFrame::ConstPtr> marginalized;
     vio->note_frame(camera_id, stamp_ns, marginalized);
     for (const auto & frame : marginalized) {
+      note_state_seed(frame);
       feed_sub_mapping(frame);
     }
     drain_submaps();
@@ -1536,6 +1571,9 @@ struct CloudMapper::Impl
       // to reach a finalized submap, so the LAST one flushed here is the cooldown
       // anchor. cooldown_note_frame overwrites, so it keeps that latest frame.
       cooldown_note_frame(frame);
+      // The tail keyframes surface only here (never marginalized mid-stream):
+      // capture their velocity/bias seeds for the refinement as well.
+      note_state_seed(frame);
       feed_sub_mapping(frame);
     }
     // This drain only sees submaps the flushed remaining frames newly completed —
@@ -1628,6 +1666,88 @@ struct CloudMapper::Impl
       views.size());
   }
 
+  // Camera-only final batch BA (config.visual_final_ba): re-estimate EVERY
+  // keyframe state (pose/velocity/bias) against ALL buffered visual
+  // observations and the buffered raw IMU stream in one batch LM solve of the
+  // odometry window solver's graph at full-trajectory scale (see
+  // visual_refinement.hpp for why the trajectory endpoints need it and why
+  // the IMU factors are what make the solve well-posed). The trajectory is
+  // overwritten with the refined poses (same stamps) and the sparse landmark
+  // map is re-triangulated at them, replacing export_sparse_landmarks()'
+  // output.
+  void refine_camera_only_trajectory(CloudMap & result)
+  {
+    // The same keyframe set fill_trajectory() exports, with the same dedupe
+    // (last writer wins on a stamp collision), stamp-ascending.
+    std::map<std::int64_t, std::pair<double, Eigen::Isometry3d>> poses;
+    for (const auto & entry : entries) {
+      if (!entry.submap) {
+        continue;
+      }
+      const Eigen::Isometry3d & T_world_origin = entry.submap->T_world_origin;
+      for (const auto & ref : entry.frames) {
+        poses[static_cast<std::int64_t>(std::llround(ref.stamp * 1e9))] =
+          std::make_pair(ref.stamp, T_world_origin * ref.T_origin_frame);
+      }
+    }
+    std::vector<vio::RefinementKeyframe> keyframes;
+    keyframes.reserve(poses.size());
+    for (const auto & [stamp_ns, stamp_and_pose] : poses) {
+      vio::RefinementKeyframe keyframe{stamp_ns, stamp_and_pose.second};
+      // Attach the odometry's own velocity/bias estimates as the state seeds
+      // (see RefinementKeyframe::has_state_seed). Keyframes missing from the
+      // seed log (never marginalized nor flushed — should not happen for an
+      // exported pose) fall back to the FD velocity and zero bias.
+      const auto seed_it = camera_only_state_seeds.find(stamp_ns);
+      if (seed_it != camera_only_state_seeds.end()) {
+        keyframe.v_world = seed_it->second.first;
+        keyframe.bias = seed_it->second.second;
+        keyframe.has_state_seed = true;
+      }
+      keyframes.push_back(keyframe);
+    }
+
+    vio::RefinementConfig refine_config;
+    refine_config.t_lidar_cams.reserve(config.visual_cameras.size());
+    for (const SensorTransform & extrinsic : config.visual_cameras) {
+      refine_config.t_lidar_cams.push_back(detail::to_isometry(extrinsic));
+    }
+    // camera_only requires t_lidar_imu (validated), = T_cam0_imu in this mode;
+    // the refinement's ImuFactor states live in the IMU frame.
+    refine_config.t_lidar_imu = detail::to_isometry(*config.t_lidar_imu);
+    refine_config.obs_sigma = config.visual_obs_sigma;
+    refine_config.max_obs_per_track = config.visual_max_obs_per_track;
+
+    // finish() runs after every producer thread joined, so visual_observations
+    // and camera_only_imu_log have no concurrent writer here (same contract as
+    // build_visual_factors_from_buffer).
+    const vio::RefinementResult refined = vio::refine_keyframe_poses(
+      visual_observations, camera_only_imu_log, keyframes, refine_config);
+    result.visual_refine_factor_count = static_cast<std::int64_t>(refined.factors);
+
+    // Same stamps, refined poses: trajectory size and timestamps are identical
+    // to the unrefined export (to_pose re-derives timestamp_ns from the second
+    // value, exactly as fill_trajectory() did).
+    result.trajectory.clear();
+    result.trajectory.reserve(keyframes.size());
+    for (std::size_t i = 0; i < keyframes.size(); ++i) {
+      const double stamp_sec = poses.at(keyframes[i].stamp_ns).first;
+      result.trajectory.push_back(to_pose(stamp_sec, refined.refined[i]));
+    }
+    result.points.clear();
+    result.colors.clear();
+    result.points.reserve(refined.landmarks.size());
+    result.colors.reserve(refined.landmarks.size());
+    for (const visual::Landmark & landmark : refined.landmarks) {
+      result.points.push_back(landmark.point);
+      result.colors.push_back(landmark.rgb);
+    }
+    BAGWIZ_LOG_INFO(
+      kLogger,
+      "camera-only final BA: %zu factors over %zu keyframes (%zu landmarks re-triangulated)",
+      refined.factors, keyframes.size(), refined.landmarks.size());
+  }
+
   // Heavy step: global matching-based iSAM2 optimization, then the trajectory,
   // window-fill, and map export. The optimization updates each held submap's
   // T_world_origin in place (GlobalMapping::update_submaps). With the injector
@@ -1653,6 +1773,18 @@ struct CloudMapper::Impl
     // from "nothing to fill" (warmup_disable() sets this and clears
     // warmup.active).
     result.warmup_overflowed = warmup.overflowed;
+    // The camera-only final BA refines the whole keyframe trajectory against
+    // ALL visual observations (its main win is the endpoints the odometry and
+    // the thin global layer leave weakest) and re-triangulates the landmark
+    // map at the refined poses, so the export phase below skips its own
+    // landmark pass when it runs. It must come after the global optimize():
+    // the globally-optimized trajectory is its seed.
+    if (config.camera_only && config.visual_final_ba) {
+      const auto refine_start = std::chrono::steady_clock::now();
+      refine_camera_only_trajectory(result);
+      result.visual_refine_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - refine_start).count();
+    }
     // Dynamic-point removal runs after the window fills on purpose: the fills
     // only mutate the trajectory, never `entries`, so the removal still covers
     // 100% of what fill_map reads while the fills' scan-match targets stay
@@ -1665,7 +1797,9 @@ struct CloudMapper::Impl
     }
     const auto export_start = std::chrono::steady_clock::now();
     if (config.camera_only) {
-      export_sparse_landmarks(result);
+      if (!config.visual_final_ba) {
+        export_sparse_landmarks(result);
+      }
     } else {
       fill_map(result);
     }

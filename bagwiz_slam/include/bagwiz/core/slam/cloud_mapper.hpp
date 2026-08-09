@@ -280,6 +280,22 @@ struct CloudMapperConfig
   double visual_crossing_trim_span = 0.5;  // s
   double visual_seed_outlier_sigmas = 30.0;
 
+  // Camera-only final batch bundle adjustment (map slam --visual-final-ba).
+  // After the global optimization, finish() re-estimates EVERY keyframe state
+  // (pose/velocity/bias) against ALL buffered visual observations and the raw
+  // IMU stream buffered during the run in one batch LM solve of the odometry
+  // window solver's graph at full-trajectory scale (core/slam/
+  // visual_refinement.hpp: IMU preintegration factors between consecutive
+  // keyframes, a bias random walk, smart rig-projection factors), seeded from
+  // the globally-optimized trajectory and the odometry's per-keyframe
+  // velocity/bias estimates.
+  // This targets the trajectory endpoints, which the odometry and the thin
+  // global layer leave weakest: the first keyframes (pinned to the IMU-only
+  // gravity alignment) and the last (young tracks only, never re-solved with
+  // future data). The sparse landmark map is then re-triangulated at the
+  // refined poses instead of the odometry-era ones. Ignored unless camera_only.
+  bool visual_final_ba = false;
+
   // Number of CPU threads passed to GLIM and to the scan-matching endpoint
   // fill's per-registration work (covariance estimation + GICP
   // correspondences). Must be positive. 1 is the deterministic path.
@@ -391,6 +407,12 @@ struct CloudMap
   // counts 0 outside camera-only mode.
   std::int64_t visual_dropped_observation_count = 0;
   std::int64_t visual_odom_keyframe_count = 0;
+
+  // Camera-only final batch BA diagnostics (config.visual_final_ba): how many
+  // smart factors the refinement built over the keyframe trajectory, and its
+  // wall-clock. Both 0 unless the refinement ran.
+  std::int64_t visual_refine_factor_count = 0;
+  double visual_refine_seconds = 0.0;
 
   // Wall-clock breakdown of finish(), for the command layer's log line: the
   // global iSAM2 optimization, the scan-matching endpoint fill (start + end

@@ -65,6 +65,11 @@ std::string validate_mode_flags(const MapSlamArgs & args)
       return "--visual-anchor-period sets the camera-only grouping's anchor window and "
              "has no effect with --pcd (the LiDAR modes group nothing by camera period)";
     }
+    if (args.visual_final_ba) {
+      return "--visual-final-ba refines the camera-only keyframe trajectory in a final "
+             "batch bundle adjustment and has no effect with --pcd (the LiDAR trajectory "
+             "is already scan-matched)";
+    }
     return "";  // LiDAR mode: every camera/feature flag keeps its existing meaning
   }
   if (!args.color_topics.empty()) {
@@ -159,6 +164,9 @@ core::slam::CloudMapperConfig build_mapper_config(
   // exports a sparse landmark map. validate_mode_flags (called first by
   // run_map_slam) guarantees --cam and --imu are set in this mode.
   config.camera_only = args.cloud_topic.empty();
+  // The final batch BA is meaningful only in that mode (validate_mode_flags
+  // rejects it with --pcd).
+  config.visual_final_ba = args.visual_final_ba;
   // Resolved by the caller — --visual-anchor-period or the anchor camera
   // topic's derived median frame period (issue #17); the mapper ignores it
   // outside camera-only mode.
@@ -341,6 +349,13 @@ void log_mapping_summary(
         "topic, or the benign case: other cameras' frames before its first / after its "
         "last frame at the bag's edges)",
         map.visual_dropped_observation_count);
+    }
+    if (args.visual_final_ba) {
+      BAGWIZ_LOG_INFO(
+        logger,
+        "Refined the trajectory with the camera-only final batch BA (%" PRId64
+        " factor(s) in %.1fs)",
+        map.visual_refine_factor_count, map.visual_refine_seconds);
     }
   } else {
     BAGWIZ_LOG_INFO(

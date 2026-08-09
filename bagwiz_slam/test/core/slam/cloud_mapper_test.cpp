@@ -1205,6 +1205,73 @@ TEST(CloudMapper, CameraOnlyRunsVisualInertialPipeline)
   }
 }
 
+// Camera-only final batch BA (CloudMapperConfig::visual_final_ba): the
+// finish()-time refinement re-estimates every keyframe state against ALL
+// buffered observations and the buffered IMU stream. Feeding the same input
+// with the flag off and on must yield the same stamp sequence (the refinement
+// overwrites poses only), a ground-truth-following trajectory either way, and
+// a nonzero refined-factor count. NOTE what this harness cannot assert:
+// accuracy IMPROVEMENT. Its scene is a single planar wall at 15 m watched
+// through a deliberately loose obs_sigma — the depth-ambiguous case for
+// monocular batch BA (re-triangulated landmarks can absorb a smooth
+// trajectory warp), on which the refinement trades up to ~0.25 m of pose
+// accuracy against global visual consistency. The accuracy claim is asserted
+// by VisualRefinement.RecoversDegradedEndpoints (non-planar scene, realistic
+// sigma) instead; here the bounds check the refinement stays SANE on
+// degenerate geometry, plus the wiring (stamps preserved, factors emitted,
+// landmarks re-triangulated).
+TEST(CloudMapper, CameraOnlyFinalBaRefinesTrajectory)
+{
+  const std::int64_t motion = kCamOnlyBaseStamp + kCamOnlyMotionStartNs;
+  constexpr int kGroups = 40;  // 4 s of motion
+
+  slam::CloudMapper mapper_off(make_camera_only_config());
+  feed_camera_only_imu(mapper_off, kCamOnlyBaseStamp, motion + kGroups * kCamOnlyPeriodNs);
+  feed_camera_only_motion(mapper_off, 0, kGroups);
+  const slam::CloudMap off = mapper_off.finish();
+
+  slam::CloudMapperConfig config = make_camera_only_config();
+  config.visual_final_ba = true;
+  slam::CloudMapper mapper_on(config);
+  feed_camera_only_imu(mapper_on, kCamOnlyBaseStamp, motion + kGroups * kCamOnlyPeriodNs);
+  feed_camera_only_motion(mapper_on, 0, kGroups);
+  const slam::CloudMap on = mapper_on.finish();
+
+  EXPECT_GT(on.visual_refine_factor_count, 0);
+  EXPECT_EQ(off.visual_refine_factor_count, 0);
+
+  // Same keyframe set, same stamps: the refinement overwrites poses only.
+  ASSERT_EQ(on.trajectory.size(), off.trajectory.size());
+  for (std::size_t i = 0; i < on.trajectory.size(); ++i) {
+    EXPECT_EQ(on.trajectory[i].timestamp_ns, off.trajectory[i].timestamp_ns);
+  }
+  // The refined trajectory still follows the ground truth (the sanity bound
+  // above — on this planar-wall scene the refinement trades up to ~0.25 m for
+  // global visual consistency but must not diverge), and the refined map is
+  // still the re-triangulated landmark set.
+  for (const auto & pose : on.trajectory) {
+    const Eigen::Vector3d p(pose.tx, pose.ty, pose.tz);
+    const Eigen::Vector3d gt = cam_only_gt_pose(pose.timestamp_ns - motion).translation();
+    EXPECT_LT((p - gt).norm(), 0.5) << "stamp=" << pose.timestamp_ns;
+  }
+  ASSERT_FALSE(on.points.empty());
+  EXPECT_EQ(on.colors.size(), on.points.size());
+  const std::vector<Eigen::Vector3d> landmarks = cam_only_wall_landmarks();
+  for (const auto & point : on.points) {
+    ASSERT_TRUE(std::isfinite(point[0]) && std::isfinite(point[1]) && std::isfinite(point[2]));
+    const Eigen::Vector3d p(point[0], point[1], point[2]);
+    double nearest = std::numeric_limits<double>::max();
+    for (const auto & landmark : landmarks) {
+      nearest = std::min(nearest, (p - landmark).norm());
+    }
+    // Looser than the unrefined pipeline test's 0.5 m: the ~0.25 m residual
+    // pose warp's bearing component is amplified into landmark depth by
+    // ~depth^2/baseline at the 15 m wall (same effect
+    // VisualRefinement.RecoversDegradedEndpoints' 1.0 m gate covers).
+    EXPECT_LT(nearest, 1.0);
+  }
+}
+
 // Keyframes whose window solve triangulated no landmarks carry an empty
 // cloud and must never reach SubMapping (GLIM requires a non-empty
 // EstimationFrame::frame). Feed a good phase, then a phase where every group

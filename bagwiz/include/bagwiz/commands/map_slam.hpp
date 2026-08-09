@@ -91,6 +91,20 @@ struct MapSlamArgs
   // (median inter-frame interval). Camera-only mode only: with --pcd the
   // period parameterizes nothing, so validate_mode_flags rejects it.
   std::string visual_anchor_period;
+  // Camera-only final batch bundle adjustment (--visual-final-ba): after the
+  // global optimization, re-estimate every keyframe state (pose/velocity/bias)
+  // against ALL visual observations and the raw IMU stream recorded during the
+  // run in one batch solve of the odometry window solver's graph at
+  // full-trajectory scale (smart projection factors over every track, IMU
+  // preintegration factors between consecutive keyframes, a bias random walk),
+  // seeded from the globally-optimized trajectory and the odometry's
+  // per-keyframe velocity/bias estimates, refining the trajectory endpoints
+  // (the first keyframes pinned to the IMU-only gravity alignment, the last
+  // ones never re-solved with future data) and re-triangulating the landmark
+  // map at the refined poses. Off by default. Camera-only mode only: with
+  // --pcd it would refine nothing (the LiDAR trajectory is scan-matched), so
+  // validate_mode_flags rejects it.
+  bool visual_final_ba = false;
   // Explicit CameraInfo topic overrides, each entry keyed as
   // "<image_topic>=<info_topic>" (--cam-info). Serves both camera roles
   // (color_topics and cam_topics). Cameras without an entry auto-resolve their

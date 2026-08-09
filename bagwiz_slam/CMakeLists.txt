@@ -202,6 +202,7 @@ if(BAGWIZ_WITH_SLAM)
     src/core/slam/visual_odometry_grouping.cpp
     src/core/slam/visual_odometry_window.cpp
     src/core/slam/visual_odometry.cpp
+    src/core/slam/visual_refinement.cpp
     src/core/slam/cuda_device.cpp
     src/core/slam/progress_bar.cpp
   )
@@ -552,6 +553,16 @@ if(BUILD_TESTING)
     ament_add_gtest(bagwiz_slam_scan_match_fill_test test/core/slam/scan_match_fill_test.cpp)
     target_link_libraries(bagwiz_slam_scan_match_fill_test
       bagwiz_slam_glim gtsam_points::gtsam_points gtsam)
+
+    # Final full-trajectory batch BA of the camera-only mode
+    # (CloudMapperConfig::visual_final_ba). Src-local like the visual_odometry
+    # tests above, so it needs the same extra include path.
+    ament_add_gtest(bagwiz_slam_visual_refinement_test
+      test/core/slam/visual_refinement_test.cpp)
+    target_link_libraries(bagwiz_slam_visual_refinement_test
+      bagwiz_slam_glim gtsam_points::gtsam_points gtsam)
+    target_include_directories(bagwiz_slam_visual_refinement_test
+      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/slam)
 
     # GPU variant: only when CUDA SLAM is on. CI never sets BAGWIZ_WITH_SLAM_CUDA,
     # so this never compiles there; on a GPU-less CUDA build the test body
