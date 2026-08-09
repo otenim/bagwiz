@@ -167,8 +167,11 @@ TEST(ParsePeriodNs, RejectsGarbage)
   EXPECT_EQ(parse_period_ns("50min"), std::nullopt);
 }
 
+// cspell:ignore nanhz infhz
 TEST(ParsePeriodNs, RejectsNonFinite)
 {
+  // strtod parses "nan" and "inf", so a frequency spelled with one gets a number
+  // and a unit and would otherwise sail through.
   EXPECT_EQ(parse_period_ns("nanhz"), std::nullopt);
   EXPECT_EQ(parse_period_ns("infhz"), std::nullopt);
   EXPECT_EQ(parse_period_ns("1e400hz"), std::nullopt);
