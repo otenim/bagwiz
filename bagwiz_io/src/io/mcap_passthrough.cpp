@@ -8,7 +8,9 @@
 
 #include "bagwiz/io/mcap_passthrough.hpp"
 
+#include "bagwiz/io/page_cache.hpp"
 #include "mcap_chunk_codec.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "writeback_window.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <mcap/reader.hpp>
 #include <mcap/writer.hpp>
@@ -42,6 +44,9 @@ constexpr std::size_t kMessagePrefixBytes = 2 + 4 + 8 + 8;
 // most a few hundred KB (schema texts); anything larger signals corruption.
 constexpr std::uint64_t kMaxSmallRecordBytes = 64ull * 1024 * 1024;
 constexpr std::size_t kCopySlabBytes = 8ull * 1024 * 1024;
+
+// Only reached on the unparsable-env warning path of the writeback knob.
+constexpr const char * kLogger = "bagwiz.io.mcap";
 
 std::uint16_t read_u16(const std::byte * p)
 {
@@ -423,7 +428,11 @@ private:
         "cannot open pass-through output " + output_.string() + ": " + status.message);
     }
 
-    if (!write_data_section(out)) {
+    // Writeback/cache window over the copy loop below, keeping the output's
+    // dirty backlog bounded on multi-GB verbatim copies.
+    detail::WritebackWindow window(output_, detail::resolve_writeback_interval_bytes(kLogger));
+
+    if (!write_data_section(out, window)) {
       // Late abort (rename verification, malformed chunk interior): remove
       // the partial file so the caller can fall back onto a clean slate.
       out.end();
@@ -433,6 +442,9 @@ private:
     }
     write_summary_section(out);
     out.end();
+    // Flush the bounded dirty remainder and drop the output's pages; the
+    // window also unregisters the file from the exit-time pass.
+    window.finish();
     return true;
   }
 
@@ -462,7 +474,7 @@ private:
     }
   }
 
-  bool write_data_section(mcap::FileWriter & out)
+  bool write_data_section(mcap::FileWriter & out, detail::WritebackWindow & window)
   {
     mcap::McapWriter::writeMagic(out);
     // The recording profile travels with the data; the library string names
@@ -506,6 +518,7 @@ private:
           ++i;
           break;
       }
+      window.note_offset(out.size());
     }
 
     // Rename verification: every renamed channel's embedded Channel record
@@ -847,6 +860,11 @@ std::optional<McapPassthroughResult> mcap_passthrough_rewrite(
   const std::filesystem::path & input, const std::filesystem::path & output,
   const McapPassthroughEdit & edit, std::string * fallback_reason)
 {
+  // The engine bypasses open_read()/open_write() (it walks the input through
+  // its own ifstream and writes via a raw mcap::FileWriter), so it records
+  // both paths for the exit-time page-cache drop itself; see page_cache.hpp.
+  register_read_file(input);
+  register_written_file(output);
   PassthroughEngine engine(input, output, edit);
   return engine.run(fallback_reason);
 }

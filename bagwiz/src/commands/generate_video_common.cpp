@@ -16,6 +16,7 @@
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/pointcloud/projector_helpers.hpp"
 #include "bagwiz/core/tf/tf_buffer_loader.hpp"
+#include "bagwiz/io/page_cache.hpp"
 #include "bagwiz/io/topics.hpp"
 
 #include <opencv2/core.hpp>
@@ -474,6 +475,10 @@ std::string finalize_video_output(
       return "could not move output into place: " + copy_ec.message();
     }
   }
+  // Record the finished video for the exit-time page-cache drop; the encoder
+  // lives in bagwiz_video, which the layering rule keeps out of bagwiz_io, so
+  // the registration happens here at the finalize step.
+  io::register_written_file(output_path);
   return "";
 }
 
