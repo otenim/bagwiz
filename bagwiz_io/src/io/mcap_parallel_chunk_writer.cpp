@@ -116,7 +116,7 @@ public:
       throw std::runtime_error(
         "mcap writer open failed for " + path.string() + ": " + status.message);
     }
-    // Writeback/cache window over the output file; note_offset() calls from
+    // Writeback window over the output file; note_offset() calls from
     // the sequencer keep its dirty backlog bounded. Built only after open()
     // because the window opens its own management fd on the file.
     writeback_window_.emplace(path, resolve_writeback_interval_bytes(kLogger));
@@ -209,8 +209,7 @@ public:
     mcap::McapWriter::write(out_, mcap::DataEnd{0});
     write_summary_section();
     out_.end();
-    // Flush the bounded dirty remainder and drop the output's pages; the
-    // window also unregisters the file from the exit-time pass.
+    // Flush the bounded dirty remainder of the output.
     writeback_window_->finish();
     closed_ = true;
   }

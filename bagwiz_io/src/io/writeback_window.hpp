@@ -17,8 +17,7 @@
 namespace bagwiz::io::detail
 {
 
-// Bounds the dirty-page backlog of a sequentially written output file and
-// hands its pages back to the kernel behind the write position.
+// Bounds the dirty-page backlog of a sequentially written output file.
 //
 // Without this, a bag rewrite can leave its whole output sitting dirty in the
 // page cache — the default dirty ratio scales with RAM, so on a host with
@@ -26,14 +25,10 @@ namespace bagwiz::io::detail
 // pages both inflate buff/cache and set up a long writeback stall later.
 // note_offset() is called with the current file offset after each write;
 // every time a further `interval_bytes` have been written, the window issues
-// sync_file_range(SYNC_FILE_RANGE_WRITE) for the interval just completed
-// (starting writeback without waiting for it) and posix_fadvise(DONTNEED) for
-// the interval before that, which has had a full interval of writeback time.
-// finish() waits for the bounded remainder (SYNC_FILE_RANGE_WAIT_AFTER — a
-// couple of intervals at most, so the wait stays short) and drops the whole
-// file. The DONTNEED steps honor page_cache_drop_enabled()
-// (BAGWIZ_PAGE_CACHE_DROP): with the drop disabled, the window only paces
-// writeback and finish() reduces to closing the fd.
+// sync_file_range(SYNC_FILE_RANGE_WRITE) for the interval just completed,
+// starting writeback without waiting for it. finish() waits for the bounded
+// remainder (SYNC_FILE_RANGE_WAIT_AFTER — a couple of intervals at most, so
+// the wait stays short).
 //
 // The window needs no access to the writer's own fd: it opens a separate
 // management fd on the path, and page-cache state is per-inode. Every
@@ -45,8 +40,8 @@ class WritebackWindow
 public:
   WritebackWindow(const std::filesystem::path & path, std::uint64_t interval_bytes) noexcept;
   // Closes the management fd. Deliberately does NOT finish(): on an error
-  // path the output is incomplete, and the exit-time drop_registered_file_caches()
-  // pass remains responsible for the file.
+  // path the output is incomplete, so there is no bounded remainder worth
+  // waiting for.
   ~WritebackWindow();
 
   WritebackWindow(const WritebackWindow &) = delete;
@@ -54,29 +49,24 @@ public:
   WritebackWindow(WritebackWindow &&) = delete;
   WritebackWindow & operator=(WritebackWindow &&) = delete;
 
-  // Records that the bytes below `offset` have been written, and issues the
-  // sync/drop pair for every interval completed since the last call.
+  // Records that the bytes below `offset` have been written, and issues
+  // sync_file_range() for every interval completed since the last call.
   void note_offset(std::uint64_t offset) noexcept;
 
-  // Flushes the bounded remainder, drops the whole file, unregisters it from
-  // the exit-time pass, and closes the fd. Idempotent. When the window is
-  // disabled, the master drop switch is off, or its fd could not be opened,
-  // this is a no-op beyond closing the fd — the registered exit-time drop (if
-  // enabled) remains as the fallback.
+  // Flushes the bounded remainder and closes the fd. Idempotent. When the
+  // window is disabled or its fd could not be opened, this is a no-op beyond
+  // closing the fd.
   void finish() noexcept;
 
 private:
   int fd_ = -1;
-  std::filesystem::path path_;
   std::uint64_t interval_ = 0;
-  std::uint64_t synced_below_ = 0;   // [0, synced_below_): sync_file_range issued
-  std::uint64_t dropped_below_ = 0;  // [0, dropped_below_): DONTNEED issued
+  std::uint64_t synced_below_ = 0;  // [0, synced_below_): sync_file_range issued
   bool finished_ = false;
 };
 
 // Writeback interval for the streaming writers, from
-// BAGWIZ_WRITEBACK_INTERVAL_BYTES. Defaults to 256 MiB; 0 disables the window
-// (outputs are then handled only by the exit-time drop).
+// BAGWIZ_WRITEBACK_INTERVAL_BYTES. Defaults to 256 MiB; 0 disables the window.
 inline std::uint64_t resolve_writeback_interval_bytes(const char * logger)
 {
   constexpr std::int64_t kDefault = 256ll * 1024 * 1024;

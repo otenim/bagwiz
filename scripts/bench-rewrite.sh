@@ -34,11 +34,6 @@ TOPIC="${TOPIC:-/tf_static}"
 BIN="install/$ENV/bagwiz/bin/bagwiz"
 TIMEV=/usr/bin/time
 
-# Timed runs are meant to see a warm OS page cache (the first run warms it);
-# bagwiz's own exit-time cache drop would undo that between invocations, so
-# pin the pre-hygiene behavior to keep the benchmark's warm-cache methodology.
-export BAGWIZ_PAGE_CACHE_DROP=0
-
 [ -f "$BAG" ] || [ -d "$BAG" ] || {
     echo "bench: bag not found: $BAG" >&2
     exit 1
