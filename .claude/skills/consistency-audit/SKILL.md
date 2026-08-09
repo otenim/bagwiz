@@ -51,7 +51,7 @@ stale, regenerate with the `update-codemaps` skill instead.
 
 ## Command → source / doc map
 
-Registered commands: `cam-info`, `check`, `complete`, `convert`, `generate`,
+Registered commands: `cam-info`, `complete`, `convert`, `generate`,
 `joke` (hidden, intentionally undocumented), `ls`, `map`, `tf`, `topic`,
 `traj`, `walk`. Re-derive this list from `bagwiz/src/commands/registry.cpp` /
 `name()` declarations before a full run, since it grows over time.
@@ -59,7 +59,6 @@ Registered commands: `cam-info`, `check`, `complete`, `convert`, `generate`,
 | Command  | Source of truth (.cpp / core)                                                                                                  | Doc                         |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------- |
 | cam-info | `cam_info.cpp`, `cam_info_replace.cpp`, `bagwiz_image/src/core/image/camera_info_resolver.cpp`                                 | `docs/commands/cam-info.md` |
-| check    | `check.cpp`                                                                                                                    | `docs/commands/check.md`    |
 | complete | `completion.cpp`                                                                                                               | `docs/commands/complete.md` |
 | convert  | `convert.cpp`                                                                                                                  | `docs/commands/convert.md`  |
 | generate | `generate.cpp`, `generate_video.cpp`                                                                                           | `docs/commands/generate.md` |

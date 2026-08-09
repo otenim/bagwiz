@@ -155,7 +155,6 @@ add_executable(bagwiz
   src/commands/cam_info_dump.cpp
   src/commands/cam_info_recompute_p.cpp
   src/commands/cam_info_replace.cpp
-  src/commands/check.cpp
   src/commands/completion.cpp
   src/commands/convert.cpp
   src/commands/generate.cpp
