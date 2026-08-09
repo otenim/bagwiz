@@ -14,7 +14,6 @@
 #include "bagwiz/io/message_decompressor.hpp"
 #include "bagwiz/io/metadata_computer.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
-#include "bagwiz/io/page_cache.hpp"
 #include "bagwiz/io/sqlite3_reader.hpp"
 #include "bagwiz/io/sqlite3_writer.hpp"
 
@@ -238,9 +237,6 @@ std::unique_ptr<BagReader> open_read(const std::filesystem::path & path, OpenOpt
     throw std::runtime_error("path does not exist: " + path.string());
   }
 
-  // Record the bag for the exit-time page-cache drop; see page_cache.hpp.
-  register_read_file(path);
-
   const bool is_dir = std::filesystem::is_directory(path, ec);
 
   if (is_dir) {
@@ -353,9 +349,6 @@ ResolvedWriteLayout resolve_write_layout(
 
 std::unique_ptr<BagWriter> open_write(const std::filesystem::path & path, CreateOptions options)
 {
-  // Record the output for the exit-time page-cache drop; see page_cache.hpp.
-  register_written_file(path);
-
   const auto resolved = resolve_write_layout(path, options);
 
   if (resolved.layout == Layout::Directory) {

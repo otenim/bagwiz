@@ -113,8 +113,6 @@ class WritebackWindowTest : public ::testing::Test
 protected:
   void SetUp() override
   {
-    // Deterministic knob state regardless of the ambient environment.
-    env_guard_.emplace("BAGWIZ_PAGE_CACHE_DROP", "1");
     tmp_dir_ = std::filesystem::temp_directory_path() /
                (std::string("bagwiz_writeback_window_test_") +
                 ::testing::UnitTest::GetInstance()->current_test_info()->name());
@@ -123,22 +121,22 @@ protected:
 
   void TearDown() override
   {
-    env_guard_.reset();
     std::error_code ec;
     std::filesystem::remove_all(tmp_dir_, ec);
   }
 
-  std::optional<EnvVarGuard> env_guard_;
   std::filesystem::path tmp_dir_;
 };
 
-TEST_F(WritebackWindowTest, FinishDropsWrittenPages)
+TEST_F(WritebackWindowTest, FinishKeepsWrittenPages)
 {
 #ifdef __linux__
   const auto file = tmp_dir_ / "out.mcap";
   const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
   ASSERT_GE(fd, 0) << std::strerror(errno);
 
+  // The window paces writeback but never evicts: finish() flushes the bounded
+  // remainder and leaves the pages in the cache.
   bagwiz::io::detail::WritebackWindow window(file, kInterval);
   std::vector<char> chunk(kInterval / 4, '\xCD');  // 256 KiB per write
   std::uint64_t written = 0;
@@ -149,11 +147,9 @@ TEST_F(WritebackWindowTest, FinishDropsWrittenPages)
   }
   ASSERT_EQ(::close(fd), 0);
 
-  window.finish();  // waits for the bounded remainder, then drops everything
+  window.finish();  // waits for the bounded remainder
 
-  const double after = resident_fraction(file);
-  ASSERT_GE(after, 0.0);
-  EXPECT_LT(after, 0.05);
+  EXPECT_GT(resident_fraction(file), 0.9);
 #else
   GTEST_SKIP() << "the writeback window is implemented for Linux only";
 #endif
@@ -177,33 +173,7 @@ TEST_F(WritebackWindowTest, ZeroIntervalIsNoOp)
   ASSERT_EQ(::close(fd), 0);
   window.finish();
 
-  // Nothing was synced or dropped: the just-written pages stay resident.
-  EXPECT_GT(resident_fraction(file), 0.9);
-#else
-  GTEST_SKIP() << "the writeback window is implemented for Linux only";
-#endif
-}
-
-TEST_F(WritebackWindowTest, DropDisabledKeepsPages)
-{
-#ifdef __linux__
-  EnvVarGuard off("BAGWIZ_PAGE_CACHE_DROP", "0");
-  const auto file = tmp_dir_ / "out.mcap";
-  const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-  ASSERT_GE(fd, 0) << std::strerror(errno);
-
-  // With the master switch off, the window paces writeback but never drops.
-  bagwiz::io::detail::WritebackWindow window(file, kInterval);
-  std::vector<char> chunk(kInterval / 4, '\xCD');
-  std::uint64_t written = 0;
-  for (int i = 0; i < 16; ++i) {
-    ASSERT_EQ(::write(fd, chunk.data(), chunk.size()), static_cast<ssize_t>(chunk.size()));
-    written += chunk.size();
-    window.note_offset(written);
-  }
-  ASSERT_EQ(::close(fd), 0);
-  window.finish();
-
+  // Nothing was synced: the just-written pages stay resident.
   EXPECT_GT(resident_fraction(file), 0.9);
 #else
   GTEST_SKIP() << "the writeback window is implemented for Linux only";

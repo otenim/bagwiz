@@ -85,7 +85,6 @@ add_library(bagwiz_io
   src/io/message_decompressor.cpp
   src/io/metadata_computer.cpp
   src/io/metadata_yaml.cpp
-  src/io/page_cache.cpp
   src/io/sqlite3_reader.cpp
   src/io/sqlite3_slice_prefetch.cpp
   src/io/sqlite3_slice_schedule.cpp
@@ -249,13 +248,9 @@ if(BUILD_TESTING)
     bagwiz_sqlite3_page_size_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(bagwiz_sqlite3_page_size_test bagwiz_io)
 
-  # Page-cache registry: exercised through the public API, with page residency
-  # measured via mincore(2) so the drop is proven to reach the kernel.
-  ament_add_gtest(bagwiz_page_cache_test test/io/page_cache_test.cpp)
-  target_link_libraries(bagwiz_page_cache_test bagwiz_io)
-
   # The writeback window is a src-local detail class; the test drives it over
-  # a throwaway file and verifies the drop with mincore(2) residency.
+  # a throwaway file and verifies the writeback pacing with mincore(2)
+  # residency.
   ament_add_gtest(bagwiz_writeback_window_test test/io/writeback_window_test.cpp)
   target_include_directories(
     bagwiz_writeback_window_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

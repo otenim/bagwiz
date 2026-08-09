@@ -8,7 +8,6 @@
 
 #include "bagwiz/io/mcap_passthrough.hpp"
 
-#include "bagwiz/io/page_cache.hpp"
 #include "mcap_chunk_codec.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "writeback_window.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
@@ -428,7 +427,7 @@ private:
         "cannot open pass-through output " + output_.string() + ": " + status.message);
     }
 
-    // Writeback/cache window over the copy loop below, keeping the output's
+    // Writeback window over the copy loop below, keeping the output's
     // dirty backlog bounded on multi-GB verbatim copies.
     detail::WritebackWindow window(output_, detail::resolve_writeback_interval_bytes(kLogger));
 
@@ -442,8 +441,7 @@ private:
     }
     write_summary_section(out);
     out.end();
-    // Flush the bounded dirty remainder and drop the output's pages; the
-    // window also unregisters the file from the exit-time pass.
+    // Flush the bounded dirty remainder of the output.
     window.finish();
     return true;
   }
@@ -860,11 +858,6 @@ std::optional<McapPassthroughResult> mcap_passthrough_rewrite(
   const std::filesystem::path & input, const std::filesystem::path & output,
   const McapPassthroughEdit & edit, std::string * fallback_reason)
 {
-  // The engine bypasses open_read()/open_write() (it walks the input through
-  // its own ifstream and writes via a raw mcap::FileWriter), so it records
-  // both paths for the exit-time page-cache drop itself; see page_cache.hpp.
-  register_read_file(input);
-  register_written_file(output);
   PassthroughEngine engine(input, output, edit);
   return engine.run(fallback_reason);
 }
