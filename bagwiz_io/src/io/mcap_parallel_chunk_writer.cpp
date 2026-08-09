@@ -9,6 +9,7 @@
 #include "mcap_parallel_chunk_writer.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include "bagwiz/core/base/logging.hpp"
+#include "writeback_window.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <mcap/writer.hpp>
 
@@ -20,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -114,6 +116,10 @@ public:
       throw std::runtime_error(
         "mcap writer open failed for " + path.string() + ": " + status.message);
     }
+    // Writeback/cache window over the output file; note_offset() calls from
+    // the sequencer keep its dirty backlog bounded. Built only after open()
+    // because the window opens its own management fd on the file.
+    writeback_window_.emplace(path, resolve_writeback_interval_bytes(kLogger));
     mcap::McapWriter::writeMagic(out_);
     mcap::McapWriter::write(out_, mcap::Header{"ros2", "bagwiz"});
 
@@ -203,6 +209,9 @@ public:
     mcap::McapWriter::write(out_, mcap::DataEnd{0});
     write_summary_section();
     out_.end();
+    // Flush the bounded dirty remainder and drop the output's pages; the
+    // window also unregisters the file from the exit-time pass.
+    writeback_window_->finish();
     closed_ = true;
   }
 
@@ -412,6 +421,7 @@ private:
       } else {
         out_.write(job->bytes.data(), job->bytes.size());
       }
+      writeback_window_->note_offset(out_.size());
     }
   }
 
@@ -530,6 +540,7 @@ private:
   const std::size_t max_inflight_;
 
   mcap::FileWriter out_;
+  std::optional<WritebackWindow> writeback_window_;
   bool closed_ = false;
 
   // Caller-thread staging state.

@@ -13,6 +13,7 @@
 #include "bagwiz/core/pointcloud/outlier_removal.hpp"
 #include "bagwiz/core/slam/point_cloud_io.hpp"
 #include "bagwiz/core/slam/progress_bar.hpp"
+#include "bagwiz/io/page_cache.hpp"
 #include "map_slam_threads.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <fmt/core.h>
@@ -322,6 +323,9 @@ bool write_map_outputs(
     BAGWIZ_LOG_ERROR(logger, "write failed: %s", map_path.c_str());
     return false;
   }
+  // Record the map for the exit-time page-cache drop; a multi-GB map.pcd
+  // otherwise lingers in the page cache after the process exits.
+  io::register_written_file(map_path);
   return true;
 }
 
