@@ -1403,32 +1403,6 @@ std::vector<std::string> complete_walk(const CompletionRequest & request)
   return {};
 }
 
-// `check` is a command group for rosbag integrity checks. Its sole subcommand is
-// `broken`. At the subcommand slot (word 1) the only candidate is `broken` (or the
-// implicit help flags for a `-` word). Past it, `broken`'s flags are surfaced for
-// any `-` word; its `-i`/`--input` value is a path that falls through to the
-// shell's file completion.
-//
-//   broken: `check`(0) `broken`(1) -i|--input <bag> [--rm] [--deep]
-std::vector<std::string> complete_check(const CompletionRequest & request)
-{
-  const auto current = current_word(request);
-  if (request.cursor_word == kFirstCommandArgWord) {
-    if (current.starts_with("-")) {
-      return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
-    }
-    return matching({"broken"}, current);
-  }
-
-  if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
-    const auto & sub = request.words[kFirstCommandArgWord];
-    if (sub == "broken") {
-      return matching(with_help({"--deep", "--input", "--rm", "-i"}), current);
-    }
-  }
-  return {};
-}
-
 // `cam-info` is a command group for sensor_msgs/msg/CameraInfo operations. Its
 // subcommands are `replace`, `recompute-p`, and `dump`. At the subcommand slot
 // (word 1) those are the candidates (or the implicit help flags for a `-`
@@ -1680,9 +1654,6 @@ std::vector<std::string> complete_request(const CompletionRequest & request)
   }
   if (command == "pcd") {
     return complete_pcd(request);
-  }
-  if (command == "check") {
-    return complete_check(request);
   }
   if (command == "walk") {
     return complete_walk(request);

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Reproducible benchmark for bagwiz's read -> process -> write rewrite loop.
 #
-# Decomposes wall-clock into read+decompress vs write for the pure-copy trio
-# (topic drop / keep / rename) plus a read-only baseline and a sparse-extraction
-# case, on a real (multi-GB) MCAP bag. The read/write split is taken from the
-# env-gated BAGWIZ_PROFILE per-stage report (authoritative, in-process timing);
+# Measures wall-clock for the pure-copy trio (topic drop / keep / rename) plus a
+# sparse-extraction case, on a real (multi-GB) MCAP bag. The read/write split is
+# taken from the env-gated BAGWIZ_PROFILE per-stage report (authoritative,
+# in-process timing);
 # /usr/bin/time -v supplies CPU% and peak RSS. This establishes the single-core
 # baseline that the pipeline acceleration backends are measured against.
 #
@@ -100,16 +100,6 @@ resource_run() {
     grep -E 'Percent of CPU|Maximum resident' "$OUTDIR/.time" | sed 's/^[[:space:]]*/  /'
 }
 
-echo
-echo "### warming OS page cache ..."
-pixi run -e "$ENV" bash -c "$BIN check broken --deep '$BAG'" >/dev/null 2>&1
-
-# [A] read-only baseline: how much of the time is just read + decompress.
-echo
-echo "===== [A] READ+DECOMPRESS only  (check broken --deep) ====="
-A=$(median_wall "$BIN check broken --deep '$BAG'")
-echo "  median wall: ${A}s"
-
 # [B] full rewrite (pure copy) on the decoded pipeline: drop a tiny latched
 # topic with the chunk pass-through disabled, so this stays the pipeline
 # baseline (the default path is measured separately in [B''] below).
@@ -175,13 +165,12 @@ echo "  median wall: ${C}s"
 profile_run "$BIN topic keep '$BAG' -t '$TOPIC' -o '$KEEP_OUT' --overwrite"
 
 echo
-echo "===== DECOMPOSITION (wall-clock cross-check) ====="
-awk -v A="$A" -v B="$B" 'BEGIN{
-  w=B-A; if(w<0)w=0;
-  printf "  read+decompress (A)   : %.2f s\n", A;
-  printf "  write+overhead  (B-A) : %.2f s\n", w;
+echo "===== SUMMARY (wall-clock cross-check) ====="
+echo "  (the read/write split comes from the BAGWIZ_PROFILE per-stage reports above)"
+awk -v B="$B" -v C="$C" 'BEGIN{
   printf "  full rewrite    (B)   : %.2f s\n", B;
-  if(B>0){printf "  read share            : %.0f%%\n",100*A/B; printf "  write share           : %.0f%%\n",100*w/B}
+  printf "  sparse extract  (C)   : %.2f s\n", C;
+  if(B>0){printf "  sparse share          : %.0f%%\n",100*C/B}
 }'
 
 rm -f "$DROP_OUT" "$KEEP_OUT" "$OUTDIR/.time"

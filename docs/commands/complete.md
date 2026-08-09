@@ -137,21 +137,21 @@ source ~/.config/fish/completions/bagwiz.fish
   `-h` / `--help` flags that CLI11 auto-injects. At the bagwiz top level,
   `-<TAB>` also surfaces `--version`. The covered positions are:
   - `bagwiz -<TAB>` → `--help`, `--version`, `-h`
-  - `bagwiz <cmd> -<TAB>` for every command (`cam-info`, `check`, `complete`,
-    `convert`, `generate`, `ls`, `map`, `pcd`, `tf`, `topic`, `traj`, `trim`, `walk`);
+  - `bagwiz <cmd> -<TAB>` for every command (`cam-info`, `complete`, `convert`,
+    `generate`, `ls`, `map`, `pcd`, `tf`, `topic`, `traj`, `trim`, `walk`);
     `walk -<TAB>` also surfaces `--cam-info`, `ls -<TAB>` surfaces `-l`/`--long`,
     and `trim -<TAB>` surfaces `--start`, `--end`, `--duration`, `--both`,
     `--align`, `--stamp`, `--output`/`-o`, `--overwrite`/`-w`
   - `bagwiz <cmd> <subcommand> -<TAB>` for every nested subcommand
-    (`cam-info replace`, `cam-info recompute-p`, `cam-info dump`, `check broken`,
+    (`cam-info replace`, `cam-info recompute-p`, `cam-info dump`,
     `convert format`, `generate video`, `map slam`, `map viewer`,
     `pcd concat`, `pcd undistort`, `tf static calc`, `tf static cp`,
     `tf static drop`, `tf static dump`, `tf static join`, `tf static update`,
     `tf tree`, `topic drop`, `topic keep`,
     `topic rename`, `traj dump`, `traj join`);
     `cam-info replace -<TAB>` surfaces `--frame-id`, `--output`/`-o`,
-    `--topics`/`-t`, and `-w`/`--overwrite`; `check broken -<TAB>` surfaces
-    `--rm` and `--deep`; `topic drop -<TAB>` / `topic keep -<TAB>` surface
+    `--topics`/`-t`, and `-w`/`--overwrite`;
+    `topic drop -<TAB>` / `topic keep -<TAB>` surface
     `--output`/`-o`, `--overwrite`/`-w`, and `--topics`/`-t` (`topic rename
 -<TAB>` surfaces `--output`/`-o` and `--overwrite`/`-w` but not `--topics`/`-t`,
     since its topics are now `--src` and `--dst`, long-form only);
@@ -172,9 +172,9 @@ source ~/.config/fish/completions/bagwiz.fish
     below).
     `tf static` is itself a command group, so `tf static <TAB>` completes its
     actions (`calc`, `cp`, `drop`, `dump`, `join`, `update`) and `tf static -<TAB>` lists just the help flags.
-    `cam-info`, `check`, `generate`, `map`, `pcd`, and `topic` are likewise
-    command groups: `cam-info <TAB>` completes `replace`, `recompute-p`, `dump`, `check <TAB>`
-    completes `broken`, `generate <TAB>` completes `video`, `map <TAB>`
+    `cam-info`, `generate`, `map`, `pcd`, and `topic` are likewise
+    command groups: `cam-info <TAB>` completes `replace`, `recompute-p`, `dump`,
+    `generate <TAB>` completes `video`, `map <TAB>`
     completes `slam`, `viewer`, `pcd <TAB>` completes `concat`, `undistort`,
     and `topic <TAB>` completes `drop`, `keep`, `rename`
 

@@ -2255,27 +2255,6 @@ TEST_F(CompletionTest, CamInfoDumpTopicSlotIsNotVariadic)
     "");
 }
 
-// `bagwiz check <TAB>` lists its single subcommand.
-TEST(FlagCompletionTest, CheckSubcommandListsBroken)
-{
-  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "check", ""}), "broken\n");
-}
-
-// `bagwiz check -` lists just the implicit help flags (the group itself defines no
-// flags of its own).
-TEST(FlagCompletionTest, CheckParentDashListsHelpFlags)
-{
-  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "check", "-"}), "--help\n-h\n");
-}
-
-// `bagwiz check broken -` lists broken's flags, sorted, with help merged.
-TEST(FlagCompletionTest, CheckBrokenDashListsBrokenFlags)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "check", "broken", "-"}),
-    "--deep\n--help\n--input\n--rm\n-h\n-i\n");
-}
-
 TEST(SupportedShellsTest, ListsBashZshAndFish)
 {
   const auto shells = bagwiz::commands::supported_shells();
