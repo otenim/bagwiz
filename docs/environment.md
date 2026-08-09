@@ -47,7 +47,7 @@ BAGWIZ_PROFILE=1 bagwiz convert format capture.mcap out.mcap
 
 # Opt out of the exit-time page-cache drop (e.g. to keep a bag warm in cache
 # for the next command in a shell pipeline)
-BAGWIZ_PAGE_CACHE_DROP=0 bagwiz check broken --deep capture.mcap
+BAGWIZ_PAGE_CACHE_DROP=0 bagwiz walk capture.mcap /sensing/imu/data
 ```
 
 ## Color output
