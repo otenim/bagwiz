@@ -197,6 +197,7 @@ if(BAGWIZ_WITH_SLAM)
   add_library(bagwiz_slam_glim STATIC
     src/core/slam/cloud_mapper.cpp
     src/core/slam/warmup_fill.cpp
+    src/core/slam/traj_upsample.cpp
     src/core/slam/scan_match_fill.cpp
     src/core/slam/visual_factors.cpp
     src/core/slam/visual_odometry_grouping.cpp
@@ -473,6 +474,13 @@ if(BUILD_TESTING)
       test/core/slam/warmup_fill_test.cpp
       src/core/slam/warmup_fill.cpp)
     target_link_libraries(bagwiz_slam_warmup_fill_test bagwiz_slam Eigen3::Eigen)
+
+    # Trajectory resampling geometry for `map slam --upsample`. GLIM-free like
+    # warmup_fill, so it compiles the TU directly and pulls only Eigen.
+    ament_add_gtest(bagwiz_slam_traj_upsample_test
+      test/core/slam/traj_upsample_test.cpp
+      src/core/slam/traj_upsample.cpp)
+    target_link_libraries(bagwiz_slam_traj_upsample_test bagwiz_slam Eigen3::Eigen)
   endif()
 
   ament_add_gtest(bagwiz_slam_gnss_sample_test test/core/slam/gnss_sample_test.cpp)

@@ -48,6 +48,12 @@ std::string validate_mode_flags(const MapSlamArgs & args)
   if (camera_only && args.cam_topics.empty()) {
     return "either --pcd (LiDAR SLAM) or --cam (camera-only visual-inertial SLAM) is required";
   }
+  // Checked before the mode split: --upsample is valid in both modes, and in
+  // camera-only mode --imu is required anyway, so this can only fire with --pcd.
+  if (!args.upsample.empty() && args.imu_topic.empty()) {
+    return "--upsample needs --imu: the poses it resamples are the odometry's per-frame "
+           "IMU-rate chains, which a LiDAR-only run never estimates";
+  }
   if (!camera_only) {
     // The --dynamic-* tuning options each affect exactly one removal method;
     // passing one to the other method would be a silent no-op, so refuse it.
@@ -125,7 +131,7 @@ core::slam::CloudMapperConfig build_mapper_config(
   const MapSlamArgs & args, const std::optional<core::slam::SensorTransform> & t_lidar_imu,
   bool use_gpu, const std::array<double, 3> & gnss_antenna_offset,
   std::span<const core::slam::SensorTransform> visual_cameras,
-  const std::int64_t visual_anchor_period_ns)
+  const std::int64_t visual_anchor_period_ns, const std::int64_t upsample_period_ns)
 {
   core::slam::CloudMapperConfig config;
   config.input_resolution = args.input_resolution;
@@ -163,6 +169,9 @@ core::slam::CloudMapperConfig build_mapper_config(
   // topic's derived median frame period (issue #17); the mapper ignores it
   // outside camera-only mode.
   config.visual_anchor_period_ns = visual_anchor_period_ns;
+  // Resolved by the caller from --upsample (period or hz); 0 leaves traj.tum at
+  // one pose per scan and CloudMap::trajectory_dense empty.
+  config.upsample_period_ns = upsample_period_ns;
   return config;
 }
 
@@ -349,6 +358,22 @@ void log_mapping_summary(
       "to %s and %s",
       map.trajectory.size(), map.points.size(), scans, imu_suffix(args, imu_count).c_str(), skipped,
       trajectory_path.string().c_str(), map_path.string().c_str());
+  }
+
+  // --upsample: say how much of the exported file is resampled rather than
+  // solved, and name the spans the grid could not cover (the fill windows and
+  // any IMU dropout), which stay at scan density.
+  if (!map.trajectory_dense.empty()) {
+    BAGWIZ_LOG_INFO(
+      logger, "Upsampled the trajectory to %zu poses (%zu added by --upsample %s)",
+      map.trajectory_dense.size(), map.upsample_grid_poses, args.upsample.c_str());
+    if (map.upsample_uncovered_gaps > 0) {
+      BAGWIZ_LOG_INFO(
+        logger,
+        "%zu span(s) kept their scan-rate density: no IMU-rate poses cover them (the "
+        "endpoint fill windows, or an IMU gap)",
+        map.upsample_uncovered_gaps);
+    }
   }
 
   // The endpoint fills scan-match LiDAR window scans; they are force-disabled

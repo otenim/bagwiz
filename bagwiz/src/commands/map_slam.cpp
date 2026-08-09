@@ -196,6 +196,9 @@ public:
       BAGWIZ_LOG_ERROR(kLogger, "%s", mode_error.c_str());
       return 1;
     }
+    if (!resolve_upsample_period()) {
+      return 1;
+    }
 
     // Resolve the effective backend (CPU/GPU) from --backend plus a CUDA device
     // probe, before any bag work. A forced 'cuda' that cannot run errors here;
@@ -387,6 +390,32 @@ private:
         args_.cloud_topic.c_str(), std::to_string(cloud_fail).c_str());
       return false;
     }
+    return true;
+  }
+
+  // Resolve --upsample into upsample_period_ns_ (0 = off). Accepts a period or a
+  // frequency; core::parse_period_ns owns the unit table and its case rules.
+  // Returns false on an unparseable or non-positive rate (logged).
+  bool resolve_upsample_period()
+  {
+    if (args_.upsample.empty()) {
+      return true;
+    }
+    const auto period_ns = core::parse_period_ns(args_.upsample);
+    if (!period_ns.has_value()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "could not parse --upsample '%s' (expected a positive <number><unit>: a period in "
+        "ns/us/ms/s, e.g. 10ms or 0.02s, or a frequency in hz, e.g. 100hz; units are "
+        "lower-case and mandatory)",
+        args_.upsample.c_str());
+      return false;
+    }
+    upsample_period_ns_ = *period_ns;
+    BAGWIZ_LOG_INFO(
+      kLogger, "Trajectory upsampling: %.3f ms (%.1f Hz) from --upsample %s",
+      static_cast<double>(upsample_period_ns_) / 1e6,
+      1e9 / static_cast<double>(upsample_period_ns_), args_.upsample.c_str());
     return true;
   }
 
@@ -1275,7 +1304,8 @@ private:
       return 1;
     }
     const core::slam::CloudMapperConfig config = build_mapper_config(
-      args_, t_lidar_imu, use_gpu_, gnss_antenna_offset, visual_cameras, visual_anchor_period_ns);
+      args_, t_lidar_imu, use_gpu_, gnss_antenna_offset, visual_cameras, visual_anchor_period_ns,
+      upsample_period_ns_);
 
     // Resolve the optional --frame remapping up front. The trajectory is expressed
     // in the anchor frame (the PointCloud2 frame_id, or cam0's frame in
@@ -1423,15 +1453,22 @@ private:
       colorize_map(map, map_colors, use_gpu_);
     }
 
-    // Apply the optional --frame remapping before writing.
+    // Apply the optional --frame remapping before writing. Both copies get it:
+    // whichever one is exported must be in the requested frame.
     if (output_body_to.has_value()) {
       transform_trajectory_to_frame(map.trajectory, *output_body_to);
+      transform_trajectory_to_frame(map.trajectory_dense, *output_body_to);
     }
+
+    // --upsample writes the resampled copy; everything upstream (the colorizer's
+    // keyframe picker above all) has already run against the optimized poses.
+    const std::vector<core::TrajectoryPose> & exported_trajectory =
+      map.trajectory_dense.empty() ? map.trajectory : map.trajectory_dense;
 
     // Write the trajectory and the map; the map stream is flushed and closed
     // inside so the --viewer serve below reads a complete file.
     if (!write_map_outputs(
-          output_path_, map_path_, map.trajectory, map.points, map.intensities, map_colors,
+          output_path_, map_path_, exported_trajectory, map.points, map.intensities, map_colors,
           kLogger)) {
       return 1;
     }
@@ -1781,6 +1818,9 @@ private:
   // visual-inertial SLAM. Set from args_.cloud_topic.empty() early in run()
   // (validate_mode_flags guarantees --cam + --imu are present in this mode).
   bool camera_only_ = false;
+  // Resolved --upsample rate as a period in nanoseconds; 0 (the default) leaves
+  // traj.tum at one pose per scan. Set by resolve_upsample_period() early in run().
+  std::int64_t upsample_period_ns_ = 0;
   // The frame every static-TF resolution anchors at: the PointCloud2 frame_id
   // in LiDAR modes, the FIRST --cam topic's CameraInfo frame_id in
   // camera-only mode (where it takes the cloud frame's role — the mapper's

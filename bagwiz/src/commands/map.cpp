@@ -307,6 +307,16 @@ private:
       "counterpart of --no-warmup-fill: the newest scans stay inside the odometry "
       "smoother window at end-of-sequence, so traj.tum otherwise stops one window "
       "short of the last input scan. Affects traj.tum's closing window only.");
+    sub->add_option(
+      "--upsample", slam_args_.upsample,
+      "Resample traj.tum onto a fixed rate instead of one pose per scan. REQUIRES "
+      "--imu: the extra poses are GLIM's per-frame IMU-rate chains, which the "
+      "LiDAR-only odometry never produces. Accepts a period ('10ms', '0.02s', "
+      "'5000us', '5000000ns') or a frequency ('100hz'); the unit is mandatory and "
+      "lower-case. The scan poses are kept as-is and the grid is added around them, "
+      "so the output is a union rather than a strictly even series. Rates finer than "
+      "the IMU add no information, and spans with no IMU-rate chain (the fill "
+      "windows, IMU dropouts) stay at scan density.");
     const int max_threads = static_cast<int>(std::thread::hardware_concurrency());
     sub
       ->add_option(

@@ -31,6 +31,10 @@ std::string_view trim(std::string_view s)
   return s;
 }
 
+// The frequency unit parse_period_ns understands. Not part of unit_factor_ns:
+// "hz" is a rate, not a duration, so it has no nanoseconds-per-unit factor.
+constexpr std::string_view kHzUnit = "hz";
+
 // Nanoseconds per unit, or -1 for an unknown unit. Empty defaults to ms.
 std::int64_t unit_factor_ns(std::string_view unit)
 {
@@ -84,6 +88,49 @@ std::optional<std::int64_t> parse_duration_ns(std::string_view text, DurationUni
     return std::nullopt;  // out of the representable int64 nanosecond range
   }
   return static_cast<std::int64_t>(std::llround(ns));
+}
+
+// cppcheck-suppress passedByValue  // string_view is the canonical by-value idiom
+std::optional<std::int64_t> parse_period_ns(std::string_view text)
+{
+  const std::string_view trimmed = trim(text);
+
+  // A time unit means the number IS the period. Delegate so the unit table and
+  // its case rules stay in exactly one place; only the positivity check is ours.
+  if (!trimmed.ends_with(kHzUnit)) {
+    const auto ns = parse_duration_ns(trimmed, DurationUnitPolicy::RequireUnit);
+    if (!ns.has_value() || *ns <= 0) {
+      return std::nullopt;
+    }
+    return ns;
+  }
+
+  // strtod needs a NUL-terminated buffer; copy the number span (the unit removed).
+  const std::string buf(trim(trimmed.substr(0, trimmed.size() - kHzUnit.size())));
+  if (buf.empty()) {
+    return std::nullopt;  // "hz" with no number
+  }
+  const char * begin = buf.c_str();
+  char * num_end = nullptr;
+  const double hz = std::strtod(begin, &num_end);
+  if (num_end != begin + buf.size()) {
+    return std::nullopt;  // no leading number, or trailing garbage ("10khz")
+  }
+  if (!std::isfinite(hz) || hz <= 0.0) {
+    return std::nullopt;  // NaN/Inf (strtod parses "nan"/"inf"), or a non-positive rate
+  }
+
+  const double period_ns = 1.0e9 / hz;
+  if (
+    !std::isfinite(period_ns) ||
+    period_ns > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+    return std::nullopt;  // out of the representable int64 nanosecond range
+  }
+  const auto rounded = static_cast<std::int64_t>(std::llround(period_ns));
+  if (rounded <= 0) {
+    return std::nullopt;  // a frequency so high the period rounds away
+  }
+  return rounded;
 }
 
 }  // namespace bagwiz::core

@@ -39,6 +39,8 @@ namespace bagwiz::commands
 // so it can be unit-tested directly; run_map_slam calls it before any bag
 // work. Rules (--pcd absent == camera-only mode, which --cam must drive):
 //   - neither --pcd nor --cam: no SLAM input at all;
+//   - --upsample without --imu: it resamples the odometry's per-frame IMU-rate
+//     chains, which a LiDAR-only run never estimates (checked in both modes);
 //   - --color without --pcd: colorization needs the LiDAR map and its
 //     dynamic-occluder oracle;
 //   - camera-only without --imu: the odometry is visual-INERTIAL (gravity
@@ -79,11 +81,13 @@ namespace bagwiz::commands
 // (issue #17: --visual-anchor-period, or the anchor topic's derived median
 // frame period) — required explicitly so no caller can silently ride the
 // CloudMapperConfig default; ignored by the mapper outside camera-only mode.
+// `upsample_period_ns` is the resolved --upsample rate (0 = off), likewise
+// required explicitly rather than defaulted.
 [[nodiscard]] core::slam::CloudMapperConfig build_mapper_config(
   const MapSlamArgs & args, const std::optional<core::slam::SensorTransform> & t_lidar_imu,
   bool use_gpu, const std::array<double, 3> & gnss_antenna_offset,
-  std::span<const core::slam::SensorTransform> visual_cameras,
-  std::int64_t visual_anchor_period_ns);
+  std::span<const core::slam::SensorTransform> visual_cameras, std::int64_t visual_anchor_period_ns,
+  std::int64_t upsample_period_ns);
 
 // Inputs for the ScanProgress construction: whether the live bar renders at
 // all, and the total message count it runs against (0 = indeterminate).

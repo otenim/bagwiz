@@ -157,6 +157,11 @@ bagwiz map slam -i drive.mcap -o out/ \
         /sensing/camera/camera7/image_raw/compressed \
   --imu /sensing/imu/imu_data
 
+# Write traj.tum at 100 Hz instead of one pose per scan (requires --imu).
+# `--upsample 10ms` is the same request spelled as a period.
+bagwiz map slam -i drive.mcap --pcd /points -o out/ \
+  --imu /sensing/imu/imu_data --upsample 100hz
+
 # Build the map, then open it in the browser (blocks until Ctrl-C).
 bagwiz map slam -i drive.mcap --pcd /points -o out/ --viewer
 ```
@@ -197,6 +202,7 @@ bagwiz map slam -i drive.mcap --pcd /points -o out/ --viewer
 | `--viewer`                          | After writing `map.pcd`, serve it over a loopback HTTP server and open the default browser to a Three.js point-cloud viewer. Blocks until interrupted (`Ctrl-C`). Requires bagwiz to be built with the map viewer; otherwise this flag errors out.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `--no-warmup-fill`                  | Disable initialization-window ('start') pose fill. GLIM's odometry emits no pose over its opening window (the LiDAR-IMU init, ~1 s), so `traj.tum` otherwise has no samples there. By default those pre-init scans are buffered and filled in by scan-matching each against the optimized map (so it works in LiDAR-only mode too); with `--imu` the buffered IMU additionally seeds each registration's initial guess and is the fallback if a fit is rejected. Affects `traj.tum`'s opening window only; the map is unaffected. Default: on.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `--no-cooldown-fill`                | Disable cooldown-window ('end') pose fill — the symmetric counterpart of `--no-warmup-fill`. The newest scans stay inside the odometry smoother window at end-of-sequence, so `traj.tum` otherwise stops one window short of the last input scan. By default those trailing scans are buffered and filled in by scan-matching each against the optimized map (LiDAR-only included); with `--imu` the buffered IMU additionally seeds each initial guess and is the fallback. Affects `traj.tum`'s closing window only; the map is unaffected. Default: on.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `--upsample <rate>`                 | Resample `traj.tum` onto a fixed rate instead of one pose per scan. Requires `--imu`. Accepts a period (`10ms`, `0.02s`, `5000us`, `5000000ns`) or a frequency (`100hz`); the unit is mandatory and lower-case. The scan poses are kept as-is and the grid is added around them. See [Trajectory upsampling](#trajectory-upsampling---upsample). Default: off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `--fill-min-inliers`                | Inlier-fraction acceptance gate (must be greater than `0`, up to `1`) for warmup/cooldown pose-fill scan-matching. Higher = stricter (endpoints may stay unfilled); lower = looser (a bad fit can degrade the fill). No effect when both fills are disabled. Default: `0.7`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `-w`, `--overwrite`                 | Overwrite the output file(s) if they already exist. Without it, an existing output file stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `--no-progress`                     | Disable the live progress bars. The bars are also auto-suppressed when stderr is not a terminal or `NO_COLOR` is set, so this flag is only needed to silence them on an interactive terminal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -307,6 +313,61 @@ target seeded from the last optimized frames, the chain running forward).
 Works in LiDAR-only mode; with `--imu` the buffered IMU additionally seeds
 each initial guess and is the fallback. Affects `traj.tum`'s closing window
 only. Disable with `--no-cooldown-fill`.
+
+### Trajectory upsampling (`--upsample`)
+
+By default `traj.tum` carries one pose per LiDAR scan (per visual keyframe in
+camera-only mode), because that is where the factor graph puts its states.
+`--upsample <rate>` resamples it onto a fixed rate instead.
+
+Requires `--imu`. The extra poses are not new estimates: with an IMU the
+odometry already integrates the motion between consecutive states, pins both
+ends of each interval to the estimated poses, and smooths the result — a
+per-frame IMU-rate chain that is otherwise discarded. `--upsample` re-anchors
+those chains onto the globally-optimized poses, spreads the endpoint
+disagreement across each interval so nothing jumps at a scan boundary, and
+samples the requested grid off them. Without an IMU no such chain exists, so
+the flag is rejected.
+
+The rate is spelled as either a period or a frequency, and the unit is
+mandatory and lower-case:
+
+| Spelling                        | Meaning                    |
+| ------------------------------- | -------------------------- |
+| `ns` / `us` / `µs` / `ms` / `s` | the sampling **period**    |
+| `hz`                            | the sampling **frequency** |
+
+So `--upsample 10ms`, `--upsample 0.01s` and `--upsample 100hz` are the same
+request. `100HZ`, `10MS` and a bare `100` are all errors: a bare number cannot
+say whether it means a period or a frequency.
+
+The output timestamps are the **union** of the scan stamps and the requested
+grid, phased on the first pose:
+
+```text
+scan          scan               scan
+ ●-----+--+--+-●--+--+--+--+--+--●     ● = optimized pose (kept verbatim)
+                                       + = grid pose (added)
+```
+
+The optimized poses are kept because they are the only rows an optimizer
+actually solved for, so the file is not strictly evenly spaced. Running with
+and without the flag leaves every scan row byte-identical, which makes the
+difference easy to diff.
+
+Two limits are worth knowing:
+
+- **A rate finer than the IMU adds no information.** Above the IMU rate the
+  extra rows are interpolated between IMU samples.
+- **Spans with no IMU-rate chain keep their scan-rate density.** That means the
+  warmup/cooldown fill windows (see
+  [Trajectory endpoint fill](#trajectory-endpoint-fill)) and any IMU dropout.
+  They are not filled by interpolating the optimized poses instead: TUM has no
+  per-row quality field, so solved rows and plain interpolation would mix
+  invisibly. The run summary reports how many spans were skipped.
+
+Camera-only mode benefits most: its keyframe gate (0.25 m / ~10°) can leave
+long stretches with no pose at all, and the same IMU chains fill them in.
 
 ### GNSS constraints (`--gnss`)
 
@@ -478,7 +539,7 @@ Written under `<output_root>`:
 
 | File       | When    | Format                                                                                                                                                                                                                                                                                                                                     |
 | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `traj.tum` | Always. | TUM trajectory — one `timestamp tx ty tz qx qy qz qw` line per pose.                                                                                                                                                                                                                                                                       |
+| `traj.tum` | Always. | TUM trajectory — one `timestamp tx ty tz qx qy qz qw` line per pose. One pose per scan (per visual keyframe in camera-only mode) unless [`--upsample`](#trajectory-upsampling---upsample) resamples it onto a fixed rate.                                                                                                                  |
 | `map.pcd`  | Always. | Binary PCD world-frame point cloud, voxel-downsampled to `--input-res`. With `--color` it additionally carries an `rgb` field (PCL packed-float convention). In camera-only mode it is instead the sparse landmark map: each track re-triangulated once at the final optimized poses, with per-landmark `rgb` from its track observations. |
 
 A file at `<output_root>` is an error; an existing directory is accepted and
