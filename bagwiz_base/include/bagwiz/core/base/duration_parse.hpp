@@ -38,6 +38,24 @@ enum class DurationUnitPolicy {
 [[nodiscard]] std::optional<std::int64_t> parse_duration_ns(
   std::string_view text, DurationUnitPolicy unit_policy = DurationUnitPolicy::DefaultMs);
 
+// Parse a sampling rate, spelled either as a period or as a frequency, into a
+// period in nanoseconds.
+//
+// Grammar:  number unit
+//   number : a decimal, optionally fractional (e.g. 100, 10.0, 0.02)
+//   unit   : a time unit accepted by parse_duration_ns ("ns", "us", "µs", "ms",
+//            "s") — the number IS the period; or "hz" — the period is 1/number.
+//
+// Units are case-sensitive ("HZ" and "Ms" are rejected) and mandatory, matching
+// parse_duration_ns under DurationUnitPolicy::RequireUnit: a bare number would
+// not say whether it means a period or a frequency. Surrounding whitespace and
+// whitespace between the number and the unit are ignored.
+//
+// Returns std::nullopt on any parse failure (missing number, unknown unit,
+// missing unit, trailing garbage), on a non-positive rate, and on a frequency so
+// high that the period rounds to zero nanoseconds.
+[[nodiscard]] std::optional<std::int64_t> parse_period_ns(std::string_view text);
+
 }  // namespace bagwiz::core
 
 #endif  // BAGWIZ__CORE__BASE__DURATION_PARSE_HPP_

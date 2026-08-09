@@ -116,6 +116,13 @@ struct CloudMapperConfig
   // matches ScanMatchParams' loose-init gate. Require 0 < x <= 1.
   double fill_min_inlier_fraction = 0.7;
 
+  // Resample period [ns] for the dense trajectory copy (`--upsample`). 0 (the
+  // default) disables it and CloudMap::trajectory_dense stays empty. Requires
+  // t_lidar_imu: the resampled poses come from GLIM's per-frame IMU-rate chains,
+  // which the LiDAR-only odometry never produces. Must be > 0 when set. See
+  // core/slam/traj_upsample.hpp for what the grid does and does not cover.
+  std::int64_t upsample_period_ns = 0;
+
   // Keyframes accumulated before GLIM finalizes a submap (GLIM SubMappingParams
   // max_num_keyframes). Smaller = more, smaller submaps: finer loop-closure
   // granularity and (via more GNSS-covered submaps) can unblock GNSS priors, but
@@ -329,6 +336,12 @@ struct CloudMap
   // Globally-optimized LiDAR poses in the world frame, sorted by timestamp.
   std::vector<core::TrajectoryPose> trajectory;
 
+  // `trajectory` resampled onto config.upsample_period_ns, sorted by timestamp.
+  // Empty unless upsampling was requested. Kept separate from `trajectory` so
+  // every existing consumer — the colorizer's keyframe picker above all — keeps
+  // seeing exactly the optimized poses; only the exported traj.tum switches.
+  std::vector<core::TrajectoryPose> trajectory_dense;
+
   // Optimized global map: world-frame xyz, one entry per point.
   std::vector<std::array<float, 3>> points;
 
@@ -350,6 +363,14 @@ struct CloudMap
   // `trajectory` (config.fill_end). 0 when the fill was off or there were no
   // trailing scans past the last estimated frame.
   std::size_t filled_end_pose_count = 0;
+
+  // Upsampling diagnostics (config.upsample_period_ns): how many rows the
+  // resample grid contributed to `trajectory_dense` on top of the optimized
+  // poses, and how many contiguous spans the grid had to skip because no
+  // IMU-rate chain covered them (the fill windows, IMU dropouts). Both zero when
+  // upsampling was off.
+  std::size_t upsample_grid_poses = 0;
+  std::size_t upsample_uncovered_gaps = 0;
 
   // True when the start-window fill was abandoned because the pre-init scan buffer
   // overflowed before odometry converged (a very long static/slow start) — lets

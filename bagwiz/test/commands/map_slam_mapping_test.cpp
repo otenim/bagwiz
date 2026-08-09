@@ -152,7 +152,8 @@ TEST(BuildMapperConfig, CopiesTheArguments)
   bagwiz::core::slam::SensorTransform extrinsic;
   extrinsic.translation = {1.0, 2.0, 3.0};
   extrinsic.rotation_xyzw = {0.0, 0.0, 0.0, 1.0};
-  const auto config = build_mapper_config(args, extrinsic, true, {4.0, 5.0, 6.0}, {}, 100'000'000);
+  const auto config =
+    build_mapper_config(args, extrinsic, true, {4.0, 5.0, 6.0}, {}, 100'000'000, 0);
 
   EXPECT_DOUBLE_EQ(config.input_resolution, 0.25);
   EXPECT_DOUBLE_EQ(config.range_min, 2.0);
@@ -182,7 +183,7 @@ TEST(BuildMapperConfig, MapsTheDynamicMethodAndSensorHeight)
   args.dynamic_method = "erasor2";
   args.dynamic_sensor_height = 1.5;
   const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000);
+    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
   EXPECT_EQ(config.dynamic_method, bagwiz::core::slam::DynamicRemovalMethod::kErasor2);
   EXPECT_DOUBLE_EQ(config.dynamic_erasor.sensor_height, 1.5);
 }
@@ -190,7 +191,7 @@ TEST(BuildMapperConfig, MapsTheDynamicMethodAndSensorHeight)
 TEST(BuildMapperConfig, DefaultsToTheDufomapMethod)
 {
   const auto config =
-    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000);
+    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
   EXPECT_EQ(config.dynamic_method, bagwiz::core::slam::DynamicRemovalMethod::kDufomap);
 }
 
@@ -200,7 +201,7 @@ TEST(BuildMapperConfig, LidarOnlyWithoutGnss)
   args.imu_topic.clear();
   args.gnss_topic.clear();
   const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000);
+    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
 
   EXPECT_FALSE(config.t_lidar_imu.has_value());
   EXPECT_FALSE(config.enable_gnss);
@@ -222,7 +223,7 @@ TEST(BuildMapperConfig, CopiesVisualCameras)
   visual_cameras[1].rotation_xyzw = {0.0, 0.0, 1.0, 0.0};
 
   const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, visual_cameras, 100'000'000);
+    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, visual_cameras, 100'000'000, 0);
 
   ASSERT_EQ(config.visual_cameras.size(), 2U);
   EXPECT_DOUBLE_EQ(config.visual_cameras[0].translation[0], 1.0);
@@ -237,7 +238,7 @@ TEST(BuildMapperConfig, NoCamTopicsLeavesVisualCamerasEmpty)
 {
   const auto args = make_args();
   const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000);
+    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
   EXPECT_TRUE(config.visual_cameras.empty());
 }
 
@@ -246,7 +247,7 @@ TEST(BuildMapperConfig, CapsThreadsAtTheHardwareLimit)
   auto args = make_args();
   args.num_threads = std::numeric_limits<int>::max();
   const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000);
+    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
   const unsigned int hardware = std::thread::hardware_concurrency();
   if (hardware > 0) {
     EXPECT_EQ(config.num_threads, static_cast<int>(hardware));
@@ -258,7 +259,7 @@ TEST(BuildMapperConfig, ZeroThreadsResolvesToTheHardwareConcurrency)
   auto args = make_args();
   args.num_threads = 0;
   const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000);
+    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
   const unsigned int hardware = std::thread::hardware_concurrency();
   EXPECT_EQ(config.num_threads, hardware > 0 ? static_cast<int>(hardware) : 1);
 }
@@ -266,8 +267,22 @@ TEST(BuildMapperConfig, ZeroThreadsResolvesToTheHardwareConcurrency)
 TEST(BuildMapperConfig, PassesTheVisualAnchorPeriod)
 {
   const auto config =
-    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 50'000'000);
+    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 50'000'000, 0);
   EXPECT_EQ(config.visual_anchor_period_ns, 50'000'000);
+}
+
+TEST(BuildMapperConfig, PassesTheUpsamplePeriod)
+{
+  const auto config = build_mapper_config(
+    make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 20'000'000);
+  EXPECT_EQ(config.upsample_period_ns, 20'000'000);
+}
+
+TEST(BuildMapperConfig, UpsampleDefaultsToOff)
+{
+  const auto config =
+    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
+  EXPECT_EQ(config.upsample_period_ns, 0);
 }
 
 TEST(MedianFramePeriodNs, MedianOfConsecutiveDeltas)
@@ -639,6 +654,37 @@ TEST(ValidateModeFlags, VisualAnchorPeriodAcceptedInCameraOnlyMode)
   EXPECT_TRUE(validate_mode_flags(args).empty());
 }
 
+TEST(ValidateModeFlags, UpsampleWithoutImuIsAnError)
+{
+  // --upsample resamples the odometry's per-frame IMU-rate chains; a LiDAR-only
+  // run never estimates them, so the flag would silently do nothing.
+  auto args = make_args();
+  args.imu_topic.clear();
+  args.upsample = "100hz";
+  const std::string error = validate_mode_flags(args);
+  EXPECT_NE(error.find("--upsample"), std::string::npos) << error;
+  EXPECT_NE(error.find("--imu"), std::string::npos) << error;
+}
+
+TEST(ValidateModeFlags, UpsampleAcceptedWithImuInLidarMode)
+{
+  auto args = make_args();
+  args.upsample = "10ms";
+  EXPECT_TRUE(validate_mode_flags(args).empty());
+}
+
+TEST(ValidateModeFlags, UpsampleAcceptedInCameraOnlyMode)
+{
+  // Camera-only mode always has --imu, so --upsample is always available there —
+  // and it is where it matters most, the keyframe gate leaving the output sparse.
+  auto args = make_args();
+  args.cloud_topic.clear();
+  args.cam_topics = {"/cam0/image_raw"};
+  args.remove_dynamic = false;
+  args.upsample = "100hz";
+  EXPECT_TRUE(validate_mode_flags(args).empty());
+}
+
 TEST(ValidateModeFlags, CameraOnlyWithoutImuIsAnError)
 {
   auto args = make_args();
@@ -695,11 +741,11 @@ TEST(BuildMapperConfig, CloudTopicEmptinessSelectsCameraOnly)
   camera_only_args.cloud_topic.clear();
   camera_only_args.cam_topics = {"/cam0/image_raw"};
   const auto camera_only_config =
-    build_mapper_config(camera_only_args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000);
+    build_mapper_config(camera_only_args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
   EXPECT_TRUE(camera_only_config.camera_only);
 
   const auto lidar_config =
-    build_mapper_config(make_args(), std::nullopt, false, {0, 0, 0}, {}, 100'000'000);
+    build_mapper_config(make_args(), std::nullopt, false, {0, 0, 0}, {}, 100'000'000, 0);
   EXPECT_FALSE(lidar_config.camera_only);
 }
 

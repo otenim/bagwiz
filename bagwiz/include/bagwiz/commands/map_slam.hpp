@@ -226,6 +226,15 @@ struct MapSlamArgs
   // the buffered IMU additionally seeds each initial guess and is the fallback.
   bool fill_end = true;
 
+  // Resample traj.tum onto a fixed rate (--upsample). Spelled either as a period
+  // ("10ms") or a frequency ("100hz") and parsed by core::parse_period_ns: the
+  // unit is mandatory and case-sensitive, and the rate must be positive. Empty
+  // (the default) leaves traj.tum at one pose per scan. Requires --imu — the
+  // resampled poses come from GLIM's per-frame IMU-rate chains, which the
+  // LiDAR-only odometry never produces — and validate_mode_flags rejects the
+  // combination.
+  std::string upsample;
+
   // Number of CPU threads for GLIM and trajectory endpoint (warmup/cooldown)
   // fill. 0 resolves to the host's hardware concurrency.
   int num_threads = 8;

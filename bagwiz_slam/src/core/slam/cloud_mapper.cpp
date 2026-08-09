@@ -21,6 +21,7 @@
 #include "bagwiz/core/slam/instance_occupancy.hpp"
 #include "bagwiz/core/slam/lidar_scan.hpp"
 #include "bagwiz/core/slam/scan_match_fill.hpp"
+#include "bagwiz/core/slam/traj_upsample.hpp"
 #include "bagwiz/core/slam/warmup_fill.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
 #include "visual_factors.hpp"   // NOLINT(build/include_subdir) src-local shared header
@@ -133,14 +134,14 @@ constexpr std::size_t kCooldownMaxScanClouds = 256;
 // scans are then folded into the target so it grows along the chain.
 constexpr std::size_t kFillSeedFrames = 12;
 
-core::TrajectoryPose to_pose(double stamp, const Eigen::Isometry3d & transform)
+core::TrajectoryPose to_pose_ns(std::int64_t timestamp_ns, const Eigen::Isometry3d & transform)
 {
   const Eigen::Vector3d translation = transform.translation();
   Eigen::Quaterniond rotation(transform.rotation());
   rotation.normalize();
 
   core::TrajectoryPose pose;
-  pose.timestamp_ns = static_cast<std::int64_t>(std::llround(stamp * 1e9));
+  pose.timestamp_ns = timestamp_ns;
   pose.tx = translation.x();
   pose.ty = translation.y();
   pose.tz = translation.z();
@@ -149,6 +150,40 @@ core::TrajectoryPose to_pose(double stamp, const Eigen::Isometry3d & transform)
   pose.qz = rotation.z();
   pose.qw = rotation.w();
   return pose;
+}
+
+core::TrajectoryPose to_pose(double stamp, const Eigen::Isometry3d & transform)
+{
+  return to_pose_ns(static_cast<std::int64_t>(std::llround(stamp * 1e9)), transform);
+}
+
+Eigen::Isometry3d to_isometry(const core::TrajectoryPose & pose)
+{
+  Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+  transform.translation() = Eigen::Vector3d(pose.tx, pose.ty, pose.tz);
+  transform.linear() =
+    Eigen::Quaterniond(pose.qw, pose.qx, pose.qy, pose.qz).normalized().toRotationMatrix();
+  return transform;
+}
+
+// GLIM stores each frame's IMU-rate chain as an 8 x N matrix whose columns are
+// [t, x, y, z, qx, qy, qz, qw] — world<-IMU poses in the ODOMETRY world frame,
+// filled by SubMapping::insert_frame whenever its enable_imu is set (i.e. with
+// --imu). Empty when the odometry ran without an IMU.
+std::vector<StampedImuPose> to_imu_rate_chain(const Eigen::Matrix<double, 8, -1> & columns)
+{
+  std::vector<StampedImuPose> chain;
+  chain.reserve(static_cast<std::size_t>(columns.cols()));
+  for (int i = 0; i < columns.cols(); ++i) {
+    const Eigen::Matrix<double, 8, 1> column = columns.col(i);
+    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+    pose.translation() = column.segment<3>(1);
+    pose.linear() = Eigen::Quaterniond(column[7], column[4], column[5], column[6])
+                      .normalized()
+                      .toRotationMatrix();
+    chain.push_back({static_cast<std::int64_t>(std::llround(column[0] * 1e9)), pose});
+  }
+  return chain;
 }
 
 // Copy a preprocessed frame's LiDAR-frame points to plain double xyz, the source
@@ -520,6 +555,11 @@ struct CloudMapper::Impl
     Eigen::Isometry3d T_origin_frame = Eigen::Isometry3d::Identity();
     FramePoints points;              // LiDAR-frame, full density (float, or int16 in use_gpu)
     std::vector<float> intensities;  // parallel to points; may be empty
+    // GLIM's IMU-rate chain for this frame, spanning [this frame, next frame] in
+    // the ODOMETRY world frame. Captured only when config.upsample_period_ns is
+    // set; build_upsampled_trajectory() re-anchors it onto the optimized poses.
+    std::vector<StampedImuPose> imu_rate;
+    Eigen::Isometry3d T_lidar_imu = Eigen::Isometry3d::Identity();
   };
   struct SubMapEntry
   {
@@ -1227,6 +1267,10 @@ struct CloudMapper::Impl
       ref.id = frame->id;
       ref.stamp = frame->stamp;
       ref.T_origin_frame = T_origin_world * frame->T_world_lidar;
+      if (config.upsample_period_ns > 0) {
+        ref.imu_rate = to_imu_rate_chain(frame->imu_rate_trajectory);
+        ref.T_lidar_imu = frame->T_lidar_imu;
+      }
       const auto found = stash.find(frame->id);
       if (found != stash.end()) {
         ref.points = std::move(found->second.points);
@@ -1653,6 +1697,9 @@ struct CloudMapper::Impl
     // from "nothing to fill" (warmup_disable() sets this and clears
     // warmup.active).
     result.warmup_overflowed = warmup.overflowed;
+    // After the fills: their poses join the grid's union. Before dynamic removal
+    // and the map export, neither of which reads the trajectory.
+    build_upsampled_trajectory(result);
     // Dynamic-point removal runs after the window fills on purpose: the fills
     // only mutate the trajectory, never `entries`, so the removal still covers
     // 100% of what fill_map reads while the fills' scan-match targets stay
@@ -1895,6 +1942,104 @@ struct CloudMapper::Impl
     for (const auto & entry : poses) {
       result.trajectory.push_back(entry.second);
     }
+  }
+
+  // Resample the trajectory onto config.upsample_period_ns (`--upsample`),
+  // leaving result.trajectory untouched and writing the dense copy to
+  // result.trajectory_dense. Runs AFTER the warmup/cooldown fills so their poses
+  // are part of the grid's union, and after the global optimization so each
+  // stashed chain can be re-anchored onto its frame's final world pose.
+  //
+  // The chain GLIM built for frame i spans [frame i, frame i+1], so the blend
+  // target is the NEXT frame's optimized pose; the last frame of the run has
+  // none and is only re-anchored. Nothing here interpolates across frames that
+  // carry no chain — see traj_upsample.hpp on why gaps stay at scan rate.
+  void build_upsampled_trajectory(CloudMap & result) const
+  {
+    if (config.upsample_period_ns <= 0) {
+      return;
+    }
+
+    // Optimized poses keyed by stamp. This is the FULL set — GLIM frames plus the
+    // warmup/cooldown fill poses — because a chain's blend target is looked up by
+    // stamp below, and at the tail that target is a fill pose rather than a frame.
+    std::map<std::int64_t, Eigen::Isometry3d> optimized_by_stamp;
+    for (const auto & pose : result.trajectory) {
+      optimized_by_stamp.emplace(pose.timestamp_ns, to_isometry(pose));
+    }
+
+    // The optimized pose a chain should arrive at: the one nearest the chain's last
+    // knot, when there is one that close. Stamps do not match exactly — GLIM allows
+    // up to 1 ms between a frame's stamp and its chain's, and real sensor stamps
+    // jitter on top — so the lookup takes a window, sized well inside a scan
+    // interval and well outside that skew.
+    const auto blend_target =
+      [&optimized_by_stamp](std::int64_t stamp_ns) -> std::optional<Eigen::Isometry3d> {
+      constexpr std::int64_t kBlendTargetWindowNs = 10'000'000;  // 10 ms
+      const auto next = optimized_by_stamp.lower_bound(stamp_ns);
+      std::optional<Eigen::Isometry3d> target;
+      std::int64_t best = kBlendTargetWindowNs;
+      if (next != optimized_by_stamp.end() && next->first - stamp_ns <= best) {
+        best = next->first - stamp_ns;
+        target = next->second;
+      }
+      if (next != optimized_by_stamp.begin()) {
+        const auto previous = std::prev(next);
+        if (stamp_ns - previous->first <= best) {
+          target = previous->second;
+        }
+      }
+      return target;
+    };
+
+    std::vector<ImuRateChain> chains;
+    for (const auto & entry : entries) {
+      if (!entry.submap) {
+        continue;
+      }
+      const Eigen::Isometry3d & T_world_origin = entry.submap->T_world_origin;
+      for (const auto & ref : entry.frames) {
+        if (ref.imu_rate.size() < 2) {
+          continue;  // LiDAR-only odometry, or a frame GLIM could not integrate
+        }
+        ImuRateChain chain = reanchor_chain(
+          ref.imu_rate, T_world_origin * ref.T_origin_frame,
+          blend_target(ref.imu_rate.back().stamp_ns), ref.T_lidar_imu);
+        if (!chain.poses.empty()) {
+          chains.push_back(std::move(chain));
+        }
+      }
+    }
+
+    std::vector<StampedPose> optimized;
+    optimized.reserve(optimized_by_stamp.size());
+    for (const auto & entry : optimized_by_stamp) {
+      optimized.push_back({entry.first, entry.second});
+    }
+
+    UpsampleStats stats;
+    const std::vector<StampedPose> dense =
+      upsample_trajectory(optimized, chains, config.upsample_period_ns, stats);
+
+    // Copy the ORIGINAL row back on a stamp match instead of the round-tripped
+    // one: the trip through Isometry3d renormalizes the quaternion and would
+    // perturb the last bits of poses --upsample must leave alone. Both sequences
+    // are ascending by stamp, so one cursor is enough.
+    result.trajectory_dense.reserve(dense.size());
+    std::size_t optimized_at = 0;
+    for (const auto & pose : dense) {
+      while (optimized_at < result.trajectory.size() &&
+             result.trajectory[optimized_at].timestamp_ns < pose.stamp_ns) {
+        ++optimized_at;
+      }
+      const bool is_optimized = optimized_at < result.trajectory.size() &&
+                                result.trajectory[optimized_at].timestamp_ns == pose.stamp_ns;
+      result.trajectory_dense.push_back(
+        is_optimized ? result.trajectory[optimized_at]
+                     : to_pose_ns(pose.stamp_ns, pose.T_world_lidar));
+    }
+    result.upsample_grid_poses = stats.grid_poses;
+    result.upsample_uncovered_gaps = stats.uncovered_gaps;
   }
 
   // A view of one globally-optimized frame: its stamp, id, world<-LiDAR pose, and

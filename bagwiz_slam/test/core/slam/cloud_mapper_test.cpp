@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
@@ -487,6 +488,119 @@ TEST(CloudMapper, ImuModePreservesIntensity)
   for (const float v : map.intensities) {
     EXPECT_NEAR(v, kIntensity, 1e-3f);
   }
+}
+
+// Run the standard LiDAR-IMU session (200 Hz IMU, 120 room scans @ 10 Hz after a
+// 0.5 s gravity-priming window) through `config`, which the caller has already
+// pointed at an IMU extrinsic. Shared by the --upsample cases below.
+slam::CloudMap run_imu_session(const slam::CloudMapperConfig & config)
+{
+  slam::CloudMapper mapper(config);
+
+  constexpr std::int64_t kImuDtNs = 5'000'000;     // 200 Hz
+  constexpr std::int64_t kScanDtNs = 100'000'000;  // 10 Hz
+  const std::int64_t base = 1'000'000'000'000'000'000LL;
+
+  std::int64_t imu_stamp = base;
+  const std::int64_t first_scan = base + 500'000'000LL;
+  while (imu_stamp < first_scan) {
+    mapper.insert_imu(make_flipped_gravity_imu(imu_stamp));
+    imu_stamp += kImuDtNs;
+  }
+  for (int i = 0; i < 120; ++i) {
+    const std::int64_t scan_stamp = first_scan + static_cast<std::int64_t>(i) * kScanDtNs;
+    while (imu_stamp < scan_stamp) {
+      mapper.insert_imu(make_flipped_gravity_imu(imu_stamp));
+      imu_stamp += kImuDtNs;
+    }
+    mapper.insert_imu(make_flipped_gravity_imu(scan_stamp));
+    mapper.insert(make_room_scan(scan_stamp));
+  }
+  return mapper.finish();
+}
+
+slam::CloudMapperConfig make_imu_config()
+{
+  // The same 180-deg-X extrinsic the placement test uses: it selects the CPU
+  // (LiDAR-IMU) backend, which is what fills GLIM's imu_rate_trajectory.
+  slam::SensorTransform t_lidar_imu;
+  t_lidar_imu.rotation_xyzw = {1.0, 0.0, 0.0, 0.0};
+  t_lidar_imu.translation = {0.0, 0.0, 0.0};
+
+  slam::CloudMapperConfig config;
+  config.t_lidar_imu = t_lidar_imu;
+  return config;
+}
+
+// --upsample resamples GLIM's per-frame IMU-rate chains onto a fixed grid. At
+// 20 ms over 10 Hz scans that is four extra rows per scan interval, and the
+// optimized scan poses must come through untouched.
+TEST(CloudMapper, UpsampleDensifiesTheTrajectoryWithoutMovingScanPoses)
+{
+  slam::CloudMapperConfig config = make_imu_config();
+  config.upsample_period_ns = 20'000'000;  // 50 Hz
+  const slam::CloudMap map = run_imu_session(config);
+
+  ASSERT_FALSE(map.trajectory.empty());
+  ASSERT_FALSE(map.trajectory_dense.empty());
+  EXPECT_GT(map.trajectory_dense.size(), map.trajectory.size());
+  EXPECT_GT(map.upsample_grid_poses, 0u);
+
+  for (std::size_t i = 1; i < map.trajectory_dense.size(); ++i) {
+    EXPECT_GT(map.trajectory_dense[i].timestamp_ns, map.trajectory_dense[i - 1].timestamp_ns);
+  }
+
+  // Every optimized pose survives verbatim — same stamp, same pose.
+  std::map<std::int64_t, const bagwiz::core::TrajectoryPose *> dense_by_stamp;
+  for (const auto & pose : map.trajectory_dense) {
+    dense_by_stamp[pose.timestamp_ns] = &pose;
+  }
+  for (const auto & pose : map.trajectory) {
+    const auto found = dense_by_stamp.find(pose.timestamp_ns);
+    ASSERT_NE(found, dense_by_stamp.end()) << "dropped optimized stamp " << pose.timestamp_ns;
+    EXPECT_EQ(found->second->tx, pose.tx);
+    EXPECT_EQ(found->second->ty, pose.ty);
+    EXPECT_EQ(found->second->tz, pose.tz);
+    EXPECT_EQ(found->second->qw, pose.qw);
+  }
+
+  // The endpoint blend must leave no step at the scan boundaries: the sensor is
+  // static here, so consecutive dense poses stay effectively on top of each other.
+  for (std::size_t i = 1; i < map.trajectory_dense.size(); ++i) {
+    const auto & a = map.trajectory_dense[i - 1];
+    const auto & b = map.trajectory_dense[i];
+    const double step = std::hypot(std::hypot(b.tx - a.tx, b.ty - a.ty), b.tz - a.tz);
+    EXPECT_LT(step, 0.1) << "discontinuity at dense row " << i;
+  }
+}
+
+// A finer grid must produce strictly more rows than a coarser one over the same
+// run — the period is honored, not just "some densification happened".
+TEST(CloudMapper, UpsamplePeriodControlsTheOutputDensity)
+{
+  slam::CloudMapperConfig coarse = make_imu_config();
+  coarse.upsample_period_ns = 50'000'000;  // 20 Hz
+  slam::CloudMapperConfig fine = make_imu_config();
+  fine.upsample_period_ns = 10'000'000;  // 100 Hz
+
+  const slam::CloudMap coarse_map = run_imu_session(coarse);
+  const slam::CloudMap fine_map = run_imu_session(fine);
+
+  ASSERT_FALSE(coarse_map.trajectory_dense.empty());
+  ASSERT_FALSE(fine_map.trajectory_dense.empty());
+  EXPECT_GT(fine_map.trajectory_dense.size(), coarse_map.trajectory_dense.size());
+  // The optimized trajectory itself is unaffected by the grid.
+  EXPECT_EQ(fine_map.trajectory.size(), coarse_map.trajectory.size());
+}
+
+TEST(CloudMapper, UpsampleOffLeavesTheDenseTrajectoryEmpty)
+{
+  const slam::CloudMap map = run_imu_session(make_imu_config());
+
+  EXPECT_FALSE(map.trajectory.empty());
+  EXPECT_TRUE(map.trajectory_dense.empty());
+  EXPECT_EQ(map.upsample_grid_poses, 0u);
+  EXPECT_EQ(map.upsample_uncovered_gaps, 0u);
 }
 
 // A GNSS fix already projected to the local metric frame.

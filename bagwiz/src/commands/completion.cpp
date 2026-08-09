@@ -1169,7 +1169,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 //           [--remove-outliers] [--outlier-r <m>] [--outlier-k <N>]
 //           [--remove-dynamic] [--dynamic-method <dufomap|erasor2>]
 //           [--dynamic-res <m>] [--dynamic-ds <m>] [--dynamic-dp <N>]
-//           [--dynamic-sensor-height <m>]
+//           [--dynamic-sensor-height <m>] [--upsample <rate>]
 //   viewer: `map`(0) `viewer`(1) -i|--input <map>
 //
 // At the action slot (word 1) the candidates are `slam` and `viewer` (or the
@@ -1240,6 +1240,7 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
          "--remove-outliers",
          "--submap-keyframes",
          "--threads",
+         "--upsample",
          "--viewer",
          "--visual-anchor-period",
          "--visual-max-features",

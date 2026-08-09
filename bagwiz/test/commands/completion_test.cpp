@@ -1300,8 +1300,8 @@ TEST(FlagCompletionTest, MapSlamDashListsSlamFlags)
     "inliers\n--frame\n--gnss\n--help\n--imu\n--"
     "input\n--input-res\n--max-range\n--min-range\n--no-color-propagate\n--no-cooldown-fill\n--no-"
     "progress\n--no-warmup-fill\n--outlier-k\n--outlier-r\n--output\n--overwrite\n--pcd\n--remove-"
-    "dynamic\n--remove-outliers\n--submap-keyframes\n--threads\n--viewer\n--visual-anchor-"
-    "period\n--visual-max-features\n"
+    "dynamic\n--remove-outliers\n--submap-keyframes\n--threads\n--upsample\n--viewer\n--visual-"
+    "anchor-period\n--visual-max-features\n"
     "-h\n-i\n-j\n-o\n-w\n");
 }
 
