@@ -404,6 +404,33 @@ tests that assert on those numbers.
   justifies it, so a later change that breaks the premise is visible
   in review.
 
+### 7. Benchmarking
+
+Applies whenever you measure the runtime performance of a bagwiz
+command — an existing one or one being added — whether through
+`scripts/bench-rewrite.sh`, the `BAGWIZ_PROFILE` stage report, or an
+ad-hoc timing run. It does not govern correctness tests, which remain
+free to build their input synthetically.
+
+- Measure on a real recorded rosbag whenever one is available. A
+  synthetic bag does not reproduce the message-size distribution,
+  topic mix, chunk layout, compression ratio, and timestamp jitter of
+  real sensor data, so a figure measured on one can point at a
+  bottleneck the command does not actually have.
+  `scripts/bench-rewrite.sh` is written around a real multi-GB bag for
+  exactly this reason.
+- When no real bag has been supplied for the work at hand, ask the
+  developer for one before measuring, and state what the measurement
+  needs: rough size, the topics and message types that must be
+  present, and the recording length. Do not quietly settle for a
+  synthetic bag because asking would take longer.
+- Fall back to a synthetic bag only once it is established that no real
+  bag is available. Then say so wherever the numbers are reported — the
+  benchmark output, the commit message, the pull request description —
+  along with how the bag was generated, so no one reads the figures as
+  real-data measurements. Keep the generator and the bag itself outside
+  the working tree, per General Rule 9.
+
 ## Maintaining These Guidelines
 
 - Keep the rules in this file free of duplication. Each topic should
