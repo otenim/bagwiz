@@ -23,16 +23,11 @@ namespace bagwiz::commands
 struct MapSlamArgs
 {
   std::filesystem::path input_path;
-  // PointCloud2 topic to run SLAM on. Empty selects camera-only mode
-  // (--cam-driven visual-inertial SLAM, issue #376 Phase 3); validate_mode_flags
-  // requires at least one of cloud_topic / cam_topics.
+  // PointCloud2 topic to run SLAM on (--pcd; required).
   std::string cloud_topic;
   // Optional Imu topic. Empty: LiDAR-only odometry. Set: switches to GLIM's
   // LiDAR-IMU OdometryEstimationCPU, resolving the LiDAR<-IMU extrinsic from the
-  // bag's static TF using the cloud's and the IMU's header frame_ids. REQUIRED in
-  // camera-only mode (cloud_topic empty): the visual-inertial odometry integrates
-  // the IMU stream, and the extrinsic is resolved against the first --cam
-  // camera's frame instead of the cloud frame.
+  // bag's static TF using the cloud's and the IMU's header frame_ids.
   std::string imu_topic;
   // Optional NavSatFix topic. Empty: no GNSS. Set: adds GNSS global constraints
   // (horizontal translation priors on submap poses) during global mapping,
@@ -45,10 +40,7 @@ struct MapSlamArgs
   // Optional camera image topics (sensor_msgs/msg/Image or CompressedImage)
   // to colorize the map from (--color). Empty: no colorization. Set: after
   // the global optimization, the map points are colorized by splatting them
-  // into each camera's images and map.pcd gains an rgb field. Requires
-  // cloud_topic (colorization needs the LiDAR map and its occluder geometry);
-  // in camera-only mode the sparse landmark map is rgb-colored from its own
-  // track observations instead, no flag involved. Each point's
+  // into each camera's images and map.pcd gains an rgb field. Each point's
   // color is a robust weighted average over its observations; a point
   // observed by several cameras gets a weighted blend of them after
   // per-camera gain alignment against the FIRST listed topic. Points no image
@@ -60,44 +52,12 @@ struct MapSlamArgs
   // (unrectified): the CameraInfo distortion model is applied during
   // projection.
   std::vector<std::string> color_topics;
-  // Optional camera image topics (sensor_msgs/msg/Image or CompressedImage)
-  // used as SLAM visual constraints (--cam). Empty: no visual constraints,
-  // zero cost. Set: each camera's frames are sparse-feature tracked during the
-  // bag read and the resulting co-visibility observations become
-  // rig-projection factors between submap poses in the global optimization,
-  // curbing the drift LiDAR geometry alone cannot see (long corridors,
-  // tunnels, open fields). Without cloud_topic (camera-only mode, imu_topic
-  // required) the cameras additionally drive the visual-inertial odometry and
-  // map.pcd is the sparse rgb landmark map. Independent of color_topics — a
-  // topic may appear in
-  // both, and is then read once for the SLAM pass and once for the later
-  // colorize pass. Intrinsics come from each camera's CameraInfo topic
-  // (camera_info_overrides, or auto-resolved from the image topic name); each
-  // camera extrinsic is resolved from the bag's static TF (cloud frame <-
-  // CameraInfo frame_id) and its absence is an error. Images are assumed RAW
-  // (unrectified): the frontend undistorts the tracked features with the
-  // CameraInfo distortion model. A topic listed more than once is an error.
-  // A camera's position in this list is its VisualObservation::camera_id.
-  std::vector<std::string> cam_topics;
-  // Target live feature-track count per cam_topics camera
-  // (--visual-max-features). More features = stronger constraints and more CPU
-  // per frame; fewer = faster. Must be > 0. Passing --visual-max-features
-  // without --cam is a CLI error.
-  int visual_max_features = 200;
-  // Camera-only anchor-window period override (--visual-anchor-period), a
-  // unit-suffixed duration string ("100ms", "0.1s"); parsed at run time under
-  // DurationUnitPolicy::RequireUnit and must be positive. Empty (the default)
-  // derives the period from the first cam_topics camera's header stamps
-  // (median inter-frame interval). Camera-only mode only: with --pcd the
-  // period parameterizes nothing, so validate_mode_flags rejects it.
-  std::string visual_anchor_period;
   // Explicit CameraInfo topic overrides, each entry keyed as
-  // "<image_topic>=<info_topic>" (--cam-info). Serves both camera roles
-  // (color_topics and cam_topics). Cameras without an entry auto-resolve their
-  // CameraInfo from the image topic name using the standard suffix rules.
-  // Entries whose key is not a listed camera topic, malformed entries, and
-  // duplicate keys are errors, as is passing any entry with neither camera
-  // list set.
+  // "<image_topic>=<info_topic>" (--cam-info). Applies to color_topics.
+  // Cameras without an entry auto-resolve their CameraInfo from the image
+  // topic name using the standard suffix rules. Entries whose key is not a
+  // listed --color topic, malformed entries, and duplicate keys are errors,
+  // as is passing any entry with color_topics empty.
   std::vector<std::string> camera_info_overrides;
   // Keyframe thinning gate for the colorize pass, in meters. 0 (the default)
   // feeds every decoded image to the colorizer; > 0 feeds an image only when
@@ -125,9 +85,9 @@ struct MapSlamArgs
   // Output root directory; receives traj.tum and map.pcd.
   std::filesystem::path output_root;
   // Frame the output trajectory is expressed in. Empty (the default) keeps the
-  // trajectory in the PointCloud2 topic's frame_id — or, in camera-only mode,
-  // in the first --cam camera's frame_id. A different value is resolved
-  // through the bag's static TF and each output pose is transformed accordingly.
+  // trajectory in the PointCloud2 topic's frame_id. A different value is
+  // resolved through the bag's static TF and each output pose is transformed
+  // accordingly.
   std::string output_frame;
   // Voxel size in meters used for BOTH the GLIM LiDAR input downsample and the
   // exported-map merge — the single "map resolution" knob. Default 0.15 matches
@@ -250,9 +210,6 @@ struct MapSlamArgs
   // (the CUDA colorize rasterizer). Its numbers are not bit-identical to the
   // CPU backend's; the difference is bounded by AGENTS.md "Numerical
   // Reproducibility". The effective choice is resolved in run_map_slam.
-  // In camera-only mode (cloud_topic empty) the visual-inertial odometry is
-  // CPU-only: "cuda" is rejected by validate_mode_flags and "auto" resolves
-  // to CPU.
   std::string backend = "auto";
 };
 
@@ -263,10 +220,7 @@ struct MapSlamArgs
 // trajectory (traj.tum) plus an optimized world-frame point-cloud map (map.pcd),
 // both under args.output_root. With args.imu_topic set, odometry switches to
 // GLIM's LiDAR-IMU estimator (OdometryEstimationCPU, or OdometryEstimationGPU
-// on the GPU backend — see backend). With args.cloud_topic EMPTY (camera-only
-// mode; args.cam_topics and args.imu_topic required), the odometry layer is the
-// visual-inertial estimator and map.pcd is the sparse rgb landmark map instead
-// of a dense point cloud.
+// on the GPU backend — see backend).
 //
 // Returns a process exit code: 0 on success, 1 on any error (input open
 // failure, topic/type mismatch, an absent LiDAR<-IMU static-TF chain, output

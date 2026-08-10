@@ -67,28 +67,21 @@ private:
   void configure_slam(CLI::App & app)
   {
     auto * sub = app.add_subcommand(
-      "slam",
-      "Estimate a trajectory from a LiDAR PointCloud2 topic, or camera-only "
-      "visual-inertial SLAM from --cam + --imu (GLIM, in-process)");
+      "slam", "Estimate a trajectory from a LiDAR PointCloud2 topic (GLIM, in-process)");
     sub->add_option("-i,--input", slam_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option(
-      "--pcd", slam_args_.cloud_topic,
-      "PointCloud2 topic to run SLAM on. Optional since camera-only mode: either --pcd or "
-      "--cam must be given (both may be). Without --pcd the run is camera-only "
-      "visual-inertial SLAM driven by --cam + --imu.");
+    sub->add_option("--pcd", slam_args_.cloud_topic, "PointCloud2 topic to run SLAM on.")
+      ->required();
     sub
       ->add_option(
         "-o,--output", slam_args_.output_root, "Output root directory; writes traj.tum and map.pcd")
       ->required();
     sub->add_option(
       "--imu", slam_args_.imu_topic,
-      "Optional Imu topic; switches odometry to LiDAR-IMU. REQUIRED in camera-only mode "
-      "(--cam without --pcd): the visual-inertial odometry integrates the IMU stream. The "
-      "LiDAR<-IMU extrinsic is resolved from the bag's static TF using the cloud and IMU "
-      "header frame_ids — or, in camera-only mode, the first --cam camera's frame — "
-      "(errors if that chain is absent).");
+      "Optional Imu topic; switches odometry to LiDAR-IMU. The LiDAR<-IMU extrinsic is "
+      "resolved from the bag's static TF using the cloud and IMU header frame_ids (errors "
+      "if that chain is absent).");
     sub->add_option(
       "--gnss", slam_args_.gnss_topic,
       "Optional NavSatFix topic; adds GNSS global constraints during global mapping "
@@ -104,40 +97,13 @@ private:
       "--cam-info); each camera extrinsic is resolved from the bag's static TF (errors "
       "if that chain is absent). Images are assumed raw (unrectified). A topic listed "
       "more than once is an error.");
-    auto * cam_opt = sub->add_option(
-      "--cam", slam_args_.cam_topics,
-      "Camera image topic(s) (sensor_msgs/msg/Image or CompressedImage) used as SLAM "
-      "visual constraints; list several after one flag and/or repeat the flag. With "
-      "--pcd, feature tracks from these cameras become co-visibility constraints "
-      "between submap poses in the global optimization, curbing drift. Without --pcd "
-      "(camera-only mode, requires --imu) the cameras drive a visual-inertial odometry "
-      "and map.pcd is the sparse rgb landmark map. Independent of --color (a topic may "
-      "appear in both). Intrinsics come from each camera's CameraInfo topic (see "
-      "--cam-info); each camera extrinsic is resolved from the bag's static TF (errors "
-      "if that chain is absent). Images are assumed raw (unrectified). A topic listed "
-      "more than once is an error.");
-    sub
-      ->add_option(
-        "--visual-max-features", slam_args_.visual_max_features,
-        "Target live feature-track count per --cam camera (default 200). More features "
-        "= stronger constraints and more CPU; fewer = faster.")
-      ->check(CLI::PositiveNumber)
-      ->needs(cam_opt);
-    sub
-      ->add_option(
-        "--visual-anchor-period", slam_args_.visual_anchor_period,
-        "Camera-only anchor-window period as <number><unit> (e.g. 100ms, 0.1s): the "
-        "cross-camera grouping window keyed to the first --cam camera's frames. "
-        "Default: derived from that topic's median frame interval. Camera-only mode "
-        "only (rejected with --pcd).")
-      ->needs(cam_opt);
     sub->add_option(
       "--cam-info", slam_args_.camera_info_overrides,
-      "Explicit CameraInfo topic per camera, as <image_topic>=<info_topic> (several "
-      "after one flag and/or repeated). Applies to both --color and --cam topics. "
-      "Cameras without an entry auto-resolve their CameraInfo from the image topic "
-      "name using the standard suffix rules. A malformed entry, an <image_topic> that "
-      "is not a --color or --cam topic, and a duplicate <image_topic> are errors.");
+      "Explicit CameraInfo topic per --color camera, as <image_topic>=<info_topic> "
+      "(several after one flag and/or repeated). Cameras without an entry auto-resolve "
+      "their CameraInfo from the image topic name using the standard suffix rules. A "
+      "malformed entry, an <image_topic> that is not a --color topic, and a duplicate "
+      "<image_topic> are errors.");
     auto * color_min_dist_opt =
       sub
         ->add_option(
@@ -166,8 +132,7 @@ private:
       "keep a neutral gray instead of inheriting the nearest observed neighbor's color.");
     sub->add_option(
       "--frame", slam_args_.output_frame,
-      "Output trajectory frame. Defaults to the PointCloud2 topic's frame_id — or, in "
-      "camera-only mode (--cam without --pcd), the first --cam camera's frame_id; a "
+      "Output trajectory frame. Defaults to the PointCloud2 topic's frame_id; a "
       "different value is resolved through the bag's static TF and the trajectory is "
       "transformed so each pose expresses the requested frame in the SLAM world.");
     sub
@@ -176,8 +141,7 @@ private:
         "Voxel size in meters (default 0.15) for BOTH the LiDAR input downsample and the "
         "exported-map merge — the single map-resolution knob. Smaller = denser map and finer "
         "SLAM detail, at more points and runtime. Feeds the optimizer, so it also changes "
-        "the trajectory. No effect in camera-only mode (the sparse landmark map is not "
-        "voxel-merged).")
+        "the trajectory.")
       ->check(CLI::PositiveNumber);
     sub
       ->add_option(
@@ -330,9 +294,7 @@ private:
         "SLAM backend (default 'auto'). 'auto' uses the CUDA GPU backend when this "
         "binary was built with CUDA support AND a CUDA device is visible, else CPU. "
         "'cuda' forces it (errors on a non-CUDA build / no device). 'cpu' forces the "
-        "CPU backend. In camera-only mode (--cam without --pcd) the run is always CPU: "
-        "'cuda' is rejected and 'auto' resolves to CPU. The two backends' numbers are "
-        "not bit-identical.")
+        "CPU backend. The two backends' numbers are not bit-identical.")
       ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
     sub->callback([this, sub]() {
       selected_ = Subcommand::kSlam;

@@ -33,7 +33,6 @@ namespace
 using bagwiz::commands::build_mapper_config;
 using bagwiz::commands::is_vehicle_like_frame;
 using bagwiz::commands::MapSlamArgs;
-using bagwiz::commands::median_frame_period_ns;
 using bagwiz::commands::remove_isolated_map_points;
 using bagwiz::commands::resolve_scan_progress;
 using bagwiz::commands::validate_mode_flags;
@@ -152,8 +151,7 @@ TEST(BuildMapperConfig, CopiesTheArguments)
   bagwiz::core::slam::SensorTransform extrinsic;
   extrinsic.translation = {1.0, 2.0, 3.0};
   extrinsic.rotation_xyzw = {0.0, 0.0, 0.0, 1.0};
-  const auto config =
-    build_mapper_config(args, extrinsic, true, {4.0, 5.0, 6.0}, {}, 100'000'000, 0);
+  const auto config = build_mapper_config(args, extrinsic, true, {4.0, 5.0, 6.0}, 0);
 
   EXPECT_DOUBLE_EQ(config.input_resolution, 0.25);
   EXPECT_DOUBLE_EQ(config.range_min, 2.0);
@@ -182,16 +180,14 @@ TEST(BuildMapperConfig, MapsTheDynamicMethodAndSensorHeight)
   auto args = make_args();
   args.dynamic_method = "erasor2";
   args.dynamic_sensor_height = 1.5;
-  const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
+  const auto config = build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, 0);
   EXPECT_EQ(config.dynamic_method, bagwiz::core::slam::DynamicRemovalMethod::kErasor2);
   EXPECT_DOUBLE_EQ(config.dynamic_erasor.sensor_height, 1.5);
 }
 
 TEST(BuildMapperConfig, DefaultsToTheDufomapMethod)
 {
-  const auto config =
-    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
+  const auto config = build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, 0);
   EXPECT_EQ(config.dynamic_method, bagwiz::core::slam::DynamicRemovalMethod::kDufomap);
 }
 
@@ -200,8 +196,7 @@ TEST(BuildMapperConfig, LidarOnlyWithoutGnss)
   auto args = make_args();
   args.imu_topic.clear();
   args.gnss_topic.clear();
-  const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
+  const auto config = build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, 0);
 
   EXPECT_FALSE(config.t_lidar_imu.has_value());
   EXPECT_FALSE(config.enable_gnss);
@@ -211,43 +206,11 @@ TEST(BuildMapperConfig, LidarOnlyWithoutGnss)
   EXPECT_DOUBLE_EQ(config.gnss_antenna_offset[2], 0.0);
 }
 
-// --cam: the extrinsic table is copied verbatim, so a row index stays the
-// VisualObservation::camera_id the frontends stamp.
-TEST(BuildMapperConfig, CopiesVisualCameras)
-{
-  auto args = make_args();
-  args.cam_topics = {"/cam0/image_raw", "/cam1/image_raw"};
-  std::vector<bagwiz::core::slam::SensorTransform> visual_cameras(2);
-  visual_cameras[0].translation = {1.0, 0.0, 0.0};
-  visual_cameras[1].translation = {0.0, 2.0, 0.0};
-  visual_cameras[1].rotation_xyzw = {0.0, 0.0, 1.0, 0.0};
-
-  const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, visual_cameras, 100'000'000, 0);
-
-  ASSERT_EQ(config.visual_cameras.size(), 2U);
-  EXPECT_DOUBLE_EQ(config.visual_cameras[0].translation[0], 1.0);
-  EXPECT_DOUBLE_EQ(config.visual_cameras[0].rotation_xyzw[3], 1.0);
-  EXPECT_DOUBLE_EQ(config.visual_cameras[1].translation[1], 2.0);
-  EXPECT_DOUBLE_EQ(config.visual_cameras[1].rotation_xyzw[2], 1.0);
-}
-
-// Without --cam the table stays empty, which is what switches the visual
-// constraints off inside the mapper.
-TEST(BuildMapperConfig, NoCamTopicsLeavesVisualCamerasEmpty)
-{
-  const auto args = make_args();
-  const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
-  EXPECT_TRUE(config.visual_cameras.empty());
-}
-
 TEST(BuildMapperConfig, CapsThreadsAtTheHardwareLimit)
 {
   auto args = make_args();
   args.num_threads = std::numeric_limits<int>::max();
-  const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
+  const auto config = build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, 0);
   const unsigned int hardware = std::thread::hardware_concurrency();
   if (hardware > 0) {
     EXPECT_EQ(config.num_threads, static_cast<int>(hardware));
@@ -258,55 +221,22 @@ TEST(BuildMapperConfig, ZeroThreadsResolvesToTheHardwareConcurrency)
 {
   auto args = make_args();
   args.num_threads = 0;
-  const auto config =
-    build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
+  const auto config = build_mapper_config(args, std::nullopt, false, {0.0, 0.0, 0.0}, 0);
   const unsigned int hardware = std::thread::hardware_concurrency();
   EXPECT_EQ(config.num_threads, hardware > 0 ? static_cast<int>(hardware) : 1);
 }
 
-TEST(BuildMapperConfig, PassesTheVisualAnchorPeriod)
-{
-  const auto config =
-    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 50'000'000, 0);
-  EXPECT_EQ(config.visual_anchor_period_ns, 50'000'000);
-}
-
 TEST(BuildMapperConfig, PassesTheUpsamplePeriod)
 {
-  const auto config = build_mapper_config(
-    make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 20'000'000);
+  const auto config =
+    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, 20'000'000);
   EXPECT_EQ(config.upsample_period_ns, 20'000'000);
 }
 
 TEST(BuildMapperConfig, UpsampleDefaultsToOff)
 {
-  const auto config =
-    build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
+  const auto config = build_mapper_config(make_args(), std::nullopt, false, {0.0, 0.0, 0.0}, 0);
   EXPECT_EQ(config.upsample_period_ns, 0);
-}
-
-TEST(MedianFramePeriodNs, MedianOfConsecutiveDeltas)
-{
-  // Regular 100 ms stamps with one jittered delta: the median ignores it.
-  const std::vector<std::int64_t> stamps{0, 100'000'000, 195'000'000, 295'000'000, 395'000'000};
-  EXPECT_EQ(median_frame_period_ns(stamps), 100'000'000);
-}
-
-TEST(MedianFramePeriodNs, RobustToAMidStreamGap)
-{
-  // A dropped frame doubles one delta; the median still reads the nominal
-  // period — exactly why span/count averaging is the wrong tool here.
-  const std::vector<std::int64_t> stamps{0,           100'000'000, 300'000'000,
-                                         400'000'000, 500'000'000, 600'000'000};
-  EXPECT_EQ(median_frame_period_ns(stamps), 100'000'000);
-}
-
-TEST(MedianFramePeriodNs, DegenerateInputsYieldZero)
-{
-  EXPECT_EQ(median_frame_period_ns({}), 0);
-  EXPECT_EQ(median_frame_period_ns(std::vector<std::int64_t>{42}), 0);
-  // Non-increasing stamps carry no positive delta to take a median of.
-  EXPECT_EQ(median_frame_period_ns(std::vector<std::int64_t>{100, 100, 50}), 0);
 }
 
 TEST(ResolveScanProgress, DisabledByTheFlagSkipsTheStatsRead)
@@ -351,35 +281,6 @@ TEST(ResolveScanProgress, LidarOnlyCountsOnlyTheCloudTopic)
   const auto setup = resolve_scan_progress(reader, args, true, kLogger);
   EXPECT_TRUE(setup.enabled);
   EXPECT_EQ(setup.total_msgs, 10);
-}
-
-// --cam images stream through the SLAM pass, so their counts join the bar's
-// denominator; --color topics are read in the later colorize pass and do not.
-TEST(ResolveScanProgress, CamTopicCountsJoinTheTotal)
-{
-  const EnvVarGuard no_color("NO_COLOR", std::nullopt);
-  auto args = make_args();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.color_topics = {"/cam1/image_raw"};
-  CountsReader reader(
-    {{"/points", 10},
-     {"/imu", 90},
-     {"/fix", 5},
-     {"/cam0/image_raw", 40},
-     {"/cam1/image_raw", 1000}});
-  const auto setup = resolve_scan_progress(reader, args, true, kLogger);
-  EXPECT_TRUE(setup.enabled);
-  EXPECT_EQ(setup.total_msgs, 145);
-}
-
-TEST(ResolveScanProgress, CamTopicCountsAreExcludedWithoutTheFlag)
-{
-  const EnvVarGuard no_color("NO_COLOR", std::nullopt);
-  const auto args = make_args();  // no --cam
-  CountsReader reader({{"/points", 10}, {"/imu", 90}, {"/fix", 5}, {"/cam0/image_raw", 40}});
-  const auto setup = resolve_scan_progress(reader, args, true, kLogger);
-  EXPECT_TRUE(setup.enabled);
-  EXPECT_EQ(setup.total_msgs, 105);
 }
 
 TEST(ResolveScanProgress, StatsFailureFallsBackToAnIndeterminateBar)
@@ -527,9 +428,8 @@ TEST(RemoveIsolatedMapPoints, EmptyMapIsANoOp)
 }
 
 // ---------------------------------------------------------------------------
-// validate_mode_flags: the mode-level flag combinations. --pcd is optional
-// since camera-only mode (issue #376 Phase 3); an empty cloud_topic with
-// --cam set is the camera-only combination, which --imu must drive.
+// validate_mode_flags: the cross-field flag combinations. --pcd is a required
+// option, so mode selection itself is enforced by CLI11.
 // ---------------------------------------------------------------------------
 
 TEST(ValidateModeFlags, LidarRunIsValid)
@@ -568,20 +468,6 @@ TEST(ValidateModeFlags, Erasor2WithItsOwnTuningIsValid)
   EXPECT_TRUE(validate_mode_flags(args).empty());
 }
 
-// In camera-only mode --remove-dynamic itself is the problem; the mode error
-// must win over the per-method tuning mismatch so the guidance is not
-// misleading.
-TEST(ValidateModeFlags, CameraOnlyModeErrorWinsOverMethodMismatch)
-{
-  auto args = make_args();  // remove_dynamic = true
-  args.cloud_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.dynamic_method = "erasor2";
-  args.dynamic_dufomap_tuning_given = true;
-  const std::string error = validate_mode_flags(args);
-  EXPECT_NE(error.find("--remove-dynamic requires --pcd"), std::string::npos) << error;
-}
-
 // ---------------------------------------------------------------------------
 // is_vehicle_like_frame: the heuristic behind the dufomap-on-a-concatenated-
 // topic warning.
@@ -603,57 +489,6 @@ TEST(IsVehicleLikeFrame, PassesSensorFrames)
   EXPECT_FALSE(is_vehicle_like_frame(""));
 }
 
-// LiDAR + --cam without --imu is the Phase 2 combination (visual constraints
-// only) and stays valid.
-TEST(ValidateModeFlags, LidarPlusCamWithoutImuIsValid)
-{
-  auto args = make_args();
-  args.imu_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  EXPECT_TRUE(validate_mode_flags(args).empty());
-}
-
-TEST(ValidateModeFlags, NeitherPcdNorCamIsAnError)
-{
-  auto args = make_args();
-  args.cloud_topic.clear();
-  const std::string error = validate_mode_flags(args);
-  EXPECT_NE(error.find("--pcd"), std::string::npos) << error;
-  EXPECT_NE(error.find("--cam"), std::string::npos) << error;
-}
-
-// Monocular + IMU is standard VIO and must be accepted.
-TEST(ValidateModeFlags, CameraOnlyWithImuIsValidIncludingMonocular)
-{
-  auto args = make_args();
-  args.cloud_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.remove_dynamic = false;  // make_args turns this LiDAR-map feature on
-  EXPECT_TRUE(validate_mode_flags(args).empty());
-}
-
-TEST(ValidateModeFlags, VisualAnchorPeriodRejectedInLidarMode)
-{
-  // The anchor period only parameterizes the camera-only grouping; with
-  // --pcd it would be a silent no-op, so refuse it like the other
-  // mode-mismatched flags.
-  auto args = make_args();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.visual_anchor_period = "100ms";
-  const std::string error = validate_mode_flags(args);
-  EXPECT_NE(error.find("--visual-anchor-period"), std::string::npos) << error;
-}
-
-TEST(ValidateModeFlags, VisualAnchorPeriodAcceptedInCameraOnlyMode)
-{
-  auto args = make_args();
-  args.cloud_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.remove_dynamic = false;
-  args.visual_anchor_period = "100ms";
-  EXPECT_TRUE(validate_mode_flags(args).empty());
-}
-
 TEST(ValidateModeFlags, UpsampleWithoutImuIsAnError)
 {
   // --upsample resamples the odometry's per-frame IMU-rate chains; a LiDAR-only
@@ -671,96 +506,6 @@ TEST(ValidateModeFlags, UpsampleAcceptedWithImuInLidarMode)
   auto args = make_args();
   args.upsample = "10ms";
   EXPECT_TRUE(validate_mode_flags(args).empty());
-}
-
-TEST(ValidateModeFlags, UpsampleAcceptedInCameraOnlyMode)
-{
-  // Camera-only mode always has --imu, so --upsample is always available there —
-  // and it is where it matters most, the keyframe gate leaving the output sparse.
-  auto args = make_args();
-  args.cloud_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.remove_dynamic = false;
-  args.upsample = "100hz";
-  EXPECT_TRUE(validate_mode_flags(args).empty());
-}
-
-TEST(ValidateModeFlags, CameraOnlyWithoutImuIsAnError)
-{
-  auto args = make_args();
-  args.cloud_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.imu_topic.clear();
-  args.remove_dynamic = false;
-  const std::string error = validate_mode_flags(args);
-  EXPECT_NE(error.find("requires --imu"), std::string::npos) << error;
-}
-
-TEST(ValidateModeFlags, ColorWithoutPcdIsAnError)
-{
-  auto args = make_args();
-  args.cloud_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.color_topics = {"/cam1/image_raw"};
-  const std::string error = validate_mode_flags(args);
-  EXPECT_NE(error.find("--color requires --pcd"), std::string::npos) << error;
-}
-
-TEST(ValidateModeFlags, CameraOnlyRejectsForcedCuda)
-{
-  auto args = make_args();
-  args.cloud_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  args.remove_dynamic = false;
-  args.backend = "cuda";
-  const std::string error = validate_mode_flags(args);
-  EXPECT_NE(error.find("--backend cuda"), std::string::npos) << error;
-}
-
-TEST(ValidateModeFlags, CameraOnlyRejectsLidarMapPostProcessors)
-{
-  auto dynamic_args = make_args();  // make_args sets remove_dynamic = true
-  dynamic_args.cloud_topic.clear();
-  dynamic_args.cam_topics = {"/cam0/image_raw"};
-  const std::string dynamic_error = validate_mode_flags(dynamic_args);
-  EXPECT_NE(dynamic_error.find("--remove-dynamic"), std::string::npos) << dynamic_error;
-
-  auto outlier_args = make_args();
-  outlier_args.cloud_topic.clear();
-  outlier_args.cam_topics = {"/cam0/image_raw"};
-  outlier_args.remove_dynamic = false;
-  outlier_args.remove_outliers = true;
-  const std::string outlier_error = validate_mode_flags(outlier_args);
-  EXPECT_NE(outlier_error.find("--remove-outliers"), std::string::npos) << outlier_error;
-}
-
-// No --pcd selects the mapper's camera-only mode; a set --pcd keeps it off.
-TEST(BuildMapperConfig, CloudTopicEmptinessSelectsCameraOnly)
-{
-  auto camera_only_args = make_args();
-  camera_only_args.cloud_topic.clear();
-  camera_only_args.cam_topics = {"/cam0/image_raw"};
-  const auto camera_only_config =
-    build_mapper_config(camera_only_args, std::nullopt, false, {0.0, 0.0, 0.0}, {}, 100'000'000, 0);
-  EXPECT_TRUE(camera_only_config.camera_only);
-
-  const auto lidar_config =
-    build_mapper_config(make_args(), std::nullopt, false, {0, 0, 0}, {}, 100'000'000, 0);
-  EXPECT_FALSE(lidar_config.camera_only);
-}
-
-// Camera-only mode streams no cloud topic: the bar's denominator is the IMU +
-// GNSS + --cam counts only.
-TEST(ResolveScanProgress, CameraOnlyCountsImuAndCamerasWithoutTheCloudTopic)
-{
-  const EnvVarGuard no_color("NO_COLOR", std::nullopt);
-  auto args = make_args();
-  args.cloud_topic.clear();
-  args.cam_topics = {"/cam0/image_raw"};
-  CountsReader reader({{"/points", 1000}, {"/imu", 90}, {"/fix", 5}, {"/cam0/image_raw", 40}});
-  const auto setup = resolve_scan_progress(reader, args, true, kLogger);
-  EXPECT_TRUE(setup.enabled);
-  EXPECT_EQ(setup.total_msgs, 135);  // /points is not streamed in camera-only mode
 }
 
 }  // namespace

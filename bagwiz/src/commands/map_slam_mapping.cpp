@@ -17,7 +17,6 @@
 
 #include <fmt/core.h>
 
-#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstdlib>
@@ -44,56 +43,19 @@ std::string imu_suffix(const MapSlamArgs & args, std::int64_t imu_count)
 
 std::string validate_mode_flags(const MapSlamArgs & args)
 {
-  const bool camera_only = args.cloud_topic.empty();
-  if (camera_only && args.cam_topics.empty()) {
-    return "either --pcd (LiDAR SLAM) or --cam (camera-only visual-inertial SLAM) is required";
-  }
-  // Checked before the mode split: --upsample is valid in both modes, and in
-  // camera-only mode --imu is required anyway, so this can only fire with --pcd.
   if (!args.upsample.empty() && args.imu_topic.empty()) {
     return "--upsample needs --imu: the poses it resamples are the odometry's per-frame "
            "IMU-rate chains, which a LiDAR-only run never estimates";
   }
-  if (!camera_only) {
-    // The --dynamic-* tuning options each affect exactly one removal method;
-    // passing one to the other method would be a silent no-op, so refuse it.
-    // Checked in LiDAR mode only: in camera-only mode --remove-dynamic itself
-    // is rejected below, which is the guidance that matters there.
-    if (args.dynamic_method == "erasor2" && args.dynamic_dufomap_tuning_given) {
-      return "--dynamic-res / --dynamic-ds / --dynamic-dp tune the dufomap method's "
-             "free-space grid and have no effect with --dynamic-method erasor2";
-    }
-    if (args.dynamic_method != "erasor2" && args.dynamic_sensor_height_given) {
-      return "--dynamic-sensor-height anchors the erasor2 method's height band and has "
-             "no effect with the dufomap method (pass --dynamic-method erasor2)";
-    }
-    if (!args.visual_anchor_period.empty()) {
-      return "--visual-anchor-period sets the camera-only grouping's anchor window and "
-             "has no effect with --pcd (the LiDAR modes group nothing by camera period)";
-    }
-    return "";  // LiDAR mode: every camera/feature flag keeps its existing meaning
+  // The --dynamic-* tuning options each affect exactly one removal method;
+  // passing one to the other method would be a silent no-op, so refuse it.
+  if (args.dynamic_method == "erasor2" && args.dynamic_dufomap_tuning_given) {
+    return "--dynamic-res / --dynamic-ds / --dynamic-dp tune the dufomap method's "
+           "free-space grid and have no effect with --dynamic-method erasor2";
   }
-  if (!args.color_topics.empty()) {
-    return "--color requires --pcd (colorization needs the LiDAR map and its "
-           "dynamic-occluder oracle); the camera-only map is rgb-colored from its own "
-           "track observations instead";
-  }
-  if (args.imu_topic.empty()) {
-    return "camera-only mode (--cam without --pcd) requires --imu: the odometry is "
-           "visual-INERTIAL — gravity alignment and the asynchronous-camera folding both "
-           "integrate the IMU stream";
-  }
-  if (args.backend == "cuda") {
-    return "camera-only mode (--cam without --pcd) does not support --backend cuda: the "
-           "visual-inertial odometry is CPU-only (use --backend auto/cpu)";
-  }
-  if (args.remove_dynamic) {
-    return "--remove-dynamic requires --pcd (it ray-casts the LiDAR scans); the "
-           "camera-only map is a sparse landmark set with no scan ghosts to remove";
-  }
-  if (args.remove_outliers) {
-    return "--remove-outliers requires --pcd (a dense-map neighborhood filter); it would "
-           "decimate the camera-only sparse landmark map";
+  if (args.dynamic_method != "erasor2" && args.dynamic_sensor_height_given) {
+    return "--dynamic-sensor-height anchors the erasor2 method's height band and has "
+           "no effect with the dufomap method (pass --dynamic-method erasor2)";
   }
   return "";
 }
@@ -105,33 +67,10 @@ bool is_vehicle_like_frame(std::string_view frame_id)
          frame_id == "odom";
 }
 
-std::int64_t median_frame_period_ns(std::span<const std::int64_t> stamps_ns)
-{
-  if (stamps_ns.size() < 2) {
-    return 0;
-  }
-  std::vector<std::int64_t> deltas;
-  deltas.reserve(stamps_ns.size() - 1);
-  for (std::size_t i = 1; i < stamps_ns.size(); ++i) {
-    const std::int64_t delta = stamps_ns[i] - stamps_ns[i - 1];
-    if (delta > 0) {
-      deltas.push_back(delta);
-    }
-  }
-  if (deltas.empty()) {
-    return 0;
-  }
-  // nth_element instead of a full sort: only the median position matters.
-  const std::size_t mid = deltas.size() / 2;
-  std::nth_element(deltas.begin(), deltas.begin() + static_cast<std::ptrdiff_t>(mid), deltas.end());
-  return deltas[mid];
-}
-
 core::slam::CloudMapperConfig build_mapper_config(
   const MapSlamArgs & args, const std::optional<core::slam::SensorTransform> & t_lidar_imu,
   bool use_gpu, const std::array<double, 3> & gnss_antenna_offset,
-  std::span<const core::slam::SensorTransform> visual_cameras,
-  const std::int64_t visual_anchor_period_ns, const std::int64_t upsample_period_ns)
+  const std::int64_t upsample_period_ns)
 {
   core::slam::CloudMapperConfig config;
   config.input_resolution = args.input_resolution;
@@ -159,16 +98,6 @@ core::slam::CloudMapperConfig build_mapper_config(
   config.fill_start = args.fill_start;
   config.fill_end = args.fill_end;
   config.gnss_antenna_offset = gnss_antenna_offset;
-  config.visual_cameras.assign(visual_cameras.begin(), visual_cameras.end());
-  // No --pcd == camera-only visual-inertial SLAM (issue #376 Phase 3): the
-  // mapper swaps its odometry layer for the visual-inertial estimator and
-  // exports a sparse landmark map. validate_mode_flags (called first by
-  // run_map_slam) guarantees --cam and --imu are set in this mode.
-  config.camera_only = args.cloud_topic.empty();
-  // Resolved by the caller — --visual-anchor-period or the anchor camera
-  // topic's derived median frame period (issue #17); the mapper ignores it
-  // outside camera-only mode.
-  config.visual_anchor_period_ns = visual_anchor_period_ns;
   // Resolved by the caller from --upsample (period or hz); 0 leaves traj.tum at
   // one pose per scan and CloudMap::trajectory_dense empty.
   config.upsample_period_ns = upsample_period_ns;
@@ -186,23 +115,16 @@ ScanProgressSetup resolve_scan_progress(
   setup.enabled = core::slam::progress_enabled(
     stderr_is_tty, std::getenv("NO_COLOR") != nullptr, args.no_progress);
   if (setup.enabled) {
-    // The read loop streams the cloud topic in LiDAR modes; camera-only mode
-    // (--cam without --pcd) streams IMU + cameras only.
+    // The read loop streams the cloud topic plus, when requested, IMU and
+    // GNSS (the --color topics do not: they are read again in the later
+    // colorize pass, which has its own progress reporting).
     std::vector<std::string> progress_topics;
-    if (!args.cloud_topic.empty()) {
-      progress_topics.push_back(args.cloud_topic);
-    }
+    progress_topics.push_back(args.cloud_topic);
     if (!args.imu_topic.empty()) {
       progress_topics.push_back(args.imu_topic);
     }
     if (!args.gnss_topic.empty()) {
       progress_topics.push_back(args.gnss_topic);
-    }
-    // The --cam images stream through this same pass (the --color topics do
-    // not: they are read again in the later colorize pass, which has its own
-    // progress reporting).
-    for (const std::string & topic : args.cam_topics) {
-      progress_topics.push_back(topic);
     }
     try {
       const auto topic_counts = reader.compute_topic_counts(progress_topics);
@@ -331,34 +253,12 @@ void log_mapping_summary(
   const std::filesystem::path & trajectory_path, const std::filesystem::path & map_path,
   const char * logger)
 {
-  if (args.cloud_topic.empty()) {
-    // Camera-only mode: the "scans" are the visual-inertial odometry's
-    // keyframes, and the map is the sparse landmark set.
-    BAGWIZ_LOG_INFO(
-      logger,
-      "Wrote %zu optimized trajectory poses and a %zu-landmark sparse map from %" PRId64
-      " visual keyframe(s)%s to %s and %s",
-      map.trajectory.size(), map.points.size(), map.visual_odom_keyframe_count,
-      imu_suffix(args, imu_count).c_str(), trajectory_path.string().c_str(),
-      map_path.string().c_str());
-    if (map.visual_dropped_observation_count > 0) {
-      BAGWIZ_LOG_WARN(
-        logger,
-        "%" PRId64
-        " visual observation(s) were dropped by the cross-camera grouping (stamps the "
-        "anchor camera's frames left uncovered — mid-run frame drops on the first --cam "
-        "topic, or the benign case: other cameras' frames before its first / after its "
-        "last frame at the bag's edges)",
-        map.visual_dropped_observation_count);
-    }
-  } else {
-    BAGWIZ_LOG_INFO(
-      logger,
-      "Wrote %zu optimized trajectory poses and a %zu-point map from %zu scans%s (%zu skipped) "
-      "to %s and %s",
-      map.trajectory.size(), map.points.size(), scans, imu_suffix(args, imu_count).c_str(), skipped,
-      trajectory_path.string().c_str(), map_path.string().c_str());
-  }
+  BAGWIZ_LOG_INFO(
+    logger,
+    "Wrote %zu optimized trajectory poses and a %zu-point map from %zu scans%s (%zu skipped) "
+    "to %s and %s",
+    map.trajectory.size(), map.points.size(), scans, imu_suffix(args, imu_count).c_str(), skipped,
+    trajectory_path.string().c_str(), map_path.string().c_str());
 
   // --upsample: say how much of the exported file is resampled rather than
   // solved, and name the spans the grid could not cover (the fill windows and
@@ -376,9 +276,7 @@ void log_mapping_summary(
     }
   }
 
-  // The endpoint fills scan-match LiDAR window scans; they are force-disabled
-  // in camera-only mode, so only report them in LiDAR modes.
-  if (args.fill_start && !args.cloud_topic.empty()) {
+  if (args.fill_start) {
     if (map.filled_start_pose_count > 0) {
       BAGWIZ_LOG_INFO(
         logger, "Filled %zu initialization-window pose(s) by scan-matching",
@@ -396,7 +294,7 @@ void log_mapping_summary(
     }
   }
 
-  if (args.fill_end && !args.cloud_topic.empty()) {
+  if (args.fill_end) {
     if (map.filled_end_pose_count > 0) {
       BAGWIZ_LOG_INFO(
         logger, "Filled %zu cooldown-window pose(s) by scan-matching", map.filled_end_pose_count);
@@ -422,28 +320,6 @@ void log_mapping_summary(
         "without GNSS. Likely too little motion (baseline) or no temporal overlap between GNSS "
         "and the submaps.",
         args.gnss_topic.c_str(), std::to_string(gnss_count).c_str());
-    }
-  }
-
-  if (!args.cam_topics.empty()) {
-    if (map.visual_factor_count > 0) {
-      BAGWIZ_LOG_INFO(
-        logger,
-        "Applied %" PRId64 " visual constraint(s) from %" PRId64
-        " track(s) across %zu --cam "
-        "camera(s); the 'visual constraints:' line above breaks the tracks down",
-        map.visual_factor_count, map.visual_track_count, args.cam_topics.size());
-    } else {
-      // --cam was requested but no track survived to a factor: the map is still
-      // valid, just unconstrained by the cameras. Warn rather than fail, as
-      // GNSS does above.
-      BAGWIZ_LOG_WARN(
-        logger,
-        "--cam camera(s) yielded no visual constraints (%" PRId64
-        " track(s) read); the global optimization ran without them. Likely too little "
-        "parallax, tracks confined to a single submap, or landmarks the LiDAR-support gate "
-        "rejected — see the 'visual constraints:' line above for the breakdown.",
-        map.visual_track_count);
     }
   }
 }
