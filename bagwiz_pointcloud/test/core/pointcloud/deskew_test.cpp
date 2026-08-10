@@ -410,3 +410,36 @@ TEST(Deskew, NonMonotonicPointTimes)
   EXPECT_NEAR(xyz_at(*r.cloud, 1)[0], 10.0f + 1.0f, 1e-4);   // t=0.05s: x + 20*0.05
   EXPECT_NEAR(xyz_at(*r.cloud, 2)[0], 100.0f + 3.0f, 1e-4);  // t=0.15s: x + 20*0.15
 }
+
+TEST(Deskew, PointsBeforeSpanAreCountedOutOfSpanAndClamped)
+{
+  // Trajectory spans [0, 0.1s]; t_ref = 0. The point at relative time -0.05s
+  // predates the first pose: it clamps to it and is counted out-of-span. The
+  // clamped pose coincides with the ref pose (both are the trajectory front),
+  // so the point's xyz is left unchanged. The in-span point at 0.02s moves
+  // normally (20 m/s * 0.02 s = 0.4 m).
+  auto cloud = make_cloud_xyzt({{1.0f, 0.0f, 0.0f, -0.05f}, {0.0f, 0.0f, 0.0f, 0.02f}});
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  auto r = deskew_pointcloud2(cloud, 0, traj);
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.points_deskewed, 2u);
+  EXPECT_EQ(r.points_out_of_span, 1u);
+  EXPECT_FALSE(r.ref_out_of_span);
+  EXPECT_NEAR(xyz_at(*r.cloud, 0)[0], 1.0f, 1e-5);  // clamped pose == ref pose: no motion
+  EXPECT_NEAR(xyz_at(*r.cloud, 1)[0], 0.4f, 1e-4);  // in-span: x + 20*0.02
+}
+
+TEST(Deskew, RefAndPointsPastSpanAreReportedOutOfSpan)
+{
+  // t_ref = 0.2s, past the last sample at 0.1s: the reference pose clamps to
+  // the back pose, and both points (t_i = 0.2s / 0.25s) clamp likewise, so the
+  // whole cloud is effectively left un-deskewed — reported, not silent.
+  auto cloud = make_cloud_xyzt({{1.0f, 0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f, 0.05f}});
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  auto r = deskew_pointcloud2(cloud, 200'000'000, traj);
+  ASSERT_TRUE(r.ok());
+  EXPECT_TRUE(r.ref_out_of_span);
+  EXPECT_EQ(r.points_out_of_span, 2u);
+  EXPECT_NEAR(xyz_at(*r.cloud, 0)[0], 1.0f, 1e-5);  // both poses clamp to back: no motion
+  EXPECT_NEAR(xyz_at(*r.cloud, 1)[0], 2.0f, 1e-5);
+}

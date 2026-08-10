@@ -150,17 +150,19 @@ bagwiz pcd undistort -i drive.mcap --pose /slam/tf --pcd /points -o undistorted.
 
 ### Options
 
-| Flag                    | Description                                                                                                                                                                                                                                                                            |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                           |
-| `--pose <pose_topic>`   | Self-position source topic already in the bag. Type must be one of `tf2_msgs/msg/TFMessage`, `nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped`, `geometry_msgs/msg/PoseWithCovarianceStamped`. Exactly one of `--pose` / `--twist` is required.                                 |
-| `--twist <twist_topic>` | Vehicle-velocity source topic already in the bag, integrated (dead-reckoned) into the deskew motion. Type must be one of `geometry_msgs/msg/Twist`, `geometry_msgs/msg/TwistStamped`, `geometry_msgs/msg/TwistWithCovarianceStamped`. Exactly one of `--pose` / `--twist` is required. |
-| `--pcd <topic>`         | **Required.** PointCloud2 topic(s) to deskew. Variadic and repeatable — `--pcd /a /b` and `--pcd /a --pcd /b` are equivalent. At least one is required.                                                                                                                                |
-| `--ref <frame>`         | Reference frame the trajectory is resolved in (same convention as `traj dump`). Default: `map`. Has no effect with `--twist` (a velocity source carries only relative motion).                                                                                                         |
-| `--of <frame>`          | Tracked body frame. The trajectory is obtained as `T_ref_of` (e.g. `T_map_base_link`). Default: `base_link`.                                                                                                                                                                           |
-| `-o`, `--output <path>` | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                                                                                                                           |
-| `-w`, `--overwrite`     | Replace `-o/--output` if it already exists. Has no effect in in-place mode.                                                                                                                                                                                                            |
-| `-j`, `--threads <N>`   | Number of worker threads for Pass 2. Default: `8`. Accepts `0`–`256`; `0` uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; in-range values above hardware concurrency are capped to it.                                                                    |
+| Flag                          | Description                                                                                                                                                                                                                                                                                                          |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>`       | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                                                         |
+| `--pose <pose_topic>`         | Self-position source topic already in the bag. Type must be one of `tf2_msgs/msg/TFMessage`, `nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped`, `geometry_msgs/msg/PoseWithCovarianceStamped`. Exactly one of `--pose` / `--twist` is required.                                                               |
+| `--twist <twist_topic>`       | Vehicle-velocity source topic already in the bag, integrated (dead-reckoned) into the deskew motion. Type must be one of `geometry_msgs/msg/Twist`, `geometry_msgs/msg/TwistStamped`, `geometry_msgs/msg/TwistWithCovarianceStamped`. Exactly one of `--pose` / `--twist` is required.                               |
+| `--pcd <topic>`               | **Required.** PointCloud2 topic(s) to deskew. Variadic and repeatable — `--pcd /a /b` and `--pcd /a --pcd /b` are equivalent. At least one is required.                                                                                                                                                              |
+| `--ref <frame>`               | Reference frame the trajectory is resolved in (same convention as `traj dump`). Default: `map`. Has no effect with `--twist` (a velocity source carries only relative motion).                                                                                                                                       |
+| `--of <frame>`                | Tracked body frame. The trajectory is obtained as `T_ref_of` (e.g. `T_map_base_link`). Default: `base_link`.                                                                                                                                                                                                         |
+| `-o`, `--output <path>`       | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                                                                                                                                                         |
+| `-w`, `--overwrite`           | Replace `-o/--output` if it already exists. Has no effect in in-place mode.                                                                                                                                                                                                                                          |
+| `-j`, `--threads <N>`         | Number of worker threads for Pass 2. Default: `8`. Accepts `0`–`256`; `0` uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; in-range values above hardware concurrency are capped to it.                                                                                                  |
+| `--no-extrap`                 | Do not extrapolate the motion trajectory beyond its samples. Clouds outside the trajectory's time span are deskewed against the clamped endpoint poses (with a warning), instead of being covered by extrapolation. Mutually exclusive with `--max-extrap-duration`.                                                 |
+| `--max-extrap-duration <val>` | Per-side cap on the trajectory extrapolation. Default: `1s`; `0` is equivalent to `--no-extrap`. Takes an optional unit `ns`/`us`/`ms`/`s` (no unit = ms), e.g. `500ms`. If covering the `--pcd` topics' first clouds needs more extrapolation than this on either side, the run errors out before writing anything. |
 
 ### Trajectory resolution
 
@@ -198,6 +200,25 @@ rate and quality: where `--pose` deskews against measured poses, `--twist`
 deskews against integrated velocities, and any velocity bias accumulates over
 the scan duration.
 
+Whichever source built it, the raw trajectory spans only the motion topic's
+first-to-last sample, and a cloud (or point) outside that span would otherwise
+be deskewed against the clamped endpoint poses — for a cloud wholly outside,
+that means no correction at all. To avoid that, Pass 1 by default extends the
+trajectory by constant-velocity extrapolation: it continues the endpoint
+velocity (linear translation, SLERP-extrapolated rotation of the first/last
+interval) backwards to the earliest first-cloud timestamp and forwards by one
+sweep (the longest first-cloud sweep over the `--pcd` topics) past the last
+sample, so leading/trailing clouds are deskewed against plausible motion
+instead of a frozen pose. The extension assumes the endpoint velocity holds
+over the extrapolated interval, so it is only trustworthy near the endpoint:
+if covering the first clouds this way needs more than `--max-extrap-duration`
+(default `1s`) on either side, the run errors out before anything is written —
+raise the cap to extrapolate that far, or pass `--no-extrap` to turn the
+extension off entirely. Clouds that still fall outside the extended span
+during the rewrite (e.g. past a longer tail gap than one sweep, or a mid-bag
+motion-source dropout) are not an error: they are deskewed against the clamped
+endpoint poses with an out-of-span warning.
+
 ### Per-topic extrinsics and time fields
 
 For every `--pcd` topic, the sensor extrinsic `E = T_of_C` (`C` = that topic's
@@ -222,8 +243,10 @@ For each cloud on a `--pcd` topic:
 - each point's xyz is moved from its own timestamp's pose to the pose at
   `t_ref = header.stamp` via
   `p' = E⁻¹·(T_ref_of(t_ref)⁻¹·T_ref_of(t_i))·E·p`, interpolating the
-  trajectory (SLERP + lerp) and clamping to the nearest endpoint pose for
-  points outside its time span;
+  trajectory (SLERP + lerp). Points or reference stamps that still fall
+  outside the (by default extrapolated) trajectory's time span are deskewed
+  against the nearest endpoint pose and reported with an out-of-span
+  warning;
 - the per-point time field is rewritten to the `t_ref`-equivalent value
   (`0` for a relative field, `header.stamp` for an absolute one), so a
   later `undistort` or `concat` run can't double-deskew the cloud;
@@ -273,6 +296,8 @@ Reproducibility": it is held strictly, at any thread count.
 | A `--twist` topic's `header.frame_id` has no static TF chain to `--of`                                                    | Fatal.                                                                                                    |
 | A `--pcd` topic's first message has no per-point time field                                                               | Fatal.                                                                                                    |
 | A later `--pcd` cloud has no usable per-point time field                                                                  | Warning; cloud passed through un-deskewed.                                                                |
+| A point's or reference stamp's time falls outside the (possibly extrapolated) trajectory's time span                      | Warning; deskewed against the clamped endpoint pose.                                                      |
+| Covering the `--pcd` clouds would need more than `--max-extrap-duration` (default `1s`) of trajectory extrapolation       | Error before anything is written; raise the cap or pass `--no-extrap`.                                    |
 | `--of` → a `--pcd` topic's cloud frame is not reachable via `*/tf_static` + `<pose_topic>`                                | Fatal.                                                                                                    |
 | A cloud reaching the rewrite step is malformed (big-endian, missing/misshapen x/y/z, or an inconsistent point/row layout) | Aborts the run (a cloud that merely fails to _parse_ is copied through unchanged with a warning instead). |
 | `-o` output path already exists without `-w`/`--overwrite`                                                                | Error.                                                                                                    |

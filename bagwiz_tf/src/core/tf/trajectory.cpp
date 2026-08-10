@@ -336,4 +336,37 @@ std::optional<TrajectoryPose> lookup_pose(
   return interpolate_poses(prev, next, t);
 }
 
+void extend_trajectory_to_span(
+  std::vector<TrajectoryPose> & poses, std::int64_t start_ns, std::int64_t end_ns)
+{
+  if (poses.empty()) {
+    return;
+  }
+  if (start_ns < poses.front().timestamp_ns) {
+    TrajectoryPose ext = poses.front();
+    if (poses.size() >= 2) {
+      const double dt = static_cast<double>(poses[1].timestamp_ns - poses[0].timestamp_ns);
+      if (dt > 0.0) {
+        const double t = -static_cast<double>(poses[0].timestamp_ns - start_ns) / dt;
+        ext = interpolate_poses(poses[0], poses[1], t);
+      }
+    }
+    ext.timestamp_ns = start_ns;
+    poses.insert(poses.begin(), ext);
+  }
+  if (end_ns > poses.back().timestamp_ns) {
+    const std::size_t n = poses.size();
+    TrajectoryPose ext = poses.back();
+    if (n >= 2) {
+      const double dt = static_cast<double>(poses[n - 1].timestamp_ns - poses[n - 2].timestamp_ns);
+      if (dt > 0.0) {
+        const double t = static_cast<double>(end_ns - poses[n - 2].timestamp_ns) / dt;
+        ext = interpolate_poses(poses[n - 2], poses[n - 1], t);
+      }
+    }
+    ext.timestamp_ns = end_ns;
+    poses.push_back(ext);
+  }
+}
+
 }  // namespace bagwiz::core

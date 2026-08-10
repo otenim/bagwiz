@@ -1549,7 +1549,8 @@ TEST(FlagCompletionTest, PcdUndistortDashListsUndistortFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "pcd", "undistort", "-"}),
-    "--help\n--input\n--of\n--output\n--overwrite\n--pcd\n--pose\n--ref\n--threads\n--twist\n-h\n-"
+    "--help\n--input\n--max-extrap-duration\n--no-extrap\n--of\n--output\n--overwrite\n--pcd\n--"
+    "pose\n--ref\n--threads\n--twist\n-h\n-"
     "i\n-j\n-"
     "o\n-w\n");
 }

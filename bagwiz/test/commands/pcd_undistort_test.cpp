@@ -29,6 +29,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -276,8 +277,8 @@ void write_undistort_input_oob_time_field(const std::filesystem::path & path)
   w->close();
 }
 
-std::optional<float> read_first_point_x(
-  const std::filesystem::path & path, const std::string & topic)
+std::optional<float> read_point_x(
+  const std::filesystem::path & path, const std::string & topic, std::size_t index)
 {
   auto reader = bagwiz::io::open_read(path);
   bagwiz::io::ReadFilter filter;
@@ -288,12 +289,18 @@ std::optional<float> read_first_point_x(
     return std::nullopt;
   }
   const auto parsed = pc::parse_pointcloud2(raw.payload);
-  if (!parsed.ok() || parsed.cloud->width == 0) {
+  if (!parsed.ok() || parsed.cloud->width <= index) {
     return std::nullopt;
   }
   float x = 0.0f;
-  std::memcpy(&x, parsed.cloud->data.data(), sizeof(float));
+  std::memcpy(&x, parsed.cloud->data.data() + index * parsed.cloud->point_step, sizeof(float));
   return x;
+}
+
+std::optional<float> read_first_point_x(
+  const std::filesystem::path & path, const std::string & topic)
+{
+  return read_point_x(path, topic, 0);
 }
 
 // Raw per-message payload bytes for a topic, in bag order. Used to assert
@@ -390,6 +397,152 @@ void write_undistort_input_twist(const std::filesystem::path & path)
     const auto other = serialize_cloud(kPoseT0Ns, "some_other_frame", 42.0f, std::nullopt);
     w->write("/other", kPoseT0Ns, std::span<const std::byte>(other.data(), other.size()));
   }
+  w->close();
+}
+
+// Multi-point variant of serialize_cloud: each entry is {x, relative t_sec},
+// y = z = 0, all float32 (point_step 16).
+std::vector<std::byte> serialize_cloud_multi(
+  std::int64_t stamp_ns, const std::string & frame_id,
+  const std::vector<std::pair<float, float>> & points)
+{
+  pc::PointCloud2 c;
+  c.timestamp_ns = stamp_ns;
+  c.frame_id = frame_id;
+  c.height = 1;
+  c.width = static_cast<std::uint32_t>(points.size());
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat32, 1},
+    {"y", 4, pc::PointFieldType::kFloat32, 1},
+    {"z", 8, pc::PointFieldType::kFloat32, 1},
+    {"t", 12, pc::PointFieldType::kFloat32, 1},
+  };
+  c.point_step = 16;
+  c.row_step = c.point_step * c.width;
+  c.is_dense = true;
+  c.data.assign(static_cast<std::size_t>(c.point_step) * c.width, std::byte{0});
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    std::memcpy(c.data.data() + i * c.point_step + 0, &points[i].first, sizeof(float));
+    std::memcpy(c.data.data() + i * c.point_step + 12, &points[i].second, sizeof(float));
+  }
+  return pc::serialize_pointcloud2(c);
+}
+
+void declare_twist_topic(bagwiz::io::BagWriter & w)
+{
+  bagwiz::io::TopicInfo t;
+  t.name = "/twist";
+  t.type = "geometry_msgs/msg/TwistStamped";
+  t.serialization_format = "cdr";
+  w.declare_topic(t);
+}
+
+void write_twist_sample(bagwiz::io::BagWriter & w, std::int64_t stamp_ns, double vx)
+{
+  geometry_msgs::msg::TwistStamped ts;
+  ts.header.frame_id = "base_link";
+  ts.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
+  ts.header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
+  ts.twist.linear.x = vx;
+  const auto p = serialize_typed(ts, "geometry_msgs/msg/TwistStamped");
+  w.write("/twist", stamp_ns, std::span<const std::byte>(p.data(), p.size()));
+}
+
+void write_empty_tf_static(bagwiz::io::BagWriter & w)
+{
+  const std::vector<geometry_msgs::msg::TransformStamped> no_edges;
+  const auto s = bagwiz::core::serialize_tf_message(no_edges);
+  w.write("/tf_static", 0, std::span<const std::byte>(s.data(), s.size()));
+}
+
+// A bag whose motion source starts 50ms AFTER the only cloud: /twist publishes
+// a constant +10 m/s forward twist at t0+50ms and t0+150ms, while /points is
+// stamped t0 with its point at relative time 0.05s (absolute t0+50ms).
+// Without trajectory extrapolation the cloud's header.stamp predates the
+// trajectory's first sample, so both the reference and the point pose lookups
+// clamp to it and the cloud is left silently un-deskewed. With extrapolation
+// (the default) the endpoint velocity continues backwards: pose(t0) = x-0.5,
+// pose(t0+50ms) = x0, so the point moves to x=+0.5.
+void write_undistort_input_twist_late_start(const std::filesystem::path & path)
+{
+  auto w = bagwiz::io::open_write(path, mcap_options());
+  declare_twist_topic(*w);
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  w->declare_topic(pcd_topic_info("/points"));
+
+  write_twist_sample(*w, kPoseT0Ns + 50 * kMs, 10.0);
+  write_twist_sample(*w, kPoseT0Ns + 150 * kMs, 10.0);
+  write_empty_tf_static(*w);
+  const auto pts = serialize_cloud(kPoseT0Ns, "base_link", 0.0f, 0.05f);
+  w->write("/points", kPoseT0Ns, std::span<const std::byte>(pts.data(), pts.size()));
+  w->close();
+}
+
+// The pose-topic counterpart of write_undistort_input_twist_late_start: the
+// map->base_link edge is published at t0+50ms (x=0) and t0+150ms (x=1), while
+// the lone cloud is stamped t0 with its point at relative time 0.05s. The
+// extrapolated pose at t0 is x=-0.5, so the point moves to x=+0.5.
+void write_undistort_input_pose_late_start(const std::filesystem::path & path)
+{
+  auto w = bagwiz::io::open_write(path, mcap_options());
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/pose_tf"));
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  w->declare_topic(pcd_topic_info("/points"));
+
+  const std::vector<geometry_msgs::msg::TransformStamped> edges0{
+    make_map_to_base_link(kPoseT0Ns + 50 * kMs, 0.0)};
+  const std::vector<geometry_msgs::msg::TransformStamped> edges1{
+    make_map_to_base_link(kPoseT0Ns + 150 * kMs, 1.0)};
+  const auto p0 = bagwiz::core::serialize_tf_message(edges0);
+  const auto p1 = bagwiz::core::serialize_tf_message(edges1);
+  w->write("/pose_tf", kPoseT0Ns + 50 * kMs, std::span<const std::byte>(p0.data(), p0.size()));
+  w->write("/pose_tf", kPoseT0Ns + 150 * kMs, std::span<const std::byte>(p1.data(), p1.size()));
+  write_empty_tf_static(*w);
+  const auto pts = serialize_cloud(kPoseT0Ns, "base_link", 0.0f, 0.05f);
+  w->write("/points", kPoseT0Ns, std::span<const std::byte>(pts.data(), pts.size()));
+  w->close();
+}
+
+// Same shape as write_undistort_input_twist_late_start, but the twist starts a
+// full 3s after the cloud — beyond the default 1s --max-extrap-duration, so
+// the run must fail instead of extrapolating that far. Raising the cap to 10s
+// extrapolates pose(t0) = x-30 and the point (relative time 3.0s) lands on the
+// twist's first sample at x=0, i.e. moves to x=+30.
+void write_undistort_input_twist_far_late_start(const std::filesystem::path & path)
+{
+  auto w = bagwiz::io::open_write(path, mcap_options());
+  declare_twist_topic(*w);
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  w->declare_topic(pcd_topic_info("/points"));
+
+  write_twist_sample(*w, kPoseT0Ns + 3000 * kMs, 10.0);
+  write_twist_sample(*w, kPoseT0Ns + 3100 * kMs, 10.0);
+  write_empty_tf_static(*w);
+  const auto pts = serialize_cloud(kPoseT0Ns, "base_link", 0.0f, 3.0f);
+  w->write("/points", kPoseT0Ns, std::span<const std::byte>(pts.data(), pts.size()));
+  w->close();
+}
+
+// A cloud whose sweep ends 30ms AFTER the last twist sample: /twist publishes
+// a constant +10 m/s twist at t0 and t0+100ms; /points is stamped t0+80ms
+// with two points at relative times 0.0s and 0.05s (absolute t0+80ms and
+// t0+130ms). Extrapolation pads the trajectory tail by one sweep (50ms, to
+// t0+150ms): the second point's pose interpolates to x=1.3 against the
+// reference pose x=0.8, moving it to x=+0.5, while the first point sits at the
+// reference time and stays at x=0.
+void write_undistort_input_twist_short(const std::filesystem::path & path)
+{
+  auto w = bagwiz::io::open_write(path, mcap_options());
+  declare_twist_topic(*w);
+  w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+  w->declare_topic(pcd_topic_info("/points"));
+
+  write_twist_sample(*w, kPoseT0Ns, 10.0);
+  write_twist_sample(*w, kPoseT0Ns + 100 * kMs, 10.0);
+  write_empty_tf_static(*w);
+  const auto pts =
+    serialize_cloud_multi(kPoseT0Ns + 80 * kMs, "base_link", {{0.0f, 0.0f}, {0.0f, 0.05f}});
+  w->write("/points", kPoseT0Ns + 80 * kMs, std::span<const std::byte>(pts.data(), pts.size()));
   w->close();
 }
 
@@ -577,4 +730,94 @@ TEST_F(PcdUndistortTest, MissingMotionSourceIsFatal)
   auto a = base_args(in_, out_);
   a.pose_topic.clear();
   EXPECT_EQ(run_pcd_undistort(a), 1);
+}
+
+// Regression test for the silent-clamping defect: a cloud stamped before the
+// motion source's first sample used to pass through un-deskewed (every pose
+// lookup clamped to the same endpoint pose) with its per-point times zeroed.
+// The default extrapolation continues the endpoint velocity backwards and
+// deskews it.
+TEST_F(PcdUndistortTest, ExtrapolatesTwistTrajectoryBackwardsForEarlyCloud)
+{
+  write_undistort_input_twist_late_start(in_);
+  auto a = base_args(in_, out_);
+  a.pose_topic.clear();
+  a.twist_topic = "/twist";
+  ASSERT_EQ(run_pcd_undistort(a), 0);
+
+  const auto x = read_first_point_x(out_, "/points");
+  ASSERT_TRUE(x.has_value());
+  EXPECT_NEAR(*x, 0.5f, 1e-4f);
+}
+
+// The same extrapolation applies to the --pose path.
+TEST_F(PcdUndistortTest, ExtrapolatesPoseTrajectoryBackwardsForEarlyCloud)
+{
+  write_undistort_input_pose_late_start(in_);
+  ASSERT_EQ(run_pcd_undistort(base_args(in_, out_)), 0);
+
+  const auto x = read_first_point_x(out_, "/points");
+  ASSERT_TRUE(x.has_value());
+  EXPECT_NEAR(*x, 0.5f, 1e-4f);
+}
+
+// --no-extrap keeps the old clamping behaviour: the early cloud is left
+// un-deskewed (the reference pose and the point pose clamp to the same
+// endpoint), and the run still succeeds with out-of-span warnings.
+TEST_F(PcdUndistortTest, NoExtrapLeavesEarlyCloudUnDeskewed)
+{
+  write_undistort_input_twist_late_start(in_);
+  auto a = base_args(in_, out_);
+  a.pose_topic.clear();
+  a.twist_topic = "/twist";
+  a.no_extrap = true;
+  ASSERT_EQ(run_pcd_undistort(a), 0);
+
+  const auto x = read_first_point_x(out_, "/points");
+  ASSERT_TRUE(x.has_value());
+  EXPECT_NEAR(*x, 0.0f, 1e-6f);
+}
+
+// A gap larger than --max-extrap-duration (default 1s) aborts the run before
+// anything is written; raising the cap lets the extrapolation through.
+TEST_F(PcdUndistortTest, ExtrapolationBeyondMaxDurationIsFatal)
+{
+  write_undistort_input_twist_far_late_start(in_);
+  auto a = base_args(in_, out_);
+  a.pose_topic.clear();
+  a.twist_topic = "/twist";
+  EXPECT_EQ(run_pcd_undistort(a), 1);
+  EXPECT_FALSE(std::filesystem::exists(out_));  // aborted before Pass 2
+
+  a.max_extrap_duration = "10s";
+  ASSERT_EQ(run_pcd_undistort(a), 0);
+  const auto x = read_first_point_x(out_, "/points");
+  ASSERT_TRUE(x.has_value());
+  EXPECT_NEAR(*x, 30.0f, 1e-3f);
+}
+
+TEST_F(PcdUndistortTest, InvalidMaxExtrapDurationIsFatal)
+{
+  write_undistort_input(in_, /*with_time_field=*/true);
+  auto a = base_args(in_, out_);
+  a.max_extrap_duration = "bogus";
+  EXPECT_EQ(run_pcd_undistort(a), 1);
+}
+
+// The tail side: a sweep ending past the motion source's last sample is
+// covered by extrapolating the endpoint velocity forward by one sweep.
+TEST_F(PcdUndistortTest, ExtrapolatesTwistTrajectoryForwardsForLateSweep)
+{
+  write_undistort_input_twist_short(in_);
+  auto a = base_args(in_, out_);
+  a.pose_topic.clear();
+  a.twist_topic = "/twist";
+  ASSERT_EQ(run_pcd_undistort(a), 0);
+
+  const auto x0 = read_point_x(out_, "/points", 0);
+  const auto x1 = read_point_x(out_, "/points", 1);
+  ASSERT_TRUE(x0.has_value());
+  ASSERT_TRUE(x1.has_value());
+  EXPECT_NEAR(*x0, 0.0f, 1e-4f);  // at the reference time: no motion
+  EXPECT_NEAR(*x1, 0.5f, 1e-4f);  // past the last twist sample: extrapolated forward
 }

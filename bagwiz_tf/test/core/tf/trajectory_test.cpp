@@ -367,4 +367,56 @@ TEST(InterpolatePoses, SlerpHalfwayAcross90Degrees)
   EXPECT_NEAR(m.qz, kSin22p5, 1e-9);
   EXPECT_NEAR(m.qw, kCos22p5, 1e-9);
 }
+
+TEST(ExtendTrajectoryToSpan, PrependsAndAppendsConstantVelocityPoses)
+{
+  // Poses at 100 (x=0) and 200 (x=10): extending to [50, 250] continues the
+  // 0.1 per-ns velocity, prepending x=-5 at 50 and appending x=15 at 250.
+  std::vector<TrajectoryPose> poses{{100, 0, 0, 0, 0, 0, 0, 1}, {200, 10, 0, 0, 0, 0, 0, 1}};
+  extend_trajectory_to_span(poses, 50, 250);
+  ASSERT_EQ(poses.size(), 4u);
+  EXPECT_EQ(poses.front().timestamp_ns, 50);
+  EXPECT_NEAR(poses.front().tx, -5.0, 1e-9);
+  EXPECT_EQ(poses[1].timestamp_ns, 100);  // the original samples stay untouched
+  EXPECT_EQ(poses.back().timestamp_ns, 250);
+  EXPECT_NEAR(poses.back().tx, 15.0, 1e-9);
+}
+
+TEST(ExtendTrajectoryToSpan, ExtrapolatesRotationBeyondFirstSample)
+{
+  // a at 100 = identity, b at 200 = 90 deg about Z; extending to 50 prepends
+  // -45 deg about Z (qz = -sin(22.5), qw = cos(22.5)).
+  std::vector<TrajectoryPose> poses{
+    {100, 0, 0, 0, 0, 0, 0, 1}, {200, 0, 0, 0, 0, 0, kSinPiOver4, kSinPiOver4}};
+  extend_trajectory_to_span(poses, 50, 200);
+  ASSERT_EQ(poses.size(), 3u);
+  EXPECT_EQ(poses.front().timestamp_ns, 50);
+  EXPECT_NEAR(poses.front().qz, -kSin22p5, 1e-9);
+  EXPECT_NEAR(poses.front().qw, kCos22p5, 1e-9);
+}
+
+TEST(ExtendTrajectoryToSpan, NoOpInsideSpan)
+{
+  std::vector<TrajectoryPose> poses{{100, 0, 0, 0, 0, 0, 0, 1}, {200, 10, 0, 0, 0, 0, 0, 1}};
+  extend_trajectory_to_span(poses, 100, 200);
+  EXPECT_EQ(poses.size(), 2u);
+}
+
+TEST(ExtendTrajectoryToSpan, SinglePoseIsCopiedToNewStamps)
+{
+  std::vector<TrajectoryPose> poses{{100, 1, 2, 3, 0, 0, 0, 1}};
+  extend_trajectory_to_span(poses, 50, 250);
+  ASSERT_EQ(poses.size(), 3u);
+  EXPECT_EQ(poses.front().timestamp_ns, 50);
+  EXPECT_DOUBLE_EQ(poses.front().tx, 1.0);
+  EXPECT_EQ(poses.back().timestamp_ns, 250);
+  EXPECT_DOUBLE_EQ(poses.back().tz, 3.0);
+}
+
+TEST(ExtendTrajectoryToSpan, EmptyTrajectoryStaysEmpty)
+{
+  std::vector<TrajectoryPose> poses;
+  extend_trajectory_to_span(poses, 50, 250);
+  EXPECT_TRUE(poses.empty());
+}
 }  // namespace
