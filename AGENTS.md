@@ -146,6 +146,25 @@ to keep this file itself consistent over time.
 - Write PR descriptions that are comprehensive and detailed, yet
   concise: cover the problem, the solution, and the test plan without
   unnecessary verbosity.
+- Retire the working branch as soon as its pull request is merged, so
+  merged work stops accumulating locally and on the remote. Standing
+  from a checkout other than the branch's own worktree, in this
+  order: remove the worktree if the branch had one
+  (`git worktree remove <path>`), delete the local branch
+  (`git branch -d <branch>`), delete the remote branch
+  (`git push origin --delete <branch>`, skipped when the repository
+  already deleted it on merge), and update the main branch
+  (`git switch main && git pull --prune`). The approval the developer
+  gave to merge covers the deletions that follow it, so do not ask a
+  second time for them.
+- Stop and report rather than forcing a step of that cleanup that
+  refuses to run — a worktree holding uncommitted changes, or a local
+  branch git will not delete because it carries commits `main` does
+  not contain. A squash or rebase merge always produces the latter,
+  since it lands rewritten commits; confirm the pull request really
+  is merged (`gh pr view <number> --json state,mergedAt`) before
+  reaching for `git branch -D`, and never use it on a branch whose
+  fate is unconfirmed.
 
 ### 8. Resource Management
 
