@@ -151,6 +151,22 @@ public:
     return false;
   }
 
+  RetainedPayload retain_payload(const RawMessage & msg) override
+  {
+    // Zero-copy only on the parallel indexed path with no per-message
+    // decompression: there the RawMessage span points into a chunk buffer
+    // the stream can share. Every other backing (the fallback path's
+    // payload_buf_, the MESSAGE-decompressor's reuse buffer) is overwritten
+    // by the next next()/decompress() call, so those fall back to the base
+    // implementation's copy.
+    if (parallel_stream_ && !decompressor_) {
+      if (auto owner = parallel_stream_->retain_last_chunk()) {
+        return RetainedPayload{msg.payload, std::move(owner)};
+      }
+    }
+    return BagReader::retain_payload(msg);
+  }
+
   Stats compute_stats() override
   {
     Stats stats;

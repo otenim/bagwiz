@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -168,4 +169,75 @@ TEST_F(McapParallelReadTest, SingleReadThreadFallsBackToSynchronousPath)
   const auto fallback = read_all(bag_, "1");
   const auto parallel = read_all(bag_, "4");
   EXPECT_EQ(fallback, parallel);
+}
+
+namespace
+{
+
+// Retain every message of `path` while iterating, then check -- after the
+// reader is destroyed -- that every retained span still holds the bytes the
+// message carried when it was emitted. Retaining everything also pins every
+// chunk buffer at once, the worst case for the buffer recycling.
+void expect_retained_payloads_outlive_reader(
+  const std::filesystem::path & path, const char * read_threads)
+{
+  SCOPED_TRACE(std::string("BAGWIZ_READ_THREADS=") + read_threads);
+  ::setenv("BAGWIZ_READ_THREADS", read_threads, 1);
+  std::vector<bagwiz::io::RetainedPayload> retained;
+  std::vector<Record> records;
+  {
+    auto reader = bagwiz::io::open_read(path);
+    bagwiz::io::RawMessage raw;
+    while (reader->next(raw)) {
+      retained.push_back(reader->retain_payload(raw));
+      records.emplace_back(
+        raw.topic->name, raw.timestamp_ns,
+        std::vector<std::byte>(raw.payload.begin(), raw.payload.end()));
+    }
+  }  // reader (and its prefetch pool) destroyed; retained spans must survive
+  ::unsetenv("BAGWIZ_READ_THREADS");
+
+  ASSERT_FALSE(records.empty());
+  ASSERT_EQ(retained.size(), records.size());
+  for (std::size_t i = 0; i < retained.size(); ++i) {
+    const auto & expect = std::get<2>(records[i]);
+    const auto span = retained[i].payload;
+    ASSERT_EQ(span.size(), expect.size());
+    EXPECT_TRUE(std::equal(span.begin(), span.end(), expect.begin()));
+  }
+}
+
+}  // namespace
+
+// retain_payload must keep the payload bytes alive past subsequent next()
+// calls and past reader destruction: zero-copy chunk sharing on the parallel
+// path ("4"), a plain copy on the synchronous fallbacks ("0"/"1").
+TEST_F(McapParallelReadTest, RetainedPayloadsOutliveReaderOnEveryPath)
+{
+  expect_retained_payloads_outlive_reader(bag_, "0");
+  expect_retained_payloads_outlive_reader(bag_, "1");
+  expect_retained_payloads_outlive_reader(bag_, "4");
+}
+
+// The uncompressed-chunk variant: there the parallel path serves payload
+// spans out of the raw chunk record buffer (blob offset > 0) instead of a
+// zstd scratch buffer, which is the other backing retain_payload must pin.
+TEST_F(McapParallelReadTest, RetainedPayloadsOutliveReaderOnUncompressedChunks)
+{
+  const auto plain = tmp_ / "plain.mcap";
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "";
+  options.mcap_chunk_size = 64;
+  auto writer = bagwiz::io::open_write(plain, options);
+  writer->declare_topic(topic_info("/a"));
+  for (int i = 0; i < 10; ++i) {
+    const auto p = payload_bytes(i, 40);
+    writer->write("/a", 1000 + i * 10, std::span<const std::byte>(p.data(), p.size()));
+  }
+  writer->close();
+
+  expect_retained_payloads_outlive_reader(plain, "0");
+  expect_retained_payloads_outlive_reader(plain, "4");
 }

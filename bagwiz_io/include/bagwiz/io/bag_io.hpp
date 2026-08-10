@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace bagwiz::io
@@ -61,6 +62,15 @@ struct RawMessage
   const TopicInfo * topic = nullptr;
   int64_t timestamp_ns = 0;
   std::span<const std::byte> payload;
+};
+
+// A message payload whose backing storage stays alive independently of the
+// reader that produced it: `owner` keeps the bytes viewed by `payload` valid
+// until the handle is destroyed. Obtained from BagReader::retain_payload().
+struct RetainedPayload
+{
+  std::span<const std::byte> payload;
+  std::shared_ptr<const void> owner;  // type-erased keep-alive handle
 };
 
 // Pre-iteration filter pushed down into the storage layer. SQLite3 uses it
@@ -114,6 +124,22 @@ public:
 
   // Stream the next message. Returns false at EOF; throws on IO error.
   virtual bool next(RawMessage & out) = 0;
+
+  // Retain the payload of the message most recently returned by next(), so
+  // its bytes survive subsequent next() calls and reader destruction. `msg`
+  // must be the message the last successful next() produced, and the call
+  // must happen before the following next() invalidates its span. The base
+  // implementation copies the bytes; a backend whose storage already holds
+  // the payload in a shareable buffer (the parallel indexed mcap read)
+  // shares that buffer instead, making retention O(1) — at the cost of
+  // pinning the whole backing chunk while the handle lives, so callers that
+  // retain many messages hold at most a bounded number of handles at once.
+  virtual RetainedPayload retain_payload(const RawMessage & msg)
+  {
+    auto copy = std::make_shared<std::vector<std::byte>>(msg.payload.begin(), msg.payload.end());
+    const std::span<const std::byte> view(copy->data(), copy->size());
+    return RetainedPayload{view, std::move(copy)};
+  }
 
   struct Stats
   {

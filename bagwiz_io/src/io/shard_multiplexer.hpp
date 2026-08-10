@@ -115,6 +115,17 @@ public:
     return false;
   }
 
+  RetainedPayload retain_payload(const RawMessage & msg) override
+  {
+    // next() leaves current_ on the shard that served the message, so
+    // forward there — the shard reader knows whether its backing can be
+    // shared zero-copy or must be copied.
+    if (current_ < shard_rel_paths_.size()) {
+      return ensure_shard(current_).retain_payload(msg);
+    }
+    return BagReader::retain_payload(msg);
+  }
+
   Stats compute_stats() override
   {
     if (metadata_.has_summary) {

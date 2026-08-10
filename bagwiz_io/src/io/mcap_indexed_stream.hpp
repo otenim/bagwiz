@@ -69,16 +69,25 @@ public:
   // non-empty error() distinguishes the latter.
   [[nodiscard]] bool next(Message & out);
 
+  // Share ownership of the decompressed chunk backing the message most
+  // recently emitted by next(). Valid only between a successful next() and
+  // the following next() call; null before the first emission. The handle
+  // keeps the chunk's buffer alive past the stream's own slot reuse — the
+  // buffer returns to the recycling pool once the last holder drops it.
+  [[nodiscard]] std::shared_ptr<const void> retain_last_chunk() const;
+
   [[nodiscard]] const std::string & error() const { return error_; }
 
 private:
-  // One retained decompressed chunk; reused once all its messages were
-  // consumed AND a later chunk claims the slot (so the last emitted payload
-  // stays valid until the next next() call, per the contract). The evicted
-  // buffer is recycled back to the prefetcher's pool at that point.
+  // One retained decompressed chunk; the slot is reused once all its
+  // messages were consumed AND a later chunk claims it (so the last emitted
+  // payload stays valid until the next next() call, per the contract). The
+  // chunk handle is shared so retain_last_chunk() can extend the buffer's
+  // life past that reuse; the make_retained_chunk() deleter recycles the
+  // buffer when the last holder lets go.
   struct Slot
   {
-    PrefetchedChunk chunk;
+    std::shared_ptr<const PrefetchedChunk> chunk;
     std::uint64_t chunk_start_offset = 0;
     std::size_t unread = 0;
   };
@@ -91,6 +100,7 @@ private:
   bool has_filter_ = false;
   mcap_compat::ReadJobQueue queue_{false};
   std::vector<Slot> slots_;
+  std::size_t last_slot_ = SIZE_MAX;  // slot of the last emitted message
   std::unordered_map<std::uint64_t, std::size_t> schedule_index_by_offset_;
   std::unique_ptr<ChunkPrefetcher> prefetcher_;
   std::string error_;

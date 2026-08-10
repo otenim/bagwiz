@@ -147,17 +147,16 @@ void ParallelIndexedStream::ingest_chunk(const mcap_compat::DecompressChunkJob &
   const std::uint64_t end_ns = options_.end_ns.value_or(mcap::MaxTime);
   const std::size_t slot_index = find_free_slot();
   Slot & slot = slots_[slot_index];
-  // Return the evicted chunk's buffer to the prefetcher pool before the new
-  // chunk takes the slot, so workers reuse it instead of allocating afresh.
-  if (slot.chunk.records.capacity() != 0) {
-    prefetcher_->recycle(std::move(slot.chunk.records));
-  }
-  slot.chunk = std::move(pre);
+  // Overwriting the evicted chunk's handle returns its buffer to the
+  // prefetcher pool (via the make_retained_chunk deleter) — unless a
+  // retain_last_chunk() holder is still alive, in which case the buffer
+  // follows that holder and is pooled when it lets go.
+  slot.chunk = make_retained_chunk(std::move(pre), prefetcher_->pool());
   slot.chunk_start_offset = job.chunkStartOffset;
   slot.unread = 0;
 
-  const std::byte * data = slot.chunk.data();
-  const std::size_t size = slot.chunk.size;
+  const std::byte * data = slot.chunk->data();
+  const std::size_t size = slot.chunk->size;
   std::size_t pos = 0;
   while (pos + kRecordHeaderBytes <= size) {
     const auto opcode = std::to_integer<std::uint8_t>(data[pos]);
@@ -198,7 +197,7 @@ bool ParallelIndexedStream::next(Message & out)
     }
     const auto & msg = std::get<mcap_compat::ReadMessageJob>(job);
     Slot & slot = slots_[msg.chunkReaderIndex];
-    const std::byte * record = slot.chunk.data() + msg.offset.offset;
+    const std::byte * record = slot.chunk->data() + msg.offset.offset;
     const std::uint64_t length = read_u64(record + 1);
     const std::byte * body = record + kRecordHeaderBytes;
     out.channel_id = read_u16(body);
@@ -206,9 +205,18 @@ bool ParallelIndexedStream::next(Message & out)
     out.payload = std::span<const std::byte>(
       body + kMessagePrefixBytes, static_cast<std::size_t>(length) - kMessagePrefixBytes);
     --slot.unread;
+    last_slot_ = msg.chunkReaderIndex;
     return true;
   }
   return false;
+}
+
+std::shared_ptr<const void> ParallelIndexedStream::retain_last_chunk() const
+{
+  if (last_slot_ >= slots_.size()) {
+    return nullptr;
+  }
+  return slots_[last_slot_].chunk;
 }
 
 }  // namespace bagwiz::io::detail

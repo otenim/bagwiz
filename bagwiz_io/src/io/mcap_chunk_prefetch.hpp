@@ -14,9 +14,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // Src-local building block of the parallel indexed mcap read path: a small
@@ -46,6 +48,51 @@ struct PrefetchedChunk
   [[nodiscard]] const std::byte * data() const { return records.data() + offset; }
 };
 
+// Thread-safe pool of reusable chunk buffers, shared (via shared_ptr) between
+// the prefetcher's workers and the retained-chunk deleters built by
+// make_retained_chunk(). Keeping it a standalone shared object lets a
+// retained chunk return its buffer for reuse no matter which thread drops the
+// last reference — and, when the consumer outlives the prefetcher, lets the
+// pool itself expire once the last holder is gone.
+class ChunkBufferPool
+{
+public:
+  // Pop a pooled buffer; an empty (capacity-0) vector when the pool is dry.
+  [[nodiscard]] std::vector<std::byte> take()
+  {
+    std::lock_guard lock(mutex_);
+    if (buffers_.empty()) {
+      return {};
+    }
+    std::vector<std::byte> buf = std::move(buffers_.back());
+    buffers_.pop_back();
+    return buf;
+  }
+
+  // Return a buffer for reuse. Capacity-0 buffers are dropped: pooling them
+  // would hand workers an allocation-free vector that still has to allocate.
+  void put(std::vector<std::byte> && buf)
+  {
+    if (buf.capacity() == 0) {
+      return;
+    }
+    std::lock_guard lock(mutex_);
+    buffers_.push_back(std::move(buf));
+  }
+
+private:
+  std::mutex mutex_;
+  std::vector<std::vector<std::byte>> buffers_;
+};
+
+// Wrap a prefetched chunk in a shared handle whose deleter returns the
+// backing buffer to `pool` when the last reference drops. This is what lets
+// a consumer keep a chunk's bytes alive past the stream's own slot reuse
+// (BagReader::retain_payload) without taking the buffer out of circulation
+// for good.
+[[nodiscard]] std::shared_ptr<const PrefetchedChunk> make_retained_chunk(
+  PrefetchedChunk && chunk, std::shared_ptr<ChunkBufferPool> pool);
+
 // Decompresses `schedule`'s chunks on `num_threads` workers, each with its own
 // file handle, at most a bounded lookahead ahead of the consumer. The consumer
 // calls get(0), get(1), ... in ascending order; each call blocks until that
@@ -68,20 +115,19 @@ public:
   // ascending indexes (0, 1, ...), each exactly once.
   [[nodiscard]] PrefetchedChunk get(std::size_t index);
 
-  // Return a consumed chunk's backing buffer for reuse by the workers. Keeps
-  // the steady state free of large allocations (and of the page faults +
+  // The buffer pool the workers draw from. Consumed chunks return their
+  // buffers to it through make_retained_chunk()'s deleter, keeping the
+  // steady state free of large allocations (and of the page faults +
   // zero-fill that come with fresh multi-MB buffers).
-  void recycle(std::vector<std::byte> && buf);
+  [[nodiscard]] const std::shared_ptr<ChunkBufferPool> & pool() const { return pool_; }
 
 private:
-  // Pop a pooled buffer (empty vector when the pool is dry).
-  [[nodiscard]] std::vector<std::byte> take_pooled_buffer();
-
   void worker_loop();
 
   const std::filesystem::path path_;
   const std::vector<ChunkRef> schedule_;
   const std::size_t lookahead_;
+  const std::shared_ptr<ChunkBufferPool> pool_ = std::make_shared<ChunkBufferPool>();
 
   std::mutex mutex_;
   std::condition_variable cv_;
@@ -90,7 +136,6 @@ private:
   bool cancel_ = false;
   std::string worker_fatal_error_;  // non-empty => a worker failed to start
   std::map<std::size_t, PrefetchedChunk> ready_;
-  std::vector<std::vector<std::byte>> buffer_pool_;
 
   std::vector<std::jthread> workers_;
 };

@@ -196,24 +196,14 @@ PrefetchedChunk ChunkPrefetcher::get(std::size_t index)
   return out;
 }
 
-void ChunkPrefetcher::recycle(std::vector<std::byte> && buf)
+std::shared_ptr<const PrefetchedChunk> make_retained_chunk(
+  PrefetchedChunk && chunk, std::shared_ptr<ChunkBufferPool> pool)
 {
-  if (buf.capacity() == 0) {
-    return;
-  }
-  std::lock_guard lock(mutex_);
-  buffer_pool_.push_back(std::move(buf));
-}
-
-std::vector<std::byte> ChunkPrefetcher::take_pooled_buffer()
-{
-  std::lock_guard lock(mutex_);
-  if (buffer_pool_.empty()) {
-    return {};
-  }
-  std::vector<std::byte> buf = std::move(buffer_pool_.back());
-  buffer_pool_.pop_back();
-  return buf;
+  return std::shared_ptr<const PrefetchedChunk>(
+    new PrefetchedChunk(std::move(chunk)), [pool = std::move(pool)](PrefetchedChunk * c) {
+      pool->put(std::move(c->records));
+      delete c;  // NOLINT(cppcoreguidelines-owning-memory) shared_ptr deleter
+    });
 }
 
 void ChunkPrefetcher::worker_loop()
@@ -256,7 +246,7 @@ void ChunkPrefetcher::worker_loop()
     const ChunkRef & ref = schedule_[index];
     PrefetchedChunk result;
     if (raw.capacity() == 0) {
-      raw = take_pooled_buffer();
+      raw = pool_->take();
     }
     try {
       raw.resize(ref.length);
@@ -267,7 +257,7 @@ void ChunkPrefetcher::worker_loop()
         result.error = "short read of chunk record from " + path_.string();
       } else {
         if (scratch.capacity() == 0) {
-          scratch = take_pooled_buffer();
+          scratch = pool_->take();
         }
         auto outcome = decompress_chunk_record(std::move(raw), std::move(scratch), dctx.get());
         result = std::move(outcome.chunk);
