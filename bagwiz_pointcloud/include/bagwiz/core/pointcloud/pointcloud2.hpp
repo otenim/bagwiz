@@ -91,6 +91,31 @@ struct PointCloud2Result
   [[nodiscard]] bool ok() const noexcept { return cloud.has_value() && error.empty(); }
 };
 
+// Locations of a serialized PointCloud2's point-data blob: the parsed header
+// plus where the blob's bytes sit inside the payload. Lets a caller mutate
+// point bytes directly in the serialized message (deskew_pointcloud2_cdr)
+// without materialising a PointCloud2 -- no data copy is made here.
+struct PointCloud2CdrLayout
+{
+  PointCloud2Header header;
+  std::size_t data_offset = 0;  // blob start within the payload
+  std::size_t data_size = 0;    // blob size in bytes
+};
+
+struct PointCloud2CdrLayoutResult
+{
+  std::optional<PointCloud2CdrLayout> layout;
+  std::string error;
+
+  [[nodiscard]] bool ok() const noexcept { return layout.has_value() && error.empty(); }
+};
+
+// Parse the header and locate the point-data blob without copying it. The
+// tail after the blob (is_dense) is still decoded, so ok() implies the whole
+// message parses -- the same acceptance parse_pointcloud2 applies.
+[[nodiscard]] PointCloud2CdrLayoutResult parse_pointcloud2_cdr_layout(
+  std::span<const std::byte> payload);
+
 // Parse only the header (stamp + field layout), stopping before the point data.
 // Cheap regardless of cloud size: no point bytes are read or copied.
 [[nodiscard]] PointCloud2HeaderResult parse_pointcloud2_header(std::span<const std::byte> payload);
