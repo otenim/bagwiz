@@ -39,8 +39,12 @@ inline constexpr double kUnitVectorComponent = 1e-3;
 
 // General real scalars — ratios, scores, residuals — relative. This is
 // "equal as floating point, allowing for a different summation order", not a
-// physical tolerance: any genuine algorithmic difference exceeds it.
-inline constexpr double kScalarRelative = 1e-6;
+// physical tolerance: any genuine algorithmic difference exceeds it. The
+// bound is sized for float32 accumulation on the CUDA backend, whose machine
+// epsilon is ~1.2e-7: a differently-ordered reduction over ~1e6 terms (a
+// multi-frame map) drifts by roughly sqrt(N) * eps ~ 1e-4. Double-precision
+// sums stay orders of magnitude inside the same bound.
+inline constexpr double kScalarRelative = 1e-4;
 
 // A color channel already quantized to uint8. One least-significant bit is
 // exactly the sRGB quantization rounding step; a deviation of 2 or more means
