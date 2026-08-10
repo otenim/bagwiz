@@ -11,6 +11,7 @@
 #include "bagwiz/commands/completion.hpp"
 #include "bagwiz/commands/help_formatter.hpp"
 #include "bagwiz/commands/parse_error.hpp"
+#include "bagwiz/commands/topic_expand.hpp"
 #include "bagwiz/core/base/logging.hpp"
 
 #include <exception>
@@ -105,6 +106,13 @@ int main(int argc, char ** argv) noexcept
       // CLI11 handled --help/--version or required_subcommand already printed
       // an error; nothing further to do.
       return 0;
+    }
+
+    // Resolve topic selectors before the command runs, so run() only ever sees
+    // literal topic names. See commands/topic_option.hpp for how a slot is
+    // declared and commands/topic_expand.hpp for what this does.
+    if (!bagwiz::commands::expand_topic_selectors(app)) {
+      return 1;
     }
 
     try {

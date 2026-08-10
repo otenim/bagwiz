@@ -9,14 +9,19 @@
 #include "bagwiz/commands/topic_option.hpp"
 
 #include "CLI/CLI.hpp"
+#include "bagwiz/commands/topic_expand.hpp"
 #include "bagwiz/commands/topic_types.hpp"
+#include "bagwiz/io/bag_io.hpp"
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -151,4 +156,190 @@ TEST(TopicOption, GuardValidatorLeavesHelpTextUnchanged)
   via_plain_add_option.add_option("-t,--topic", plain_topic, "Topic to inspect.");
 
   EXPECT_EQ(via_topic_option.help(), via_plain_add_option.help());
+}
+
+namespace
+{
+using bagwiz::commands::expand_topic_selectors;
+
+constexpr std::array<std::uint8_t, 4> kPayload{0x01, 0x02, 0x03, 0x04};
+
+std::span<const std::byte> payload_view()
+{
+  static_assert(sizeof(std::uint8_t) == sizeof(std::byte));
+  return std::span<const std::byte>(
+    reinterpret_cast<const std::byte *>(  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+      kPayload.data()),
+    kPayload.size());
+}
+
+bagwiz::io::TopicInfo make_topic(std::string name, std::string type)
+{
+  bagwiz::io::TopicInfo t;
+  t.name = std::move(name);
+  t.type = std::move(type);
+  t.serialization_format = "cdr";
+  return t;
+}
+
+// Bag with two PointCloud2 topics (declared right-before-left so the test can
+// prove the result is sorted, not declaration-ordered) and one Image topic.
+std::filesystem::path make_bag(const std::filesystem::path & dir)
+{
+  bagwiz::io::CreateOptions opts;
+  opts.format = bagwiz::io::Format::Mcap;
+  opts.layout = bagwiz::io::Layout::Directory;
+  opts.mcap_compression = "none";
+
+  auto writer = bagwiz::io::open_write(dir, opts);
+  const auto topics = std::vector<bagwiz::io::TopicInfo>{
+    make_topic("/lidar/right/points", "sensor_msgs/msg/PointCloud2"),
+    make_topic("/lidar/left/points", "sensor_msgs/msg/PointCloud2"),
+    make_topic("/camera/image_raw", "sensor_msgs/msg/Image"),
+  };
+  for (const auto & t : topics) {
+    writer->declare_topic(t);
+  }
+  std::int64_t stamp = 1000;
+  for (const auto & t : topics) {
+    writer->write(t.name, stamp++, payload_view());
+  }
+  writer->close();
+  return dir;
+}
+
+std::filesystem::path scratch_dir(const std::string & name)
+{
+  auto dir = std::filesystem::temp_directory_path() / ("bagwiz_topic_expand_" + name);
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  return dir;
+}
+}  // namespace
+
+TEST(ExpandTopicSelectors, ExpandsAGlobFilteredByTypeAndSorted)
+{
+  const auto bag = make_bag(scratch_dir("glob"));
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"*", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/lidar/left/points", "/lidar/right/points"}));
+  std::error_code ec;
+  std::filesystem::remove_all(bag, ec);
+}
+
+TEST(ExpandTopicSelectors, LeavesALiteralUntouchedEvenWhenAbsentFromTheBag)
+{
+  const auto bag = make_bag(scratch_dir("literal"));
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"/not/here", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/not/here"}));
+  std::error_code ec;
+  std::filesystem::remove_all(bag, ec);
+}
+
+TEST(ExpandTopicSelectors, RejectsAGlobInALiteralSlot)
+{
+  const auto bag = make_bag(scratch_dir("reject"));
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::string topic;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "-t,--topic", topic, "Topic.", TopicSlotSpec{.mode = TopicSelectorMode::kLiteral});
+
+  app.parse(std::vector<std::string>{"/lidar/*", "-t", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+
+  std::error_code ec;
+  std::filesystem::remove_all(bag, ec);
+}
+
+TEST(ExpandTopicSelectors, FailsWhenAGlobMatchesNothing)
+{
+  const auto bag = make_bag(scratch_dir("nomatch"));
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"/nope/*", "--pcd", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+
+  std::error_code ec;
+  std::filesystem::remove_all(bag, ec);
+}
+
+TEST(ExpandTopicSelectors, SkipsExpansionWhenTheInputIsNotABag)
+{
+  // `cam-info recompute-p` accepts a calibration YAML here and rejects --topics
+  // itself with a message about the YAML. Expansion must not pre-empt that.
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> topics;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(*sub, "-t,--topics", topics, "Topics.", TopicSlotSpec{});
+
+  app.parse(std::vector<std::string>{"/a", "-t", "/nonexistent/path.yaml", "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(topics, (std::vector<std::string>{"/a"}));
+}
+
+TEST(ExpandTopicSelectors, PairValueGlobsOnlyTheLeftHalf)
+{
+  const auto bag = make_bag(scratch_dir("pair"));
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  std::vector<std::string> offsets;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  auto * pcd_opt = add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+  add_topic_option(
+    *sub, "--stamp-offset", offsets, "Offsets.",
+    TopicSlotSpec{.pair_value = true, .scope = pcd_opt});
+
+  app.parse(
+    std::vector<std::string>{
+      "/lidar/*=50ms", "--stamp-offset", "*", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(
+    offsets, (std::vector<std::string>{"/lidar/left/points=50ms", "/lidar/right/points=50ms"}));
+  std::error_code ec;
+  std::filesystem::remove_all(bag, ec);
 }
