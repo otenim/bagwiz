@@ -9,7 +9,7 @@
 #include "bagwiz/core/pipeline/pipelined_backend.hpp"
 
 #include "bagwiz/core/pipeline/bounded_message_queue.hpp"
-#include "bagwiz/core/pipeline/owned_message.hpp"
+#include "bagwiz/core/pipeline/queued_message.hpp"
 #include "bagwiz/core/pipeline/rewrite_backend.hpp"
 #include "bagwiz/core/pipeline/stage_profiler.hpp"
 #include "bagwiz/io/bag_io.hpp"
@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
-#include <span>
 #include <string>
 #include <thread>
 #include <utility>
@@ -31,8 +30,8 @@ namespace bagwiz::core::pipeline
 namespace
 {
 
-// Read stage: pull every message, route it, optionally transform it, and copy
-// each kept message into the queue. Owns all the counters and the read/process
+// Read stage: pull every message, route it, optionally transform it, and hand
+// each kept message to the queue. Owns all the counters and the read/process
 // /byte profiling so the write stage stays a pure drain. The keep/drop/rename
 // /transform/skip accounting mirrors SequentialBackend line for line, so the
 // counts are identical regardless of backend. A transforming processor's
@@ -70,13 +69,12 @@ RewriteCounts read_loop(
       continue;
     }
 
-    // Build the owned hand-off record BEFORE the next next() invalidates the
-    // reader's zero-copy view. The rename test (out_topic != input name) must
-    // also happen here while the input name is still valid.
+    // Build the hand-off record BEFORE the next next() invalidates the reader's
+    // zero-copy view: freeze() must see the most recent emission, and the
+    // rename test (out_topic != input name) needs the input name still valid.
     const bool renamed = emit.out_topic != raw.topic->name;
-    OwnedMessage msg;
+    QueuedMessage msg;
     msg.out_topic = std::string(emit.out_topic);
-    msg.timestamp_ns = raw.timestamp_ns;
     bool transformed = false;
     if (transforming) {
       xform_buf.clear();
@@ -90,15 +88,17 @@ RewriteCounts read_loop(
         continue;
       }
       if (action == TransformAction::kWrite) {
-        msg.payload = std::move(xform_buf);
+        // A transformed payload lives in a buffer this stage produced, not in
+        // the reader's backing store, so it cannot come from freeze().
+        msg.frozen = io::own_payload(std::move(xform_buf), raw.topic, raw.timestamp_ns);
         transformed = true;
       } else {
-        msg.payload.assign(raw.payload.begin(), raw.payload.end());
+        msg.frozen = reader.freeze(raw);
       }
     } else {
-      msg.payload.assign(raw.payload.begin(), raw.payload.end());
+      msg.frozen = reader.freeze(raw);
     }
-    const auto out_size = static_cast<std::uint64_t>(msg.payload.size());
+    const auto out_size = static_cast<std::uint64_t>(msg.frozen.payload.size());
     if (!queue.push(std::move(msg))) {
       break;  // the writer failed; stop producing (its error is rethrown below)
     }
@@ -135,10 +135,10 @@ RewriteCounts PipelinedBackend::run(
   // reader blocked on backpressure) and rethrown from run() after the join.
   std::thread writer_thread([&writer, &queue, &write_prof] {
     try {
-      OwnedMessage msg;
+      QueuedMessage msg;
       while (queue.pop(msg)) {
         auto s = write_prof.time(Stage::kWrite);
-        writer.write(msg.out_topic, msg.timestamp_ns, msg.payload);
+        writer.write(msg.out_topic, msg.frozen.timestamp_ns, msg.frozen.payload);
       }
     } catch (...) {
       queue.fail(std::current_exception());

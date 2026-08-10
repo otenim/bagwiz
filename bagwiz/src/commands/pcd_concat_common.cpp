@@ -205,16 +205,21 @@ ConcatGroupTracker::ConcatGroupTracker(
   fired_.assign(groups_.size(), 0);
 }
 
+bool ConcatGroupTracker::is_picked(std::size_t topic, std::size_t index) const
+{
+  return index < refs_[topic].size() && !refs_[topic][index].empty();
+}
+
 std::vector<ConcatGroupJob> ConcatGroupTracker::on_message(
-  std::size_t topic, std::size_t index, std::span<const std::byte> payload)
+  std::size_t topic, std::size_t index, io::FrozenMessage msg)
 {
   std::vector<ConcatGroupJob> jobs;
-  if (index >= refs_[topic].size() || refs_[topic][index].empty()) {
+  if (!is_picked(topic, index)) {
     return jobs;  // this message is not picked by any group
   }
 
   Entry entry;
-  entry.payload = std::make_shared<const std::vector<std::byte>>(payload.begin(), payload.end());
+  entry.frozen = std::move(msg);
   entry.refcount = refs_[topic][index].size();
   cache_.emplace(msg_key(topic, index), std::move(entry));
 
@@ -244,7 +249,7 @@ ConcatGroupJob ConcatGroupTracker::build_job(std::size_t group)
     if (ci == cache_.end()) {
       continue;  // unreachable: a group only fires once every pick arrived
     }
-    job.picks.push_back({k, index, ci->second.payload});
+    job.picks.push_back({k, index, ci->second.frozen});
     if (--ci->second.refcount == 0) {
       cache_.erase(ci);
     }
@@ -267,7 +272,7 @@ ConcatGroupResult process_concat_group(
 
   for (const auto & pick : job.picks) {
     ConcatPickOutcome outcome{pick.topic, pick.index, ConcatPickOutcome::Status::kOk};
-    auto parsed = core::pointcloud::parse_pointcloud2(*pick.payload);
+    auto parsed = core::pointcloud::parse_pointcloud2(pick.frozen.payload);
     if (!parsed.ok()) {
       outcome.status = ConcatPickOutcome::Status::kParseFail;
       result.picks.push_back(outcome);
