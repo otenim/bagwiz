@@ -99,11 +99,17 @@ public:
         out.timestamp_ns = static_cast<int64_t>(msg.log_time);
         // The stream's payload span stays valid until its next next() call
         // (the retained chunk buffer is only reused then), which matches the
-        // RawMessage contract — no copy needed on this path.
+        // RawMessage contract — no copy needed on this path. Remember the
+        // chunk buffer's owner so freeze() can alias it; the MESSAGE-mode
+        // decompressor's reusable buffer cannot be shared, so freeze() falls
+        // back to copying there.
         if (decompressor_) {
           out.payload = decompressor_->decompress(msg.payload);
+          last_owner_.reset();
         } else {
           out.payload = msg.payload;
+          last_owner_ = parallel_stream_->last_payload_owner();
+          last_payload_ = out.payload;
         }
         return true;
       }
@@ -145,10 +151,28 @@ public:
         payload_buf_.assign(src, src + size);
         out.payload = std::span<const std::byte>(payload_buf_.data(), payload_buf_.size());
       }
+      // Neither stable backing is shareable (payload_buf_ is overwritten by
+      // the next next() call, the decompressor's buffer likewise), so
+      // freeze() copies on this path.
+      last_owner_.reset();
       ++iter;
       return true;
     }
     return false;
+  }
+
+  FrozenMessage freeze(const RawMessage & msg) const override
+  {
+    // Zero-copy only on the parallel indexed path, where the payload aliases
+    // a pooled chunk buffer whose ownership we can share. `msg` must be the
+    // most recent emission (the freeze() contract), so matching its span
+    // against the cached one is enough.
+    if (
+      last_owner_ && msg.payload.data() == last_payload_.data() &&
+      msg.payload.size() == last_payload_.size()) {
+      return FrozenMessage{msg.topic, msg.timestamp_ns, msg.payload, last_owner_};
+    }
+    return BagReader::freeze(msg);
   }
 
   Stats compute_stats() override
@@ -329,6 +353,12 @@ private:
   // buffer plays the same role then).
   std::vector<std::byte> payload_buf_;
   std::shared_ptr<MessageDecompressor> decompressor_;
+  // Backing-store handle and span of the payload returned by the most recent
+  // next() call when it aliases a pooled chunk buffer (parallel indexed path
+  // without MESSAGE-mode decompression); null/meaningless on every other
+  // path, where freeze() copies.
+  std::shared_ptr<const void> last_owner_;
+  std::span<const std::byte> last_payload_;
 };
 
 // ---------------------------------------------------------------------------

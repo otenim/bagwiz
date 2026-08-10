@@ -152,11 +152,53 @@ DecompressOutcome decompress_chunk_record(
 
 }  // namespace
 
+std::vector<std::byte> ChunkBufferPool::take()
+{
+  std::lock_guard lock(mutex_);
+  if (buffers_.empty()) {
+    return {};
+  }
+  std::vector<std::byte> buf = std::move(buffers_.back());
+  buffers_.pop_back();
+  return buf;
+}
+
+void ChunkBufferPool::recycle(std::vector<std::byte> && buf)
+{
+  if (buf.capacity() == 0) {
+    return;
+  }
+  std::lock_guard lock(mutex_);
+  buffers_.push_back(std::move(buf));
+}
+
+std::shared_ptr<std::vector<std::byte>> ChunkBufferPool::share(std::vector<std::byte> && buf)
+{
+  const std::weak_ptr<ChunkBufferPool> weak = shared_from_this();
+  // The deleter runs when the last shared owner (the stream's slot, plus any
+  // FrozenMessage holding the buffer alive) lets go. The buffer then returns
+  // to the pool for the workers to reuse; once the pool is gone (reader
+  // destroyed while frozen messages live on), it is freed normally instead.
+  // Allocation failure inside recycle() must not escape a deleter, so fall
+  // back to plain deletion.
+  return {new std::vector<std::byte>(std::move(buf)), [weak](std::vector<std::byte> * p) noexcept {
+            try {
+              if (auto pool = weak.lock()) {
+                pool->recycle(std::move(*p));
+              }
+            } catch (...) {
+            }
+            delete p;
+          }};
+}
+
 ChunkPrefetcher::ChunkPrefetcher(
-  std::filesystem::path path, std::vector<ChunkRef> schedule, int num_threads)
+  std::filesystem::path path, std::vector<ChunkRef> schedule, int num_threads,
+  std::shared_ptr<ChunkBufferPool> pool)
 : path_(std::move(path)),
   schedule_(std::move(schedule)),
-  lookahead_(static_cast<std::size_t>(std::max(num_threads, 1)) + 2)
+  lookahead_(static_cast<std::size_t>(std::max(num_threads, 1)) + 2),
+  pool_(std::move(pool))
 {
   const int workers = std::max(num_threads, 1);
   workers_.reserve(static_cast<std::size_t>(workers));
@@ -194,26 +236,6 @@ PrefetchedChunk ChunkPrefetcher::get(std::size_t index)
   cv_.notify_all();
   PrefetchedChunk out = std::move(node.mapped());
   return out;
-}
-
-void ChunkPrefetcher::recycle(std::vector<std::byte> && buf)
-{
-  if (buf.capacity() == 0) {
-    return;
-  }
-  std::lock_guard lock(mutex_);
-  buffer_pool_.push_back(std::move(buf));
-}
-
-std::vector<std::byte> ChunkPrefetcher::take_pooled_buffer()
-{
-  std::lock_guard lock(mutex_);
-  if (buffer_pool_.empty()) {
-    return {};
-  }
-  std::vector<std::byte> buf = std::move(buffer_pool_.back());
-  buffer_pool_.pop_back();
-  return buf;
 }
 
 void ChunkPrefetcher::worker_loop()
@@ -256,7 +278,7 @@ void ChunkPrefetcher::worker_loop()
     const ChunkRef & ref = schedule_[index];
     PrefetchedChunk result;
     if (raw.capacity() == 0) {
-      raw = take_pooled_buffer();
+      raw = pool_->take();
     }
     try {
       raw.resize(ref.length);
@@ -267,7 +289,7 @@ void ChunkPrefetcher::worker_loop()
         result.error = "short read of chunk record from " + path_.string();
       } else {
         if (scratch.capacity() == 0) {
-          scratch = take_pooled_buffer();
+          scratch = pool_->take();
         }
         auto outcome = decompress_chunk_record(std::move(raw), std::move(scratch), dctx.get());
         result = std::move(outcome.chunk);

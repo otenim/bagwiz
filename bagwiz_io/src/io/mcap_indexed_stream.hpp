@@ -71,16 +71,28 @@ public:
 
   [[nodiscard]] const std::string & error() const { return error_; }
 
+  // Shared ownership of the chunk buffer backing the payload emitted by the
+  // most recent successful next() call; null before the first emission.
+  // BagReader::freeze() uses this to alias the buffer instead of copying the
+  // payload.
+  [[nodiscard]] std::shared_ptr<const void> last_payload_owner() const { return last_owner_; }
+
 private:
-  // One retained decompressed chunk; reused once all its messages were
-  // consumed AND a later chunk claims the slot (so the last emitted payload
-  // stays valid until the next next() call, per the contract). The evicted
-  // buffer is recycled back to the prefetcher's pool at that point.
+  // One retained decompressed chunk. The slot is reused once all its messages
+  // were consumed AND a later chunk claims the slot (so the last emitted
+  // payload stays valid until the next next() call, per the contract). The
+  // buffer is shared: freezing a message out of this slot extends the
+  // buffer's life past eviction, and the last owner returns it to the
+  // prefetcher's pool (see ChunkBufferPool::share).
   struct Slot
   {
-    PrefetchedChunk chunk;
+    std::shared_ptr<std::vector<std::byte>> records;
+    std::size_t offset = 0;  // records blob start within `records`
+    std::size_t size = 0;    // records blob size in bytes
     std::uint64_t chunk_start_offset = 0;
     std::size_t unread = 0;
+
+    [[nodiscard]] const std::byte * data() const { return records->data() + offset; }
   };
 
   [[nodiscard]] std::size_t find_free_slot();
@@ -92,7 +104,11 @@ private:
   mcap_compat::ReadJobQueue queue_{false};
   std::vector<Slot> slots_;
   std::unordered_map<std::uint64_t, std::size_t> schedule_index_by_offset_;
+  // Declared before prefetcher_ so the pool outlives the workers that draw
+  // buffers from it (members destruct in reverse declaration order).
+  std::shared_ptr<ChunkBufferPool> pool_ = std::make_shared<ChunkBufferPool>();
   std::unique_ptr<ChunkPrefetcher> prefetcher_;
+  std::shared_ptr<const void> last_owner_;  // chunk buffer of the last emission
   std::string error_;
 };
 

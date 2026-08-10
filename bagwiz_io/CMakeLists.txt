@@ -75,6 +75,7 @@ add_library(bagwiz_io
   src/io/bag_factory.cpp
   src/io/bag_open.cpp
   src/io/file_decompressor.cpp
+  src/io/frozen_message.cpp
   src/io/mcap_chunk_codec.cpp
   src/io/mcap_chunk_prefetch.cpp
   src/io/mcap_indexed_stream.cpp
@@ -161,6 +162,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_mcap_parallel_read_test test/io/mcap_parallel_read_test.cpp)
   target_link_libraries(bagwiz_mcap_parallel_read_test bagwiz_io ${mcap_vendor_TARGETS})
+
+  ament_add_gtest(bagwiz_frozen_message_test test/io/frozen_message_test.cpp)
+  target_link_libraries(bagwiz_frozen_message_test bagwiz_io ${mcap_vendor_TARGETS})
 
   ament_add_gtest(bagwiz_mcap_passthrough_test test/io/mcap_passthrough_test.cpp)
   target_link_libraries(bagwiz_mcap_passthrough_test bagwiz_io ${mcap_vendor_TARGETS})

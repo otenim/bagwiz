@@ -117,7 +117,8 @@ ParallelIndexedStream::ParallelIndexedStream(
         chunk.messageStartTime, chunk.messageEndTime, chunk.chunkStartOffset,
         chunk.chunkStartOffset + chunk.chunkLength + chunk.messageIndexLength});
   }
-  prefetcher_ = std::make_unique<ChunkPrefetcher>(path, std::move(schedule), options_.num_threads);
+  prefetcher_ =
+    std::make_unique<ChunkPrefetcher>(path, std::move(schedule), options_.num_threads, pool_);
 }
 
 std::size_t ParallelIndexedStream::find_free_slot()
@@ -147,17 +148,19 @@ void ParallelIndexedStream::ingest_chunk(const mcap_compat::DecompressChunkJob &
   const std::uint64_t end_ns = options_.end_ns.value_or(mcap::MaxTime);
   const std::size_t slot_index = find_free_slot();
   Slot & slot = slots_[slot_index];
-  // Return the evicted chunk's buffer to the prefetcher pool before the new
-  // chunk takes the slot, so workers reuse it instead of allocating afresh.
-  if (slot.chunk.records.capacity() != 0) {
-    prefetcher_->recycle(std::move(slot.chunk.records));
-  }
-  slot.chunk = std::move(pre);
+  // Release the evicted chunk's buffer before the new chunk takes the slot.
+  // The shared_ptr deleter returns it to the pool — immediately when no
+  // message from this chunk was frozen, or when the last FrozenMessage
+  // releases it otherwise — so workers reuse it instead of allocating afresh.
+  slot.records.reset();
+  slot.records = pool_->share(std::move(pre.records));
+  slot.offset = pre.offset;
+  slot.size = pre.size;
   slot.chunk_start_offset = job.chunkStartOffset;
   slot.unread = 0;
 
-  const std::byte * data = slot.chunk.data();
-  const std::size_t size = slot.chunk.size;
+  const std::byte * data = slot.data();
+  const std::size_t size = slot.size;
   std::size_t pos = 0;
   while (pos + kRecordHeaderBytes <= size) {
     const auto opcode = std::to_integer<std::uint8_t>(data[pos]);
@@ -198,13 +201,14 @@ bool ParallelIndexedStream::next(Message & out)
     }
     const auto & msg = std::get<mcap_compat::ReadMessageJob>(job);
     Slot & slot = slots_[msg.chunkReaderIndex];
-    const std::byte * record = slot.chunk.data() + msg.offset.offset;
+    const std::byte * record = slot.data() + msg.offset.offset;
     const std::uint64_t length = read_u64(record + 1);
     const std::byte * body = record + kRecordHeaderBytes;
     out.channel_id = read_u16(body);
     out.log_time = read_u64(body + 6);
     out.payload = std::span<const std::byte>(
       body + kMessagePrefixBytes, static_cast<std::size_t>(length) - kMessagePrefixBytes);
+    last_owner_ = slot.records;
     --slot.unread;
     return true;
   }

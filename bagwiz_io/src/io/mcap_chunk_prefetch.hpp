@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -24,6 +25,33 @@
 // of the consumer, in a fixed schedule order, with a bounded lookahead window.
 namespace bagwiz::io::detail
 {
+
+// Thread-safe pool of multi-MiB chunk buffers, shared between a
+// ChunkPrefetcher's workers and the ParallelIndexedStream consuming them.
+// Held via shared_ptr so that buffers frozen out of the stream (see
+// BagReader::freeze) can return themselves to the pool when their last owner
+// lets go — or free themselves normally when the pool is already gone, which
+// is what lets a FrozenMessage outlive the reader.
+class ChunkBufferPool : public std::enable_shared_from_this<ChunkBufferPool>
+{
+public:
+  // Pop a pooled buffer (empty vector when the pool is dry).
+  [[nodiscard]] std::vector<std::byte> take();
+
+  // Return a buffer for reuse by the workers. Keeps the steady state free of
+  // large allocations (and of the page faults + zero-fill that come with
+  // fresh multi-MB buffers).
+  void recycle(std::vector<std::byte> && buf);
+
+  // Move `buf` into a shared_ptr whose deleter returns the buffer to this
+  // pool when the last shared owner is released (and simply frees it once
+  // the pool is gone).
+  [[nodiscard]] std::shared_ptr<std::vector<std::byte>> share(std::vector<std::byte> && buf);
+
+private:
+  std::mutex mutex_;
+  std::vector<std::vector<std::byte>> buffers_;
+};
 
 // One chunk record to prefetch, straight from the bag's ChunkIndex summary.
 struct ChunkRef
@@ -54,7 +82,9 @@ struct PrefetchedChunk
 class ChunkPrefetcher
 {
 public:
-  ChunkPrefetcher(std::filesystem::path path, std::vector<ChunkRef> schedule, int num_threads);
+  ChunkPrefetcher(
+    std::filesystem::path path, std::vector<ChunkRef> schedule, int num_threads,
+    std::shared_ptr<ChunkBufferPool> pool);
   ~ChunkPrefetcher();
 
   ChunkPrefetcher(const ChunkPrefetcher &) = delete;
@@ -68,20 +98,13 @@ public:
   // ascending indexes (0, 1, ...), each exactly once.
   [[nodiscard]] PrefetchedChunk get(std::size_t index);
 
-  // Return a consumed chunk's backing buffer for reuse by the workers. Keeps
-  // the steady state free of large allocations (and of the page faults +
-  // zero-fill that come with fresh multi-MB buffers).
-  void recycle(std::vector<std::byte> && buf);
-
 private:
-  // Pop a pooled buffer (empty vector when the pool is dry).
-  [[nodiscard]] std::vector<std::byte> take_pooled_buffer();
-
   void worker_loop();
 
   const std::filesystem::path path_;
   const std::vector<ChunkRef> schedule_;
   const std::size_t lookahead_;
+  const std::shared_ptr<ChunkBufferPool> pool_;
 
   std::mutex mutex_;
   std::condition_variable cv_;
@@ -90,7 +113,6 @@ private:
   bool cancel_ = false;
   std::string worker_fatal_error_;  // non-empty => a worker failed to start
   std::map<std::size_t, PrefetchedChunk> ready_;
-  std::vector<std::vector<std::byte>> buffer_pool_;
 
   std::vector<std::jthread> workers_;
 };
