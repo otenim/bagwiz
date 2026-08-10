@@ -187,6 +187,7 @@ add_executable(bagwiz
   src/commands/topic.cpp
   src/commands/topic_drop.cpp
   src/commands/topic_keep.cpp
+  src/commands/topic_option.cpp
   src/commands/topic_rename.cpp
   src/commands/stamp.cpp
   src/commands/stamp_sync.cpp
@@ -314,6 +315,12 @@ if(BUILD_TESTING)
     src/commands/help_formatter.cpp)
   target_include_directories(bagwiz_help_formatter_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_help_formatter_test ${bagwiz_test_libs} CLI11::CLI11)
+
+  ament_add_gtest(bagwiz_topic_option_test
+    test/commands/topic_option_test.cpp
+    src/commands/topic_option.cpp)
+  target_include_directories(bagwiz_topic_option_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_topic_option_test ${bagwiz_test_libs} CLI11::CLI11)
 
   ament_add_gtest(bagwiz_parse_error_test
     test/commands/parse_error_test.cpp
