@@ -45,6 +45,42 @@ struct TopicPatternResolution
 [[nodiscard]] TopicPatternResolution resolve_topic_patterns(
   std::span<const std::string> patterns, std::span<const std::string> topic_names);
 
+// A topic name paired with its message type. resolve_topic_selectors() needs
+// the type in order to honour a slot's accepted-type filter.
+struct TopicEntry
+{
+  std::string name;
+  std::string type;
+};
+
+// Outcome of resolving a slot's values against a bag's topic list.
+struct SelectorResolution
+{
+  // The slot's resolved values, deduplicated, in resolution order: selectors in
+  // argument order, and within one selector its matches sorted lexicographically
+  // by topic name. The order is part of the contract because some slots are
+  // order-sensitive (`pcd concat --pcd` concatenates in list order and takes the
+  // first entry as its time-matching reference), and lexicographic is the order
+  // `bagwiz ls` already prints.
+  std::vector<std::string> matched;
+  // Globs that matched no topic, in input order (with duplicates). A literal
+  // never appears here: it is passed through for the command's own presence and
+  // type checks to judge.
+  std::vector<std::string> unmatched;
+};
+
+// Resolve `selectors` against `topics`.
+//
+// A selector without '*' is a literal and is copied to `matched` verbatim —
+// unfiltered and unvalidated — so the command's existing "not present" and
+// "wrong type" errors keep firing with their current wording. A selector
+// containing '*' is matched against the entries whose type appears in
+// `allowed_types` (an empty span accepts every type); matching nothing puts it
+// in `unmatched`.
+[[nodiscard]] SelectorResolution resolve_topic_selectors(
+  std::span<const std::string> selectors, std::span<const TopicEntry> topics,
+  std::span<const std::string_view> allowed_types);
+
 }  // namespace bagwiz::core
 
 #endif  // BAGWIZ__CORE__BASE__TOPIC_MATCH_HPP_

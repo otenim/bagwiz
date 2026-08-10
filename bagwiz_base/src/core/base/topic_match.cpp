@@ -8,10 +8,13 @@
 
 #include "bagwiz/core/base/topic_match.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
+#include <vector>
 
 namespace bagwiz::core
 {
@@ -67,6 +70,58 @@ TopicPatternResolution resolve_topic_patterns(
     }
     if (!any) {
       result.unmatched.push_back(pattern);
+    }
+  }
+  return result;
+}
+
+namespace
+{
+
+bool type_allowed(std::string_view type, std::span<const std::string_view> allowed_types)
+{
+  if (allowed_types.empty()) {
+    return true;
+  }
+  return std::find(allowed_types.begin(), allowed_types.end(), type) != allowed_types.end();
+}
+
+}  // namespace
+
+SelectorResolution resolve_topic_selectors(
+  std::span<const std::string> selectors, std::span<const TopicEntry> topics,
+  std::span<const std::string_view> allowed_types)
+{
+  SelectorResolution result;
+  std::unordered_set<std::string> seen;
+
+  const auto append = [&result, &seen](const std::string & name) {
+    if (seen.insert(name).second) {
+      result.matched.push_back(name);
+    }
+  };
+
+  for (const auto & selector : selectors) {
+    if (selector.find('*') == std::string::npos) {
+      append(selector);  // literal: pass through untouched
+      continue;
+    }
+
+    std::vector<std::string> hits;
+    for (const auto & topic : topics) {
+      if (type_allowed(topic.type, allowed_types) && topic_glob_match(selector, topic.name)) {
+        hits.push_back(topic.name);
+      }
+    }
+    if (hits.empty()) {
+      result.unmatched.push_back(selector);
+      continue;
+    }
+    // Sorted so the result never depends on the order the bag happens to
+    // declare its topics in.
+    std::sort(hits.begin(), hits.end());
+    for (const auto & hit : hits) {
+      append(hit);
     }
   }
   return result;
