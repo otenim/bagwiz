@@ -10,6 +10,7 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/tf/tf_topics.hpp"
@@ -54,70 +55,6 @@ constexpr std::size_t kSecondCommandArgWord = 2;
 constexpr std::size_t kThirdCommandArgWord = 3;
 constexpr std::size_t kFourthCommandArgWord = 4;
 
-// Alias of the canonical constant so the constexpr type arrays below can seed
-// from it without qualifying every entry.
-constexpr std::string_view kTfMessageType = core::kTfMessageTypeName;
-
-// Message types `traj dump` can process. This MUST mirror the supported set
-// dispatched in src/commands/traj.cpp (TrajCommand::run_dump); keep the two in
-// sync. A topic typed as anything outside this set is rejected by the command,
-// so completion never offers it.
-constexpr std::array<std::string_view, 4> kTrajDumpSupportedTypes{{
-  kTfMessageType,
-  "geometry_msgs/msg/PoseStamped",
-  "geometry_msgs/msg/PoseWithCovarianceStamped",
-  "nav_msgs/msg/Odometry",
-}};
-
-// The lone tf2_msgs/msg/TFMessage type as a span, shared by every completion
-// that offers TF topics: `tf tree`'s `--topics` (the only type it renders) and
-// `tf static update`'s `--topic` (further narrowed to static topics there).
-constexpr std::array<std::string_view, 1> kTfMessageTypes{{kTfMessageType}};
-
-// Pose topic types `pcd undistort --pose` accepts. This MUST mirror
-// is_supported_pose_topic_type() in src/commands/pcd_undistort_common.cpp
-// (which validate_undistort_topics enforces); keep the two in sync. The set
-// happens to equal kTrajDumpSupportedTypes today, but the two commands gate on
-// separate validators and can drift independently. A topic typed as anything
-// outside this set is rejected by the command, so completion never offers it.
-constexpr std::array<std::string_view, 4> kUndistortPoseTopicTypes{{
-  kTfMessageType,
-  "geometry_msgs/msg/PoseStamped",
-  "geometry_msgs/msg/PoseWithCovarianceStamped",
-  "nav_msgs/msg/Odometry",
-}};
-
-// Twist (vehicle-velocity) topic types `pcd undistort --twist` accepts. This
-// MUST mirror is_supported_twist_topic_type() in
-// src/commands/pcd_undistort_common.cpp (which validate_undistort_topics
-// enforces); keep the two in sync. A topic typed as anything outside this set
-// is rejected by the command, so completion never offers it.
-constexpr std::array<std::string_view, 3> kUndistortTwistTopicTypes{{
-  "geometry_msgs/msg/Twist",
-  "geometry_msgs/msg/TwistStamped",
-  "geometry_msgs/msg/TwistWithCovarianceStamped",
-}};
-
-// Image topic types the shared to_packed_raster() decoder accepts —
-// `generate video` rendering, `walk`'s image preview, and `map slam`'s
-// `--color` cameras all gate on it. This MUST mirror
-// is_supported_image_type() in bagwiz_image/src/core/image/packed_raster.cpp
-// (and is_supported_type() in src/commands/generate_video_common.cpp); keep them
-// in sync. As with `traj dump` / `tf tree`, a topic typed as anything outside
-// this set is rejected by the command, so completion never offers it.
-constexpr std::array<std::string_view, 2> kImageTopicTypes{{
-  "sensor_msgs/msg/Image",
-  "sensor_msgs/msg/CompressedImage",
-}};
-
-// CameraInfo topic type accepted by `generate video --cam-info`. This MUST
-// mirror the camera-info type constants in src/commands/cam_info_common.hpp
-// and bagwiz_image/src/core/image/camera_info_resolver.cpp (the resolver
-// `generate video --cam-info` goes through).
-constexpr std::array<std::string_view, 1> kCameraInfoType{{
-  "sensor_msgs/msg/CameraInfo",
-}};
-
 // Every command that takes multiple topics spells the flag this way, so
 // topics are named consistently across the whole CLI.
 constexpr std::array<std::string_view, 2> kTopicsFlags{{"-t", "--topics"}};
@@ -133,18 +70,6 @@ constexpr std::array<std::string_view, 1> kSrcTopicFlags{{"--src"}};
 
 // PointCloud2 topic(s) for `map slam --pcd`.
 constexpr std::array<std::string_view, 1> kPcdFlags{{"--pcd"}};
-
-constexpr std::array<std::string_view, 1> kPointCloud2Type{{
-  "sensor_msgs/msg/PointCloud2",
-}};
-
-constexpr std::array<std::string_view, 1> kImuType{{
-  "sensor_msgs/msg/Imu",
-}};
-
-constexpr std::array<std::string_view, 1> kNavSatFixType{{
-  "sensor_msgs/msg/NavSatFix",
-}};
 
 // Declarative table of commands whose topic-value slots should be completed
 // from a bag. `subcommand` is empty when the command has no subcommand level
@@ -558,7 +483,7 @@ std::vector<std::string> collect_tf_frame_ids(
 
     std::vector<std::string> tf_topic_names;
     for (const auto & t : reader->topics()) {
-      if (t.type == kTfMessageType && (!static_only || core::is_static_tf_topic(t))) {
+      if (t.type == core::kTfMessageTypeName && (!static_only || core::is_static_tf_topic(t))) {
         tf_topic_names.push_back(t.name);
       }
     }
@@ -572,7 +497,7 @@ std::vector<std::string> collect_tf_frame_ids(
 
     std::unordered_map<std::string, std::unique_ptr<core::decoder::Decoder>> decoders;
     for (const auto & topic_info : reader->topics()) {
-      if (topic_info.type != kTfMessageType) {
+      if (topic_info.type != core::kTfMessageTypeName) {
         continue;
       }
       if (static_only && !core::is_static_tf_topic(topic_info)) {
