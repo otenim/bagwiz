@@ -23,8 +23,6 @@ find_package(bagwiz_msg REQUIRED)
 find_package(bagwiz_image REQUIRED)
 find_package(bagwiz_tf REQUIRED)
 find_package(bagwiz_pointcloud REQUIRED)
-# Linked PRIVATE so OpenCV never enters the ament export set (mirrors bagwiz_image).
-find_package(OpenCV REQUIRED)
 
 # GeographicLib provides the WGS84 -> ENU / UTM projections used by
 # gnss_projector.cpp. It is consumed PRIVATE — an implementation detail that
@@ -137,7 +135,6 @@ add_library(bagwiz_slam
   src/core/slam/propagation_radius.cpp
   src/core/slam/scan_image_pairer.cpp
   src/core/slam/scan_to_world.cpp
-  src/core/slam/visual_frontend.cpp
 )
 target_include_directories(bagwiz_slam
   PUBLIC
@@ -156,9 +153,6 @@ target_link_libraries(bagwiz_slam
 # GeographicLib (WGS84 -> ENU/UTM projection) is private to gnss_projector.cpp.
 target_include_directories(bagwiz_slam PRIVATE ${GeographicLib_INCLUDE_DIRS})
 target_link_libraries(bagwiz_slam PRIVATE ${GeographicLib_LIBRARIES})
-# OpenCV (visual_frontend.cpp) is private like bagwiz_image/bagwiz_pointcloud, so it
-# never leaks into bagwiz_slam's export set.
-target_link_libraries(bagwiz_slam PRIVATE ${OpenCV_LIBS})
 
 # ---------------------------------------------------------------------------
 # bagwiz_slam_glim: the GLIM-bearing production objects, kept in a separate
@@ -199,10 +193,6 @@ if(BAGWIZ_WITH_SLAM)
     src/core/slam/warmup_fill.cpp
     src/core/slam/traj_upsample.cpp
     src/core/slam/scan_match_fill.cpp
-    src/core/slam/visual_factors.cpp
-    src/core/slam/visual_odometry_grouping.cpp
-    src/core/slam/visual_odometry_window.cpp
-    src/core/slam/visual_odometry.cpp
     src/core/slam/cuda_device.cpp
     src/core/slam/progress_bar.cpp
   )
@@ -438,9 +428,6 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_slam_scan_to_world_test test/core/slam/scan_to_world_test.cpp)
   target_link_libraries(bagwiz_slam_scan_to_world_test bagwiz_slam)
 
-  ament_add_gtest(bagwiz_slam_visual_frontend_test test/core/slam/visual_frontend_test.cpp)
-  target_link_libraries(bagwiz_slam_visual_frontend_test bagwiz_slam)
-
   ament_add_gtest(bagwiz_slam_scan_image_pairer_test test/core/slam/scan_image_pairer_test.cpp)
   target_link_libraries(bagwiz_slam_scan_image_pairer_test bagwiz_slam)
 
@@ -519,41 +506,6 @@ if(BUILD_TESTING)
     ament_add_gtest(bagwiz_slam_cloud_mapper_test test/core/slam/cloud_mapper_test.cpp)
     target_link_libraries(bagwiz_slam_cloud_mapper_test
       bagwiz_slam_glim glim::glim gtsam_points::gtsam_points gtsam)
-
-    # Submap association + pose interpolation helpers for the visual-factor
-    # builder. Src-local (visual_factors.hpp lives beside its .cpp, not under
-    # include/), so the test needs an extra include path to reach it.
-    ament_add_gtest(bagwiz_slam_visual_factors_test test/core/slam/visual_factors_test.cpp)
-    target_link_libraries(bagwiz_slam_visual_factors_test
-      bagwiz_slam_glim glim::glim gtsam_points::gtsam_points gtsam)
-    target_include_directories(bagwiz_slam_visual_factors_test
-      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/slam)
-
-    ament_add_gtest(bagwiz_slam_visual_odometry_grouping_test
-      test/core/slam/visual_odometry_grouping_test.cpp)
-    target_include_directories(bagwiz_slam_visual_odometry_grouping_test
-      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/slam)
-    target_link_libraries(bagwiz_slam_visual_odometry_grouping_test bagwiz_slam_glim)
-
-    # Rebuilt-window batch-LM core of the camera-only visual-inertial
-    # odometry. Src-local like visual_factors_test above, so it needs the
-    # same extra include path.
-    ament_add_gtest(bagwiz_slam_visual_odometry_window_test
-      test/core/slam/visual_odometry_window_test.cpp)
-    target_link_libraries(bagwiz_slam_visual_odometry_window_test
-      bagwiz_slam_glim glim::glim gtsam_points::gtsam_points gtsam)
-    target_include_directories(bagwiz_slam_visual_odometry_window_test
-      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/slam)
-
-    # glim::OdometryEstimationBase shell tying the grouping buffer and window
-    # solver together (issue #376 Phase 3). Src-local like the two tests
-    # above, so it needs the same extra include path.
-    ament_add_gtest(bagwiz_slam_visual_odometry_test
-      test/core/slam/visual_odometry_test.cpp)
-    target_link_libraries(bagwiz_slam_visual_odometry_test
-      bagwiz_slam_glim glim::glim gtsam_points::gtsam_points gtsam)
-    target_include_directories(bagwiz_slam_visual_odometry_test
-      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/slam)
 
     # gtsam_points-linked (GLIM-free) registration core for the scan-matching
     # warmup/cooldown fill.
