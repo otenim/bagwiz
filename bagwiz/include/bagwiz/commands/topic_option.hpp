@@ -67,6 +67,12 @@ struct TopicSlotSpec
 };
 
 // A registered slot. Exactly one of `multi_target` / `single_target` is set.
+// All pointers here are non-owning: `option` is owned by the App it was
+// added to, `multi_target`/`single_target` by whatever the caller passed to
+// add_topic_option(), and `spec`'s span/string_view members by whatever the
+// caller passed for `allowed_types`/`reject_reason`. Every one of them must
+// outlive the App — true by construction for a Command's own configure(),
+// which is the only place these are ever called.
 struct TopicSlot
 {
   const CLI::Option * option{};

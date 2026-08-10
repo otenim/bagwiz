@@ -13,7 +13,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <filesystem>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -103,4 +105,50 @@ TEST(TopicOption, ScopeRecordsTheGoverningOption)
   ASSERT_EQ(slots.size(), 2U);
   EXPECT_EQ(slots[1].spec.scope, pcd_opt);
   EXPECT_TRUE(slots[1].spec.pair_value);
+}
+
+// The other tests in this file incidentally exercise the store's cleanup
+// guard: this toolchain happens to hand consecutive TEST() bodies the same
+// CLI::App stack address, so without the guard a dead test's slots would
+// leak into the next. That coverage is accidental — it would go quiet under
+// --gtest_shuffle, a --gtest_filter selecting one test, a different
+// compiler, or ASan's stack layout. This test forces the exact scenario
+// instead of hoping the toolchain reproduces it: placement-new two CLI::App
+// instances into the same storage, one after the other's destructor runs.
+TEST(TopicOption, DestroyedAppDoesNotLeakSlotsIntoAReusedAddress)
+{
+  alignas(CLI::App) std::byte storage[sizeof(CLI::App)];
+
+  // NOLINTNEXTLINE(cppcoreguidelines-owning-memory) placement-new is the
+  // point of this test: it is the only way to force two CLI::App instances
+  // to share an address deterministically, rather than hoping the toolchain
+  // reuses a stack slot the way the other tests above incidentally rely on.
+  auto * first = new (static_cast<void *>(storage)) CLI::App{"test"};
+  std::vector<std::string> topics;
+  add_topic_option(*first, "-t,--topics", topics, "d", TopicSlotSpec{});
+  ASSERT_EQ(topic_slots_of(*first).size(), 1U);
+  first->~App();
+
+  auto * second = new (static_cast<void *>(storage)) CLI::App{"test"};
+  EXPECT_TRUE(topic_slots_of(*second).empty());
+  second->~App();
+}
+
+// add_topic_option() attaches a no-op validator purely to hold the store's
+// cleanup guard (see arm_guard() in topic_option.cpp). CLI11 folds a
+// validator's description into the option's --help type string, so that
+// validator's description must stay "" — this pins that down: an app built
+// through add_topic_option() must produce byte-identical --help to the same
+// app built through plain CLI::App::add_option().
+TEST(TopicOption, GuardValidatorLeavesHelpTextUnchanged)
+{
+  CLI::App via_topic_option{"test"};
+  std::string topic;
+  add_topic_option(via_topic_option, "-t,--topic", topic, "Topic to inspect.", TopicSlotSpec{});
+
+  CLI::App via_plain_add_option{"test"};
+  std::string plain_topic;
+  via_plain_add_option.add_option("-t,--topic", plain_topic, "Topic to inspect.");
+
+  EXPECT_EQ(via_topic_option.help(), via_plain_add_option.help());
 }
