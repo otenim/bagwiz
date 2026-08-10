@@ -19,10 +19,10 @@
 
 // Resampling the exported trajectory onto an arbitrary rate (`map slam --upsample`).
 //
-// The exported trajectory carries one pose per LiDAR scan (per visual keyframe in
-// camera-only mode) because that is where the factor graph puts its states. With
-// an IMU, though, GLIM already estimates the motion BETWEEN those states and then
-// throws it away: glim::SubMapping::insert_frame integrates the IMU across each
+// The exported trajectory carries one pose per LiDAR scan because that is where
+// the factor graph puts its states. With an IMU, though, GLIM already estimates
+// the motion BETWEEN those states and then throws it away:
+// glim::SubMapping::insert_frame integrates the IMU across each
 // [frame, next frame] interval, pins both ends to the odometry states with tight
 // priors, LM-optimizes the chain, and stores the result in
 // EstimationFrame::imu_rate_trajectory. Those poses are not dead reckoning — they

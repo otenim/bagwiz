@@ -59,7 +59,6 @@
 #include <exception>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <thread>
