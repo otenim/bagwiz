@@ -74,6 +74,7 @@
     "erodibility",
     "executemany",
     "executescript",
+    "extrap",
     "falsey",
     "fatbin",
     "forwardpropagate",

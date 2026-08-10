@@ -658,6 +658,27 @@ std::optional<std::unordered_map<std::string, PcdTopicState>> peek_pcd_topic_sta
       PcdTopicState st;
       st.frame_id = header.header->frame_id;
       st.has_time = cloud_has_usable_point_time(header.header->fields, header.header->point_step);
+      if (st.has_time) {
+        // The first cloud's absolute point-time span feeds the trajectory
+        // extrapolation. A cloud that fails a full parse here is tolerated
+        // (Pass 2 passes it through with a warning) and simply contributes
+        // no span.
+        auto parsed = core::pointcloud::parse_pointcloud2(raw.payload);
+        if (parsed.ok()) {
+          const auto field = core::pointcloud::find_point_time_field(*parsed.cloud);
+          if (field.has_value()) {
+            st.time_span = core::pointcloud::absolute_point_time_span_ns(
+              *parsed.cloud, *field, parsed.cloud->timestamp_ns);
+          }
+          if (st.time_span.has_value()) {
+            // The deskew reference is the cloud's own header.stamp, which can
+            // lie outside the point-time span (e.g. a scan starting before the
+            // motion source's first sample); the trajectory must cover both.
+            st.time_span->min_ns = std::min(st.time_span->min_ns, parsed.cloud->timestamp_ns);
+            st.time_span->max_ns = std::max(st.time_span->max_ns, parsed.cloud->timestamp_ns);
+          }
+        }
+      }
       states.emplace(raw.topic->name, st);
       pending.erase(it);
     }

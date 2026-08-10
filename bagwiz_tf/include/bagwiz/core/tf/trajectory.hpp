@@ -108,6 +108,20 @@ TrajectoryPose interpolate_poses(const TrajectoryPose & a, const TrajectoryPose 
 std::optional<TrajectoryPose> lookup_pose(
   std::int64_t stamp_ns, std::span<const TrajectoryPose> poses);
 
+// Extend a sorted trajectory to cover [`start_ns`, `end_ns`] by constant-
+// velocity extrapolation at the endpoints: a pose is prepended at `start_ns`
+// when it predates the first pose, and appended at `end_ns` when it postdates
+// the last one. The extrapolated pose continues the endpoint's velocity —
+// linear translation and SLERP-extrapolated rotation (interpolate_poses with
+// `t` outside [0,1]) of the first/last interval — which for a dead-reckoned
+// constant-twist trajectory matches the model's own zero-order hold. With
+// fewer than two usable samples (size < 2 or a non-positive interval) the
+// endpoint pose is copied to the new stamp instead. Extrapolation accuracy
+// degrades with the distance from the endpoint; callers are expected to bound
+// the extension. Preconditions: `poses` sorted ascending by timestamp_ns.
+void extend_trajectory_to_span(
+  std::vector<TrajectoryPose> & poses, std::int64_t start_ns, std::int64_t end_ns);
+
 }  // namespace bagwiz::core
 
 #endif  // BAGWIZ__CORE__TF__TRAJECTORY_HPP_

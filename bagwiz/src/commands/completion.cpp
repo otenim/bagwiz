@@ -1486,12 +1486,14 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 // validate_undistort_topics enforces, the pose one mirroring `traj dump`'s
 // topic slot. `--pcd` is variadic and completes PointCloud2 topics from the
 // input bag, mirroring concat's `--pcd`. `--ref`/`--of` complete the bag's TF
-// frame ids, mirroring `traj dump`/`join`. `-o`/`--output` takes a path and
-// `-j`/`--threads` takes a count, so they get no value completion.
+// frame ids, mirroring `traj dump`/`join`. `-o`/`--output` takes a path,
+// `-j`/`--threads` takes a count, and `--max-extrap-duration` takes a
+// free-form duration, so they get no value completion.
 //
 //   undistort: `pcd`(0) `undistort`(1) -i|--input <bag> (--pose|--twist) <topic>
 //              --pcd <t...> [--ref <frame>] [--of <frame>] [-o <out>]
-//              [-j|--threads <N>] [-w|--overwrite]
+//              [-j|--threads <N>] [-w|--overwrite] [--no-extrap]
+//              [--max-extrap-duration <dur>]
 std::vector<std::string> complete_pcd(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1514,8 +1516,8 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
     if (sub == "undistort") {
       return matching(
         with_help(
-          {"--input", "--of", "--output", "--overwrite", "--pcd", "--pose", "--ref", "--threads",
-           "--twist", "-i", "-j", "-o", "-w"}),
+          {"--input", "--max-extrap-duration", "--no-extrap", "--of", "--output", "--overwrite",
+           "--pcd", "--pose", "--ref", "--threads", "--twist", "-i", "-j", "-o", "-w"}),
         current);
     }
   }

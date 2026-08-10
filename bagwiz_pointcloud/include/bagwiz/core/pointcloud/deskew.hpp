@@ -32,6 +32,14 @@ namespace bagwiz::core::pointcloud
 //   - points_no_pose:   no trajectory pose could be resolved for the point's
 //                        (or the reference's) timestamp.
 //   - points_nonfinite: xyz itself is NaN/Inf; passed through unchanged.
+// Two further members report endpoint clamping, which is not an error but
+// means the affected points were deskewed against a pose at a different time
+// than their own (up to no correction at all):
+//   - points_out_of_span: a subset of points_deskewed whose timestamp fell
+//     outside the trajectory's time span and was clamped to the nearest
+//     endpoint pose.
+//   - ref_out_of_span: `t_ref_ns` itself fell outside the trajectory's span
+//     (the reference pose was likewise clamped).
 struct DeskewResult
 {
   std::optional<PointCloud2> cloud;
@@ -41,6 +49,8 @@ struct DeskewResult
   std::uint64_t points_no_time = 0;
   std::uint64_t points_no_pose = 0;
   std::uint64_t points_nonfinite = 0;
+  std::uint64_t points_out_of_span = 0;
+  bool ref_out_of_span = false;
 
   [[nodiscard]] bool ok() const noexcept { return cloud.has_value() && error.empty(); }
 };

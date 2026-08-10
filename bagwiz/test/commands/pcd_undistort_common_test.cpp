@@ -498,6 +498,14 @@ TEST_F(PcdUndistortCommonTest, PeekCollectsFirstCloudStates)
   EXPECT_EQ(states->at("/raw").frame_id, "base_link");
   EXPECT_FALSE(states->at("/raw").has_time);
   EXPECT_EQ(states->count("/empty"), 0u);
+  // The peeked span folds header.stamp (kT0Ns) together with the per-point
+  // relative time (0s in the fixture), so it covers exactly [kT0Ns, kT0Ns];
+  // a topic without a usable time field carries no span.
+  const auto & span = states->at("/points").time_span;
+  ASSERT_TRUE(span.has_value());
+  EXPECT_EQ(span->min_ns, kT0Ns);
+  EXPECT_EQ(span->max_ns, kT0Ns);
+  EXPECT_FALSE(states->at("/raw").time_span.has_value());
 }
 
 TEST_F(PcdUndistortCommonTest, PeekRejectsUndecodableFirstMessage)

@@ -10,6 +10,7 @@
 #define COMMANDS__PCD_UNDISTORT_COMMON_HPP_
 
 #include "bagwiz/core/cdr_walker/value.hpp"
+#include "bagwiz/core/pointcloud/point_time.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
 #include "bagwiz/io/bag_io.hpp"
@@ -106,18 +107,24 @@ struct TrajectoryBuildResult
 [[nodiscard]] bool cloud_has_usable_point_time(
   const std::vector<core::pointcloud::PointField> & fields, std::uint32_t point_step);
 
-// One --pcd topic's peeked state: its first cloud's frame and whether that
-// cloud carries a usable per-point time field.
+// One --pcd topic's peeked state: its first cloud's frame, whether that
+// cloud carries a usable per-point time field, and (when it does and the full
+// cloud parses) the first cloud's absolute time span — the per-point times
+// folded together with header.stamp, since deskew needs poses at both — used
+// to extend the motion trajectory over clouds that predate/postdate its
+// samples.
 struct PcdTopicState
 {
   std::string frame_id;
   bool has_time = false;
+  std::optional<core::pointcloud::PointTimeSpan> time_span;
 };
 
-// Peek each --pcd topic's first cloud (frame_id + time field) with one
-// filtered reader pass. Returns nullopt after logging on open / header-parse
-// / read failure. A topic whose first message never arrives is simply absent
-// from the returned map; validate_pcd_topic_states rejects that case.
+// Peek each --pcd topic's first cloud (frame_id + time field + absolute
+// point-time span) with one filtered reader pass. Returns nullopt after
+// logging on open / header-parse / read failure. A topic whose first message
+// never arrives is simply absent from the returned map;
+// validate_pcd_topic_states rejects that case.
 [[nodiscard]] std::optional<std::unordered_map<std::string, PcdTopicState>> peek_pcd_topic_states(
   const std::filesystem::path & input_path, const std::vector<std::string> & pcd_topics,
   const char * logger);

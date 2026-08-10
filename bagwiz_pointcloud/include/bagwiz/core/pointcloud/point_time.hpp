@@ -26,6 +26,13 @@ struct PointTimeField
   PointFieldType datatype = PointFieldType::kFloat32;
 };
 
+// Separates sweep-relative per-point times (< ~seconds) from epoch-absolute
+// ones (~1.7e9 s): a time field whose largest magnitude stays below this many
+// seconds is read as relative to the cloud's header.stamp, otherwise as
+// absolute epoch seconds. Shared by deskew_pointcloud2 and
+// absolute_point_time_span_ns so both classify the same cloud identically.
+inline constexpr double kRelativeTimeThresholdSec = 1.0e6;
+
 // The per-point time field bagwiz recognises, or nullopt. Shared by `map slam`
 // (LiDAR scan extraction) and `pcd concat` so both agree on what counts as a
 // per-point time. Following glim's convention, a field qualifies when:
@@ -45,6 +52,22 @@ struct PointTimeField
 // field can test std::isfinite).
 [[nodiscard]] double point_time_seconds(
   const std::byte * field_bytes, const PointTimeField & field);
+
+// The absolute (epoch-ns) span covered by a cloud's per-point time field.
+struct PointTimeSpan
+{
+  std::int64_t min_ns = 0;
+  std::int64_t max_ns = 0;
+};
+
+// Scan `cloud`'s per-point time `field` and return the absolute point-time
+// span in nanoseconds, applying the same relative/absolute classification as
+// deskew_pointcloud2 (kRelativeTimeThresholdSec); relative times are resolved
+// against `t_ref_ns` (the cloud's header.stamp). Non-finite time values are
+// ignored. Returns nullopt when the field is declared out of bounds, the point
+// layout is inconsistent, or no point carried a finite time.
+[[nodiscard]] std::optional<PointTimeSpan> absolute_point_time_span_ns(
+  const PointCloud2 & cloud, const PointTimeField & field, std::int64_t t_ref_ns);
 
 }  // namespace bagwiz::core::pointcloud
 

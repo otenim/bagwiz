@@ -22,9 +22,6 @@ namespace bagwiz::core::pointcloud
 namespace
 {
 
-// Separates sweep-relative times (< ~seconds) from epoch-absolute (~1.7e9 s).
-constexpr double kRelativeTimeThresholdSec = 1.0e6;
-
 // Mirror of core::interpolate_poses (bagwiz_tf/src/core/tf/trajectory.cpp),
 // copied operation-for-operation so the per-point hot loop can inline it and
 // so both produce bit-identical results. Any change to that function must be
@@ -293,6 +290,11 @@ DeskewResult deskew_pointcloud2(
     out.points_no_pose = out.points_total;
     return out;
   }
+  // lookup_pose clamps out-of-span stamps to the endpoint poses; report that
+  // on the result so callers can warn, since a clamped reference can silently
+  // turn the whole deskew into a no-op.
+  out.ref_out_of_span =
+    t_ref_ns < trajectory.front().timestamp_ns || t_ref_ns > trajectory.back().timestamp_ns;
 
   // T_ref_inv and the extrinsic E / E_inv, once per cloud (tf2::Transform
   // semantics; see the Mat3/Vec3 note above).
@@ -369,10 +371,12 @@ DeskewResult deskew_pointcloud2(
       core::TrajectoryPose pose_i;
       if (lo == n_poses) {
         pose_i = trajectory.back();
+        ++out.points_out_of_span;  // t_i past the last pose: clamped to it
       } else if (trajectory[lo].timestamp_ns == t_i_ns) {
         pose_i = trajectory[lo];
       } else if (lo == 0) {
         pose_i = trajectory.front();
+        ++out.points_out_of_span;  // t_i before the first pose: clamped to it
       } else {
         const auto & prev = trajectory[lo - 1];
         const auto & next = trajectory[lo];

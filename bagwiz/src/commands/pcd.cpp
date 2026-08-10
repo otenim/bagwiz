@@ -154,6 +154,19 @@ private:
         "Number of worker threads for deskew (default: 8; 0 = hardware concurrency, "
         "1 = sync). Range 0-256; in-range values above hardware concurrency are capped.")
       ->check(CLI::Range(0, 256));
+    auto * no_extrap_flag = sub->add_flag(
+      "--no-extrap", undistort_args_.no_extrap,
+      "Do not extrapolate the motion trajectory to cover clouds outside its time span; "
+      "out-of-span points are deskewed against the clamped endpoint poses (with a warning).");
+    sub
+      ->add_option(
+        "--max-extrap-duration", undistort_args_.max_extrap_duration,
+        "Per-side cap on the trajectory extrapolation used to cover clouds outside the "
+        "motion source's time span (default: 1s; 0 = no extrapolation, same as --no-extrap). "
+        "Takes an optional unit ns/us/ms/s (no unit = ms), e.g. 500ms. If covering the "
+        "--pcd topics' first clouds needs more extrapolation than this, the run errors "
+        "out before writing anything.")
+      ->excludes(no_extrap_flag);
     sub->callback([this]() { selected_ = Subcommand::kUndistort; });
   }
 };

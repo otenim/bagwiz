@@ -9,6 +9,7 @@
 #include "bagwiz/commands/pcd_undistort.hpp"
 
 #include "bagwiz/core/bag/rewrite.hpp"
+#include "bagwiz/core/base/duration_parse.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/pointcloud/deskew.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
@@ -21,6 +22,7 @@
 
 #include <geometry_msgs/msg/transform.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <condition_variable>
@@ -98,6 +100,29 @@ struct ParallelContext
   bool reader_done = false;
 };
 
+// Warn about endpoint clamping in a deskewed cloud. A clamped point (or
+// reference stamp) is deskewed against a pose at a different time than its
+// own — up to no correction at all — while its per-point time is still
+// rewritten to the reference value, so this must never be silent.
+void log_out_of_span_warnings(const core::pointcloud::DeskewResult & res, const char * topic)
+{
+  if (res.ref_out_of_span) {
+    BAGWIZ_LOG_WARN(
+      kLogger,
+      "pcd undistort: cloud on '%s': header.stamp is outside the motion trajectory's time "
+      "span; deskewed against the clamped endpoint pose",
+      topic);
+  }
+  if (res.points_out_of_span > 0) {
+    BAGWIZ_LOG_WARN(
+      kLogger,
+      "pcd undistort: cloud on '%s': %" PRIu64
+      " point(s) fell outside the motion trajectory's time span; their poses were clamped "
+      "to the trajectory endpoints",
+      topic, res.points_out_of_span);
+  }
+}
+
 // Parse, deskew, and serialize a single cloud.  Runs on a worker thread and
 // only touches local state plus the read-only trajectory span.
 OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPose> trajectory)
@@ -129,6 +154,7 @@ OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPos
             job.topic.c_str(), res.points_total, res.points_no_time, res.points_no_pose,
             res.points_nonfinite);
         }
+        log_out_of_span_warnings(res, job.topic.c_str());
         item.payload = core::pointcloud::serialize_pointcloud2(*res.cloud);
       }
     }
@@ -443,6 +469,7 @@ int run_sync_undistort_pass(
         name.c_str(), res.points_total, res.points_no_time, res.points_no_pose,
         res.points_nonfinite);
     }
+    log_out_of_span_warnings(res, name.c_str());
     const auto payload = core::pointcloud::serialize_pointcloud2(*res.cloud);
     writer.write(name, raw.timestamp_ns, payload);
     ++total_clouds;
@@ -511,6 +538,19 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
     // is expressed in never enters the deskew math.
     BAGWIZ_LOG_WARN(kLogger, "pcd undistort: --ref has no effect with --twist; ignoring it");
   }
+  std::int64_t max_extrap_ns = 1'000'000'000;  // --max-extrap-duration default: 1s
+  if (args.max_extrap_duration.has_value()) {
+    const auto dur = core::parse_duration_ns(*args.max_extrap_duration);
+    if (!dur.has_value() || *dur < 0) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "pcd undistort: --max-extrap-duration '%s' is not a valid non-negative duration "
+        "(ns/us/ms/s, no unit = ms; e.g. 500ms)",
+        args.max_extrap_duration->c_str());
+      return 1;
+    }
+    max_extrap_ns = *dur;
+  }
 
   auto reader = io::open_read_or_log(args.input_path, kLogger);
   if (!reader) {
@@ -530,13 +570,83 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
   if (!built.ok()) {
     return 1;
   }
-  const std::vector<core::TrajectoryPose> trajectory = std::move(built.trajectory);
+  std::vector<core::TrajectoryPose> trajectory = std::move(built.trajectory);
 
   // ---- peek + validate each --pcd topic's first cloud, then extrinsics ------
   const auto pcd_state = peek_pcd_topic_states(args.input_path, args.pcd_topics, kLogger);
   if (!pcd_state.has_value() || !validate_pcd_topic_states(args.pcd_topics, *pcd_state, kLogger)) {
     return 1;
   }
+
+  // ---- extend the trajectory over clouds outside its time span ---------------
+  // The trajectory only spans the motion source's first..last sample, and
+  // deskew clamps out-of-span lookups to the endpoint poses — for a cloud
+  // wholly before the first sample that silently means no correction at all
+  // (ref and points clamp to the same pose). Extrapolate the endpoints at
+  // constant velocity to cover the --pcd clouds instead, but refuse gaps
+  // beyond --max-extrap-duration: constant-velocity extrapolation is only
+  // trustworthy near the endpoint. --no-extrap (or a 0 duration) keeps the
+  // old clamping behaviour; the out-of-span warnings then flag the affected
+  // clouds during Pass 2.
+  if (!args.no_extrap && max_extrap_ns > 0) {
+    std::optional<std::int64_t> needed_start;
+    std::int64_t max_sweep_ns = 0;
+    for (const auto & topic : args.pcd_topics) {
+      const auto & span = pcd_state->at(topic).time_span;
+      if (!span.has_value()) {
+        continue;
+      }
+      if (!needed_start.has_value() || span->min_ns < *needed_start) {
+        needed_start = span->min_ns;
+      }
+      max_sweep_ns = std::max(max_sweep_ns, span->max_ns - span->min_ns);
+    }
+    if (needed_start.has_value()) {
+      // The tail must additionally cover the last clouds' sweeps, whose stamps
+      // are unknown without a full bag scan; padding by the longest first-cloud
+      // sweep covers the common case, and the out-of-span warnings catch the
+      // rest.
+      const std::int64_t needed_end = trajectory.back().timestamp_ns + max_sweep_ns;
+      const std::int64_t head_ns = trajectory.front().timestamp_ns - *needed_start;
+      const std::int64_t tail_ns = needed_end - trajectory.back().timestamp_ns;
+      if (head_ns > max_extrap_ns) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "pcd undistort: the earliest --pcd cloud starts %.3f s before the motion "
+          "trajectory's first sample, exceeding --max-extrap-duration (%.3f s); raise "
+          "--max-extrap-duration to extrapolate that far, or pass --no-extrap to deskew "
+          "against the clamped endpoint poses instead",
+          head_ns / 1.0e9, max_extrap_ns / 1.0e9);
+        return 1;
+      }
+      if (tail_ns > max_extrap_ns) {
+        BAGWIZ_LOG_ERROR(
+          kLogger,
+          "pcd undistort: covering one sweep past the motion trajectory's last sample "
+          "needs %.3f s of extrapolation, exceeding --max-extrap-duration (%.3f s); raise "
+          "--max-extrap-duration to extrapolate that far, or pass --no-extrap to deskew "
+          "against the clamped endpoint poses instead",
+          tail_ns / 1.0e9, max_extrap_ns / 1.0e9);
+        return 1;
+      }
+      core::extend_trajectory_to_span(trajectory, *needed_start, needed_end);
+      if (head_ns > 0) {
+        BAGWIZ_LOG_INFO(
+          kLogger,
+          "pcd undistort: extrapolated the motion trajectory %.1f ms before its first "
+          "sample to cover the earliest --pcd cloud",
+          head_ns / 1.0e6);
+      }
+      if (tail_ns > 0) {
+        BAGWIZ_LOG_INFO(
+          kLogger,
+          "pcd undistort: extrapolated the motion trajectory %.1f ms past its last sample "
+          "to cover the latest --pcd clouds' sweeps",
+          tail_ns / 1.0e6);
+      }
+    }
+  }
+
   const auto extrinsics = resolve_pcd_extrinsics(buffer, of, args.pcd_topics, *pcd_state, kLogger);
   if (!extrinsics.has_value()) {
     return 1;
