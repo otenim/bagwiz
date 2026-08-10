@@ -13,7 +13,6 @@
 #include "bagwiz/core/slam/instance_occupancy.hpp"
 #include "bagwiz/core/slam/lidar_scan.hpp"
 #include "bagwiz/core/slam/sensor_transform.hpp"
-#include "bagwiz/core/slam/visual_observation.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
 
 #include <array>
@@ -21,7 +20,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <span>
 #include <vector>
 
 // LiDAR-only optimized mapping over a sequence of scans. Extends the M1
@@ -29,9 +27,7 @@
 // frames through GLIM's SubMapping -> GlobalMapping — the same pipeline
 // glim_rosbag uses for its final globally-optimized output — and then reading
 // back the optimized global point-cloud map plus the globally-optimized
-// per-scan trajectory. A camera-only mode (CloudMapperConfig::camera_only)
-// swaps the odometry layer for the visual-inertial estimator and exports a
-// sparse landmark map instead, sharing the sub/global mapping machinery.
+// per-scan trajectory.
 //
 // Every GLIM / Eigen / GTSAM type is hidden behind a
 // pimpl so this header (and the `slam` command that drives it) stays free of
@@ -39,9 +35,8 @@
 // unit is compiled only when BAGWIZ_WITH_SLAM is on. No ROS node / pub-sub is
 // involved — GLIM's modules are called directly.
 //
-// Usage: feed scans in timestamp order with insert() (or IMU + visual
-// observations in camera-only mode), then call finish() once to flush, run
-// the global optimization, and obtain the map + trajectory.
+// Usage: feed scans in timestamp order with insert(), then call finish() once
+// to flush, run the global optimization, and obtain the map + trajectory.
 namespace bagwiz::core::slam
 {
 
@@ -83,9 +78,6 @@ struct CloudMapperConfig
   // disabled in sub/global mapping). A value → LiDAR-IMU CPU odometry with that
   // extrinsic, and IMU enabled in sub/global mapping; feed IMU via insert_imu().
   // Convention is GLIM's T_lidar_imu (p_lidar = T_lidar_imu * p_imu).
-  // In camera-only mode (camera_only below) this carries T_cam0_imu instead —
-  // the first camera's frame takes the "lidar" role, so GLIM's T_world_lidar IS
-  // T_world_cam0 and the exported trajectory is the first camera's.
   std::optional<SensorTransform> t_lidar_imu;
 
   // Fill in poses for the SLAM initialization ("start") window. GLIM's odometry
@@ -222,71 +214,6 @@ struct CloudMapperConfig
   // using t_lidar_imu.
   std::array<double, 3> gnss_antenna_offset{0.0, 0.0, 0.0};
 
-  // Visual-constraint cameras (map slam --cam): per-camera cloud<-camera
-  // optical extrinsic, indexed by VisualObservation::camera_id. Empty (the
-  // default): no visual constraints, zero overhead. In camera-only mode the
-  // "cloud frame" is the first camera's, so entry i is T_cam0_cam_i and this
-  // list also defines the odometry rig.
-  std::vector<SensorTransform> visual_cameras;
-
-  // Isotropic measurement sigma in normalized image units (~pixel sigma / fx).
-  double visual_obs_sigma = 1.0e-3;
-
-  // Per-track cap on observations kept for the factor (evenly subsampled).
-  int visual_max_obs_per_track = 16;
-
-  // LiDAR-support gate: a triangulated landmark must fall within this distance
-  // of the involved submaps' points (voxel hash lookup). <= 0 disables.
-  // Meaningless in camera-only mode (submap clouds are landmark clouds there),
-  // so the mode forces it to 0 at construction.
-  double visual_gate_distance = 1.0;
-
-  // Camera-only mode (issue #376 Phase 3): run SLAM from visual observations +
-  // IMU alone, with no LiDAR scans. The odometry layer becomes the
-  // visual-inertial estimator (VisualInertialOdometry) instead of a GLIM
-  // LiDAR backend; sub/global mapping are GLIM's stock modules reconfigured
-  // for a thin relative-pose layer (odometry-delta between factors + IMU
-  // factors, no scan-matching factors anywhere). Requires t_lidar_imu
-  // (= T_cam0_imu) and a non-empty visual_cameras (= T_cam0_cam_i, i.e. the
-  // "cloud frame" is the first camera's); use_gpu is rejected. insert() must
-  // never be called in this mode (throws std::logic_error); feed
-  // insert_imu() + insert_visual_observations() instead. The LiDAR-specific
-  // features are force-disabled at construction (endpoint fill, dynamic-point
-  // removal, the visual gate). finish() exports the
-  // re-triangulated sparse landmark set into CloudMap::points/colors instead
-  // of a merged submap cloud.
-  bool camera_only = false;
-
-  // Anchor-window period [ns] of the camera-only odometry's observation
-  // grouping (VisualInertialOdometryConfig::anchor_period_ns), i.e. the first
-  // camera's frame period. The CLI resolves it — --visual-anchor-period, or
-  // the anchor topic's derived median frame interval (issue #17); the default
-  // only backstops a failed derivation. Ignored unless camera_only.
-  std::int64_t visual_anchor_period_ns = 100'000'000;
-
-  // Camera-only keyframe gate: a grouped observation set becomes a keyframe
-  // when the IMU-predicted displacement from the last keyframe exceeds either
-  // threshold. Ignored unless camera_only.
-  double visual_keyframe_min_trans = 0.25;  // m
-  double visual_keyframe_min_rot = 0.17;    // rad (~10 deg)
-
-  // Camera-only window size: keyframes kept in the rebuilt-window batch
-  // smoother before marginalization. Ignored unless camera_only.
-  int visual_max_window_keyframes = 10;
-
-  // Camera-only visual-constraint seeding (issue #18). The VIO trajectory the
-  // observations are composed against drifts span-proportionally (~2-4% of
-  // distance on the reference bag), so an untrimmed crossing track's seed
-  // residual reads ~100x obs_sigma — the LiDAR-calibrated 3-sigma gate then
-  // rejects every crossing track and camera-only runs build zero factors.
-  // Trim each crossing track to +/-visual_crossing_trim_span seconds around
-  // its submap-crossing stamp (drift shrinks with the span; measured ~18
-  // sigma median at 0.5 s) and widen the seed gate to
-  // visual_seed_outlier_sigmas. Both ignored unless camera_only — the LiDAR
-  // path keeps its scan-matched trajectory and validated 3-sigma seed.
-  double visual_crossing_trim_span = 0.5;  // s
-  double visual_seed_outlier_sigmas = 30.0;
-
   // Number of CPU threads passed to GLIM and to the scan-matching endpoint
   // fill's per-registration work (covariance estimation + GICP
   // correspondences). Must be positive. 1 is the deterministic path.
@@ -309,8 +236,6 @@ struct CloudMapperConfig
   // path — it only overlaps the CPU preprocess (and bag read) with the GPU
   // odometry/mapping to cut wall-clock. Set true to force the fully synchronous
   // single-thread path (e.g. for A/B timing or a strictly serial run).
-  // Irrelevant in camera-only mode, which never starts the pipeline (there are
-  // no scans to preprocess).
   bool disable_pipeline = false;
 };
 
@@ -386,33 +311,6 @@ struct CloudMap
   std::size_t dynamic_removed_point_count = 0;
   double dynamic_removal_seconds = 0.0;
 
-  // Number of visual rig-projection factors injected during global
-  // optimization (config.visual_cameras; map slam --cam) — one per track that
-  // was seen from two or more submaps and survived triangulation and the
-  // LiDAR-support gate. 0 when no cameras were configured or no track qualified.
-  std::int64_t visual_factor_count = 0;
-
-  // Number of distinct VisualObservation::track_id values received via
-  // insert_visual_observations(), regardless of whether a factor was built
-  // from them. 0 when config.visual_cameras is empty (observations are
-  // ignored at ingest).
-  std::int64_t visual_track_count = 0;
-
-  // Per-point rgb, parallel to `points`. Populated only in camera-only mode,
-  // where finish() exports the re-triangulated sparse landmark set (each
-  // landmark's color sampled by the visual frontend at its track position);
-  // empty otherwise (LiDAR maps are colorized by the command layer instead).
-  std::vector<std::array<std::uint8_t, 3>> colors;
-
-  // Camera-only odometry diagnostics (VisualInertialOdometry::Stats): how
-  // many grouped observations the cross-camera grouping dropped and how many
-  // keyframes the estimator produced. Drops mean a stamp no anchor-camera
-  // window covers — a mid-run anchor frame drop, or the benign stream-extent
-  // mismatch at the bag's head/tail; the grouping never drops for lag. Both
-  // counts 0 outside camera-only mode.
-  std::int64_t visual_dropped_observation_count = 0;
-  std::int64_t visual_odom_keyframe_count = 0;
-
   // Wall-clock breakdown of finish(), for the command layer's log line: the
   // global iSAM2 optimization, the scan-matching endpoint fill (start + end
   // windows together), and the export map fill. Diagnostic only — without the
@@ -437,11 +335,10 @@ public:
   CloudMapper(CloudMapper &&) noexcept;
   CloudMapper & operator=(CloudMapper &&) noexcept;
 
-  // Feed one IMU sample (LiDAR-IMU and camera-only modes; a no-op in
-  // LiDAR-only mode). Forwarded to the odometry and the sub/global mapping
-  // stages, all of which buffer it for their own preintegration. Samples must
-  // arrive in non-decreasing timestamp order, interleaved with scans (with
-  // observation batches in camera-only mode).
+  // Feed one IMU sample (LiDAR-IMU mode; a no-op in LiDAR-only mode).
+  // Forwarded to the odometry and the sub/global mapping stages, all of which
+  // buffer it for their own preintegration. Samples must arrive in
+  // non-decreasing timestamp order, interleaved with scans.
   void insert_imu(const ImuSample & imu);
 
   // Feed one GNSS fix, already projected to the local metric frame (see
@@ -450,30 +347,9 @@ public:
   // in non-decreasing timestamp order.
   void insert_gnss(const GnssPoint & gnss);
 
-  // Feed a batch of visual feature observations (map slam --cam). Thread-safe:
-  // safe to call concurrently with insert()/insert_imu()/insert_gnss(), e.g.
-  // from a dedicated visual-frontend thread. Buffered and turned into
-  // rig-projection factors in finish(); a no-op when config.visual_cameras is
-  // empty (no cameras configured, so the ingest cost is skipped entirely).
-  // In camera-only mode the batch additionally drives the visual-inertial
-  // odometry (serialized with insert_imu() on an internal mutex, so the
-  // estimator's single-threaded contract holds across concurrent callers);
-  // per-camera streams must be stamp-non-decreasing across calls.
-  void insert_visual_observations(std::span<const VisualObservation> observations);
-
-  // Per-frame heartbeat for a camera frame that yielded no observations
-  // (decode failure, zero surviving tracks). Camera-only mode only (a no-op
-  // otherwise): advances the camera's grouping stream head so one camera with
-  // systematically undecodable or featureless frames cannot stall the other
-  // cameras' window releases for the rest of the bag. Same thread-safety and
-  // stamp-monotonicity contract as insert_visual_observations; camera_id
-  // indexes config.visual_cameras.
-  void note_visual_frame(std::int32_t camera_id, std::int64_t stamp_ns);
-
   // Feed one scan. Scans must arrive in non-decreasing timestamp order. A scan
   // with no per-point time is fed with explicit zero per-point times (treated
   // as already motion-undistorted), bypassing GLIM's pseudo-time synthesis.
-  // Must never be called in camera-only mode (throws std::logic_error).
   void insert(const LidarScan & scan);
 
   // Flush the remaining in-flight frames, run the global optimization, and
