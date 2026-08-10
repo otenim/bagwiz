@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <optional>
@@ -696,6 +697,38 @@ TEST_F(PcdUndistortTest, SyncAndParallelOutputsAreIdentical)
   EXPECT_EQ(read_raw_payloads(sync_out, "/points_a"), read_raw_payloads(par_out, "/points_a"));
   EXPECT_EQ(read_raw_payloads(sync_out, "/points_b"), read_raw_payloads(par_out, "/points_b"));
   EXPECT_EQ(read_raw_payloads(sync_out, "/other"), read_raw_payloads(par_out, "/other"));
+}
+
+// BAGWIZ_PROFILE must produce the per-stage report on stderr for both the
+// sync and the parallel pass, and stay silent when unset. Only the label
+// line is asserted -- the timings are wall-clock and vary run to run.
+TEST_F(PcdUndistortTest, ProfileReportEmittedWhenEnabled)
+{
+  write_undistort_input(in_, /*with_time_field=*/true);
+
+  ::setenv("BAGWIZ_PROFILE", "1", 1);
+  ::testing::internal::CaptureStderr();
+  auto sync_args = base_args(in_, out_);
+  sync_args.threads = 1;
+  ASSERT_EQ(run_pcd_undistort(sync_args), 0);
+  EXPECT_NE(
+    ::testing::internal::GetCapturedStderr().find("profile [pcd_undistort]"), std::string::npos);
+
+  const auto par_out = tmp_ / "par.mcap";
+  ::testing::internal::CaptureStderr();
+  auto par_args = base_args(in_, par_out);
+  par_args.threads = 2;
+  ASSERT_EQ(run_pcd_undistort(par_args), 0);
+  EXPECT_NE(
+    ::testing::internal::GetCapturedStderr().find("profile [pcd_undistort]"), std::string::npos);
+  ::unsetenv("BAGWIZ_PROFILE");
+
+  const auto quiet_out = tmp_ / "quiet.mcap";
+  ::testing::internal::CaptureStderr();
+  auto quiet_args = base_args(in_, quiet_out);
+  quiet_args.threads = 1;
+  ASSERT_EQ(run_pcd_undistort(quiet_args), 0);
+  EXPECT_EQ(::testing::internal::GetCapturedStderr().find("profile ["), std::string::npos);
 }
 
 // The --twist counterpart of DeskewsTargetTopicAndPreservesOthers: a constant
