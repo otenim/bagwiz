@@ -51,8 +51,7 @@ class ScanProgress
 public:
   // total <= 0 selects the indeterminate bar. `enabled` false makes this a
   // complete no-op (no terminal output is ever produced). `unit` names the
-  // item the postfix counts ("scans" in LiDAR modes, "frames" in camera-only
-  // mode, which has no LiDAR scans to count).
+  // item the postfix counts (e.g. "scans").
   ScanProgress(std::int64_t total, bool enabled, std::string unit = "scans");
   ~ScanProgress();
   ScanProgress(const ScanProgress &) = delete;

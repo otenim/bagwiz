@@ -95,7 +95,7 @@ struct ScanProgress::Impl
   std::int64_t total = 0;
   int last_tenths = -1;
   std::chrono::steady_clock::time_point last_draw{};
-  std::string unit;  // postfix item name ("scans" / "frames")
+  std::string unit;  // postfix item name (e.g. "scans")
   std::unique_ptr<indicators::ProgressBar> bar;
   std::unique_ptr<indicators::IndeterminateProgressBar> spinner;
 };

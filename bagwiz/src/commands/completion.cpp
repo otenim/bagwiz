@@ -100,7 +100,7 @@ constexpr std::array<std::string_view, 3> kUndistortTwistTopicTypes{{
 
 // Image topic types the shared to_packed_raster() decoder accepts —
 // `generate video` rendering, `walk`'s image preview, and `map slam`'s
-// `--color` / `--cam` cameras all gate on it. This MUST mirror
+// `--color` cameras all gate on it. This MUST mirror
 // is_supported_image_type() in bagwiz_image/src/core/image/packed_raster.cpp
 // (and is_supported_type() in src/commands/generate_video_common.cpp); keep them
 // in sync. As with `traj dump` / `tf tree`, a topic typed as anything outside
@@ -1156,11 +1156,10 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 // verbs are `slam` and `viewer`. The verb adds one positional slot, shifting
 // every argument one word to the right of a flat command.
 //
-//   slam:   `map`(0) `slam`(1) -i|--input <bag> [--pcd <topic>] -o|--output <root>
+//   slam:   `map`(0) `slam`(1) -i|--input <bag> --pcd <topic> -o|--output <root>
 //           [--backend <cpu|cuda|auto>] [--frame <frame_id>] [--imu <topic>]
-//           [--gnss <topic>] [--color <topic>...] [--cam <topic>...]
-//           [--cam-info <image>=<info>...] [--visual-max-features <N>]
-//           [--visual-anchor-period <duration>]
+//           [--gnss <topic>] [--color <topic>...]
+//           [--cam-info <image>=<info>...]
 //           [--color-min-dist <m>] [--color-keyframe-blur]
 //           [--input-res <m>] [--min-range <m>] [--max-range <m>]
 //           [-j|--threads <N>] [--viewer] [-w|--overwrite]
@@ -1177,7 +1176,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
 // completed earlier by try_topic_completion via kTopicBindings (PointCloud2
 // topics only); here we surface `slam`'s flags for any `-` word and complete the
 // values of `--imu` (Imu topics), `--gnss` (NavSatFix topics), `--frame` (frame
-// ids from the bag's static TF), `--color` / `--cam` (image topics), and
+// ids from the bag's static TF), `--color` (image topics), and
 // `--cam-info` (the `<image_topic>` half of each `<image>=<info>` pair,
 // completed as "<topic>="; the `<info_topic>` half offers nothing) from the
 // bag. `viewer` has no value-bearing flags and its `--input` value is a path.
@@ -1209,7 +1208,6 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
     return matching(
       with_help(
         {"--backend",
-         "--cam",
          "--cam-info",
          "--color",
          "--color-keyframe-blur",
@@ -1242,8 +1240,6 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
          "--threads",
          "--upsample",
          "--viewer",
-         "--visual-anchor-period",
-         "--visual-max-features",
          "-i",
          "-j",
          "-o",
@@ -1271,10 +1267,10 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
 
   // Topic-bearing flags: complete the value(s) from the bag's topics of the
   // type(s) the flag accepts. --imu and --gnss take exactly one value, so they
-  // complete only immediately after the flag. --color, --cam and --cam-info
-  // accept several values per occurrence (CLI11 consumes every following
-  // non-flag word), so the governing flag is found by walking left past the
-  // values already typed; any other intervening flag ends that value run.
+  // complete only immediately after the flag. --color and --cam-info accept
+  // several values per occurrence (CLI11 consumes every following non-flag
+  // word), so the governing flag is found by walking left past the values
+  // already typed; any other intervening flag ends that value run.
   if (request.cursor_word == 0) {
     return {};
   }
@@ -1293,7 +1289,7 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
         break;
       }
     }
-    if (governing == "--color" || governing == "--cam") {
+    if (governing == "--color") {
       flag_topic_types = kImageTopicTypes;
     } else if (governing == "--cam-info") {
       // --cam-info takes <image_topic>=<info_topic> pairs. Complete the

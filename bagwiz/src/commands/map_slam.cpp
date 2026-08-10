@@ -39,7 +39,6 @@
 #include "map_slam_colorize.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "map_slam_mapping.hpp"   // NOLINT(build/include_subdir) src-local shared header
 #include "map_slam_threads.hpp"   // NOLINT(build/include_subdir) src-local shared header
-#include "map_slam_visual.hpp"    // NOLINT(build/include_subdir) src-local shared header
 
 #include <tf2/buffer_core.hpp>
 #include <tf2/time.hpp>
@@ -188,10 +187,9 @@ public:
       return 1;
     }
 
-    // Mode-level flag combinations (--pcd is optional since camera-only mode;
-    // camera-only additionally requires --imu and rejects the LiDAR-only
-    // features). Checked before any bag work.
-    camera_only_ = args_.cloud_topic.empty();
+    // Cross-field flag combinations the per-option CLI checks can't express
+    // (--upsample needing --imu, and the --dynamic-* tuning options each
+    // affecting one removal method only). Checked before any bag work.
     if (const std::string mode_error = validate_mode_flags(args_); !mode_error.empty()) {
       BAGWIZ_LOG_ERROR(kLogger, "%s", mode_error.c_str());
       return 1;
@@ -219,9 +217,7 @@ public:
       return 1;
     }
 
-    if (
-      !args_.cloud_topic.empty() &&
-      !topic_present_with_type(*reader, args_.cloud_topic, kPointCloud2Type)) {
+    if (!topic_present_with_type(*reader, args_.cloud_topic, kPointCloud2Type)) {
       return 1;
     }
     if (!args_.imu_topic.empty() && !topic_present_with_type(*reader, args_.imu_topic, kImuType)) {
@@ -232,12 +228,10 @@ public:
         return 1;
       }
     }
-    // --cam-info names the CameraInfo topic of a listed camera, so it needs at
-    // least one camera role to attach to.
-    if (
-      !args_.camera_info_overrides.empty() && args_.color_topics.empty() &&
-      args_.cam_topics.empty()) {
-      BAGWIZ_LOG_ERROR(kLogger, "--cam-info requires --color or --cam.");
+    // --cam-info names the CameraInfo topic of a listed --color camera, so it
+    // needs --color to attach to.
+    if (!args_.camera_info_overrides.empty() && args_.color_topics.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "--cam-info requires --color.");
       return 1;
     }
     if (!build_camera_union()) {
@@ -247,9 +241,7 @@ public:
       return 1;
     }
 
-    // Resolve the frame every static-TF lookup anchors at: the cloud frame in
-    // LiDAR modes, the first --cam topic's CameraInfo frame_id in camera-only
-    // mode (CameraInfos are already loaded, so no bag re-scan is needed).
+    // Resolve the frame every static-TF lookup anchors at: the cloud frame.
     if (!resolve_anchor_frame()) {
       return 1;
     }
@@ -262,7 +254,7 @@ public:
     // naming test is a convention-based heuristic, hence a warning, not an
     // error.
     if (
-      args_.remove_dynamic && args_.dynamic_method != "erasor2" && !camera_only_ &&
+      args_.remove_dynamic && args_.dynamic_method != "erasor2" &&
       is_vehicle_like_frame(anchor_frame_)) {
       BAGWIZ_LOG_WARN(
         kLogger,
@@ -322,9 +314,8 @@ public:
     }
 
     // Resolve every cloud<-camera extrinsic before feeding GLIM so an absent
-    // TF chain aborts before hours of SLAM, not after. --cam needs its
-    // extrinsics at mapper construction; --color's colorization runs after the
-    // global optimization but is resolved just as early for the same reason.
+    // TF chain aborts before hours of SLAM, not after: --color's colorization
+    // runs after the global optimization but is resolved just as early.
     if (!all_camera_topics_.empty() && !resolve_camera_extrinsics()) {
       return 1;
     }
@@ -419,104 +410,14 @@ private:
     return true;
   }
 
-  // Resolve the camera-only anchor-window period (issue #17): the
-  // --visual-anchor-period override when given, otherwise the median
-  // inter-frame interval of the first --cam topic — computed over the SAME
-  // capture stamps the grouping windows (image_capture_stamp_ns: header
-  // stamp, receive-stamp fallback), so a sim-time bag derives consistently.
-  // Returns false only on an unparseable or non-positive override (logged);
-  // a failed derivation warns and keeps `period_ns` (the config default).
-  bool resolve_visual_anchor_period(std::int64_t & period_ns)
-  {
-    if (!args_.visual_anchor_period.empty()) {
-      const auto ns =
-        core::parse_duration_ns(args_.visual_anchor_period, core::DurationUnitPolicy::RequireUnit);
-      if (!ns.has_value() || *ns <= 0) {
-        BAGWIZ_LOG_ERROR(
-          kLogger,
-          "could not parse --visual-anchor-period '%s' (expected a positive <number><unit>, "
-          "e.g. 100ms, 0.1s)",
-          args_.visual_anchor_period.c_str());
-        return false;
-      }
-      period_ns = *ns;
-      BAGWIZ_LOG_INFO(
-        kLogger, "Visual anchor period: %.1f ms (from --visual-anchor-period)",
-        static_cast<double>(period_ns) / 1e6);
-      return true;
-    }
-    // Derivation reads the anchor topic through a fresh reader (the caller's
-    // reader serves the feed loop; see peek_cloud_frame for the pattern).
-    std::unique_ptr<io::BagReader> reader;
-    try {
-      reader = io::open_read(args_.input_path);
-    } catch (const std::exception & e) {
-      BAGWIZ_LOG_WARN(
-        kLogger,
-        "Could not reopen %s to derive the anchor period (%s); keeping the %.1f ms "
-        "default (override with --visual-anchor-period)",
-        args_.input_path.c_str(), e.what(), static_cast<double>(period_ns) / 1e6);
-      return true;
-    }
-    io::ReadFilter filter;
-    filter.topics.push_back(args_.cam_topics.front());
-    reader->set_filter(filter);
-    // ~12 s of frames at 10 Hz: ample for a stable median, cheap to decode
-    // (image_capture_stamp_ns reads only the leading header).
-    constexpr std::size_t kMaxPeriodProbeStamps = 120;
-    std::vector<std::int64_t> stamps;
-    stamps.reserve(kMaxPeriodProbeStamps);
-    io::RawMessage raw;
-    while (stamps.size() < kMaxPeriodProbeStamps && reader->next(raw)) {
-      stamps.push_back(
-        core::image::image_capture_stamp_ns(raw.topic->type, raw.payload, raw.timestamp_ns));
-    }
-    const std::int64_t derived = median_frame_period_ns(stamps);
-    if (derived <= 0) {
-      BAGWIZ_LOG_WARN(
-        kLogger,
-        "Could not derive the anchor camera's frame period from '%s' (fewer than two usable "
-        "frames); keeping the %.1f ms default (override with --visual-anchor-period)",
-        args_.cam_topics.front().c_str(), static_cast<double>(period_ns) / 1e6);
-      return true;
-    }
-    period_ns = derived;
-    BAGWIZ_LOG_INFO(
-      kLogger, "Visual anchor period: %.1f ms (median frame period of '%s')",
-      static_cast<double>(period_ns) / 1e6, args_.cam_topics.front().c_str());
-    return true;
-  }
+  // Resolve anchor_frame_: peek the cloud topic's frame_id. False (logged) on
+  // failure.
+  bool resolve_anchor_frame() { return peek_cloud_frame(anchor_frame_); }
 
-  // Resolve anchor_frame_: peek the cloud topic's frame_id in LiDAR modes;
-  // take the first --cam topic's CameraInfo frame_id in camera-only mode,
-  // where that camera's frame takes the cloud frame's role (the mapper's
-  // "lidar" frame is cam0, so T_world_lidar is T_world_cam0). False (logged)
-  // on failure. validate_mode_flags guarantees cam_indices_ is non-empty in
-  // camera-only mode.
-  bool resolve_anchor_frame()
-  {
-    if (!camera_only_) {
-      return peek_cloud_frame(anchor_frame_);
-    }
-    anchor_frame_ = camera_infos_[cam_indices_.front()].frame_id;
-    if (anchor_frame_.empty()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger,
-        "CameraInfo on '%s' has an empty header.frame_id; cannot anchor the camera-only "
-        "extrinsics (the first --cam camera's frame takes the cloud frame's role).",
-        camera_info_topics_[cam_indices_.front()].c_str());
-      return false;
-    }
-    return true;
-  }
-
-  // Build the camera list every camera-bearing feature works off: the union of
-  // the two roles, --color topics first (in listing order) then the --cam
-  // topics not already listed, with color_indices_ / cam_indices_ indexing
-  // into it in each flag's own listing order. A topic named by BOTH flags is
-  // one union entry — validated, CameraInfo-loaded and TF-resolved once, and
-  // read by each role's own pass. A topic repeated WITHIN one flag is an
-  // error (logged; false aborts).
+  // Build the camera list every camera-bearing feature works off: the
+  // --color topics, in listing order, with color_indices_ indexing into it
+  // (currently the identity mapping, since --color is the only camera role).
+  // A topic repeated within --color is an error (logged; false aborts).
   bool build_camera_union()
   {
     const auto duplicate_free = [](const std::vector<std::string> & topics, const char * flag) {
@@ -531,9 +432,7 @@ private:
       }
       return true;
     };
-    if (
-      !duplicate_free(args_.color_topics, "--color") ||
-      !duplicate_free(args_.cam_topics, "--cam")) {
+    if (!duplicate_free(args_.color_topics, "--color")) {
       return false;
     }
 
@@ -541,32 +440,13 @@ private:
       color_indices_.push_back(all_camera_topics_.size());
       all_camera_topics_.push_back(topic);
     }
-    for (const std::string & topic : args_.cam_topics) {
-      const auto existing = std::find(all_camera_topics_.begin(), all_camera_topics_.end(), topic);
-      if (existing != all_camera_topics_.end()) {
-        cam_indices_.push_back(
-          static_cast<std::size_t>(std::distance(all_camera_topics_.begin(), existing)));
-        continue;
-      }
-      cam_indices_.push_back(all_camera_topics_.size());
-      all_camera_topics_.push_back(topic);
-    }
     return true;
   }
 
-  // The flag(s) that put camera `cam` (an all_camera_topics_ index) on the
-  // camera list, for error messages naming what the user asked for.
-  std::string camera_role_flags(std::size_t cam) const
-  {
-    const bool color =
-      std::find(color_indices_.begin(), color_indices_.end(), cam) != color_indices_.end();
-    const bool visual =
-      std::find(cam_indices_.begin(), cam_indices_.end(), cam) != cam_indices_.end();
-    if (color && visual) {
-      return "--color/--cam";
-    }
-    return color ? "--color" : "--cam";
-  }
+  // The flag that put camera `cam` (an all_camera_topics_ index) on the
+  // camera list, for error messages naming what the user asked for. Only
+  // --color builds the list now.
+  std::string camera_role_flags(std::size_t /*cam*/) const { return "--color"; }
 
   // Validate every camera image topic in the union and resolve + load its
   // CameraInfo (into camera_info_topics_ / camera_infos_, parallel to
@@ -661,15 +541,13 @@ private:
   // Resolve T_cloud_cam (cloud frame <- camera optical frame) for every camera
   // in the union from the bag's static TF, into t_cloud_cams_ (parallel to
   // all_camera_topics_).
-  // Mirrors resolve_extrinsic: --color/--cam are explicit requests, so any
-  // failure is fatal rather than silently writing an uncolored map or dropping
-  // the visual constraints. The cloud frame and the static TF buffer are
-  // resolved once and shared across cameras.
+  // Mirrors resolve_extrinsic: --color is an explicit request, so any failure
+  // is fatal rather than silently writing an uncolored map. The cloud frame
+  // and the static TF buffer are resolved once and shared across cameras.
   bool resolve_camera_extrinsics()
   {
-    // The anchor frame (cloud frame, or cam0's frame in camera-only mode) and
-    // the static TF buffer are resolved once and shared across cameras.
-    // cam0 itself hits the identity shortcut below in camera-only mode.
+    // The anchor frame (the cloud frame) and the static TF buffer are
+    // resolved once and shared across cameras.
     const std::string & cloud_frame = anchor_frame_;
 
     // Build the static TF buffer lazily: an all-identity setup (every camera
@@ -835,9 +713,7 @@ private:
   }
 
   // Resolve T_lidar_imu (cloud frame <- imu frame) from the bag's static TF.
-  // In camera-only mode the cloud frame is cam0's, so this is T_cam0_imu —
-  // the extrinsic the visual-inertial odometry requires. Returns false
-  // (logged) on any failure.
+  // Returns false (logged) on any failure.
   bool resolve_extrinsic(core::slam::SensorTransform & out)
   {
     std::string imu_frame;
@@ -934,10 +810,9 @@ private:
 
   // Resolve the GNSS antenna lever-arm T_cloud_gnss.translation() from the bag's
   // static TF (anchor frame <- NavSatFix frame_id; the anchor is the cloud
-  // frame in LiDAR modes, cam0's frame in camera-only mode). Unlike the IMU
-  // extrinsic this is NON-FATAL: GNSS still works without it, just uncorrected,
-  // so every failure path logs a warning and returns {0,0,0} (no correction)
-  // rather than aborting.
+  // frame). Unlike the IMU extrinsic this is NON-FATAL: GNSS still works
+  // without it, just uncorrected, so every failure path logs a warning and
+  // returns {0,0,0} (no correction) rather than aborting.
   std::array<double, 3> resolve_gnss_offset()
   {
     const std::array<double, 3> kZero{0.0, 0.0, 0.0};
@@ -1014,40 +889,23 @@ private:
     }
   }
 
-  // Read the cloud topic — plus, when requested, the IMU, GNSS and --cam image
-  // topics — in log order, dispatching each message by type. `on_image` is
-  // called with the camera's index into args_.cam_topics (its
-  // VisualObservation::camera_id) and the raw message, whose payload it must
-  // copy if it outlives the call. Returns false on a fatal read error or when
-  // no scan decoded (both logged); otherwise fills the counters (`images`
-  // counts the --cam messages dispatched to `on_image`).
-  template <typename ScanFn, typename ImuFn, typename GnssFn, typename ImageFn>
+  // Read the cloud topic — plus, when requested, the IMU and GNSS topics — in
+  // log order, dispatching each message by type. Returns false on a fatal
+  // read error or when no scan decoded (both logged); otherwise fills the
+  // counters.
+  template <typename ScanFn, typename ImuFn, typename GnssFn>
   bool process_messages(
     io::BagReader & reader, ScanFn && on_scan, ImuFn && on_imu, GnssFn && on_gnss,
-    ImageFn && on_image, core::slam::ScanProgress & progress, std::int64_t & scans,
-    std::int64_t & skipped, std::int64_t & imu_count, std::int64_t & gnss_count,
-    std::int64_t & images)
+    core::slam::ScanProgress & progress, std::int64_t & scans, std::int64_t & skipped,
+    std::int64_t & imu_count, std::int64_t & gnss_count)
   {
     io::ReadFilter filter;
-    // Camera-only mode has no cloud topic to stream; the pass is IMU (+GNSS)
-    // and the --cam images only.
-    if (!args_.cloud_topic.empty()) {
-      filter.topics.push_back(args_.cloud_topic);
-    }
+    filter.topics.push_back(args_.cloud_topic);
     if (!args_.imu_topic.empty()) {
       filter.topics.push_back(args_.imu_topic);
     }
     if (!args_.gnss_topic.empty()) {
       filter.topics.push_back(args_.gnss_topic);
-    }
-    // The --cam images ride this same pass (a second pass would double the read
-    // cost), dispatched to their camera by exact topic name. A topic that is
-    // also a --color topic is consumed here for its visual role only; the
-    // colorize pass reads the images again later, after the optimization.
-    std::unordered_map<std::string, std::size_t> visual_cameras;
-    for (std::size_t cam = 0; cam < args_.cam_topics.size(); ++cam) {
-      filter.topics.push_back(args_.cam_topics[cam]);
-      visual_cameras.emplace(args_.cam_topics[cam], cam);
     }
     reader.set_filter(filter);
 
@@ -1089,31 +947,15 @@ private:
           }
           on_gnss(*parsed.sample);
           ++gnss_count;
-        } else if (!visual_cameras.empty()) {
-          const auto camera = visual_cameras.find(raw.topic->name);
-          if (camera != visual_cameras.end()) {
-            on_image(camera->second, raw);
-            ++images;
-          }
         }
-        // The postfix tracks the mode's primary feed: decoded scans in LiDAR
-        // modes, dispatched camera frames in camera-only mode (no scans).
-        progress.update(processed, camera_only_ ? images : scans);
+        progress.update(processed, scans);
       }
     } catch (const std::exception & e) {
-      if (camera_only_) {
-        BAGWIZ_LOG_ERROR(
-          kLogger, "read error after %s frames: %s", std::to_string(images).c_str(), e.what());
-      } else {
-        BAGWIZ_LOG_ERROR(
-          kLogger, "read error after %s scans: %s", std::to_string(scans).c_str(), e.what());
-      }
+      BAGWIZ_LOG_ERROR(
+        kLogger, "read error after %s scans: %s", std::to_string(scans).c_str(), e.what());
       return false;
     }
-    // No decodable scans is fatal in LiDAR modes. Camera-only mode is fed by
-    // the cameras instead; a silent camera stream surfaces later as an empty
-    // trajectory (run_mapping's check) rather than here.
-    if (scans == 0 && !camera_only_) {
+    if (scans == 0) {
       BAGWIZ_LOG_ERROR(
         kLogger, "No decodable PointCloud2 messages on '%s'", args_.cloud_topic.c_str());
       return false;
@@ -1168,9 +1010,8 @@ private:
   // Resolve the optional --frame remapping. Returns true when no remapping is
   // requested or when the transform was found. On failure logs and returns false.
   // On success, `body_to` is set to the anchor-frame -> output-frame transform
-  // when remapping is needed. The anchor (anchor_frame_) is the cloud frame in
-  // LiDAR modes and cam0's frame in camera-only mode — the trajectory's native
-  // frame in both.
+  // when remapping is needed. The anchor (anchor_frame_) is the cloud frame —
+  // the trajectory's native frame.
   bool resolve_output_transform(std::optional<geometry_msgs::msg::Transform> & body_to)
   {
     body_to = std::nullopt;
@@ -1256,15 +1097,6 @@ private:
     }
     // auto (the default): prefer GPU when runnable, else CPU.
     use_gpu_ = gpu_runnable;
-    if (use_gpu_ && camera_only_) {
-      // The visual-inertial odometry is CPU-only and camera-only suppresses
-      // every scan-matching factor, so the GPU backend has nothing left to
-      // accelerate (a forced '--backend cuda' was already rejected by
-      // validate_mode_flags).
-      BAGWIZ_LOG_INFO(kLogger, "Backend: CPU — camera-only mode runs on the CPU backend.");
-      use_gpu_ = false;
-      return true;
-    }
     if (use_gpu_) {
       BAGWIZ_LOG_INFO(kLogger, "Backend: GPU (CUDA) — auto-selected.");
     } else if (cuda.has_cuda_build) {
@@ -1289,29 +1121,14 @@ private:
     if (!args_.gnss_topic.empty()) {
       gnss_antenna_offset = resolve_gnss_offset();
     }
-    // --cam extrinsic table, in --cam listing order: its row index is the
-    // VisualObservation::camera_id the frontends stamp (see VisualFeed).
-    std::vector<core::slam::SensorTransform> visual_cameras;
-    visual_cameras.reserve(cam_indices_.size());
-    for (const std::size_t cam : cam_indices_) {
-      visual_cameras.push_back(t_cloud_cams_[cam]);
-    }
-    // Camera-only anchor-window period: flag override or bag-derived (issue
-    // #17). LiDAR modes skip the resolution — the mapper ignores the value
-    // and validate_mode_flags already rejected the flag there.
-    std::int64_t visual_anchor_period_ns = core::slam::CloudMapperConfig{}.visual_anchor_period_ns;
-    if (camera_only_ && !resolve_visual_anchor_period(visual_anchor_period_ns)) {
-      return 1;
-    }
-    const core::slam::CloudMapperConfig config = build_mapper_config(
-      args_, t_lidar_imu, use_gpu_, gnss_antenna_offset, visual_cameras, visual_anchor_period_ns,
-      upsample_period_ns_);
+    const core::slam::CloudMapperConfig config =
+      build_mapper_config(args_, t_lidar_imu, use_gpu_, gnss_antenna_offset, upsample_period_ns_);
 
-    // Resolve the optional --frame remapping up front. The trajectory is expressed
-    // in the anchor frame (the PointCloud2 frame_id, or cam0's frame in
-    // camera-only mode) by default; a requested --frame is resolved
-    // through the bag's static TF and applied after optimization. Resolving here
-    // avoids running the full SLAM pipeline only to fail on an invalid frame.
+    // Resolve the optional --frame remapping up front. The trajectory is
+    // expressed in the anchor frame (the PointCloud2 frame_id) by default; a
+    // requested --frame is resolved through the bag's static TF and applied
+    // after optimization. Resolving here avoids running the full SLAM
+    // pipeline only to fail on an invalid frame.
     std::optional<geometry_msgs::msg::Transform> output_body_to;
     if (!resolve_output_transform(output_body_to)) {
       return 1;
@@ -1334,69 +1151,29 @@ private:
       mapper.insert_gnss(point);
     };
 
-    // --cam: one feature-tracking worker per camera, fed from the read loop
-    // below. Built after the mapper (its workers insert into it) and drained
-    // before finish(), which turns the observations into factors.
-    std::unique_ptr<VisualFeed> visual_feed;
-    if (!cam_indices_.empty()) {
-      std::vector<core::image::CameraInfo> visual_camera_infos;
-      visual_camera_infos.reserve(cam_indices_.size());
-      for (const std::size_t cam : cam_indices_) {
-        visual_camera_infos.push_back(camera_infos_[cam]);
-      }
-      visual_feed = std::make_unique<VisualFeed>(
-        args_.cam_topics, visual_camera_infos, args_.visual_max_features, mapper, kLogger);
-    }
-
     const auto progress_setup =
       resolve_scan_progress(reader, args_, ::isatty(STDERR_FILENO) != 0, kLogger);
     const bool progress_on = progress_setup.enabled;
-    // Camera-only mode has no scans to count; the postfix shows dispatched
-    // camera frames instead.
-    core::slam::ScanProgress progress(
-      progress_setup.total_msgs, progress_on, camera_only_ ? "frames" : "scans");
+    core::slam::ScanProgress progress(progress_setup.total_msgs, progress_on, "scans");
 
     std::int64_t scans = 0;
     std::int64_t skipped = 0;
     std::int64_t imu_count = 0;
     std::int64_t gnss_count = 0;
-    std::int64_t images = 0;
     if (!process_messages(
           reader, [&](const core::slam::LidarScan & s) { mapper.insert(s); },
-          [&](const core::slam::ImuSample & i) { mapper.insert_imu(i); }, on_gnss,
-          // Only reached when --cam was given, i.e. when visual_feed exists.
-          // The stamp is read here because the frontend needs its frames in
-          // capture order, which only this loop can guarantee.
-          [&](std::size_t cam, const io::RawMessage & raw) {
-            visual_feed->push(
-              cam,
-              core::image::image_capture_stamp_ns(raw.topic->type, raw.payload, raw.timestamp_ns),
-              raw.topic->type, std::vector<std::byte>(raw.payload.begin(), raw.payload.end()));
-          },
-          progress, scans, skipped, imu_count, gnss_count, images)) {
+          [&](const core::slam::ImuSample & i) { mapper.insert_imu(i); }, on_gnss, progress, scans,
+          skipped, imu_count, gnss_count)) {
       return 1;
     }
     progress.done();
-    // Every image is tracked and inserted before finish() reads the buffer.
-    if (visual_feed) {
-      visual_feed->finish();
-    }
 
     auto finalized = finalize_with_spinner(mapper, progress_on, kLogger);
     core::slam::CloudMap map = std::move(finalized.map);
 
     if (map.trajectory.empty()) {
-      if (camera_only_) {
-        BAGWIZ_LOG_ERROR(
-          kLogger,
-          "SLAM produced no trajectory poses: the visual-inertial odometry emitted no usable "
-          "keyframes (check that the --cam topics carry decodable images and the --imu stream "
-          "covers them)");
-      } else {
-        BAGWIZ_LOG_ERROR(
-          kLogger, "SLAM produced no trajectory poses from %s scans",
-          std::to_string(scans).c_str());
-      }
+      BAGWIZ_LOG_ERROR(
+        kLogger, "SLAM produced no trajectory poses from %s scans", std::to_string(scans).c_str());
       return 1;
     }
 
@@ -1441,14 +1218,9 @@ private:
     // Colorize the map from the camera images BEFORE the optional --frame
     // remap: the colorizer interpolates camera poses from the trajectory,
     // which at this point still expresses the cloud frame the camera
-    // extrinsic was resolved against. In camera-only mode the map is already
-    // colored: finish() re-triangulated the sparse landmark set with each
-    // landmark's frontend-sampled rgb (and --color is rejected in that mode,
-    // so the colorize pass never runs).
+    // extrinsic was resolved against.
     std::vector<std::array<std::uint8_t, 3>> map_colors;
-    if (camera_only_) {
-      map_colors = std::move(map.colors);
-    } else if (!args_.color_topics.empty()) {
+    if (!args_.color_topics.empty()) {
       core::slam::FinalizeSpinner spinner("Colorizing map", progress_on);
       colorize_map(map, map_colors, use_gpu_);
     }
@@ -1517,9 +1289,9 @@ private:
     // independent and the kd-tree build is the expensive part, so build it
     // once and share it between every camera's MapColorizer.
     const auto geometry = build_shared_colorize_geometry(map.points, threads);
-    // The camera state is keyed by the --color ∪ --cam union; the colorize pass
-    // runs over the --color role only, in --color listing order (its first
-    // topic is the gain-alignment reference), so pick that subset out.
+    // The camera state is keyed by the --color camera list, in --color
+    // listing order (its first topic is the gain-alignment reference), so
+    // pick that subset out.
     std::vector<core::image::CameraInfo> color_camera_infos;
     std::vector<core::slam::SensorTransform> color_t_cloud_cams;
     color_camera_infos.reserve(cam_count);
@@ -1814,27 +1586,19 @@ private:
   std::filesystem::path map_path_;     // <output_root>/map.pcd (mapping mode only)
   // Effective backend resolved by resolve_backend() from --backend.
   bool use_gpu_ = false;
-  // Camera-only mode (issue #376 Phase 3): --cam without --pcd runs
-  // visual-inertial SLAM. Set from args_.cloud_topic.empty() early in run()
-  // (validate_mode_flags guarantees --cam + --imu are present in this mode).
-  bool camera_only_ = false;
   // Resolved --upsample rate as a period in nanoseconds; 0 (the default) leaves
   // traj.tum at one pose per scan. Set by resolve_upsample_period() early in run().
   std::int64_t upsample_period_ns_ = 0;
-  // The frame every static-TF resolution anchors at: the PointCloud2 frame_id
-  // in LiDAR modes, the FIRST --cam topic's CameraInfo frame_id in
-  // camera-only mode (where it takes the cloud frame's role — the mapper's
-  // "lidar" frame is cam0, so the exported trajectory is cam0's). Resolved
-  // once by resolve_anchor_frame() after the camera infos are loaded.
+  // The frame every static-TF resolution anchors at: the PointCloud2
+  // frame_id. Resolved once by resolve_anchor_frame() after the camera infos
+  // are loaded.
   std::string anchor_frame_;
-  // The --color ∪ --cam camera list built by build_camera_union(): --color
-  // topics first (in listing order; the first is the colorize gain-alignment
-  // reference), then the --cam topics not already listed. color_indices_ and
-  // cam_indices_ index into it in their own flag's listing order — a
-  // cam_indices_ position is the camera's VisualObservation::camera_id.
+  // The --color camera list built by build_camera_union(), in --color
+  // listing order (the first is the colorize gain-alignment reference);
+  // color_indices_ indexes into it (currently the identity mapping, since
+  // --color is the only camera role left).
   std::vector<std::string> all_camera_topics_;
   std::vector<std::size_t> color_indices_;
-  std::vector<std::size_t> cam_indices_;
   // Per-camera state parallel to all_camera_topics_, filled by
   // validate_camera_inputs / resolve_camera_extrinsics.
   std::vector<std::string> camera_info_topics_;            // resolved CameraInfo topics
