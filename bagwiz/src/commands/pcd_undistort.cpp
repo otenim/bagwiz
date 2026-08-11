@@ -58,36 +58,29 @@ constexpr const char * kDefaultRefFrame = "map";
 constexpr const char * kDefaultOfFrame = "base_link";
 
 // One PointCloud2 message handed off from the bag reader to a worker thread.
+// `frozen` shares the reader's chunk backing (BagReader::freeze) instead of
+// copying the bytes; it pins that whole chunk while the job is in flight, so
+// peak pinned memory is bounded by ParallelContext::max_in_flight chunks.
 struct DeskewJob
 {
   std::size_t seq;
   std::string topic;
   std::int64_t timestamp_ns;
-  std::vector<std::byte> payload;
+  io::FrozenMessage frozen;
   std::optional<geometry_msgs::msg::Transform> extrinsic;
 };
 
 // One output message waiting in the in-order completion map for the collector.
+// `frozen` is either the frozen input bytes (copy-through and undecodable
+// pass-through messages) or a freshly serialized cloud the item owns; the
+// collector writes both the same way.
 struct OutputItem
 {
   std::string topic;
   std::int64_t timestamp_ns;
-  std::vector<std::byte> payload;
+  io::FrozenMessage frozen;
   std::uint64_t in_bytes = 0;  // input payload size, for the profiler's byte counters
   std::optional<std::string> error;
-};
-
-// Rendezvous slot for a copy-through message written without a payload copy.
-// When nothing is in flight, the reader hands the collector the borrowed
-// payload span (valid until the reader's next next() call) instead of copying
-// it into the completion map; the reader blocks until the collector sets
-// `done`, so the span never outlives its backing store.
-struct DirectWrite
-{
-  std::string topic;
-  std::int64_t timestamp_ns;
-  std::span<const std::byte> payload;
-  bool done = false;
 };
 
 // Shared state for the parallel reader / worker pool / collector pipeline.
@@ -97,7 +90,6 @@ struct ParallelContext
   std::condition_variable cv;
   std::queue<DeskewJob> job_queue;
   std::map<std::size_t, OutputItem> completed;
-  std::optional<DirectWrite> direct;
   std::size_t next_output_seq = 0;
   std::size_t total_submitted = 0;
   std::size_t in_flight = 0;
@@ -136,15 +128,15 @@ OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPos
   OutputItem item;
   item.topic = job.topic;
   item.timestamp_ns = job.timestamp_ns;
-  item.in_bytes = static_cast<std::uint64_t>(job.payload.size());
+  item.in_bytes = static_cast<std::uint64_t>(job.frozen.payload.size());
 
   try {
-    auto parsed = core::pointcloud::parse_pointcloud2(job.payload);
+    auto parsed = core::pointcloud::parse_pointcloud2(job.frozen.payload);
     if (!parsed.ok()) {
       BAGWIZ_LOG_WARN(
         kLogger, "pcd undistort: skipping undecodable cloud on '%s': %s", job.topic.c_str(),
         parsed.error.c_str());
-      item.payload = std::move(job.payload);
+      item.frozen = std::move(job.frozen);
     } else {
       const std::int64_t t_ref = parsed.cloud->timestamp_ns;
       auto res = core::pointcloud::deskew_pointcloud2(
@@ -162,7 +154,7 @@ OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPos
             res.points_nonfinite);
         }
         log_out_of_span_warnings(res, job.topic.c_str());
-        item.payload = core::pointcloud::serialize_pointcloud2(*res.cloud);
+        item.frozen = io::own_payload(core::pointcloud::serialize_pointcloud2(*res.cloud));
       }
     }
   } catch (const std::exception & e) {
@@ -250,53 +242,26 @@ int run_parallel_undistort_pass(
     try {
       while (true) {
         OutputItem item;
-        bool wrote_direct = false;
         {
           std::unique_lock lock(ctx.mutex);
           ctx.cv.wait(lock, [&] {
-            auto it = ctx.completed.find(ctx.next_output_seq);
-            // A served (done) rendezvous stays visible until the reader
-            // resets it; it must not be served again.
-            const bool direct_pending = ctx.direct.has_value() && !ctx.direct->done;
-            return direct_pending || (it != ctx.completed.end()) ||
+            return ctx.completed.count(ctx.next_output_seq) != 0 ||
                    (ctx.reader_done && ctx.next_output_seq == ctx.total_submitted);
           });
 
-          if (ctx.direct.has_value() && !ctx.direct->done) {
-            // Serve the rendezvous: the reader is blocked until `done`, so the
-            // borrowed span is still valid. writer.write stays on this thread
-            // (the BagWriter single-thread contract).
-            const std::string topic = ctx.direct->topic;
-            const std::int64_t timestamp_ns = ctx.direct->timestamp_ns;
-            const std::span<const std::byte> payload = ctx.direct->payload;
-            lock.unlock();
-            {
-              auto s = write_prof.time(core::pipeline::Stage::kWrite);
-              writer.write(topic, timestamp_ns, payload);
-            }
-            write_prof.add_message(
-              static_cast<std::uint64_t>(payload.size()),
-              static_cast<std::uint64_t>(payload.size()));
-            lock.lock();
-            ctx.direct->done = true;
-            wrote_direct = true;
-          } else if (ctx.reader_done && ctx.next_output_seq == ctx.total_submitted) {
+          if (ctx.reader_done && ctx.next_output_seq == ctx.total_submitted) {
             break;
-          } else {
-            auto it = ctx.completed.find(ctx.next_output_seq);
-            if (it == ctx.completed.end()) {
-              continue;
-            }
-            item = std::move(it->second);
-            ctx.completed.erase(it);
-            ++ctx.next_output_seq;
-            --ctx.in_flight;
           }
+          auto it = ctx.completed.find(ctx.next_output_seq);
+          if (it == ctx.completed.end()) {
+            continue;
+          }
+          item = std::move(it->second);
+          ctx.completed.erase(it);
+          ++ctx.next_output_seq;
+          --ctx.in_flight;
         }
         ctx.cv.notify_all();
-        if (wrote_direct) {
-          continue;
-        }
 
         if (item.error.has_value()) {
           BAGWIZ_LOG_ERROR(
@@ -318,9 +283,10 @@ int run_parallel_undistort_pass(
 
         {
           auto s = write_prof.time(core::pipeline::Stage::kWrite);
-          writer.write(item.topic, item.timestamp_ns, item.payload);
+          writer.write(item.topic, item.timestamp_ns, item.frozen.payload);
         }
-        write_prof.add_message(item.in_bytes, static_cast<std::uint64_t>(item.payload.size()));
+        write_prof.add_message(
+          item.in_bytes, static_cast<std::uint64_t>(item.frozen.payload.size()));
       }
 
       // close() drains the writer's remaining compression backlog, so its
@@ -370,11 +336,11 @@ int run_parallel_undistort_pass(
         job.topic = name;
         job.timestamp_ns = raw.timestamp_ns;
         {
-          // The staging copy runs on this reader thread and is part of the
-          // cost of getting a message out of the bag into the pipeline, so
-          // it is charged to the read stage.
+          // freeze() shares the reader's chunk backing instead of copying the
+          // payload; it stays on this reader thread's critical path, so it is
+          // charged to the read stage.
           auto s = read_prof.time(core::pipeline::Stage::kRead);
-          job.payload.assign(raw.payload.begin(), raw.payload.end());
+          job.frozen = rd->freeze(raw);
         }
         job.extrinsic = extrinsics.at(name);
 
@@ -390,43 +356,21 @@ int run_parallel_undistort_pass(
         lock.unlock();
         ctx.cv.notify_all();
       } else {
-        // Copy-through message. When the pipeline has drained (nothing in
-        // flight — which implies the queue and completion map are empty and
-        // every submitted item has been popped by the collector), this message
-        // is exactly next in output order: hand the collector the borrowed
-        // payload span for an immediate write instead of copying it into the
-        // completion map. The reader blocks until the write completes, so the
-        // span stays valid. in_flight is only ever incremented by this reader
-        // thread, so the check is race-free.
-        bool used_fast_path = false;
-        {
-          std::unique_lock lock(ctx.mutex);
-          if (!ctx.stop && ctx.in_flight == 0) {
-            ctx.direct = DirectWrite{name, raw.timestamp_ns, raw.payload, false};
-            ctx.cv.notify_all();
-            ctx.cv.wait(lock, [&] { return ctx.direct->done || ctx.stop; });
-            const bool wrote = ctx.direct->done;
-            ctx.direct.reset();
-            used_fast_path = true;
-            if (!wrote) {
-              break;  // stop requested (collector error)
-            }
-          }
-        }
-        if (used_fast_path) {
-          continue;
-        }
-
+        // Copy-through message: freeze the reader's chunk backing and hand it
+        // to the collector through the in-order completion map. The frozen
+        // payload keeps the bytes alive until the collector writes and drops
+        // the item, so neither a payload copy nor the reader-blocking
+        // rendezvous this used to need is required.
         OutputItem item;
         item.topic = name;
         item.timestamp_ns = raw.timestamp_ns;
         {
-          // Charged to the read stage for the same reason as the pcd staging
-          // copy above.
+          // Charged to the read stage for the same reason as the pcd freeze
+          // above.
           auto s = read_prof.time(core::pipeline::Stage::kRead);
-          item.payload.assign(raw.payload.begin(), raw.payload.end());
+          item.frozen = rd->freeze(raw);
         }
-        item.in_bytes = static_cast<std::uint64_t>(item.payload.size());
+        item.in_bytes = static_cast<std::uint64_t>(item.frozen.payload.size());
 
         std::unique_lock lock(ctx.mutex);
         ctx.cv.wait(lock, [&] { return ctx.in_flight < ctx.max_in_flight || ctx.stop; });

@@ -9,7 +9,7 @@
 #ifndef BAGWIZ__CORE__PIPELINE__BOUNDED_MESSAGE_QUEUE_HPP_
 #define BAGWIZ__CORE__PIPELINE__BOUNDED_MESSAGE_QUEUE_HPP_
 
-#include "bagwiz/core/pipeline/owned_message.hpp"
+#include "bagwiz/core/pipeline/queued_message.hpp"
 
 #include <condition_variable>
 #include <cstddef>
@@ -26,15 +26,29 @@ namespace bagwiz::core::pipeline
 // would cross this, so a fast reader cannot outrun a slow writer and balloon
 // memory. 128 MiB is small next to a multi-GB bag yet large enough to keep the
 // writer fed across read-stage stalls.
+//
+// The cap counts payload bytes, which is what a queued message costs when its
+// buffer is its own. A payload aliased out of the reader (the zero-copy
+// freeze() path) instead pins the whole chunk it points into, so the memory
+// actually held exceeds the count — bounded by the distinct chunks the queued
+// messages span, which is at most a chunk per message and in practice far
+// fewer, since messages arrive in chunk order.
+//
+// That overhead is a real constant, not a rounding error: on the 9.5 GB
+// reference bag of issue #39, a pipelined rewrite at this cap peaks at 514 MiB
+// RSS against 344 MiB for the copying queue it replaced, i.e. pinned bytes run
+// to roughly 2.3x the nominal cap. The factor scales with the bag's chunk size,
+// so treat this number as an order of magnitude, and halve the cap rather than
+// assuming the old bound if a deployment is tight on memory.
 inline constexpr std::size_t kDefaultQueueBytes = 128UL * 1024UL * 1024UL;
 
-// A single-producer / single-consumer blocking queue of OwnedMessages, bounded
-// by total payload bytes. PipelinedBackend's read thread is the sole producer
-// and its write thread the sole consumer; this queue is the ONLY object shared
-// between them, which keeps the data-race surface tiny. FIFO order is preserved,
-// so a single consumer emits messages in the producer's (reader's) emission
-// order — that is what makes PipelinedBackend's output byte-identical to
-// SequentialBackend.
+// A single-producer / single-consumer blocking queue of QueuedMessages,
+// bounded by total payload bytes. PipelinedBackend's read thread is the sole
+// producer and its write thread the sole consumer; this queue is the ONLY
+// object shared between them, which keeps the data-race surface tiny. FIFO
+// order is preserved, so a single consumer emits messages in the producer's
+// (reader's) emission order — that is what makes PipelinedBackend's output
+// byte-identical to SequentialBackend.
 //
 // Shutdown is cooperative and deadlock-free: every wait predicate also wakes on
 // close() (producer done) and fail() (a fatal error on either side), so neither
@@ -59,9 +73,9 @@ public:
   // died) — the producer should stop. A message larger than the whole cap is
   // still admitted when the queue is empty, so an oversized payload can never
   // deadlock the pipeline.
-  bool push(OwnedMessage && msg)
+  bool push(QueuedMessage && msg)
   {
-    const std::size_t bytes = msg.payload.size();
+    const std::size_t bytes = msg.frozen.payload.size();
     std::unique_lock<std::mutex> lock(mutex_);
     not_full_.wait(
       lock, [&] { return failed_ || cur_bytes_ == 0 || cur_bytes_ + bytes <= max_bytes_; });
@@ -78,7 +92,7 @@ public:
   // drained, or it was failed. On success moves the front message into `out` and
   // returns true. Returns false when no message will ever come (closed+drained,
   // or failed) — the consumer should stop.
-  bool pop(OwnedMessage & out)
+  bool pop(QueuedMessage & out)
   {
     std::unique_lock<std::mutex> lock(mutex_);
     not_empty_.wait(lock, [&] { return failed_ || !queue_.empty() || closed_; });
@@ -87,7 +101,7 @@ public:
     }
     out = std::move(queue_.front());
     queue_.pop_front();
-    cur_bytes_ -= out.payload.size();
+    cur_bytes_ -= out.frozen.payload.size();
     not_full_.notify_one();
     return true;
   }
@@ -130,7 +144,7 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable not_full_;
   std::condition_variable not_empty_;
-  std::deque<OwnedMessage> queue_;
+  std::deque<QueuedMessage> queue_;
   std::size_t cur_bytes_ = 0;
   const std::size_t max_bytes_;
   bool closed_ = false;

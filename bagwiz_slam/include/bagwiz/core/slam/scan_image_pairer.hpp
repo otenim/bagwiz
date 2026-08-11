@@ -9,6 +9,8 @@
 #ifndef BAGWIZ__CORE__SLAM__SCAN_IMAGE_PAIRER_HPP_
 #define BAGWIZ__CORE__SLAM__SCAN_IMAGE_PAIRER_HPP_
 
+#include "bagwiz/io/bag_io.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -43,13 +45,15 @@ class ScanImagePairer
 public:
   // One camera image awaiting its bracketing scans: the camera index (into
   // the caller's colorizer array), the capture stamp, and the undecoded
-  // message (type + payload) carried through untouched.
+  // message (type + payload) carried through untouched. The payload is frozen
+  // rather than copied: an image waits here across many later next() calls,
+  // which is exactly what BagReader::freeze exists for.
   struct PendingImage
   {
     std::size_t cam = 0;
     std::int64_t stamp_ns = 0;
     std::string type;
-    std::vector<std::byte> payload;
+    io::FrozenMessage frozen;
   };
 
   // One decided image: the image plus the world points of its temporally

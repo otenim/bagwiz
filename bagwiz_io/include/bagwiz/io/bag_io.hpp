@@ -76,6 +76,14 @@ struct FrozenMessage
   std::shared_ptr<const void> owner;  // keeps the payload's backing store alive
 };
 
+// Wrap a buffer the caller already owns in a FrozenMessage. Payloads a consumer
+// produced itself — a transform's output, a re-serialized point cloud — cannot
+// come from freeze(), but a stage draining a queue should not have to care
+// which of the two it is handling. This gives a locally built buffer the same
+// shared-ownership shape, so both can travel as one type.
+[[nodiscard]] FrozenMessage own_payload(
+  std::vector<std::byte> && bytes, const TopicInfo * topic = nullptr, int64_t timestamp_ns = 0);
+
 // Pre-iteration filter pushed down into the storage layer. SQLite3 uses it
 // in WHERE clauses; MCAP uses it to skip chunks via the chunk index.
 struct ReadFilter
