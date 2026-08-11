@@ -164,10 +164,11 @@ TEST_F(ExpandTopicSelectorsTest, ScopeToAnOptionThatIsNotATopicSlotIsAnInternalE
   EXPECT_FALSE(expand_topic_selectors(app));
 }
 
-// A pair_value literal slot has no left/right split (see the kLiteral branch
-// of expand_slot() in topic_expand.cpp): a '*' anywhere in <lhs>=<rhs> — even
-// only in the rhs — is rejected. Mirrors `map slam --cam-info`, the
-// mechanism's only pair_value + kLiteral slot in production.
+// A pair_value literal slot's glob check has no left/right split (see the
+// contains_glob() call in the kLiteral branch of expand_slot() in
+// topic_expand.cpp): a '*' anywhere in <lhs>=<rhs> — even only in the rhs —
+// is rejected. Mirrors `map slam --cam-info`, the mechanism's only
+// pair_value + kLiteral slot in production.
 TEST_F(ExpandTopicSelectorsTest, PairValueLiteralSlotChecksTheWholeUnsplitValueForAGlob)
 {
   const auto bag = make_bag(tmp_dir_ / "bag");

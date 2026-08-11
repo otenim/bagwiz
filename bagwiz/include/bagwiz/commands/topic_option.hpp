@@ -83,7 +83,10 @@ struct TopicSlotSpec
   // Safe to combine with pair_value in either mode: the presence check always
   // runs against the split left half (the selector), never the raw
   // "<topic>=<rhs>" value, which is never itself a topic name and would
-  // otherwise reject every value unconditionally.
+  // otherwise reject every value unconditionally. The right half is never
+  // presence-checked either, even when it names a topic — as in
+  // `map slam --cam-info <image_topic>=<info_topic>` — because it is not a
+  // selector, and the command owns a more specific error for it.
   //
   // Best-effort, not absolute: it runs against the bag read at expansion
   // time, and expand_app() leaves every value untouched (skipping this check
