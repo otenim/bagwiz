@@ -22,7 +22,12 @@ here instead of repeating it.
   exact topic-name match — a **literal**.
 - A literal is passed straight through to the command, which checks it for
   presence and message type exactly as if selectors did not exist — the
-  error wording does not change.
+  error wording does not change. The exception is `topic drop -t`,
+  `topic keep -t`, and `trim --align`: an absent literal on those three is
+  rejected centrally, with the same "selector matched no topic" wording a
+  non-matching glob gets, because a plain presence check was already all
+  those three commands did with the value — there is no more specific,
+  command-owned error underneath it to defer to.
 - A `*` glob is resolved against the bag's topic list, restricted to the
   message type(s) the flag accepts (a `--pcd` glob only ever matches
   `PointCloud2` topics, never "every topic, then a type error"), and expands
