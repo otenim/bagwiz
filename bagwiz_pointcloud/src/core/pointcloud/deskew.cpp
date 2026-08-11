@@ -16,6 +16,7 @@
 #include <limits>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bagwiz::core::pointcloud
 {
@@ -156,7 +157,11 @@ Vec3 vec_add(const Vec3 & a, const Vec3 & b)
   return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
-const PointField * find_field(std::span<const PointField> fields, const char * name)
+// Takes the field table by const reference rather than std::span: newer
+// cppcheck releases misread a by-value span as call-local storage and flag
+// the returned pointer as dangling (the same view-type false-positive class
+// that keeps std::string_view out of this codebase's signatures).
+const PointField * find_field(const std::vector<PointField> & fields, const char * name)
 {
   for (const auto & f : fields) {
     if (f.name == name) return &f;
@@ -230,7 +235,7 @@ struct KernelLayout
 };
 
 KernelLayout resolve_kernel_layout(
-  bool is_bigendian, std::span<const PointField> fields, std::uint32_t point_step,
+  bool is_bigendian, const std::vector<PointField> & fields, std::uint32_t point_step,
   std::uint32_t row_step, std::uint32_t width, std::uint32_t height, std::size_t data_size)
 {
   KernelLayout lay;
