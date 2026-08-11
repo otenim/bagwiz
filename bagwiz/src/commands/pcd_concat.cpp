@@ -53,6 +53,8 @@ namespace bagwiz::commands
 namespace
 {
 constexpr const char * kLogger = "bagwiz.cmd.pcd";
+// Mirrors topic_types.hpp's kPointCloud2Type (pcd concat --pcd's
+// allowed_types). Keep both in sync by hand.
 constexpr const char * kPointCloud2Type = "sensor_msgs/msg/PointCloud2";
 constexpr std::chrono::hours kTfBufferCacheTime{24 * 365};
 constexpr std::int64_t kDefaultToleranceNs = 50'000'000;  // 50 ms fallback

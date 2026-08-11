@@ -34,6 +34,10 @@ namespace
 namespace img = bagwiz::core::image;
 
 constexpr const char * kLogger = "bagwiz.cmd.cam-info.dump";
+// Mirrors topic_types.hpp's kCameraInfoType (cam-info dump -t's
+// allowed_types). Deliberately a separate copy from cam_info_common.hpp's
+// kCameraInfoType, which this command does not use. Keep both in sync by
+// hand.
 constexpr const char * kCameraInfoType = "sensor_msgs/msg/CameraInfo";
 
 // True when two calibrations would produce the same YAML. Used to notice a bag

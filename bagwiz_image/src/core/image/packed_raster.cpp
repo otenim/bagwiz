@@ -25,6 +25,10 @@ namespace bagwiz::core::image
 
 namespace
 {
+// Mirrors bagwiz::commands::kImageTopicTypes in
+// bagwiz/include/bagwiz/commands/topic_types.hpp via is_supported_image_type()
+// below — the decoder-level counterpart to generate_video_common.cpp's own
+// copy. Keep all three in sync by hand.
 constexpr std::string_view kImageType = "sensor_msgs/msg/Image";
 constexpr std::string_view kCompressedImageType = "sensor_msgs/msg/CompressedImage";
 

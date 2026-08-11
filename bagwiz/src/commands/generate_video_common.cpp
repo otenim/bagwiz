@@ -43,6 +43,10 @@ namespace bagwiz::commands
 namespace
 {
 constexpr const char * kLogger = "bagwiz.cmd.generate";
+// kImageType / kCompressedImageType mirror topic_types.hpp's kImageTopicTypes
+// (generate video -t's allowed_types) via is_supported_type() below.
+// kPointCloudType mirrors topic_types.hpp's kPointCloud2Type (--pcd's
+// allowed_types). Keep both in sync by hand.
 constexpr const char * kImageType = "sensor_msgs/msg/Image";
 constexpr const char * kCompressedImageType = "sensor_msgs/msg/CompressedImage";
 constexpr const char * kPointCloudType = "sensor_msgs/msg/PointCloud2";

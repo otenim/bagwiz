@@ -69,6 +69,9 @@ namespace
 constexpr const char * kLogger = "bagwiz.cmd.traj";
 constexpr const char * kFormatTum = "tum";
 constexpr const char * kJoinMsgTypeTf = "tf";
+// This foursome mirrors topic_types.hpp's kTrajDumpSupportedTypes (traj dump
+// -t's allowed_types); run_dump()'s dispatch below is the validator. Keep
+// both in sync by hand.
 constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
 constexpr const char * kPoseStampedType = "geometry_msgs/msg/PoseStamped";
 constexpr const char * kPoseWithCovarianceStampedType =
