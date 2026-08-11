@@ -130,6 +130,32 @@ PointCloud2HeaderResult parse_pointcloud2_header(std::span<const std::byte> payl
   return result;
 }
 
+// Decode the header and record where the point-data blob sits, without
+// copying it: read_bytes() hands back a zero-copy view into `payload`, whose
+// distance from the payload start is the blob offset. is_dense is still
+// decoded so a payload truncated after the blob is rejected exactly like it
+// is by parse_pointcloud2.
+PointCloud2CdrLayoutResult parse_pointcloud2_cdr_layout(std::span<const std::byte> payload)
+{
+  PointCloud2CdrLayoutResult result;
+  try {
+    cdr_walker::CdrReader reader(payload);
+    PointCloud2CdrLayout layout;
+    layout.header = read_header(reader);
+    const std::uint32_t data_len = reader.read_sequence_length();
+    const auto data_span = reader.read_bytes(data_len);
+    layout.data_offset =
+      data_span.empty() ? 0 : static_cast<std::size_t>(data_span.data() - payload.data());
+    layout.data_size = data_span.size();
+    (void)reader.read_bool();  // is_dense
+    result.layout.emplace(std::move(layout));
+  } catch (const std::exception & e) {
+    result.layout.reset();
+    result.error = std::string("failed to parse sensor_msgs/msg/PointCloud2 payload: ") + e.what();
+  }
+  return result;
+}
+
 // Parse the full message. The header is decoded by read_header(); the point data
 // that follows is a zero-copy view from CdrReader::read_bytes(), copied into
 // result.cloud->data so the returned PointCloud2 owns its bytes.

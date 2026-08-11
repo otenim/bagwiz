@@ -12,9 +12,13 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <limits>
+#include <optional>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -442,4 +446,134 @@ TEST(Deskew, RefAndPointsPastSpanAreReportedOutOfSpan)
   EXPECT_EQ(r.points_out_of_span, 2u);
   EXPECT_NEAR(xyz_at(*r.cloud, 0)[0], 1.0f, 1e-5);  // both poses clamp to back: no motion
   EXPECT_NEAR(xyz_at(*r.cloud, 1)[0], 2.0f, 1e-5);
+}
+
+// --- deskew_pointcloud2_cdr: the in-place serialized-payload variant ---------
+
+namespace
+{
+
+using bagwiz::core::pointcloud::deskew_pointcloud2_cdr;
+using bagwiz::core::pointcloud::parse_pointcloud2;
+using bagwiz::core::pointcloud::serialize_pointcloud2;
+
+// Deskew `cloud` through both paths -- parse -> deskew -> serialize, and the
+// in-place CDR patch of the serialized payload -- and require byte-identical
+// output plus identical counters. Exact equality is justified: both paths run
+// the same per-point kernel over the same immutable inputs; the only
+// difference is where the untouched bytes travel. The CDR variant reads its
+// reference stamp from the message header, so the struct path is driven with
+// cloud.timestamp_ns to match.
+void expect_cdr_matches_struct_path(
+  const PointCloud2 & cloud, const std::vector<TrajectoryPose> & traj,
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt)
+{
+  const auto payload = serialize_pointcloud2(cloud);
+
+  auto parsed = parse_pointcloud2(payload);
+  ASSERT_TRUE(parsed.ok());
+  auto ref = deskew_pointcloud2(std::move(*parsed.cloud), cloud.timestamp_ns, traj, extrinsic);
+  ASSERT_TRUE(ref.ok());
+  const auto want = serialize_pointcloud2(*ref.cloud);
+
+  std::vector<std::byte> patched = payload;
+  const auto got =
+    deskew_pointcloud2_cdr(std::span<std::byte>(patched.data(), patched.size()), traj, extrinsic);
+  ASSERT_TRUE(got.ok()) << got.parse_error << " / " << got.error;
+  EXPECT_EQ(got.t_ref_ns, cloud.timestamp_ns);
+  EXPECT_EQ(patched, want);
+  EXPECT_EQ(got.points_total, ref.points_total);
+  EXPECT_EQ(got.points_deskewed, ref.points_deskewed);
+  EXPECT_EQ(got.points_no_time, ref.points_no_time);
+  EXPECT_EQ(got.points_no_pose, ref.points_no_pose);
+  EXPECT_EQ(got.points_nonfinite, ref.points_nonfinite);
+  EXPECT_EQ(got.points_out_of_span, ref.points_out_of_span);
+  EXPECT_EQ(got.ref_out_of_span, ref.ref_out_of_span);
+}
+
+}  // namespace
+
+TEST(DeskewCdr, MatchesStructPathOnFloat32Cloud)
+{
+  // Mixed coverage in one cloud: a normal in-span point, a non-finite point,
+  // an out-of-span point, and non-monotonic times; non-zero header stamp.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  auto cloud = make_cloud_xyzt(
+    {{0.0f, 0.0f, 0.0f, 0.1f},
+     {nan, nan, nan, 0.05f},
+     {1.0f, 0.0f, 0.0f, -0.05f},
+     {0.5f, 0.5f, 0.0f, 0.02f}});
+  cloud.timestamp_ns = 2'000'000'000;
+  std::vector<TrajectoryPose> traj{
+    {2'000'000'000, 0, 0, 0, 0, 0, 0, 1}, {2'100'000'000, 2, 0, 0, 0, 0, 0.3826834, 0.9238795}};
+  expect_cdr_matches_struct_path(cloud, traj);
+}
+
+TEST(DeskewCdr, MatchesStructPathOnFloat64Cloud)
+{
+  auto cloud = make_cloud_xyzt_f64({{0.0, 0.0, 0.0, 0.1}, {1.0, 2.0, 3.0, 0.0}});
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  expect_cdr_matches_struct_path(cloud, traj);
+}
+
+TEST(DeskewCdr, MatchesStructPathOnU32TimeCloud)
+{
+  auto cloud = make_cloud_xyz_u32time(0.0f, 0.0f, 0.0f, 100'000'000u);
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  expect_cdr_matches_struct_path(cloud, traj);
+}
+
+TEST(DeskewCdr, MatchesStructPathWithExtrinsic)
+{
+  auto cloud = make_cloud_xyzt({{1.0f, 0.0f, 0.0f, 0.1f}});
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  geometry_msgs::msg::Transform e;
+  e.translation.x = 0.5;
+  e.rotation.z = 0.7071068;
+  e.rotation.w = 0.7071068;
+  expect_cdr_matches_struct_path(cloud, traj, e);
+}
+
+TEST(DeskewCdr, NoTimeFieldLeavesPayloadVerbatimWithCounter)
+{
+  auto cloud = make_cloud_xyzt({{1.0f, 2.0f, 3.0f, 0.5f}});
+  cloud.fields[3].name = "intensity";  // no recognised time field left
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+
+  const auto payload = serialize_pointcloud2(cloud);
+  std::vector<std::byte> patched = payload;
+  const auto got =
+    deskew_pointcloud2_cdr(std::span<std::byte>(patched.data(), patched.size()), traj);
+  ASSERT_TRUE(got.ok());
+  EXPECT_EQ(got.points_no_time, 1u);
+  EXPECT_EQ(got.points_deskewed, 0u);
+  EXPECT_EQ(patched, payload);  // nothing rewritten
+}
+
+TEST(DeskewCdr, UndecodablePayloadReportsParseErrorAndLeavesBytes)
+{
+  std::vector<std::byte> junk(7, std::byte{0x5A});
+  const auto before = junk;
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}};
+  const auto got = deskew_pointcloud2_cdr(std::span<std::byte>(junk.data(), junk.size()), traj);
+  EXPECT_FALSE(got.ok());
+  EXPECT_FALSE(got.parse_error.empty());
+  EXPECT_TRUE(got.error.empty());
+  EXPECT_EQ(junk, before);
+}
+
+TEST(DeskewCdr, RejectsBigEndianWithValidationError)
+{
+  auto cloud = make_cloud_xyzt({{0.0f, 0.0f, 0.0f, 0.0f}});
+  cloud.is_bigendian = true;
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}};
+
+  const auto payload = serialize_pointcloud2(cloud);
+  std::vector<std::byte> patched = payload;
+  const auto got =
+    deskew_pointcloud2_cdr(std::span<std::byte>(patched.data(), patched.size()), traj);
+  EXPECT_FALSE(got.ok());
+  EXPECT_TRUE(got.parse_error.empty());
+  EXPECT_FALSE(got.error.empty());
+  EXPECT_EQ(patched, payload);
 }

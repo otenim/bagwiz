@@ -102,7 +102,7 @@ struct ParallelContext
 // reference stamp) is deskewed against a pose at a different time than its
 // own — up to no correction at all — while its per-point time is still
 // rewritten to the reference value, so this must never be silent.
-void log_out_of_span_warnings(const core::pointcloud::DeskewResult & res, const char * topic)
+void log_out_of_span_warnings(const core::pointcloud::DeskewCdrResult & res, const char * topic)
 {
   if (res.ref_out_of_span) {
     BAGWIZ_LOG_WARN(
@@ -121,8 +121,9 @@ void log_out_of_span_warnings(const core::pointcloud::DeskewResult & res, const 
   }
 }
 
-// Parse, deskew, and serialize a single cloud.  Runs on a worker thread and
-// only touches local state plus the read-only trajectory span.
+// Deskew a single cloud by patching one owned copy of its CDR payload in
+// place — no parse-side data copy and no re-serialize. Runs on a worker
+// thread and only touches local state plus the read-only trajectory span.
 OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPose> trajectory)
 {
   OutputItem item;
@@ -131,31 +132,31 @@ OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPos
   item.in_bytes = static_cast<std::uint64_t>(job.frozen.payload.size());
 
   try {
-    auto parsed = core::pointcloud::parse_pointcloud2(job.frozen.payload);
-    if (!parsed.ok()) {
+    // The one copy this path still makes: the frozen payload may alias the
+    // reader's chunk buffer, which is shared with the prefetcher and the other
+    // messages in that chunk, so patching it in place is not an option.
+    std::vector<std::byte> patched(job.frozen.payload.begin(), job.frozen.payload.end());
+    const auto res = core::pointcloud::deskew_pointcloud2_cdr(
+      std::span<std::byte>(patched.data(), patched.size()), trajectory, job.extrinsic);
+    if (!res.parse_error.empty()) {
       BAGWIZ_LOG_WARN(
         kLogger, "pcd undistort: skipping undecodable cloud on '%s': %s", job.topic.c_str(),
-        parsed.error.c_str());
+        res.parse_error.c_str());
       item.frozen = std::move(job.frozen);
+    } else if (!res.error.empty()) {
+      item.error = res.error;
     } else {
-      const std::int64_t t_ref = parsed.cloud->timestamp_ns;
-      auto res = core::pointcloud::deskew_pointcloud2(
-        std::move(*parsed.cloud), t_ref, trajectory, job.extrinsic);
-      if (!res.ok()) {
-        item.error = res.error;
-      } else {
-        if (res.points_deskewed == 0 && res.points_total > 0) {
-          BAGWIZ_LOG_WARN(
-            kLogger,
-            "pcd undistort: cloud on '%s' had nothing deskewed of %" PRIu64
-            " point(s) (no_time=%" PRIu64 ", no_pose=%" PRIu64 ", nonfinite=%" PRIu64
-            "); passed through un-deskewed",
-            job.topic.c_str(), res.points_total, res.points_no_time, res.points_no_pose,
-            res.points_nonfinite);
-        }
-        log_out_of_span_warnings(res, job.topic.c_str());
-        item.frozen = io::own_payload(core::pointcloud::serialize_pointcloud2(*res.cloud));
+      if (res.points_deskewed == 0 && res.points_total > 0) {
+        BAGWIZ_LOG_WARN(
+          kLogger,
+          "pcd undistort: cloud on '%s' had nothing deskewed of %" PRIu64
+          " point(s) (no_time=%" PRIu64 ", no_pose=%" PRIu64 ", nonfinite=%" PRIu64
+          "); passed through un-deskewed",
+          job.topic.c_str(), res.points_total, res.points_no_time, res.points_no_pose,
+          res.points_nonfinite);
       }
+      log_out_of_span_warnings(res, job.topic.c_str());
+      item.frozen = io::own_payload(std::move(patched));
     }
   } catch (const std::exception & e) {
     item.error = std::string("exception: ") + e.what();
@@ -457,6 +458,7 @@ int run_sync_undistort_pass(
   core::pipeline::StageProfiler prof;
   const auto started_at = std::chrono::steady_clock::now();
 
+  std::vector<std::byte> patch_buf;  // reused across clouds
   io::RawMessage raw;
   while (true) {
     bool got = false;
@@ -477,14 +479,18 @@ int run_sync_undistort_pass(
       prof.add_message(in_size, in_size);
       continue;
     }
-    auto parsed = [&] {
+    // Deskew by patching one owned copy of the CDR payload in place — no
+    // parse-side data copy and no re-serialize.
+    const auto res = [&] {
       auto s = prof.time(core::pipeline::Stage::kProcess);
-      return core::pointcloud::parse_pointcloud2(raw.payload);
+      patch_buf.assign(raw.payload.begin(), raw.payload.end());
+      return core::pointcloud::deskew_pointcloud2_cdr(
+        std::span<std::byte>(patch_buf.data(), patch_buf.size()), trajectory, extrinsics.at(name));
     }();
-    if (!parsed.ok()) {
+    if (!res.parse_error.empty()) {
       BAGWIZ_LOG_WARN(
         kLogger, "pcd undistort: skipping undecodable cloud on '%s': %s", name.c_str(),
-        parsed.error.c_str());
+        res.parse_error.c_str());
       {
         auto s = prof.time(core::pipeline::Stage::kWrite);
         writer.write(name, raw.timestamp_ns, raw.payload);
@@ -492,13 +498,7 @@ int run_sync_undistort_pass(
       prof.add_message(in_size, in_size);
       continue;
     }
-    const std::int64_t t_ref = parsed.cloud->timestamp_ns;  // header.stamp
-    auto res = [&] {
-      auto s = prof.time(core::pipeline::Stage::kProcess);
-      return core::pointcloud::deskew_pointcloud2(
-        std::move(*parsed.cloud), t_ref, trajectory, extrinsics.at(name));
-    }();
-    if (!res.ok()) {
+    if (!res.error.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger, "pcd undistort: deskew failed on '%s': %s", name.c_str(), res.error.c_str());
       return 1;
@@ -519,15 +519,11 @@ int run_sync_undistort_pass(
         res.points_nonfinite);
     }
     log_out_of_span_warnings(res, name.c_str());
-    const auto payload = [&] {
-      auto s = prof.time(core::pipeline::Stage::kProcess);
-      return core::pointcloud::serialize_pointcloud2(*res.cloud);
-    }();
     {
       auto s = prof.time(core::pipeline::Stage::kWrite);
-      writer.write(name, raw.timestamp_ns, payload);
+      writer.write(name, raw.timestamp_ns, patch_buf);
     }
-    prof.add_message(in_size, static_cast<std::uint64_t>(payload.size()));
+    prof.add_message(in_size, static_cast<std::uint64_t>(patch_buf.size()));
     ++total_clouds;
   }
 
