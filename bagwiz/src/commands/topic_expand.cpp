@@ -345,8 +345,18 @@ bool expand_slot(
       if (contains_glob(value)) {
         return reject_glob(app, slot, value);
       }
-      if (ctx && !topic_is_present(ctx->universe, value)) {
-        log_selector_matched_nothing(app, slot, value);
+      if (!ctx) {
+        continue;
+      }
+      // pair_value: check presence of the split selector (the left half),
+      // never the raw "<topic>=<rhs>" value — a pair value is never itself a
+      // topic name, so testing the whole string would reject every value
+      // unconditionally. This mirrors resolve_values()'s kGlob-mode behavior,
+      // which also splits before checking presence; see TopicSlotSpec's
+      // pair_value/require_present doc comments.
+      const std::string selector = slot.spec.pair_value ? split_pair(value).first : value;
+      if (!topic_is_present(ctx->universe, selector)) {
+        log_selector_matched_nothing(app, slot, selector);
         return false;
       }
     }
@@ -373,8 +383,26 @@ bool expand_app(const CLI::App & app)
   }
 
   const std::filesystem::path * input = topic_input_of(app);
-  if (input == nullptr || input->empty()) {
-    return true;  // no bag to resolve against
+  if (input == nullptr) {
+    // A declaration bug, not a user-reachable state: every slot-carrying
+    // subcommand's set_topic_input() call sits right next to its
+    // add_topic_option() calls, and this is the one place that fact would
+    // otherwise go unverified. Miss the call and every slot on this command
+    // silently degrades — a literal-only slot stops rejecting '*' (the
+    // header's central promise) and a glob slot hands '*' to the command as a
+    // literal topic name — because expand_slot() is never reached at all.
+    // nullptr-only, deliberately: an empty *input (below) is the normal,
+    // reachable "no -i yet" case a bare TEST() can construct and must stay
+    // silent.
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "%s: internal error — this command declares topic slots but never called "
+      "set_topic_input()",
+      command_label(app).c_str());
+    return false;
+  }
+  if (input->empty()) {
+    return true;  // -i not parsed yet; unreachable in production, see below
   }
 
   auto topics = read_topics(*input);

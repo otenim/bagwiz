@@ -736,6 +736,48 @@ TEST_F(ExpandTopicSelectorsTest, ScopeToAnOptionThatIsNotATopicSlotIsAnInternalE
   EXPECT_FALSE(expand_topic_selectors(app));
 }
 
+// Important 3 of the final whole-branch review: a command that declares a
+// topic slot but never calls set_topic_input() must fail loudly rather than
+// silently skip expansion — miss the call and a literal-only slot stops
+// rejecting '*' (the header's central promise) and a glob slot hands '*' to
+// the command as a literal topic name. This already happened once on this
+// branch for five real commands before the fix restored the calls; nothing
+// short of this check stops a sixth.
+TEST_F(ExpandTopicSelectorsTest, MissingSetTopicInputIsAnInternalError)
+{
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::string topic;
+  // Deliberately no set_topic_input(*sub, ...) call.
+  add_topic_option(
+    *sub, "-t,--topic", topic, "Topic.", TopicSlotSpec{.mode = TopicSelectorMode::kLiteral});
+
+  app.parse(std::vector<std::string>{"/anything", "-t", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+}
+
+// The nullptr check above must not fire on the ordinary "no -i yet" case a
+// bare TEST() can construct: set_topic_input() was called, but `input` is
+// still empty because nothing parsed it. Every real slot-carrying subcommand
+// makes -i ->required(), so this path is unreachable from user input — but a
+// test that forgets to pass -i (many in this file's ExpandTopicSelectorsTest
+// fixture do not parse -i separately from --input's own token) must keep
+// working, not start failing.
+TEST_F(ExpandTopicSelectorsTest, EmptyInputPathWithSetTopicInputCalledStillSkipsExpansion)
+{
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::string topic;
+  set_topic_input(*sub, input);
+  add_topic_option(
+    *sub, "-t,--topic", topic, "Topic.", TopicSlotSpec{.mode = TopicSelectorMode::kLiteral});
+
+  // No "-i" at all: `input` stays empty after parsing.
+  app.parse(std::vector<std::string>{"/lidar/*", "-t", "cmd"});
+  EXPECT_TRUE(expand_topic_selectors(app));
+}
+
 // pcd concat's own contract: concatenation follows --pcd's list order, and
 // the FIRST topic becomes the time-matching reference (see pcd.cpp's --pcd
 // help text). A glob's expansion order therefore is not incidental — it is
@@ -895,6 +937,59 @@ TEST_F(ExpandTopicSelectorsTest, PairValueLiteralSlotChecksTheWholeUnsplitValueF
   app.parse(
     std::vector<std::string>{
       "/camera/image_raw=/camera/*", "--cam-info", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+}
+
+// require_present combined with pair_value + kLiteral (Important 2 of the
+// final review): the presence check must run against the split left half,
+// never the raw "<topic>=<rhs>" value — that string is never itself a topic
+// name, so checking it whole would reject every value unconditionally, no
+// matter how well-formed. This is the opposite split rule from
+// PairValueLiteralSlotChecksTheWholeUnsplitValueForAGlob just above: the glob
+// check stays whole-value, the presence check does not.
+TEST_F(ExpandTopicSelectorsTest, PairValueLiteralSlotWithRequirePresentChecksOnlyTheLeftHalf)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> overrides;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--cam-info", overrides, "Overrides.",
+    TopicSlotSpec{
+      .mode = TopicSelectorMode::kLiteral, .pair_value = true, .require_present = true});
+
+  // "/lidar/left/points" is in make_bag(); the rhs is not a topic at all and
+  // would fail presence if checked unsplit, the bug this test guards against.
+  app.parse(
+    std::vector<std::string>{
+      "/lidar/left/points=/not/a/topic", "--cam-info", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  // kLiteral mode never rewrites a slot's value (see
+  // OptionalTargetLiteralSlotPassesALiteralThrough below): the pair is passed
+  // through exactly as typed.
+  EXPECT_EQ(overrides, (std::vector<std::string>{"/lidar/left/points=/not/a/topic"}));
+}
+
+TEST_F(ExpandTopicSelectorsTest, PairValueLiteralSlotWithRequirePresentRejectsAnAbsentLeftHalf)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> overrides;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--cam-info", overrides, "Overrides.",
+    TopicSlotSpec{
+      .mode = TopicSelectorMode::kLiteral, .pair_value = true, .require_present = true});
+
+  app.parse(
+    std::vector<std::string>{"/not/here=/some/yaml", "--cam-info", bag.string(), "-i", "cmd"});
   EXPECT_FALSE(expand_topic_selectors(app));
 }
 

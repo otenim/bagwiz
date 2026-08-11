@@ -54,7 +54,12 @@ struct TopicSlotSpec
 
   // The value is `<topic>=<rhs>`. For a kGlob slot only the half before the
   // first '=' is a selector — the right half is a file path or a scalar, never
-  // a topic. For a kLiteral slot the whole value is checked for '*'.
+  // a topic. For a kLiteral slot the glob rejection check (contains_glob())
+  // still scans the whole raw value, deliberately more conservative than
+  // kGlob mode — a kLiteral slot rejects '*' anywhere in the value, not just
+  // the left half, since nothing in it should ever be a selector. The
+  // require_present presence check, by contrast, always checks the split left
+  // half in both modes; see its own doc comment.
   bool pair_value{false};
 
   // When set, selectors resolve against this option's expanded result instead
@@ -74,6 +79,11 @@ struct TopicSlotSpec
   // ever rejects a literal, whichever mode carried it. The check is
   // presence-only and ignores allowed_types, so a wrongly-typed literal still
   // reaches the command and still gets that command's type error.
+  //
+  // Safe to combine with pair_value in either mode: the presence check always
+  // runs against the split left half (the selector), never the raw
+  // "<topic>=<rhs>" value, which is never itself a topic name and would
+  // otherwise reject every value unconditionally.
   //
   // Best-effort, not absolute: it runs against the bag read at expansion
   // time, and expand_app() leaves every value untouched (skipping this check
@@ -148,7 +158,17 @@ CLI::Option * add_topic_option(
 
 // Name the option holding the bag this (sub)command's topic slots resolve
 // against. Call once per subcommand that declares topic slots; without it the
-// expansion pass has no bag to expand against and leaves the values verbatim.
+// expansion pass treats it as a declaration bug and fails loudly (see
+// expand_app() in topic_expand.cpp) rather than silently leaving every value
+// unexpanded.
+//
+// Always call this alongside at least one add_topic_option() on the same
+// app, never on its own: only add_topic_option() arms the StoreGuard that
+// erases this app's store entry when the app is destroyed, so a
+// set_topic_input()-only call leaks that entry, keyed by what becomes a
+// dangling CLI::App* once `app` is destroyed. Unreachable today — every call
+// site pairs the two, and expand_app() returns before ever reading `input`
+// when a command's slot list is empty — but nothing enforces it.
 void set_topic_input(CLI::App & app, std::filesystem::path & input_target);
 
 // Slots registered on `app`, in declaration order. Empty when `app` declares
