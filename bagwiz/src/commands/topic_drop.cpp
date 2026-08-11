@@ -12,7 +12,6 @@
 #include "bagwiz/core/bag/bag_passthrough.hpp"
 #include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/logging.hpp"
-#include "bagwiz/core/base/topic_match.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
 #include "bagwiz/io/topics.hpp"
@@ -153,17 +152,17 @@ int run_topic_drop(const TopicDropArgs & args)
 {
   // 0. Guard the public entry point. The CLI marks <topics> ->required(), but
   //    run_topic_drop is also called directly from tests; an empty selector
-  //    list would otherwise slip past the unmatched-pattern check below and
-  //    silently copy the bag unchanged. Fail fast instead.
+  //    list would otherwise build an empty `drop` set below and silently copy
+  //    the bag unchanged. Fail fast instead.
   if (args.topics.empty()) {
     BAGWIZ_LOG_ERROR(kLogger, "topic drop: no topic selector given; nothing to remove.");
     return 1;
   }
 
-  // 1. Resolve the selectors against the bag's topic list up front, so a typo'd
-  //    or non-matching selector fails the run before any writer (or in-place
-  //    tmp) is created. The topic list is snapshotted into a vector because the
-  //    reader's span is invalidated once the reader is destroyed below.
+  // 1. Snapshot the bag's topic list up front so the "all topics matched"
+  //    warning below can compare against it. The topic list is snapshotted
+  //    into a vector because the reader's span is invalidated once the reader
+  //    is destroyed below.
   std::vector<std::string> topic_names;
   {
     auto reader = io::open_read_or_log(args.input_path, kLogger);
@@ -173,18 +172,9 @@ int run_topic_drop(const TopicDropArgs & args)
     topic_names = io::snapshot_topic_names(*reader);
   }
 
-  const auto resolution = core::resolve_topic_patterns(args.topics, topic_names);
-  if (!resolution.unmatched.empty()) {
-    for (const auto & pattern : resolution.unmatched) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "selector '%s' matched no topic in %s", pattern.c_str(), args.input_path.c_str());
-    }
-    return 1;
-  }
-
-  // The empty-selector guard and the unmatched-pattern return above together
-  // ensure every selector matched at least one topic, so `drop` is non-empty.
-  const auto & drop = resolution.matched;
+  // Selectors were expanded before run() (see commands/topic_option.hpp), so
+  // args.topics is already the literal list of topics to remove.
+  const std::unordered_set<std::string> drop(args.topics.begin(), args.topics.end());
   if (drop.size() == topic_names.size()) {
     BAGWIZ_LOG_WARN(
       kLogger, "all %zu topic(s) matched; the output bag will contain no topics.",

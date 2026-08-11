@@ -451,11 +451,14 @@ if(BUILD_TESTING)
   # registrar + CLI11 wiring, so the test also compiles registry.cpp and
   # links CLI11 (completion_test idiom). trim_stamp.hpp is CLI-internal, so
   # the test adds src/commands to its include path (traj_common idiom).
+  # TrimCommand::configure() declares --align through add_topic_option()
+  # (topic_option.hpp), so the test also compiles topic_option.cpp.
   ament_add_gtest(bagwiz_trim_test
     test/commands/trim_test.cpp
     src/commands/trim.cpp
     src/commands/trim_stamp.cpp
-    src/commands/registry.cpp)
+    src/commands/registry.cpp
+    src/commands/topic_option.cpp)
   target_include_directories(bagwiz_trim_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_trim_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)

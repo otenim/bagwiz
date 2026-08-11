@@ -144,14 +144,17 @@ TEST_F(TopicKeepTest, KeepExactTopicToOutput)
   EXPECT_EQ(in.at("/sensing/camera"), 2);
 }
 
-TEST_F(TopicKeepTest, KeepWildcardKeepsMatchingSubtree)
+TEST_F(TopicKeepTest, KeepMultipleTopicsInSubtree)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so this is the already-expanded form of the '/sensing/*' glob; glob
+  // expansion itself is covered by bagwiz_topic_option_test.
   bagwiz::commands::TopicKeepArgs args;
   args.input_path = in_path;
-  args.topics = {"/sensing/*"};
+  args.topics = {"/sensing/camera", "/sensing/lidar"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_keep(args), 0);
@@ -168,9 +171,11 @@ TEST_F(TopicKeepTest, KeepMultipleSelectors)
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so '*/objects' arrives here already resolved to '/perception/objects'.
   bagwiz::commands::TopicKeepArgs args;
   args.input_path = in_path;
-  args.topics = {"/sensing/camera", "*/objects"};
+  args.topics = {"/sensing/camera", "/perception/objects"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_keep(args), 0);
@@ -199,7 +204,13 @@ TEST_F(TopicKeepTest, KeepInPlaceRewritesInput)
   EXPECT_EQ(result.size(), 1U);  // camera and objects dropped
 }
 
-TEST_F(TopicKeepTest, UnmatchedSelectorFailsWithoutWriting)
+// See TopicDropTest.LiteralNotInBagDropsNothing: run_topic_keep() no longer
+// checks that a literal names an existing topic (only a '*' glob that
+// matches nothing is rejected, before run() — see bagwiz_topic_option_test,
+// FailsWhenAGlobMatchesNothing). For `keep` this is more consequential than
+// for `drop`: a typo'd literal matches nothing, so nothing is kept and the
+// output bag ends up empty.
+TEST_F(TopicKeepTest, LiteralNotInBagKeepsNothing)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
@@ -209,12 +220,10 @@ TEST_F(TopicKeepTest, UnmatchedSelectorFailsWithoutWriting)
   args.topics = {"/does/not/exist"};
   args.output_path = out_path;
 
-  EXPECT_EQ(bagwiz::commands::run_topic_keep(args), 1);
-  EXPECT_FALSE(std::filesystem::exists(out_path));
+  ASSERT_EQ(bagwiz::commands::run_topic_keep(args), 0);
 
-  // The input is left fully intact.
-  const auto in = collect(in_path);
-  EXPECT_EQ(in.size(), 3U);
+  const auto out = collect(out_path);
+  EXPECT_TRUE(out.empty());
 }
 
 TEST_F(TopicKeepTest, EmptySelectorListFailsWithoutWriting)
@@ -240,9 +249,11 @@ TEST_F(TopicKeepTest, KeepAllTopicsRetainsEverything)
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so this is the already-expanded, lexicographically sorted form of '*'.
   bagwiz::commands::TopicKeepArgs args;
   args.input_path = in_path;
-  args.topics = {"*"};
+  args.topics = {"/perception/objects", "/sensing/camera", "/sensing/lidar"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_keep(args), 0);

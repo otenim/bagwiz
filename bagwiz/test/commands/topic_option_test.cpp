@@ -274,6 +274,33 @@ TEST_F(ExpandTopicSelectorsTest, ExpandsAGlobFilteredByTypeAndSorted)
   EXPECT_EQ(pcd, (std::vector<std::string>{"/lidar/left/points", "/lidar/right/points"}));
 }
 
+// A literal selector and a non-overlapping glob selector in the same
+// multi-value slot: the result keeps argument order across selectors (the
+// literal stays first even though it would sort after the glob's match
+// lexicographically), while each glob's own matches stay sorted internally.
+// Exercises what `topic drop -t <literal> -t <glob>` used to prove via its
+// own in-command expansion before that moved here (Task 5).
+TEST_F(ExpandTopicSelectorsTest, MixesALiteralAndANonOverlappingGlobInOneSlot)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(
+    std::vector<std::string>{
+      "/lidar/left/*", "--pcd", "/lidar/right/points", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/lidar/right/points", "/lidar/left/points"}));
+}
+
 TEST_F(ExpandTopicSelectorsTest, LeavesALiteralUntouchedEvenWhenAbsentFromTheBag)
 {
   const auto bag = make_bag(tmp_dir_ / "bag");

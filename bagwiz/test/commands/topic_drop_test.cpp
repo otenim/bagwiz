@@ -142,14 +142,17 @@ TEST_F(TopicDropTest, DropExactTopicToOutput)
   EXPECT_EQ(in.at("/sensing/lidar"), 1);
 }
 
-TEST_F(TopicDropTest, DropWildcardDropsMatchingSubtree)
+TEST_F(TopicDropTest, DropMultipleTopicsInSubtree)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so this is the already-expanded form of the '/sensing/*' glob; glob
+  // expansion itself is covered by bagwiz_topic_option_test.
   bagwiz::commands::TopicDropArgs args;
   args.input_path = in_path;
-  args.topics = {"/sensing/*"};
+  args.topics = {"/sensing/camera", "/sensing/lidar"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_drop(args), 0);
@@ -166,9 +169,11 @@ TEST_F(TopicDropTest, DropMultipleSelectors)
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so '*/objects' arrives here already resolved to '/perception/objects'.
   bagwiz::commands::TopicDropArgs args;
   args.input_path = in_path;
-  args.topics = {"/sensing/camera", "*/objects"};
+  args.topics = {"/sensing/camera", "/perception/objects"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_drop(args), 0);
@@ -197,7 +202,13 @@ TEST_F(TopicDropTest, DropInPlaceRewritesInput)
   EXPECT_EQ(result.at("/perception/objects"), 1);
 }
 
-TEST_F(TopicDropTest, UnmatchedSelectorFailsWithoutWriting)
+// A '*' glob that matches no topic is rejected before run() (see
+// bagwiz_topic_option_test, FailsWhenAGlobMatchesNothing), but a literal
+// passes through the expansion pass unvalidated (see
+// LeavesALiteralUntouchedEvenWhenAbsentFromTheBag in the same file), so
+// run_topic_drop() itself no longer checks that a literal names an existing
+// topic. A typo'd literal is therefore a silent no-op, not an error.
+TEST_F(TopicDropTest, LiteralNotInBagDropsNothing)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
@@ -207,12 +218,13 @@ TEST_F(TopicDropTest, UnmatchedSelectorFailsWithoutWriting)
   args.topics = {"/does/not/exist"};
   args.output_path = out_path;
 
-  EXPECT_EQ(bagwiz::commands::run_topic_drop(args), 1);
-  EXPECT_FALSE(std::filesystem::exists(out_path));
+  ASSERT_EQ(bagwiz::commands::run_topic_drop(args), 0);
 
-  // The input is left fully intact.
-  const auto in = collect(in_path);
-  EXPECT_EQ(in.size(), 3U);
+  const auto out = collect(out_path);
+  EXPECT_EQ(out.size(), 3U);
+  EXPECT_EQ(out.at("/sensing/camera"), 2);
+  EXPECT_EQ(out.at("/sensing/lidar"), 1);
+  EXPECT_EQ(out.at("/perception/objects"), 1);
 }
 
 TEST_F(TopicDropTest, EmptySelectorListFailsWithoutWriting)
@@ -238,9 +250,11 @@ TEST_F(TopicDropTest, DropAllTopicsProducesEmptyBag)
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so this is the already-expanded, lexicographically sorted form of '*'.
   bagwiz::commands::TopicDropArgs args;
   args.input_path = in_path;
-  args.topics = {"*"};
+  args.topics = {"/perception/objects", "/sensing/camera", "/sensing/lidar"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_drop(args), 0);

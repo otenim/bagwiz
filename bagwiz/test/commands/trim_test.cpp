@@ -367,22 +367,12 @@ TEST_F(TrimTest, AlignToMultipleTopicsUsesCommonSpan)
   EXPECT_EQ(out.at("/fast"), (std::vector<std::int64_t>{kT0 + kSecond, kT0 + 2 * kSecond}));
 }
 
-TEST_F(TrimTest, AlignAcceptsGlobSelectors)
-{
-  const auto in_path = build_input(tmp_dir_);
-  const auto out_path = tmp_dir_ / "out";
-
-  bagwiz::commands::TrimArgs args;
-  args.input_path = in_path;
-  args.align = {"/s*"};  // matches only /slow
-  args.output_path = out_path;
-
-  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
-
-  const auto out = collect(out_path);
-  EXPECT_EQ(out.at("/fast"), (std::vector<std::int64_t>{kT0 + kSecond, kT0 + 2 * kSecond}));
-}
-
+// A literal (unglobbed) --align value passes through the expansion pass
+// unvalidated (see commands/topic_option.hpp), so a name absent from the bag
+// still reaches resolve_align_window() unchanged. It fails there anyway: a
+// topic with no messages in the filtered scan — absent or merely
+// empty, both look the same to the span map — trips the same
+// "topic '%s' has no messages" check as AlignTopicWithNoMessagesFails below.
 TEST_F(TrimTest, AlignUnmatchedSelectorFails)
 {
   const auto in_path = build_input(tmp_dir_);
