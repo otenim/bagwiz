@@ -8,6 +8,8 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/base/terminal_input.hpp"
 #include "bagwiz/core/decoder/decoder.hpp"
@@ -96,10 +98,16 @@ public:
     app.add_option("-i,--input", input_path_, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    app.add_option("-t,--topic", topic_, "Topic name to inspect")->required();
-    app.add_option(
-      "--cam-info", camera_info_topic_,
-      "Explicit CameraInfo topic for the undistort preview and the point-cloud projection overlay");
+    set_topic_input(app, input_path_);
+    add_topic_option(
+      app, "-t,--topic", topic_, "Topic name to inspect",
+      TopicSlotSpec{.mode = TopicSelectorMode::kLiteral})
+      ->required();
+    add_topic_option(
+      app, "--cam-info", camera_info_topic_,
+      "Explicit CameraInfo topic for the undistort preview and the point-cloud projection "
+      "overlay",
+      TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral});
   }
 
   int run() override

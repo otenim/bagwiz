@@ -551,13 +551,21 @@ if(BUILD_TESTING)
     bagwiz_cam_info_common_test ${bagwiz_test_libs} fmt::fmt
     ${sensor_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
 
+  # Also compiles generate.cpp (GenerateCommand's CLI11 wiring) plus
+  # topic_option.cpp + registry.cpp so a test can drive the real
+  # configure_video() through Registry::instance() (walk_test.cpp idiom) —
+  # generate.cpp is the production call site for
+  # add_topic_option(std::optional<std::string>&) (--cam-info).
   ament_add_gtest(bagwiz_generate_video_test
     test/commands/generate_video_test.cpp
+    src/commands/generate.cpp
     src/commands/generate_video.cpp
-    src/commands/generate_video_common.cpp)
+    src/commands/generate_video_common.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
   target_include_directories(bagwiz_generate_video_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(
-    bagwiz_generate_video_test ${bagwiz_test_libs} fmt::fmt
+    bagwiz_generate_video_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV ${OpenCV_LIBS})
 
   # generate_video_common.hpp lives in src/commands (CLI-internal, not
@@ -613,6 +621,8 @@ if(BUILD_TESTING)
 
   # walk.cpp carries a BAGWIZ_REGISTER_COMMAND registrar, so the test also
   # compiles registry.cpp (completion_test idiom).
+  # walk.cpp declares its -t/--topic and --cam-info through add_topic_option()
+  # (topic_option.hpp), so this test also compiles topic_option.cpp.
   ament_add_gtest(bagwiz_walk_test
     test/commands/walk_test.cpp
     src/commands/walk.cpp
@@ -623,6 +633,7 @@ if(BUILD_TESTING)
     src/commands/walk_overlay_scan.cpp
     src/commands/walk_preview.cpp
     src/commands/walk_save.cpp
+    src/commands/topic_option.cpp
     src/commands/registry.cpp)
   target_include_directories(bagwiz_walk_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)

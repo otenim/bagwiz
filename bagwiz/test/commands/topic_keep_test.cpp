@@ -378,4 +378,40 @@ TEST(TopicKeepCliWiring, TopicsFlagRequiresPresence)
   EXPECT_TRUE(slots[0].spec.require_present);
 }
 
+// Task 8: `topic rename` --src/--dst are both literal-only. --dst additionally
+// carries a reject_reason (it names the topic to CREATE, so there is nothing
+// for a glob to match against). Same registry-driven idiom as
+// TopicKeepCliWiring above; TopicCommand::configure() wires drop/keep/rename
+// together so this test lives alongside the others that already pay
+// topic.cpp's link cost.
+TEST(TopicRenameCliWiring, SrcAndDstAreLiteralOnly)
+{
+  bagwiz::commands::Command * topic_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "topic") {
+      topic_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(topic_cmd, nullptr);
+
+  CLI::App app{"topic"};
+  topic_cmd->configure(app);
+
+  auto * rename_sub = app.get_subcommand_no_throw("rename");
+  ASSERT_NE(rename_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*rename_sub);
+  ASSERT_EQ(slots.size(), 2U);  // --src then --dst, in declaration order
+
+  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"src"}));
+  EXPECT_EQ(slots[0].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_TRUE(slots[0].spec.reject_reason.empty());
+  EXPECT_TRUE(slots[0].option->get_required());
+
+  EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"dst"}));
+  EXPECT_EQ(slots[1].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_EQ(slots[1].spec.reject_reason, "it names the topic to create");
+  EXPECT_TRUE(slots[1].option->get_required());
+}
+
 }  // namespace

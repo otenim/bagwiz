@@ -74,22 +74,26 @@ private:
       ->required()
       ->check(CLI::ExistingPath);
     set_topic_input(*sub, slam_args_.input_path);
-    sub->add_option("--pcd", slam_args_.cloud_topic, "PointCloud2 topic to run SLAM on.")
+    add_topic_option(
+      *sub, "--pcd", slam_args_.cloud_topic, "PointCloud2 topic to run SLAM on.",
+      TopicSlotSpec{.allowed_types = kPointCloud2Type, .mode = TopicSelectorMode::kLiteral})
       ->required();
     sub
       ->add_option(
         "-o,--output", slam_args_.output_root, "Output root directory; writes traj.tum and map.pcd")
       ->required();
-    sub->add_option(
-      "--imu", slam_args_.imu_topic,
+    add_topic_option(
+      *sub, "--imu", slam_args_.imu_topic,
       "Optional Imu topic; switches odometry to LiDAR-IMU. The LiDAR<-IMU extrinsic is "
       "resolved from the bag's static TF using the cloud and IMU header frame_ids (errors "
-      "if that chain is absent).");
-    sub->add_option(
-      "--gnss", slam_args_.gnss_topic,
+      "if that chain is absent).",
+      TopicSlotSpec{.allowed_types = kImuType, .mode = TopicSelectorMode::kLiteral});
+    add_topic_option(
+      *sub, "--gnss", slam_args_.gnss_topic,
       "Optional NavSatFix topic; adds GNSS global constraints during global mapping "
       "(horizontal translation priors on submap poses) to curb drift. The antenna "
-      "lever-arm is resolved from the bag's static TF (a missing TF only warns).");
+      "lever-arm is resolved from the bag's static TF (a missing TF only warns).",
+      TopicSlotSpec{.allowed_types = kNavSatFixType, .mode = TopicSelectorMode::kLiteral});
     auto * color_opt = add_topic_option(
       *sub, "--color", slam_args_.color_topics,
       "Camera image topic(s) (sensor_msgs/msg/Image or CompressedImage) to colorize the "
@@ -101,13 +105,17 @@ private:
       "if that chain is absent). Images are assumed raw (unrectified). A topic listed "
       "more than once is an error.",
       TopicSlotSpec{.allowed_types = kImageTopicTypes});
-    sub->add_option(
-      "--cam-info", slam_args_.camera_info_overrides,
+    add_topic_option(
+      *sub, "--cam-info", slam_args_.camera_info_overrides,
       "Explicit CameraInfo topic per --color camera, as <image_topic>=<info_topic> "
-      "(several after one flag and/or repeated). Cameras without an entry auto-resolve "
-      "their CameraInfo from the image topic name using the standard suffix rules. A "
-      "malformed entry, an <image_topic> that is not a --color topic, and a duplicate "
-      "<image_topic> are errors.");
+      "(several after one flag and/or repeated). Both halves are literal topic names. "
+      "Cameras without an entry auto-resolve their CameraInfo from the image topic name "
+      "using the standard suffix rules. A malformed entry, an <image_topic> that is not a "
+      "--color topic, and a duplicate <image_topic> are errors.",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral,
+        .reject_reason = "each camera needs its own CameraInfo topic, so both halves of "
+                         "<image_topic>=<info_topic> must be literal names"});
     auto * color_min_dist_opt =
       sub
         ->add_option(

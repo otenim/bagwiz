@@ -10,6 +10,7 @@
 #define BAGWIZ__COMMANDS__TOPIC_OPTION_HPP_
 
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -95,10 +96,14 @@ struct TopicSlotSpec
 // A registered slot. Exactly one of `multi_target` / `single_target` is set.
 // All pointers here are non-owning: `option` is owned by the App it was
 // added to, `multi_target`/`single_target` by whatever the caller passed to
-// add_topic_option(), and `spec`'s span/string_view members by whatever the
-// caller passed for `allowed_types`/`reject_reason`. Every one of them must
-// outlive the App — true by construction for a Command's own configure(),
-// which is the only place these are ever called.
+// add_topic_option() — except the std::optional<std::string> overload, where
+// `single_target` instead points at an internal proxy string owned by this
+// same registration (see topic_option.cpp), since std::optional<std::string>
+// has no stable std::string storage to point at until it is engaged — and
+// `spec`'s span/string_view members by whatever the caller passed for
+// `allowed_types`/`reject_reason`. Every one of them must outlive the App —
+// true by construction for a Command's own configure(), which is the only
+// place these are ever called.
 struct TopicSlot
 {
   const CLI::Option * option{};
@@ -114,6 +119,19 @@ CLI::Option * add_topic_option(
   const TopicSlotSpec & spec);
 CLI::Option * add_topic_option(
   CLI::App & app, std::string flags, std::vector<std::string> & target, std::string description,
+  const TopicSlotSpec & spec);
+// For a slot whose absence is meaningfully different from an empty value (the
+// command auto-resolves the topic when the flag is omitted). Only
+// TopicSelectorMode::kLiteral is supported: the expansion pass's kLiteral
+// branch only ever reads a slot's current value, never writes it back (there
+// is nothing to expand into a literal), so `target` needs no post-expansion
+// sync. A kGlob slot's expanded result gets written back through
+// TopicSlot::single_target, which this overload cannot route to `target` —
+// declaring one this way would silently strand the expansion in an internal
+// proxy. `target` holds a value exactly when the flag was given: CLI11 never
+// touches it otherwise, matching CLI::App::add_option's own optional handling.
+CLI::Option * add_topic_option(
+  CLI::App & app, std::string flags, std::optional<std::string> & target, std::string description,
   const TopicSlotSpec & spec);
 
 // Name the option holding the bag this (sub)command's topic slots resolve

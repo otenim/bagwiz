@@ -10,7 +10,9 @@
 
 #include "CLI/CLI.hpp"
 
+#include <deque>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -26,6 +28,14 @@ struct Registration
 {
   std::vector<TopicSlot> slots;
   std::filesystem::path * input{};
+  // Backing storage for the std::optional<std::string> overload of
+  // add_topic_option(): CLI11 (and TopicSlot::single_target) need a plain
+  // std::string to bind to, but the caller's storage is an optional. A deque,
+  // not a vector, because TopicSlot::single_target below captures one
+  // element's address at registration time — that address must stay valid
+  // even as a later optional-target slot on the same app pushes another
+  // element in, which push_back on a vector is not guaranteed to preserve.
+  std::deque<std::string> optional_proxies;
 };
 
 // Process-wide store, keyed by the CLI::App the option was declared on so a
@@ -107,6 +117,32 @@ CLI::Option * add_topic_option(
 {
   CLI::Option * option = app.add_option(std::move(flags), target, std::move(description));
   store()[&app].slots.push_back(TopicSlot{.option = option, .multi_target = &target, .spec = spec});
+  arm_guard(app, option);
+  return option;
+}
+
+CLI::Option * add_topic_option(
+  CLI::App & app, std::string flags, std::optional<std::string> & target, std::string description,
+  const TopicSlotSpec & spec)
+{
+  Registration & registration = store()[&app];
+  std::string & proxy = registration.optional_proxies.emplace_back();
+  CLI::Option * option = app.add_option(std::move(flags), proxy, std::move(description));
+  // Mirror the parsed value into `target` so it ends up nullopt exactly when
+  // the flag was not given, same as CLI::App::add_option's native optional
+  // support would leave it. check() runs once per value actually supplied
+  // (never for an omitted option), which is exactly that condition; it is
+  // used here purely for the side effect, the same trick arm_guard() below
+  // uses to hold its cleanup guard. Registered before any ->check(...) the
+  // caller chains afterward, but harmless either way since nothing here
+  // rejects or transforms the value.
+  option->check(
+    [&target](const std::string & value) {
+      target = value;
+      return std::string{};
+    },
+    "", "");
+  registration.slots.push_back(TopicSlot{.option = option, .single_target = &proxy, .spec = spec});
   arm_guard(app, option);
   return option;
 }

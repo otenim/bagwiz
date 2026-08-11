@@ -11,6 +11,7 @@
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/topic_expand.hpp"
 #include "bagwiz/commands/topic_types.hpp"
+#include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <gtest/gtest.h>
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <new>
+#include <optional>
 #include <span>
 #include <string>
 #include <system_error>
@@ -183,6 +185,18 @@ bagwiz::io::TopicInfo make_topic(std::string name, std::string type)
   t.type = std::move(type);
   t.serialization_format = "cdr";
   return t;
+}
+
+// Fresh scratch directory for a standalone TEST() that needs one bag and does
+// not use ExpandTopicSelectorsTest's fixture (which owns a shared tmp_dir_
+// removed in TearDown). The caller owns cleanup.
+std::filesystem::path scratch_dir(const std::string & label)
+{
+  const auto dir = std::filesystem::temp_directory_path() /
+                   ("bagwiz_topic_option_" + label + "_" +
+                    std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+  std::filesystem::create_directories(dir);
+  return dir;
 }
 
 std::filesystem::path write_bag(
@@ -744,4 +758,166 @@ TEST_F(ExpandTopicSelectorsTest, PcdGlobExpansionOrderIsDeterministicForTheConca
 
   // Sorted lexicographically, not bag-declaration order: /a is the reference.
   EXPECT_EQ(pcd, (std::vector<std::string>{"/a", "/a1", "/a2"}));
+}
+
+// A literal-only slot's reject_reason replaces the default "does not accept
+// globs" wording. `topic rename --dst` is the shape this mirrors: the operand
+// names a topic that does not exist yet, so there is nothing to match a glob
+// against and the message should say why, not just that globs are refused.
+TEST(ExpandTopicSelectors, RejectReasonAppearsInTheError)
+{
+  bagwiz::core::init_logging();
+  const auto bag = make_bag(scratch_dir("reason"));
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::string dst;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--dst", dst, "New name.",
+    TopicSlotSpec{
+      .mode = TopicSelectorMode::kLiteral, .reject_reason = "it names the topic to create"});
+
+  app.parse(std::vector<std::string>{"/new/*", "--dst", bag.string(), "-i", "cmd"});
+  testing::internal::CaptureStderr();
+  EXPECT_FALSE(expand_topic_selectors(app));
+  const std::string err = testing::internal::GetCapturedStderr();
+  EXPECT_NE(err.find("it names the topic to create"), std::string::npos) << err;
+
+  std::error_code ec;
+  std::filesystem::remove_all(bag, ec);
+}
+
+// Task 4 added assign_slot_result()'s "single-target slot resolved to more
+// than one topic" guard defensively — every glob-capable slot declared before
+// Task 8 was multi-value, so nothing ever exercised it. Task 8 is the first
+// task that could: a single-target slot declared without `.mode = kLiteral`
+// (the trap TopicSlotSpec::mode's kGlob default sets) silently keeps only the
+// first match unless this guard fires. This proves the guard is real, not
+// merely present.
+TEST_F(ExpandTopicSelectorsTest, SingleTargetGlobMatchingMultipleTopicsFailsLoudly)
+{
+  bagwiz::core::init_logging();
+  const auto bag = make_dedupe_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::string topic;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  // Deliberately omits `.mode = TopicSelectorMode::kLiteral` — the mistake
+  // Task 8 must not make on any of its 18 slots.
+  add_topic_option(
+    *sub, "-t,--topic", topic, "Topic.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"/a*", "-t", bag.string(), "-i", "cmd"});
+  testing::internal::CaptureStderr();
+  EXPECT_FALSE(expand_topic_selectors(app));
+  const std::string err = testing::internal::GetCapturedStderr();
+  EXPECT_NE(err.find("-t/--topic"), std::string::npos) << err;
+  EXPECT_NE(err.find("/a"), std::string::npos) << err;
+  EXPECT_NE(err.find("/a1"), std::string::npos) << err;
+  EXPECT_NE(err.find("/a2"), std::string::npos) << err;
+}
+
+// add_topic_option(std::optional<std::string>&) exists so a slot whose
+// absence is meaningfully different from an empty value (walk --cam-info,
+// generate video --cam-info) can still go through the mechanism. CLI11 must
+// leave `target` untouched — nullopt — when the flag is never given.
+TEST(TopicOption, OptionalTargetStaysNulloptWhenFlagOmitted)
+{
+  CLI::App app{"test"};
+  std::optional<std::string> topic;
+  add_topic_option(
+    app, "--cam-info", topic, "CameraInfo topic.",
+    TopicSlotSpec{.mode = TopicSelectorMode::kLiteral});
+
+  const auto slots = topic_slots_of(app);
+  ASSERT_EQ(slots.size(), 1U);
+  EXPECT_NE(slots[0].single_target, nullptr);
+  EXPECT_EQ(slots[0].multi_target, nullptr);
+
+  app.parse(std::vector<std::string>{});
+  EXPECT_FALSE(topic.has_value());
+}
+
+TEST(TopicOption, OptionalTargetHoldsTheParsedValueWhenGiven)
+{
+  CLI::App app{"test"};
+  std::optional<std::string> topic;
+  add_topic_option(
+    app, "--cam-info", topic, "CameraInfo topic.",
+    TopicSlotSpec{.mode = TopicSelectorMode::kLiteral});
+
+  app.parse(std::vector<std::string>{"/camera/camera_info", "--cam-info"});
+  ASSERT_TRUE(topic.has_value());
+  EXPECT_EQ(*topic, "/camera/camera_info");
+}
+
+// A pair_value literal slot has no left/right split (see the kLiteral branch
+// of expand_slot() in topic_expand.cpp): a '*' anywhere in <lhs>=<rhs> — even
+// only in the rhs — is rejected. Mirrors `map slam --cam-info`, the
+// mechanism's only pair_value + kLiteral slot in production.
+TEST_F(ExpandTopicSelectorsTest, PairValueLiteralSlotChecksTheWholeUnsplitValueForAGlob)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> overrides;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--cam-info", overrides, "Overrides.",
+    TopicSlotSpec{.mode = TopicSelectorMode::kLiteral, .pair_value = true});
+
+  // The '*' sits only in the rhs; a naive split-then-check would miss it.
+  app.parse(
+    std::vector<std::string>{
+      "/camera/image_raw=/camera/*", "--cam-info", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+}
+
+TEST_F(ExpandTopicSelectorsTest, OptionalTargetLiteralSlotRejectsAGlob)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::optional<std::string> cam_info;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--cam-info", cam_info, "CameraInfo.",
+    TopicSlotSpec{
+      .allowed_types = bagwiz::commands::kCameraInfoType, .mode = TopicSelectorMode::kLiteral});
+
+  app.parse(std::vector<std::string>{"/camera/*", "--cam-info", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+}
+
+// Proves the optional overload's whole round trip: CLI11 parses into the
+// internal proxy, the sync callback mirrors it into `cam_info`, and — since
+// literal mode never writes a slot back — expansion leaves that value
+// unchanged, so `cam_info` still holds exactly what was typed.
+TEST_F(ExpandTopicSelectorsTest, OptionalTargetLiteralSlotPassesALiteralThrough)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::optional<std::string> cam_info;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--cam-info", cam_info, "CameraInfo.",
+    TopicSlotSpec{
+      .allowed_types = bagwiz::commands::kCameraInfoType, .mode = TopicSelectorMode::kLiteral});
+
+  app.parse(std::vector<std::string>{"/not/checked", "--cam-info", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+  ASSERT_TRUE(cam_info.has_value());
+  EXPECT_EQ(*cam_info, "/not/checked");
 }

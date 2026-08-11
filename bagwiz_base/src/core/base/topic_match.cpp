@@ -56,25 +56,6 @@ bool topic_glob_match(std::string_view pattern, std::string_view topic)
   return p == pattern.size();
 }
 
-TopicPatternResolution resolve_topic_patterns(
-  std::span<const std::string> patterns, std::span<const std::string> topic_names)
-{
-  TopicPatternResolution result;
-  for (const auto & pattern : patterns) {
-    bool any = false;
-    for (const auto & name : topic_names) {
-      if (topic_glob_match(pattern, name)) {
-        result.matched.insert(name);
-        any = true;
-      }
-    }
-    if (!any) {
-      result.unmatched.push_back(pattern);
-    }
-  }
-  return result;
-}
-
 namespace
 {
 

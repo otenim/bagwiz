@@ -75,9 +75,12 @@ private:
       ->required()
       ->check(CLI::ExistingPath);
     set_topic_input(*sub, concat_args_.input_path);
-    sub
-      ->add_option(
-        "-t,--topic", concat_args_.output_topic, "Name of the new concatenated PointCloud2 topic")
+    add_topic_option(
+      *sub, "-t,--topic", concat_args_.output_topic,
+      "Name of the new concatenated PointCloud2 topic",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral,
+        .reject_reason = "it names the new concatenated topic to create"})
       ->required();
     auto * pcd_opt =
       add_topic_option(
@@ -135,17 +138,20 @@ private:
       ->required()
       ->check(CLI::ExistingPath);
     set_topic_input(*sub, undistort_args_.input_path);
-    auto * pose_opt = sub->add_option(
-      "--pose", undistort_args_.pose_topic,
+    auto * pose_opt = add_topic_option(
+      *sub, "--pose", undistort_args_.pose_topic,
       "Self-position topic (TFMessage / Odometry / PoseStamped / "
-      "PoseWithCovarianceStamped). Exactly one of --pose / --twist is required.");
-    sub
-      ->add_option(
-        "--twist", undistort_args_.twist_topic,
-        "Vehicle-velocity topic (Twist / TwistStamped / TwistWithCovarianceStamped), integrated "
-        "into the deskew motion. Alternative to --pose; exactly one of them is required. A bare "
-        "Twist has no header: its samples are stamped with the bag's log time and assumed to be "
-        "expressed in the --of frame.")
+      "PoseWithCovarianceStamped). Exactly one of --pose / --twist is required.",
+      TopicSlotSpec{
+        .allowed_types = kUndistortPoseTopicTypes, .mode = TopicSelectorMode::kLiteral});
+    add_topic_option(
+      *sub, "--twist", undistort_args_.twist_topic,
+      "Vehicle-velocity topic (Twist / TwistStamped / TwistWithCovarianceStamped), integrated "
+      "into the deskew motion. Alternative to --pose; exactly one of them is required. A bare "
+      "Twist has no header: its samples are stamped with the bag's log time and assumed to be "
+      "expressed in the --of frame.",
+      TopicSlotSpec{
+        .allowed_types = kUndistortTwistTopicTypes, .mode = TopicSelectorMode::kLiteral})
       ->excludes(pose_opt);
     add_topic_option(
       *sub, "--pcd", undistort_args_.pcd_topics,

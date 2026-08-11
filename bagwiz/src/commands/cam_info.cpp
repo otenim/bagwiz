@@ -163,11 +163,12 @@ private:
     sub->add_option("-i,--input", dump_args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub
-      ->add_option(
-        "-t,--topic", dump_args_.topic,
-        "The CameraInfo topic whose calibration to write (its type must be "
-        "sensor_msgs/msg/CameraInfo)")
+    set_topic_input(*sub, dump_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topic", dump_args_.topic,
+      "The CameraInfo topic whose calibration to write (its type must be "
+      "sensor_msgs/msg/CameraInfo)",
+      TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral})
       ->required();
     sub->add_option(
       "-o,--output", dump_args_.output_path, "Write the YAML to this path instead of stdout.");

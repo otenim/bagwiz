@@ -71,11 +71,11 @@ private:
       ->required()
       ->check(CLI::ExistingPath);
     set_topic_input(*sub, video_args_.input_path);
-    sub
-      ->add_option(
-        "-t,--topic", video_args_.topic,
-        "Image topic to render. Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
-        "sensor_msgs/msg/CompressedImage (JPEG/PNG).")
+    add_topic_option(
+      *sub, "-t,--topic", video_args_.topic,
+      "Image topic to render. Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
+      "sensor_msgs/msg/CompressedImage (JPEG/PNG).",
+      TopicSlotSpec{.allowed_types = kImageTopicTypes, .mode = TopicSelectorMode::kLiteral})
       ->required();
     sub
       ->add_option(
@@ -86,11 +86,11 @@ private:
     sub->add_flag(
       "-w,--overwrite", video_args_.overwrite,
       "Replace an existing <output>. Without it, an existing output path stops the run.");
-    sub
-      ->add_option(
-        "--cam-info", video_args_.camera_info_topic,
-        "CameraInfo topic for --undistort and --pcd. When omitted, it is derived from "
-        "<img_topic> following the standard /camera_info suffix rules.")
+    add_topic_option(
+      *sub, "--cam-info", video_args_.camera_info_topic,
+      "CameraInfo topic for --undistort and --pcd. When omitted, it is derived from "
+      "<img_topic> following the standard /camera_info suffix rules.",
+      TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral})
       ->check([](const std::string & topic) {
         if (topic.empty()) {
           return std::string{"cam-info topic must not be empty"};

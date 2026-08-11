@@ -8,6 +8,9 @@
 
 #include "bagwiz/commands/generate_video.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/image/camera_info_resolver.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/core/video/video_encoder.hpp"
@@ -1054,6 +1057,52 @@ TEST_F(GenerateVideoTest, PointCloudOverlayOnRealBag)
   EXPECT_EQ(probe.height, kExpectedHeight);
   EXPECT_EQ(probe.frame_count, kExpectedFrames);
   EXPECT_NEAR(probe.duration_s, 30.0, 1.0);
+}
+
+// Exercises the real GenerateCommand::configure_video() — reached through the
+// process-wide command registry that generate.cpp's BAGWIZ_REGISTER_COMMAND
+// registrar populates — rather than a hand-mirrored copy of its wiring.
+// --cam-info is the production call site for
+// add_topic_option(std::optional<std::string>&): GenerateVideoArgs::camera_info_topic
+// is optional so "not given" (auto-resolve from the image topic) stays
+// distinguishable from "given", which is exactly what that overload exists
+// for — this proves it is really reachable from a real command, not just
+// topic_option_test.cpp's synthetic std::optional.
+TEST(GenerateVideoCliWiring, TopicOptionsAreDeclaredLiteralOnly)
+{
+  bagwiz::commands::Command * generate_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "generate") {
+      generate_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(generate_cmd, nullptr);
+
+  CLI::App app{"generate"};
+  generate_cmd->configure(app);
+
+  auto * video_sub = app.get_subcommand_no_throw("video");
+  ASSERT_NE(video_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*video_sub);
+  ASSERT_EQ(slots.size(), 3U);  // -t/--topic, --cam-info, --pcd, in declaration order
+
+  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"topic"}));
+  EXPECT_EQ(slots[0].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_EQ(slots[0].spec.allowed_types.size(), 2U);  // Image, CompressedImage
+  EXPECT_TRUE(slots[0].option->get_required());
+
+  EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"cam-info"}));
+  EXPECT_EQ(slots[1].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  ASSERT_EQ(slots[1].spec.allowed_types.size(), 1U);
+  EXPECT_EQ(slots[1].spec.allowed_types[0], "sensor_msgs/msg/CameraInfo");
+  // std::optional<std::string>-backed: single_target points at the internal
+  // proxy add_topic_option() owns, never null.
+  EXPECT_NE(slots[1].single_target, nullptr);
+
+  EXPECT_EQ(slots[2].option->get_lnames(), (std::vector<std::string>{"pcd"}));
+  EXPECT_EQ(
+    slots[2].spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);  // unaffected by Task 8
 }
 
 }  // namespace

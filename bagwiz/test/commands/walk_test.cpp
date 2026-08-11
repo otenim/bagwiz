@@ -14,6 +14,8 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -21,6 +23,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -126,6 +129,34 @@ TEST(WalkCommand, NonTtyInvocationExitsWithGuardMessage)
   EXPECT_NE(
     pipes.take_stderr().find("walk requires an interactive terminal (stdin+stdout must be TTY)"),
     std::string::npos);
+}
+
+// Exercises the real WalkCommand::configure() — reached through the
+// process-wide command registry that walk.cpp's BAGWIZ_REGISTER_COMMAND
+// registrar populates — rather than a hand-mirrored copy of its wiring.
+// Dropping `.mode = kLiteral` from either declaration fails this test
+// directly (and, per topic_expand.cpp's assign_slot_result(), would also
+// leave -t/--topic silently keeping only the first match of a glob).
+TEST(WalkCommand, TopicOptionsAreLiteralOnly)
+{
+  bagwiz::commands::Command * walk = find_walk_command();
+  ASSERT_NE(walk, nullptr);
+
+  CLI::App app;
+  walk->configure(app);
+
+  const auto slots = bagwiz::commands::topic_slots_of(app);
+  ASSERT_EQ(slots.size(), 2U);  // -t/--topic then --cam-info, in declaration order
+
+  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"topic"}));
+  EXPECT_EQ(slots[0].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_TRUE(slots[0].spec.allowed_types.empty());
+  EXPECT_TRUE(slots[0].option->get_required());
+
+  EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"cam-info"}));
+  EXPECT_EQ(slots[1].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  ASSERT_EQ(slots[1].spec.allowed_types.size(), 1U);
+  EXPECT_EQ(slots[1].spec.allowed_types[0], "sensor_msgs/msg/CameraInfo");
 }
 
 }  // namespace
