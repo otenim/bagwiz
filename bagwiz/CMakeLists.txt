@@ -420,11 +420,25 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_smoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_smoke_test ${bagwiz_test_libs})
 
+  # topic.cpp carries the TopicCommand registrar + CLI11 wiring for `topic
+  # drop`/`topic keep`/`topic rename` together, so proving topic.cpp's own
+  # configure_drop() sets TopicSlotSpec::require_present (rather than a
+  # hand-mirrored copy of it) pulls in the whole sibling set: topic_keep.cpp
+  # and topic_rename.cpp because TopicCommand::run()'s vtable entry
+  # references run_topic_keep/run_topic_rename regardless of which
+  # subcommand a given test exercises, topic_option.cpp for
+  # add_topic_option()/set_topic_input(), and registry.cpp for
+  # Registry::instance() (completion_test/trim_test idiom).
   ament_add_gtest(bagwiz_topic_drop_test
     test/commands/topic_drop_test.cpp
-    src/commands/topic_drop.cpp)
+    src/commands/topic.cpp
+    src/commands/topic_drop.cpp
+    src/commands/topic_keep.cpp
+    src/commands/topic_rename.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
   target_include_directories(bagwiz_topic_drop_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(bagwiz_topic_drop_test ${bagwiz_test_libs} fmt::fmt)
+  target_link_libraries(bagwiz_topic_drop_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
 
   # traj_common.hpp lives in src/commands (CLI-internal, not installed), so
   # this test adds src/commands to its include path (pcd_concat_common idiom).
@@ -435,11 +449,20 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_traj_common_test ${bagwiz_test_libs} fmt::fmt)
 
+  # Same shape as bagwiz_topic_drop_test above, mirrored for `topic keep`:
+  # topic.cpp pulls in topic_drop.cpp and topic_rename.cpp too (TopicCommand's
+  # vtable references run_topic_drop/run_topic_rename regardless of which
+  # subcommand this test exercises), plus topic_option.cpp and registry.cpp.
   ament_add_gtest(bagwiz_topic_keep_test
     test/commands/topic_keep_test.cpp
-    src/commands/topic_keep.cpp)
+    src/commands/topic.cpp
+    src/commands/topic_drop.cpp
+    src/commands/topic_keep.cpp
+    src/commands/topic_rename.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
   target_include_directories(bagwiz_topic_keep_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(bagwiz_topic_keep_test ${bagwiz_test_libs} fmt::fmt)
+  target_link_libraries(bagwiz_topic_keep_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
 
   ament_add_gtest(bagwiz_topic_rename_test
     test/commands/topic_rename_test.cpp

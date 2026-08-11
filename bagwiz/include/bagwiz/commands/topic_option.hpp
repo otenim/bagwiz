@@ -65,11 +65,21 @@ struct TopicSlotSpec
   // self-evident from the flag alone.
   std::string_view reject_reason{};
 
-  // When true, every resolved value must name a topic in the resolution
-  // universe; an absent one is an error in the same "selector matched no
-  // topic" shape a non-matching glob produces. The check is presence-only and
-  // ignores allowed_types, so a wrongly-typed literal still reaches the
-  // command and still gets that command's type error.
+  // When true, every literal value this slot receives must name a topic in
+  // the resolution universe; an absent one is an error in the same "selector
+  // matched no topic" shape a non-matching glob produces. Applies in both
+  // kGlob and kLiteral mode — a kGlob slot's glob-produced matches are
+  // already guaranteed present by construction, so in practice this only
+  // ever rejects a literal, whichever mode carried it. The check is
+  // presence-only and ignores allowed_types, so a wrongly-typed literal still
+  // reaches the command and still gets that command's type error.
+  //
+  // Best-effort, not absolute: it runs against the bag read at expansion
+  // time, and expand_app() leaves every value untouched (skipping this check
+  // along with everything else) when that read fails — see expand_app() in
+  // topic_expand.cpp. In practice run() re-opens the same path with the same
+  // io::open_read and fails too, but that is a property of the commands this
+  // flag is set on, not a guarantee this flag itself makes.
   //
   // Set it ONLY on a slot whose command has no presence check of its own.
   // Most commands do (generate video --pcd reports "pcd topic '…' not found",

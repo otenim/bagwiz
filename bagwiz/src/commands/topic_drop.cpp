@@ -16,6 +16,7 @@
 #include "bagwiz/io/bag_open.hpp"
 #include "bagwiz/io/topics.hpp"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
@@ -173,8 +174,29 @@ int run_topic_drop(const TopicDropArgs & args)
   }
 
   // Selectors were expanded before run() (see commands/topic_option.hpp), so
-  // args.topics is already the literal list of topics to remove.
+  // args.topics is already the literal list of topics to remove — the CLI's
+  // -t/--topics slot sets TopicSlotSpec::require_present, so every entry is
+  // supposed to already name a real topic by the time run() is reached.
   const std::unordered_set<std::string> drop(args.topics.begin(), args.topics.end());
+
+  // Precondition assert, not selector validation: require_present (above) is
+  // where "does this name a real topic" is supposed to be decided, once, for
+  // every command that opts in. run_topic_drop is also called directly from
+  // tests, bypassing that pass entirely, so this backstops the specific
+  // failure mode that motivated require_present in the first place — a
+  // name that reaches here without matching a real topic would otherwise
+  // silently drop nothing instead of erroring.
+  for (const auto & name : drop) {
+    if (std::find(topic_names.begin(), topic_names.end(), name) == topic_names.end()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "topic drop: internal precondition failed: '%s' is not a topic in %s; expansion should "
+        "have rejected this before run() was reached.",
+        name.c_str(), args.input_path.c_str());
+      return 1;
+    }
+  }
+
   if (drop.size() == topic_names.size()) {
     BAGWIZ_LOG_WARN(
       kLogger, "all %zu topic(s) matched; the output bag will contain no topics.",

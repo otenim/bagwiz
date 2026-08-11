@@ -8,6 +8,9 @@
 
 #include "bagwiz/commands/topic_drop.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 
@@ -202,16 +205,15 @@ TEST_F(TopicDropTest, DropInPlaceRewritesInput)
   EXPECT_EQ(result.at("/perception/objects"), 1);
 }
 
-// run_topic_drop() itself performs no existence check on its own (that was
-// deleted along with resolve_topic_patterns() in Task 5) — it trusts
-// args.topics is already validated. This test calls it directly, bypassing
-// that validation entirely, so a typo'd literal is a silent no-op here.
-// Through the real CLI this cannot happen: `-t/--topics` sets
-// TopicSlotSpec::require_present, so the expansion pass rejects an absent
-// literal before run() is ever reached — see bagwiz_topic_option_test,
-// RequirePresentRejectsAnAbsentLiteral and (for this exact command)
-// RequirePresentPreventsTopicKeepFromDestroyingTheBagInPlace.
-TEST_F(TopicDropTest, LiteralNotInBagDropsNothing)
+// Through the real CLI a typo'd literal can never reach run_topic_drop():
+// `-t/--topics` sets TopicSlotSpec::require_present, so the expansion pass
+// rejects it first (see bagwiz_topic_option_test, RequirePresentRejectsAn
+// AbsentLiteral and RequirePresentPreventsTopicKeepFromDestroyingTheBagIn
+// Place). run_topic_drop() is also called directly from tests, bypassing
+// that pass entirely, so it asserts the same precondition itself as a
+// backstop (see the comment above the loop in topic_drop.cpp) — this proves
+// that backstop actually fires rather than silently dropping nothing.
+TEST_F(TopicDropTest, LiteralNotInBagFailsPrecondition)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
@@ -221,13 +223,12 @@ TEST_F(TopicDropTest, LiteralNotInBagDropsNothing)
   args.topics = {"/does/not/exist"};
   args.output_path = out_path;
 
-  ASSERT_EQ(bagwiz::commands::run_topic_drop(args), 0);
+  EXPECT_EQ(bagwiz::commands::run_topic_drop(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(out_path));
 
-  const auto out = collect(out_path);
-  EXPECT_EQ(out.size(), 3U);
-  EXPECT_EQ(out.at("/sensing/camera"), 2);
-  EXPECT_EQ(out.at("/sensing/lidar"), 1);
-  EXPECT_EQ(out.at("/perception/objects"), 1);
+  // The input is left fully intact.
+  const auto in = collect(in_path);
+  EXPECT_EQ(in.size(), 3U);
 }
 
 TEST_F(TopicDropTest, EmptySelectorListFailsWithoutWriting)
@@ -342,6 +343,33 @@ TEST_F(TopicDropTest, PassthroughMatchesPipelineAndPreservesCompression)
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "ref" / "metadata.yaml").compression_format, "none");
   EXPECT_EQ(
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml").compression_format, "zstd");
+}
+
+// Exercises the real TopicCommand::configure_drop() — reached through the
+// process-wide command registry that topic.cpp's BAGWIZ_REGISTER_COMMAND
+// registrar populates — rather than a hand-mirrored copy of its wiring.
+// Deleting `.require_present = true` from topic.cpp's `drop` -t/--topics
+// declaration fails this test directly; it does not rest on a manual CLI run
+// staying correct.
+TEST(TopicDropCliWiring, TopicsFlagRequiresPresence)
+{
+  bagwiz::commands::Command * topic_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "topic") {
+      topic_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(topic_cmd, nullptr);
+
+  CLI::App app{"topic"};
+  topic_cmd->configure(app);
+
+  auto * drop_sub = app.get_subcommand_no_throw("drop");
+  ASSERT_NE(drop_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*drop_sub);
+  ASSERT_EQ(slots.size(), 1U);  // just -t/--topics
+  EXPECT_TRUE(slots[0].spec.require_present);
 }
 
 }  // namespace

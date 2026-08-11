@@ -8,6 +8,9 @@
 
 #include "bagwiz/commands/trim.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "trim_stamp.hpp"  // NOLINT(build/include_subdir) src-local shared header
@@ -1041,6 +1044,30 @@ TEST_F(TrimTest, PassthroughMatchesPipelineAndPreservesCompression)
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "ref" / "metadata.yaml").compression_format, "none");
   EXPECT_EQ(
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml").compression_format, "zstd");
+}
+
+// Exercises the real TrimCommand::configure() — reached through the
+// process-wide command registry that its BAGWIZ_REGISTER_COMMAND registrar
+// populates — rather than a hand-mirrored copy of its wiring. Deleting
+// `.require_present = true` from trim.cpp's --align declaration fails this
+// test directly; it does not rest on a manual CLI run staying correct.
+TEST(TrimCliWiring, AlignFlagRequiresPresence)
+{
+  bagwiz::commands::Command * trim_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "trim") {
+      trim_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(trim_cmd, nullptr);
+
+  CLI::App app{"trim"};
+  trim_cmd->configure(app);
+
+  const auto slots = bagwiz::commands::topic_slots_of(app);
+  ASSERT_EQ(slots.size(), 1U);  // just --align
+  EXPECT_TRUE(slots[0].spec.require_present);
 }
 
 }  // namespace

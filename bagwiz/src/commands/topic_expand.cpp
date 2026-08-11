@@ -216,6 +216,17 @@ bool topic_is_present(const std::vector<core::TopicEntry> & universe, const std:
   });
 }
 
+// The one error shape for "this selector produced nothing": an unmatched
+// glob and, on a require_present slot, an absent literal both funnel through
+// here so there is exactly one place that could ever grow a second shape.
+void log_selector_matched_nothing(
+  const CLI::App & app, const TopicSlot & slot, const std::string & value)
+{
+  BAGWIZ_LOG_ERROR(
+    kLogger, "%s: %s selector '%s' matched no topic", command_label(app).c_str(),
+    flag_label(*slot.option).c_str(), value.c_str());
+}
+
 // Expand one slot's values against `ctx.universe`, filtered by `ctx.allowed`.
 // Splits pair values at '=' before resolving so only the left half is a
 // selector, and expands one value at a time so each keeps its own right
@@ -257,9 +268,7 @@ std::optional<std::vector<ExpandedValue>> resolve_values(
       !resolved.unmatched.empty() ||
       (!from_glob && slot.spec.require_present && !topic_is_present(ctx.universe, selectors[i]));
     if (missing) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "%s: %s selector '%s' matched no topic", command_label(app).c_str(),
-        flag_label(*slot.option).c_str(), selectors[i].c_str());
+      log_selector_matched_nothing(app, slot, selectors[i]);
       return std::nullopt;
     }
     for (const auto & name : resolved.matched) {
@@ -321,9 +330,24 @@ bool expand_slot(
   }
 
   if (slot.spec.mode == TopicSelectorMode::kLiteral) {
+    // require_present applies uniformly across both modes: a kLiteral slot's
+    // value never goes through resolve_values() (there is nothing to expand),
+    // so the presence check has to happen here instead. The universe is only
+    // resolved when actually needed, since most kLiteral slots don't set the
+    // flag and resolve_context() can fail on a scope-configuration bug.
+    const std::optional<ResolutionContext> ctx =
+      slot.spec.require_present ? resolve_context(app, slot, bag_topics, expanded)
+                                : std::optional<ResolutionContext>{};
+    if (slot.spec.require_present && !ctx) {
+      return false;
+    }
     for (const auto & value : values) {
       if (contains_glob(value)) {
         return reject_glob(app, slot, value);
+      }
+      if (ctx && !topic_is_present(ctx->universe, value)) {
+        log_selector_matched_nothing(app, slot, value);
+        return false;
       }
     }
     return true;

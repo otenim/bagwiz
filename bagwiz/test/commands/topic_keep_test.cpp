@@ -8,6 +8,9 @@
 
 #include "bagwiz/commands/topic_keep.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 
@@ -204,17 +207,15 @@ TEST_F(TopicKeepTest, KeepInPlaceRewritesInput)
   EXPECT_EQ(result.size(), 1U);  // camera and objects dropped
 }
 
-// See TopicDropTest.LiteralNotInBagDropsNothing: run_topic_keep() itself
-// performs no existence check (it trusts args.topics is already validated),
-// so calling it directly bypasses that validation entirely. For `keep` a
-// no-op selector is far more consequential than for `drop` — nothing is
-// kept, so the output bag ends up empty — which is exactly why
-// TopicSlotSpec::require_present exists on `-t/--topics` for the real CLI:
-// see bagwiz_topic_option_test,
-// RequirePresentPreventsTopicKeepFromDestroyingTheBagInPlace, which proves a
-// typo'd literal is rejected before run() (and therefore before any writer,
-// in-place or otherwise) is ever reached.
-TEST_F(TopicKeepTest, LiteralNotInBagKeepsNothing)
+// Through the real CLI a typo'd literal can never reach run_topic_keep():
+// `-t/--topics` sets TopicSlotSpec::require_present, so the expansion pass
+// rejects it first (see bagwiz_topic_option_test,
+// RequirePresentPreventsTopicKeepFromDestroyingTheBagInPlace). run_topic_keep
+// is also called directly from tests, bypassing that pass entirely, so it
+// asserts the same precondition itself as a backstop (see the comment above
+// the loop in topic_keep.cpp) — this proves that backstop actually fires,
+// rather than silently emptying the bag the way it once did.
+TEST_F(TopicKeepTest, LiteralNotInBagFailsPrecondition)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
@@ -224,10 +225,12 @@ TEST_F(TopicKeepTest, LiteralNotInBagKeepsNothing)
   args.topics = {"/does/not/exist"};
   args.output_path = out_path;
 
-  ASSERT_EQ(bagwiz::commands::run_topic_keep(args), 0);
+  EXPECT_EQ(bagwiz::commands::run_topic_keep(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(out_path));
 
-  const auto out = collect(out_path);
-  EXPECT_TRUE(out.empty());
+  // The input is left fully intact.
+  const auto in = collect(in_path);
+  EXPECT_EQ(in.size(), 3U);
 }
 
 TEST_F(TopicKeepTest, EmptySelectorListFailsWithoutWriting)
@@ -346,6 +349,33 @@ TEST_F(TopicKeepTest, PassthroughMatchesPipelineAndPreservesCompression)
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "ref" / "metadata.yaml").compression_format, "none");
   EXPECT_EQ(
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml").compression_format, "zstd");
+}
+
+// Exercises the real TopicCommand::configure_keep() — reached through the
+// process-wide command registry that topic.cpp's BAGWIZ_REGISTER_COMMAND
+// registrar populates — rather than a hand-mirrored copy of its wiring.
+// Deleting `.require_present = true` from topic.cpp's `keep` -t/--topics
+// declaration fails this test directly; it does not rest on a manual CLI run
+// staying correct.
+TEST(TopicKeepCliWiring, TopicsFlagRequiresPresence)
+{
+  bagwiz::commands::Command * topic_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "topic") {
+      topic_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(topic_cmd, nullptr);
+
+  CLI::App app{"topic"};
+  topic_cmd->configure(app);
+
+  auto * keep_sub = app.get_subcommand_no_throw("keep");
+  ASSERT_NE(keep_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*keep_sub);
+  ASSERT_EQ(slots.size(), 1U);  // just -t/--topics
+  EXPECT_TRUE(slots[0].spec.require_present);
 }
 
 }  // namespace
