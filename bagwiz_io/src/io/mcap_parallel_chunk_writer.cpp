@@ -106,8 +106,8 @@ class ParallelChunkMcapWriter::Impl
 {
 public:
   Impl(
-    const std::filesystem::path & path, std::string compression, std::uint64_t chunk_size,
-    int num_threads)
+    const std::filesystem::path & path, std::string compression, mcap::CompressionLevel level,
+    std::uint64_t chunk_size, int num_threads)
   : compression_(std::move(compression)),
     chunk_size_(chunk_size),
     max_inflight_(static_cast<std::size_t>(std::max(num_threads, 1)) + 2)
@@ -128,7 +128,7 @@ public:
     // (A deque because mcap::ZStdWriter is neither copyable nor movable.)
     const int workers = std::max(num_threads, 1);
     for (int i = 0; i < workers; ++i) {
-      encoders_.emplace_back(mcap::CompressionLevel::Default, chunk_size_);
+      encoders_.emplace_back(level, chunk_size_);
     }
     workers_.reserve(static_cast<std::size_t>(workers));
     for (int i = 0; i < workers; ++i) {
@@ -577,9 +577,9 @@ private:
 };
 
 ParallelChunkMcapWriter::ParallelChunkMcapWriter(
-  const std::filesystem::path & path, std::string compression, std::uint64_t chunk_size,
-  int num_threads)
-: impl_(std::make_unique<Impl>(path, std::move(compression), chunk_size, num_threads))
+  const std::filesystem::path & path, std::string compression, mcap::CompressionLevel level,
+  std::uint64_t chunk_size, int num_threads)
+: impl_(std::make_unique<Impl>(path, std::move(compression), level, chunk_size, num_threads))
 {
 }
 

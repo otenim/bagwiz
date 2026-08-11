@@ -35,6 +35,13 @@ struct PcdUndistortArgs
   // --max-extrap-duration; per-side cap on the trajectory extrapolation,
   // parsed with core::parse_duration_ns (no unit = ms). Empty => 1s.
   std::optional<std::string> max_extrap_duration;
+  // --compression; mcap chunk codec for the output: "zstd", "lz4", or
+  // "none". Empty => the storage default (zstd). mcap outputs only.
+  std::optional<std::string> compression;
+  // --compression-level; encoder effort for the chosen (or default) codec:
+  // "fastest", "fast", "default", "slow", or "slowest". Empty => "default".
+  // Rejected together with --compression none.
+  std::optional<std::string> compression_level;
 };
 
 // Execute `bagwiz pcd undistort`. Returns a process exit code.

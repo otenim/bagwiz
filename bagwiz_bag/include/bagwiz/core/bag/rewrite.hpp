@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
 
 // The shared "-o vs in-place" dispatch every rewrite-style command
 // (topic drop/keep/rename, cam-info replace/recompute-p,
@@ -60,13 +61,17 @@ struct BagRewriteOptions
   // path's extension.
   bool inherit_output_format = false;
 
-  // Force mcap_compression = "none" on the writer options (both modes).
-  // Rewrite commands disable compression so a bag that is rewritten often
-  // does not pay the (de)compression cost each time; commands that want the
-  // storage default set this to false. This flag governs only the decoded
-  // rewrite pipeline: the chunk pass-through never opens a writer through
-  // these options and preserves the input's chunk compression instead.
-  bool disable_mcap_compression = true;
+  // Overrides for the writer's mcap chunk codec ("zstd", "lz4", "none") and
+  // encoder level ("fastest", "fast", "default", "slow", "slowest"), applied
+  // in both modes; an empty string keeps the storage default for that knob.
+  // The codec default forces "none": rewrite commands disable compression so
+  // a bag that is rewritten often does not pay the (de)compression cost each
+  // time; commands that want the storage default (or a user-chosen codec)
+  // override this. These knobs govern only the decoded rewrite pipeline: the
+  // chunk pass-through never opens a writer through these options and
+  // preserves the input's chunk compression instead.
+  std::string mcap_compression = "none";
+  std::string mcap_compression_level;
 };
 
 // The command's rewrite pass. Receives the writer factory chosen by the

@@ -22,11 +22,14 @@
 #include <rmw/serialized_message.h>
 #include <rmw/types.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -332,6 +335,17 @@ PcdUndistortArgs base_args(const std::filesystem::path & in, const std::filesyst
   a.output_path = out;
   a.overwrite = true;
   return a;
+}
+
+// True when `needle` appears verbatim in the raw bytes of the file at `path`.
+// Distinguishes an uncompressed mcap output (message payloads stored as-is)
+// from a compressed one without parsing mcap internals.
+bool file_contains(const std::filesystem::path & path, const std::vector<std::byte> & needle)
+{
+  std::ifstream f(path, std::ios::binary);
+  std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  const auto * n = reinterpret_cast<const char *>(needle.data());
+  return std::search(bytes.begin(), bytes.end(), n, n + needle.size()) != bytes.end();
 }
 
 // Typed-message CDR round-trip through the introspection typesupport (the
@@ -691,6 +705,98 @@ TEST_F(PcdUndistortTest, SyncAndParallelOutputsAreIdentical)
 
   auto par_args = base_args(in_, par_out);
   par_args.pcd_topics = {"/points_a", "/points_b"};
+  par_args.threads = 2;
+  ASSERT_EQ(run_pcd_undistort(par_args), 0);
+
+  EXPECT_EQ(read_raw_payloads(sync_out, "/points_a"), read_raw_payloads(par_out, "/points_a"));
+  EXPECT_EQ(read_raw_payloads(sync_out, "/points_b"), read_raw_payloads(par_out, "/points_b"));
+  EXPECT_EQ(read_raw_payloads(sync_out, "/other"), read_raw_payloads(par_out, "/other"));
+}
+
+// --compression selects the output's mcap chunk codec, defaulting to zstd.
+// Every codec round-trips to the same messages; the uncompressed output is
+// the one whose raw file bytes contain a deskewed payload verbatim.
+TEST_F(PcdUndistortTest, CompressionFlagSelectsOutputCodec)
+{
+  write_undistort_input(in_, /*with_time_field=*/true);
+
+  ASSERT_EQ(run_pcd_undistort(base_args(in_, out_)), 0);  // default: zstd
+  const auto want = read_raw_payloads(out_, "/points");
+  ASSERT_EQ(want.size(), 1u);
+
+  const auto none_out = tmp_ / "none.mcap";
+  auto none_args = base_args(in_, none_out);
+  none_args.compression = "none";
+  ASSERT_EQ(run_pcd_undistort(none_args), 0);
+  EXPECT_EQ(read_raw_payloads(none_out, "/points"), want);
+
+  const auto lz4_out = tmp_ / "lz4.mcap";
+  auto lz4_args = base_args(in_, lz4_out);
+  lz4_args.compression = "lz4";
+  ASSERT_EQ(run_pcd_undistort(lz4_args), 0);
+  EXPECT_EQ(read_raw_payloads(lz4_out, "/points"), want);
+
+  const auto & needle = want.front();
+  EXPECT_TRUE(file_contains(none_out, needle));
+  EXPECT_FALSE(file_contains(out_, needle));
+  EXPECT_FALSE(file_contains(lz4_out, needle));
+}
+
+// --compression-level without --compression applies to the default codec
+// (zstd); the run must succeed and still deskew correctly.
+TEST_F(PcdUndistortTest, CompressionLevelAppliesToDefaultCodec)
+{
+  write_undistort_input(in_, /*with_time_field=*/true);
+  auto a = base_args(in_, out_);
+  a.compression_level = "fastest";
+  ASSERT_EQ(run_pcd_undistort(a), 0);
+  const auto x = read_first_point_x(out_, "/points");
+  ASSERT_TRUE(x.has_value());
+  EXPECT_NEAR(*x, 1.0f, 1e-4f);
+}
+
+// Unknown codec / level values, --compression-level with none (there is no
+// level to pick), and a non-mcap output (the flag is mcap chunk compression)
+// must all fail fast.
+TEST_F(PcdUndistortTest, CompressionFlagRejectsInvalidCombinations)
+{
+  write_undistort_input(in_, /*with_time_field=*/true);
+
+  auto bad_codec = base_args(in_, out_);
+  bad_codec.compression = "brotli";
+  EXPECT_EQ(run_pcd_undistort(bad_codec), 1);
+
+  auto bad_level = base_args(in_, tmp_ / "o2.mcap");
+  bad_level.compression_level = "turbo";
+  EXPECT_EQ(run_pcd_undistort(bad_level), 1);
+
+  auto level_with_none = base_args(in_, tmp_ / "o3.mcap");
+  level_with_none.compression = "none";
+  level_with_none.compression_level = "fastest";
+  EXPECT_EQ(run_pcd_undistort(level_with_none), 1);
+
+  auto db3_out = base_args(in_, tmp_ / "o4.db3");
+  db3_out.compression = "lz4";
+  EXPECT_EQ(run_pcd_undistort(db3_out), 1);
+}
+
+// The parallel mcap write path's byte-identity across thread counts must
+// hold for lz4 exactly as it does for the default zstd.
+TEST_F(PcdUndistortTest, SyncAndParallelOutputsAreIdenticalWithLz4)
+{
+  write_two_pcd_topics_input(in_);
+  const auto sync_out = tmp_ / "sync.mcap";
+  const auto par_out = tmp_ / "par.mcap";
+
+  auto sync_args = base_args(in_, sync_out);
+  sync_args.pcd_topics = {"/points_a", "/points_b"};
+  sync_args.compression = "lz4";
+  sync_args.threads = 1;
+  ASSERT_EQ(run_pcd_undistort(sync_args), 0);
+
+  auto par_args = base_args(in_, par_out);
+  par_args.pcd_topics = {"/points_a", "/points_b"};
+  par_args.compression = "lz4";
   par_args.threads = 2;
   ASSERT_EQ(run_pcd_undistort(par_args), 0);
 

@@ -237,7 +237,13 @@ struct CreateOptions
   std::optional<int64_t> split_duration_ns;
 
   // MCAP-specific
-  std::string mcap_compression = "zstd";  // "", "lz4", "zstd"
+  std::string mcap_compression = "zstd";  // "", "none", "lz4", "zstd"
+  // Encoder effort for the chunk codec: "fastest", "fast", "default",
+  // "slow", or "slowest" (mcap::CompressionLevel names). Empty selects the
+  // codec-appropriate default — "default" for zstd, but "fastest" for lz4,
+  // whose "default" mcap maps onto the far slower LZ4-HC mode. Meaningless
+  // (and ignored) when compression is off.
+  std::string mcap_compression_level;
   // 1 MiB keeps libmcap's chunk staging buffer L2-resident: every payload is
   // memcpy'd into that buffer and read back by the chunk flush, and once the
   // buffer outgrows the per-core cache both passes round-trip DRAM instead

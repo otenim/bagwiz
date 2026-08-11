@@ -99,8 +99,8 @@ int write_compressible_replacement_pass(const bagwiz::io::WriterFactory & open_w
 
 // The compression recorded on each chunk of an MCAP file, deduplicated. An
 // empty string is mcap::Compression::None — that is what the writer emits when
-// CreateOptions::mcap_compression is "none", so it is the value a
-// disable_mcap_compression rewrite must produce.
+// CreateOptions::mcap_compression is "none", so it is the value a rewrite
+// with the default mcap_compression = "none" override must produce.
 std::set<std::string> mcap_chunk_compressions(const std::filesystem::path & path)
 {
   mcap::McapReader reader;
@@ -141,7 +141,7 @@ protected:
     options_.format_unknown_error = "test: could not detect storage format of input bag '%s'.";
     options_.pass_failed_error = "test: pass failed; aborting in-place swap";
     options_.inherit_output_format = true;
-    options_.disable_mcap_compression = true;
+    options_.mcap_compression = "none";
   }
 
   void TearDown() override
@@ -354,18 +354,20 @@ TEST_F(RewriteTest, InPlaceFormatAutoGuardRejectsNonBag)
 // MCAP compression wiring.
 //
 // Every rewrite command drives the writer through run_bag_rewrite, and all of
-// them but one take the default disable_mcap_compression = true, which pins
-// mcap_compression to "none". `pcd undistort` is the sole opt-out: it sets the
-// flag false so the writer keeps its zstd default. The option is easy to flip
-// by accident and the effect is invisible in a bag's topics/messages, so these
-// tests read the produced MCAP's chunk compression directly.
+// them but one take the default mcap_compression = "none" override. `pcd
+// undistort` is the sole opt-out: it clears the override (or forwards its
+// --compression flag) so the writer keeps its zstd default or the user's
+// codec. The option is easy to flip by accident and the effect is invisible
+// in a bag's topics/messages, so these tests read the produced MCAP's chunk
+// compression directly.
 // ---------------------------------------------------------------------------
 
-TEST(BagRewriteOptionsDefaults, DisableMcapCompressionDefaultsToTrue)
+TEST(BagRewriteOptionsDefaults, McapCompressionDefaultsToNone)
 {
   // Every rewrite command except `pcd undistort` relies on this default, so a
   // new command that never touches the field still writes uncompressed.
-  EXPECT_TRUE(bagwiz::core::BagRewriteOptions{}.disable_mcap_compression);
+  EXPECT_EQ(bagwiz::core::BagRewriteOptions{}.mcap_compression, "none");
+  EXPECT_TRUE(bagwiz::core::BagRewriteOptions{}.mcap_compression_level.empty());
 }
 
 TEST_F(RewriteTest, OutputModeDisablingCompressionWritesUncompressedChunks)
@@ -373,7 +375,7 @@ TEST_F(RewriteTest, OutputModeDisablingCompressionWritesUncompressedChunks)
   const auto input = tmp_dir_ / "input.mcap";
   const auto output = tmp_dir_ / "output.mcap";
   seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
-  ASSERT_TRUE(options_.disable_mcap_compression);
+  ASSERT_EQ(options_.mcap_compression, "none");
 
   ASSERT_EQ(
     bagwiz::core::run_bag_rewrite(
@@ -388,8 +390,9 @@ TEST_F(RewriteTest, OutputModeKeepingCompressionWritesZstdChunks)
   const auto input = tmp_dir_ / "input.mcap";
   const auto output = tmp_dir_ / "output.mcap";
   seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
-  // The `pcd undistort` configuration: leave the writer's zstd default alone.
-  options_.disable_mcap_compression = false;
+  // The `pcd undistort` default configuration: clear the override and leave
+  // the writer's zstd default alone.
+  options_.mcap_compression = "";
 
   ASSERT_EQ(
     bagwiz::core::run_bag_rewrite(
@@ -399,11 +402,29 @@ TEST_F(RewriteTest, OutputModeKeepingCompressionWritesZstdChunks)
   EXPECT_EQ(mcap_chunk_compressions(output), (std::set<std::string>{"zstd"}));
 }
 
+TEST_F(RewriteTest, OutputModeCodecOverrideWritesLz4Chunks)
+{
+  const auto input = tmp_dir_ / "input.mcap";
+  const auto output = tmp_dir_ / "output.mcap";
+  seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
+  // A user-chosen codec (pcd undistort --compression lz4) flows through the
+  // same override; the level accompanies it.
+  options_.mcap_compression = "lz4";
+  options_.mcap_compression_level = "fastest";
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  EXPECT_EQ(mcap_chunk_compressions(output), (std::set<std::string>{"lz4"}));
+}
+
 TEST_F(RewriteTest, InPlaceDisablingCompressionWritesUncompressedChunks)
 {
   const auto input = tmp_dir_ / "input.mcap";
   seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
-  ASSERT_TRUE(options_.disable_mcap_compression);
+  ASSERT_EQ(options_.mcap_compression, "none");
 
   ASSERT_EQ(
     bagwiz::core::run_bag_rewrite(
@@ -417,7 +438,7 @@ TEST_F(RewriteTest, InPlaceKeepingCompressionWritesZstdChunks)
 {
   const auto input = tmp_dir_ / "input.mcap";
   seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
-  options_.disable_mcap_compression = false;
+  options_.mcap_compression = "";
 
   ASSERT_EQ(
     bagwiz::core::run_bag_rewrite(
