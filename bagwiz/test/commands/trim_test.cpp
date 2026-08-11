@@ -367,11 +367,14 @@ TEST_F(TrimTest, AlignToMultipleTopicsUsesCommonSpan)
   EXPECT_EQ(out.at("/fast"), (std::vector<std::int64_t>{kT0 + kSecond, kT0 + 2 * kSecond}));
 }
 
-// A literal (unglobbed) --align value passes through the expansion pass
-// unvalidated (see commands/topic_option.hpp), so a name absent from the bag
-// still reaches resolve_align_window() unchanged. It fails there anyway: a
-// topic with no messages in the filtered scan — absent or merely
-// empty, both look the same to the span map — trips the same
+// run_trim() called directly bypasses the CLI's expansion pass entirely, so
+// this does not exercise --align's TopicSlotSpec::require_present (that only
+// runs from commands/topic_expand.cpp, reached via expand_topic_selectors()
+// in main.cpp — see bagwiz_topic_option_test's
+// RequirePresentRejectsAnAbsentLiteral for that layer). resolve_align_window()
+// itself has no independent presence check either, but it fails anyway for a
+// different reason: a topic with no messages in the filtered scan — absent or
+// merely empty, both look the same to the span map — trips the same
 // "topic '%s' has no messages" check as AlignTopicWithNoMessagesFails below.
 TEST_F(TrimTest, AlignUnmatchedSelectorFails)
 {

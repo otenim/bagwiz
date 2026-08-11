@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -301,6 +302,8 @@ TEST_F(ExpandTopicSelectorsTest, MixesALiteralAndANonOverlappingGlobInOneSlot)
   EXPECT_EQ(pcd, (std::vector<std::string>{"/lidar/right/points", "/lidar/left/points"}));
 }
 
+// Default TopicSlotSpec::require_present is false: contrast with
+// RequirePresentRejectsAnAbsentLiteral below, which sets it.
 TEST_F(ExpandTopicSelectorsTest, LeavesALiteralUntouchedEvenWhenAbsentFromTheBag)
 {
   const auto bag = make_bag(tmp_dir_ / "bag");
@@ -318,6 +321,90 @@ TEST_F(ExpandTopicSelectorsTest, LeavesALiteralUntouchedEvenWhenAbsentFromTheBag
   ASSERT_TRUE(expand_topic_selectors(app));
 
   EXPECT_EQ(pcd, (std::vector<std::string>{"/not/here"}));
+}
+
+// require_present restores, for a literal, the same "matched no topic"
+// rejection a non-matching glob already gets — this is what topic drop -t,
+// topic keep -t, and trim --align set it for (see TopicSlotSpec's doc comment
+// and RequirePresentPreventsTopicKeepFromDestroyingTheBagInPlace below).
+TEST_F(ExpandTopicSelectorsTest, RequirePresentRejectsAnAbsentLiteral)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type, .require_present = true});
+
+  app.parse(std::vector<std::string>{"/not/here", "--pcd", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+}
+
+// require_present's check is presence-only: it must not reuse allowed_types,
+// because that would block a wrongly-typed literal from ever reaching the
+// command's own (more specific) type error. /camera/image_raw exists in
+// make_bag() but is sensor_msgs/msg/Image, not PointCloud2 — it must still
+// pass through untouched despite both flags being set together.
+TEST_F(ExpandTopicSelectorsTest, RequirePresentIgnoresAllowedTypesForPresenceOnly)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type, .require_present = true});
+
+  app.parse(std::vector<std::string>{"/camera/image_raw", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/camera/image_raw"}));
+}
+
+// Regression test for the incident that prompted require_present: before this
+// flag existed, `topic keep -i bag.mcap -t /typo` silently rewrote the bag in
+// place with zero topics, exit 0, no warning — the presence check that used
+// to live in the deleted resolve_topic_patterns() call (Task 5) had no
+// replacement. This mirrors TopicCommand::configure_keep()'s wiring
+// (commands/topic.cpp) closely enough that a regression here is also a
+// regression in the real `topic keep` subcommand.
+TEST_F(ExpandTopicSelectorsTest, RequirePresentPreventsTopicKeepFromDestroyingTheBagInPlace)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("keep", "");
+  std::filesystem::path input;
+  std::vector<std::string> topics;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "")->check(CLI::ExistingPath);
+  add_topic_option(*sub, "-t,--topics", topics, "Topics.", TopicSlotSpec{.require_present = true});
+
+  // Equivalent to `bagwiz topic keep -i <bag> -t /typo` — no -o/--output, the
+  // in-place mode that would otherwise overwrite `bag` itself.
+  app.parse(std::vector<std::string>{"/typo", "-t", bag.string(), "-i", "keep"});
+
+  // Mirrors main.cpp's real gate: run() — and therefore any writer, in-place
+  // or otherwise — is only ever reached when expansion succeeds.
+  ASSERT_FALSE(expand_topic_selectors(app));
+
+  // The bag on disk is exactly as make_bag() left it: expansion failing means
+  // the command's run() is never invoked, so no writer was ever opened.
+  auto reader = bagwiz::io::open_read(bag);
+  std::vector<std::string> names;
+  for (const auto & t : reader->topics()) {
+    names.push_back(t.name);
+  }
+  std::sort(names.begin(), names.end());
+  EXPECT_EQ(
+    names,
+    (std::vector<std::string>{"/camera/image_raw", "/lidar/left/points", "/lidar/right/points"}));
 }
 
 TEST_F(ExpandTopicSelectorsTest, RejectsAGlobInALiteralSlot)

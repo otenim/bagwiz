@@ -14,6 +14,7 @@
 #include "bagwiz/core/base/topic_match.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <filesystem>
@@ -204,6 +205,17 @@ struct ExpandedValue
   bool from_glob{false};
 };
 
+// True when `name` names an entry in `universe`, ignoring type — the
+// presence check TopicSlotSpec::require_present asks for is deliberately
+// blind to allowed_types, so a wrongly-typed literal still reaches the
+// command and gets that command's own (more specific) type error.
+bool topic_is_present(const std::vector<core::TopicEntry> & universe, const std::string & name)
+{
+  return std::any_of(universe.begin(), universe.end(), [&name](const core::TopicEntry & entry) {
+    return entry.name == name;
+  });
+}
+
 // Expand one slot's values against `ctx.universe`, filtered by `ctx.allowed`.
 // Splits pair values at '=' before resolving so only the left half is a
 // selector, and expands one value at a time so each keeps its own right
@@ -237,7 +249,14 @@ std::optional<std::vector<ExpandedValue>> resolve_values(
     const bool from_glob = contains_glob(selectors[i]);
     const std::vector<std::string> one{selectors[i]};
     const auto resolved = core::resolve_topic_selectors(one, ctx.universe, ctx.allowed);
-    if (!resolved.unmatched.empty()) {
+    // A glob that matched nothing is already in resolved.unmatched. A literal
+    // is always copied through unvalidated by resolve_topic_selectors (see
+    // topic_match.hpp), so require_present slots re-check its presence here —
+    // same error, same shape, whether the selector was a literal or a glob.
+    const bool missing =
+      !resolved.unmatched.empty() ||
+      (!from_glob && slot.spec.require_present && !topic_is_present(ctx.universe, selectors[i]));
+    if (missing) {
       BAGWIZ_LOG_ERROR(
         kLogger, "%s: %s selector '%s' matched no topic", command_label(app).c_str(),
         flag_label(*slot.option).c_str(), selectors[i].c_str());

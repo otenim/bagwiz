@@ -64,6 +64,22 @@ struct TopicSlotSpec
   // Replaces the default kLiteral rejection message where the reason is not
   // self-evident from the flag alone.
   std::string_view reject_reason{};
+
+  // When true, every resolved value must name a topic in the resolution
+  // universe; an absent one is an error in the same "selector matched no
+  // topic" shape a non-matching glob produces. The check is presence-only and
+  // ignores allowed_types, so a wrongly-typed literal still reaches the
+  // command and still gets that command's type error.
+  //
+  // Set it ONLY on a slot whose command has no presence check of its own.
+  // Most commands do (generate video --pcd reports "pcd topic '…' not found",
+  // map slam --color reports "Topic '…' is not present in …"), and theirs are
+  // more specific. The exceptions are topic drop -t, topic keep -t, and
+  // trim --align, whose presence check WAS resolve_topic_patterns()'s
+  // unmatched reporting — delete that without this flag and
+  // `topic keep -i bag.mcap -t /typo` rewrites the bag in place with nothing
+  // in it, exit 0, no warning.
+  bool require_present{false};
 };
 
 // A registered slot. Exactly one of `multi_target` / `single_target` is set.

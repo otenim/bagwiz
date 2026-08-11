@@ -202,12 +202,15 @@ TEST_F(TopicDropTest, DropInPlaceRewritesInput)
   EXPECT_EQ(result.at("/perception/objects"), 1);
 }
 
-// A '*' glob that matches no topic is rejected before run() (see
-// bagwiz_topic_option_test, FailsWhenAGlobMatchesNothing), but a literal
-// passes through the expansion pass unvalidated (see
-// LeavesALiteralUntouchedEvenWhenAbsentFromTheBag in the same file), so
-// run_topic_drop() itself no longer checks that a literal names an existing
-// topic. A typo'd literal is therefore a silent no-op, not an error.
+// run_topic_drop() itself performs no existence check on its own (that was
+// deleted along with resolve_topic_patterns() in Task 5) — it trusts
+// args.topics is already validated. This test calls it directly, bypassing
+// that validation entirely, so a typo'd literal is a silent no-op here.
+// Through the real CLI this cannot happen: `-t/--topics` sets
+// TopicSlotSpec::require_present, so the expansion pass rejects an absent
+// literal before run() is ever reached — see bagwiz_topic_option_test,
+// RequirePresentRejectsAnAbsentLiteral and (for this exact command)
+// RequirePresentPreventsTopicKeepFromDestroyingTheBagInPlace.
 TEST_F(TopicDropTest, LiteralNotInBagDropsNothing)
 {
   const auto in_path = build_input(tmp_dir_);

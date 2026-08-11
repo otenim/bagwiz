@@ -83,7 +83,7 @@ private:
     add_topic_option(
       *sub, "-t,--topics", drop_args_.topics,
       "Topic selector(s) to remove. A literal topic name or a '*' glob. Repeat for several.",
-      TopicSlotSpec{})
+      TopicSlotSpec{.require_present = true})
       ->required();
     sub->add_option(
       "-o,--output", drop_args_.output_path,
@@ -108,7 +108,7 @@ private:
     add_topic_option(
       *sub, "-t,--topics", keep_args_.topics,
       "Topic selector(s) to keep. A literal topic name or a '*' glob. Repeat for several.",
-      TopicSlotSpec{})
+      TopicSlotSpec{.require_present = true})
       ->required();
     sub->add_option(
       "-o,--output", keep_args_.output_path,

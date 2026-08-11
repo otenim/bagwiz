@@ -204,12 +204,16 @@ TEST_F(TopicKeepTest, KeepInPlaceRewritesInput)
   EXPECT_EQ(result.size(), 1U);  // camera and objects dropped
 }
 
-// See TopicDropTest.LiteralNotInBagDropsNothing: run_topic_keep() no longer
-// checks that a literal names an existing topic (only a '*' glob that
-// matches nothing is rejected, before run() — see bagwiz_topic_option_test,
-// FailsWhenAGlobMatchesNothing). For `keep` this is more consequential than
-// for `drop`: a typo'd literal matches nothing, so nothing is kept and the
-// output bag ends up empty.
+// See TopicDropTest.LiteralNotInBagDropsNothing: run_topic_keep() itself
+// performs no existence check (it trusts args.topics is already validated),
+// so calling it directly bypasses that validation entirely. For `keep` a
+// no-op selector is far more consequential than for `drop` — nothing is
+// kept, so the output bag ends up empty — which is exactly why
+// TopicSlotSpec::require_present exists on `-t/--topics` for the real CLI:
+// see bagwiz_topic_option_test,
+// RequirePresentPreventsTopicKeepFromDestroyingTheBagInPlace, which proves a
+// typo'd literal is rejected before run() (and therefore before any writer,
+// in-place or otherwise) is ever reached.
 TEST_F(TopicKeepTest, LiteralNotInBagKeepsNothing)
 {
   const auto in_path = build_input(tmp_dir_);

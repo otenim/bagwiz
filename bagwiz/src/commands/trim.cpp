@@ -695,7 +695,7 @@ public:
       app, "--align", args_.align,
       "Trim to the common time span of these topics (latest first message to earliest last "
       "message, both included). Literal names or '*' globs.",
-      TopicSlotSpec{});
+      TopicSlotSpec{.require_present = true});
     app
       .add_option(
         "--stamp", args_.stamp,
