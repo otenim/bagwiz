@@ -30,7 +30,7 @@ struct PcdUndistortArgs
   std::optional<std::string> of_frame;   // --of;  empty => "base_link"
   std::optional<std::filesystem::path> output_path;  // -o; empty => in-place
   bool overwrite = false;                            // -w
-  std::optional<int> threads;  // -j,--threads; omit => 8, 0 => hardware concurrency, 1 => sync
+  std::optional<int> threads;  // -j,--threads; omit/0 => hardware concurrency, 1 => sync
   bool no_extrap = false;      // --no-extrap; disable trajectory extrapolation
   // --max-extrap-duration; per-side cap on the trajectory extrapolation,
   // parsed with core::parse_duration_ns (no unit = ms). Empty => 1s.

@@ -17,8 +17,8 @@ namespace bagwiz::commands
 
 // Worker count for a parallel pass: --threads, clamped to the hardware
 // concurrency when that is known. A non-positive value (0 = "auto") resolves
-// to the hardware concurrency (1 when unknown); the CLI default of 8 is
-// applied by the caller before this function sees the value.
+// to the hardware concurrency (1 when unknown); each caller applies its own
+// CLI default before this function sees the value.
 [[nodiscard]] inline int resolve_num_threads(const int requested, const unsigned int hardware)
 {
   int num_threads = (requested <= 0) ? static_cast<int>(hardware != 0u ? hardware : 1u) : requested;
