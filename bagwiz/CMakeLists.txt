@@ -317,12 +317,39 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_help_formatter_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_help_formatter_test ${bagwiz_test_libs} CLI11::CLI11)
 
+  # topic_option_test.cpp covers registration/store only (add_topic_option(),
+  # set_topic_input(), the StoreGuard) and needs no bag, so it links
+  # topic_option.cpp alone. The expansion-pass tests (which do build real MCAP
+  # fixtures and need topic_expand.cpp too) used to live in this same file;
+  # they were split out, once past this project's 800-line file guideline,
+  # into the two targets below. All three share
+  # test/commands/topic_expand_test_util.hpp for its bag-building helpers, but
+  # that header needs no target of its own.
   ament_add_gtest(bagwiz_topic_option_test
     test/commands/topic_option_test.cpp
-    src/commands/topic_option.cpp
-    src/commands/topic_expand.cpp)
+    src/commands/topic_option.cpp)
   target_include_directories(bagwiz_topic_option_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_topic_option_test ${bagwiz_test_libs} CLI11::CLI11)
+
+  # Independent-slot expansion behavior: glob/literal/require_present/reject/
+  # dedupe and the declaration-bug guards. See topic_expand_test.cpp's header
+  # comment for the split rationale.
+  ament_add_gtest(bagwiz_topic_expand_test
+    test/commands/topic_expand_test.cpp
+    src/commands/topic_option.cpp
+    src/commands/topic_expand.cpp)
+  target_include_directories(bagwiz_topic_expand_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_topic_expand_test ${bagwiz_test_libs} CLI11::CLI11)
+
+  # Cross-slot expansion behavior: pair_value and scope, including the
+  # optional-target overload's interaction with both.
+  ament_add_gtest(bagwiz_topic_expand_pair_scope_test
+    test/commands/topic_expand_pair_scope_test.cpp
+    src/commands/topic_option.cpp
+    src/commands/topic_expand.cpp)
+  target_include_directories(
+    bagwiz_topic_expand_pair_scope_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_topic_expand_pair_scope_test ${bagwiz_test_libs} CLI11::CLI11)
 
   ament_add_gtest(bagwiz_parse_error_test
     test/commands/parse_error_test.cpp
