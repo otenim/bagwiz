@@ -10,6 +10,8 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/map_slam.hpp"
 #include "bagwiz/commands/map_viewer.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 
 #include <string_view>
@@ -71,6 +73,7 @@ private:
     sub->add_option("-i,--input", slam_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(*sub, slam_args_.input_path);
     sub->add_option("--pcd", slam_args_.cloud_topic, "PointCloud2 topic to run SLAM on.")
       ->required();
     sub
@@ -87,16 +90,17 @@ private:
       "Optional NavSatFix topic; adds GNSS global constraints during global mapping "
       "(horizontal translation priors on submap poses) to curb drift. The antenna "
       "lever-arm is resolved from the bag's static TF (a missing TF only warns).");
-    auto * color_opt = sub->add_option(
-      "--color", slam_args_.color_topics,
+    auto * color_opt = add_topic_option(
+      *sub, "--color", slam_args_.color_topics,
       "Camera image topic(s) (sensor_msgs/msg/Image or CompressedImage) to colorize the "
-      "map from; list several after one flag and/or repeat the flag. Requires --pcd "
-      "(colorization needs the LiDAR map and its occluder geometry). After the global "
-      "optimization, map points are colorized from each camera's images and map.pcd "
-      "gains an rgb field. Intrinsics come from each camera's CameraInfo topic (see "
+      "map from; a literal name or a '*' glob. List several after one flag and/or repeat the "
+      "flag. Requires --pcd (colorization needs the LiDAR map and its occluder geometry). "
+      "After the global optimization, map points are colorized from each camera's images and "
+      "map.pcd gains an rgb field. Intrinsics come from each camera's CameraInfo topic (see "
       "--cam-info); each camera extrinsic is resolved from the bag's static TF (errors "
       "if that chain is absent). Images are assumed raw (unrectified). A topic listed "
-      "more than once is an error.");
+      "more than once is an error.",
+      TopicSlotSpec{.allowed_types = kImageTopicTypes});
     sub->add_option(
       "--cam-info", slam_args_.camera_info_overrides,
       "Explicit CameraInfo topic per --color camera, as <image_topic>=<info_topic> "

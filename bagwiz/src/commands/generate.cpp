@@ -9,6 +9,8 @@
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/generate_video.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
@@ -68,6 +70,7 @@ private:
     sub->add_option("-i,--input", video_args_.input_path, "Input ROS 2 rosbag (file or directory).")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(*sub, video_args_.input_path);
     sub
       ->add_option(
         "-t,--topic", video_args_.topic,
@@ -105,12 +108,12 @@ private:
         "1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them.")
       ->default_val(1.0f)
       ->check(CLI::Range(0.01f, 10.0f));
-    sub
-      ->add_option(
-        "--pcd", video_args_.pointcloud_topics,
-        "PointCloud2 topic(s) to project onto each frame. Repeatable. Implies distortion "
-        "correction and requires a CameraInfo topic and a TF chain from each cloud frame "
-        "to the camera frame.")
+    add_topic_option(
+      *sub, "--pcd", video_args_.pointcloud_topics,
+      "PointCloud2 topic(s) to project onto each frame; a literal name or a '*' glob. "
+      "Repeatable. Implies distortion correction and requires a CameraInfo topic and a TF chain "
+      "from each cloud frame to the camera frame.",
+      TopicSlotSpec{.allowed_types = kPointCloud2Type})
       ->check([](const std::string & topic) {
         if (topic.empty()) {
           return std::string{"pcd topic must not be empty"};

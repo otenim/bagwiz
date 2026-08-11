@@ -10,6 +10,8 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/pcd_concat.hpp"
 #include "bagwiz/commands/pcd_undistort.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 
 #include <string_view>
@@ -124,6 +126,7 @@ private:
     sub->add_option("-i,--input", undistort_args_.input_path, "Input bag (file or directory).")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(*sub, undistort_args_.input_path);
     auto * pose_opt = sub->add_option(
       "--pose", undistort_args_.pose_topic,
       "Self-position topic (TFMessage / Odometry / PoseStamped / "
@@ -136,9 +139,10 @@ private:
         "Twist has no header: its samples are stamped with the bag's log time and assumed to be "
         "expressed in the --of frame.")
       ->excludes(pose_opt);
-    sub
-      ->add_option(
-        "--pcd", undistort_args_.pcd_topics, "PointCloud2 topic(s) to deskew (repeatable).")
+    add_topic_option(
+      *sub, "--pcd", undistort_args_.pcd_topics,
+      "PointCloud2 topic(s) to deskew; a literal name or a '*' glob (repeatable).",
+      TopicSlotSpec{.allowed_types = kPointCloud2Type})
       ->required()
       ->expected(-1);
     sub->add_option("--ref", undistort_args_.ref_frame, "Reference frame (default: map).");

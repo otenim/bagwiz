@@ -633,3 +633,26 @@ TEST_F(ExpandTopicSelectorsTest, DedupeSkipsGlobDuplicateOfAGlob)
 
   EXPECT_EQ(topics, (std::vector<std::string>{"/a", "/a1", "/a2"}));
 }
+
+// Proves a type-filtered glob on an image-typed slot (the shape `tf tree`,
+// `cam-info replace`/`recompute-p`, `generate video --pcd`, `pcd undistort
+// --pcd`, and `map slam --color` all now share) matches only topics of the
+// declared type, ignoring the bag's other PointCloud2 topics.
+TEST_F(ExpandTopicSelectorsTest, ImageSlotGlobPicksOnlyImageTopics)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> color;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--color", color, "Cameras.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kImageTopicTypes});
+
+  app.parse(std::vector<std::string>{"*", "--color", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(color, (std::vector<std::string>{"/camera/image_raw"}));
+}
