@@ -74,16 +74,21 @@ private:
     sub->add_option("-i,--input", concat_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(*sub, concat_args_.input_path);
     sub
       ->add_option(
         "-t,--topic", concat_args_.output_topic, "Name of the new concatenated PointCloud2 topic")
       ->required();
-    sub
-      ->add_option(
-        "--pcd", concat_args_.pcd_topics,
-        "PointCloud2 topics to concatenate (2 or more). Concatenation order follows this list.")
-      ->required()
-      ->expected(-1);
+    auto * pcd_opt =
+      add_topic_option(
+        *sub, "--pcd", concat_args_.pcd_topics,
+        "PointCloud2 topics to concatenate (2 or more); each a literal name or a '*' glob. "
+        "Concatenation order follows this list, and a glob contributes its matches in "
+        "topic-name order. The first topic in the resulting list is the time-matching "
+        "reference.",
+        TopicSlotSpec{.allowed_types = kPointCloud2Type})
+        ->required()
+        ->expected(-1);
     sub->add_option(
       "--frame", concat_args_.frame,
       "Target frame all clouds are transformed into. Default: base_link. Required when the "
@@ -96,11 +101,14 @@ private:
       "Nearest-match tolerance for pairing the other topics to the first --pcd topic. "
       "Takes an optional unit ns/us/ms/s (no unit = ms), e.g. 50ms. "
       "Default: half the first topic's median period (50 ms when that cannot be measured).");
-    sub->add_option(
-      "--stamp-offset", concat_args_.stamp_offsets,
+    add_topic_option(
+      *sub, "--stamp-offset", concat_args_.stamp_offsets,
       "Per-topic matching offset as topic=value, added to header.stamp for MATCHING ONLY "
-      "(the real stamp and per-point times are never rewritten). Value takes an optional unit "
-      "ns/us/ms/s (no unit = ms), e.g. '/lidar/left/points=50ms'. Repeatable.");
+      "(the real stamp and per-point times are never rewritten). <topic> is a literal name or "
+      "a '*' glob over the --pcd topics; when several entries match one topic the last wins. "
+      "Value takes an optional unit ns/us/ms/s (no unit = ms), e.g. "
+      "'/lidar/left/points=50ms'. Repeatable.",
+      TopicSlotSpec{.pair_value = true, .scope = pcd_opt});
     sub->add_flag(
       "--drop-inputs", concat_args_.drop_inputs,
       "Drop the source --pcd topics from the output (default: keep them).");

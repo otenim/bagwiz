@@ -8,6 +8,9 @@
 
 #include "bagwiz/commands/pcd_concat.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
@@ -356,4 +359,40 @@ TEST_F(PcdConcatTest, ParallelDropInputsPreservesCopyThrough)
   EXPECT_FALSE(read_topic(out, "/front").present);
   EXPECT_FALSE(read_topic(out, "/rear").present);
   EXPECT_EQ(read_raw_payloads(out, "/other"), read_raw_payloads(in, "/other"));
+}
+
+// Exercises the real PcdCommand::configure_concat() — reached through the
+// process-wide command registry that pcd.cpp's BAGWIZ_REGISTER_COMMAND
+// registrar populates — rather than a hand-mirrored copy of its wiring.
+// Reordering --stamp-offset before --pcd, or dropping `.scope = pcd_opt`
+// from pcd.cpp's declaration, fails this test directly; it does not rest on
+// a manual CLI run staying correct. `pcd concat` is the mechanism's first
+// real `scope` user, so this is also the first test that would catch a
+// future edit silently losing it.
+TEST(PcdConcatCliWiring, StampOffsetIsScopedToThePcdOptionInDeclarationOrder)
+{
+  bagwiz::commands::Command * pcd_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "pcd") {
+      pcd_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(pcd_cmd, nullptr);
+
+  CLI::App app{"pcd"};
+  pcd_cmd->configure(app);
+
+  auto * concat_sub = app.get_subcommand_no_throw("concat");
+  ASSERT_NE(concat_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*concat_sub);
+  ASSERT_EQ(slots.size(), 2U);  // --pcd then --stamp-offset, in declaration order
+
+  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"pcd"}));
+  EXPECT_EQ(slots[0].spec.scope, nullptr);
+  EXPECT_TRUE(slots[0].option->get_required());
+
+  EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"stamp-offset"}));
+  EXPECT_TRUE(slots[1].spec.pair_value);
+  EXPECT_EQ(slots[1].spec.scope, slots[0].option);
 }

@@ -656,3 +656,92 @@ TEST_F(ExpandTopicSelectorsTest, ImageSlotGlobPicksOnlyImageTopics)
 
   EXPECT_EQ(color, (std::vector<std::string>{"/camera/image_raw"}));
 }
+
+// '*' on --stamp-offset must resolve against the --pcd selection, not the
+// bag: a cloud that was not selected for concatenation is not addressable.
+// Mirrors pcd.cpp's real `pcd concat` declaration exactly — unlike
+// ScopedSlotResolvesAgainstGoverningResultIgnoringItsOwnTypeFilter above,
+// --stamp-offset sets no allowed_types of its own, the same as the
+// production TopicSlotSpec.
+TEST_F(ExpandTopicSelectorsTest, ScopedGlobDoesNotReachTopicsOutsideTheGoverningSlot)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  std::vector<std::string> offsets;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  auto * pcd_opt = add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+  add_topic_option(
+    *sub, "--stamp-offset", offsets, "Offsets.",
+    TopicSlotSpec{.pair_value = true, .scope = pcd_opt});
+
+  app.parse(
+    std::vector<std::string>{
+      "*=50ms", "--stamp-offset", "/lidar/left/points", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/lidar/left/points"}));
+  EXPECT_EQ(offsets, (std::vector<std::string>{"/lidar/left/points=50ms"}));
+}
+
+// Task 4 shipped `scope` with no test exercising its failure mode — nothing
+// used it until pcd concat (Task 7). expand_app() resolves a scoped slot by
+// looking up `scope` in a map of already-processed slots, built while
+// walking topic_slots_of(app) in declaration order (see resolve_context() in
+// topic_expand.cpp): a scope naming an Option outside that set can never
+// appear in the map, no matter when it is declared. A plain CLI option that
+// was never routed through add_topic_option is exactly such an Option — it
+// can never be "an earlier topic slot of this command" — so this is the
+// most direct way to force the lookup to miss without needing a real
+// second topic slot. The failure must be loud (expand fails) rather than a
+// silent wrong-universe resolution or a crash.
+TEST_F(ExpandTopicSelectorsTest, ScopeToAnOptionThatIsNotATopicSlotIsAnInternalError)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> offsets;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  std::string not_a_topic_slot;
+  auto * plain_opt = sub->add_option("--not-a-slot", not_a_topic_slot, "");
+  add_topic_option(
+    *sub, "--stamp-offset", offsets, "Offsets.",
+    TopicSlotSpec{.pair_value = true, .scope = plain_opt});
+
+  app.parse(
+    std::vector<std::string>{
+      "/lidar/left/points=50ms", "--stamp-offset", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+}
+
+// pcd concat's own contract: concatenation follows --pcd's list order, and
+// the FIRST topic becomes the time-matching reference (see pcd.cpp's --pcd
+// help text). A glob's expansion order therefore is not incidental — it is
+// what makes that reference deterministic when --pcd is a glob rather than
+// an explicit literal list.
+TEST_F(ExpandTopicSelectorsTest, PcdGlobExpansionOrderIsDeterministicForTheConcatReferenceTopic)
+{
+  const auto bag = make_dedupe_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"*", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  // Sorted lexicographically, not bag-declaration order: /a is the reference.
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/a", "/a1", "/a2"}));
+}
