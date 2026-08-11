@@ -185,6 +185,12 @@ source ~/.config/fish/completions/bagwiz.fish
 
 ## Topic completion
 
+A flag's completion candidates are the bag topics of the types that flag
+accepts; a flag with no type restriction offers every topic in the bag.
+Completion does not know which flags accept a `*` glob (see
+[Topic selectors](topic.md#topic-selectors)) and which take a literal topic
+name only — it offers plain topic names either way, typed as-is.
+
 - Flag values that name a bag topic of a specific type are completed by opening
   `<input>` and offering only topics of that type:
   - `bagwiz generate video -i <input> ... --cam-info <topic>` — `sensor_msgs/msg/CameraInfo` topics
@@ -220,10 +226,9 @@ source ~/.config/fish/completions/bagwiz.fish
     `sensor_msgs/msg/CameraInfo` topics, offered at every value of the variadic
     run
   - `bagwiz cam-info dump -i <input> -t <topic>` — `sensor_msgs/msg/CameraInfo` topics
-  - `bagwiz topic drop -i <input> -t/--topics <selector>...` / `bagwiz topic keep
--i <input> -t/--topics <selector>...` — every topic in the bag (no type
-    filter — these take selectors, which may be globs), offered at every value
-    of the variadic run
+  - `bagwiz topic drop -i <input> -t/--topics <topic>...` / `bagwiz topic keep
+-i <input> -t/--topics <topic>...` — every topic in the bag, offered at every
+    value of the variadic run
   - `bagwiz tf tree -i <input> [-t/--topics <topic>...]` — restricted to
     `tf2_msgs/msg/TFMessage` topics (the only type `tf tree` can render),
     offered at every value of the variadic run. The flag is optional; omitting
@@ -234,9 +239,8 @@ source ~/.config/fish/completions/bagwiz.fish
     dynamic TF topic such as `/tf` would be invisible to every bagwiz static-TF
     reader, so dynamic TF topics are deliberately omitted. The flag also accepts
     a brand-new topic name, which simply has no candidate to offer
-  - `bagwiz trim -i <input> --align <topic>...` — every topic in the bag (no type
-    filter — these take selectors, which may be globs), offered at the first
-    value of the run only
+  - `bagwiz trim -i <input> --align <topic>...` — every topic in the bag,
+    offered at the first value of the run only
 - Commands that take a `<topic>` flag value complete it by opening
   `<input>` as a ROS 2 rosbag and listing topics with names that start with
   the current prefix. The currently-covered positions are:

@@ -26,7 +26,13 @@ Each `-t` entry is either a bare `<topic>` — rewritten from the shared
 The two forms can be mixed: bare entries share one calibration (for example a
 `/camera_info` and a republished `/camera_info_throttled`) while `=` entries
 each carry their own (for example one YAML per camera of a rig), all in a
-single pass.
+single pass. `<topic>` is a topic selector — a literal name or a `*` glob
+restricted to `sensor_msgs/msg/CameraInfo` topics (see
+[Topic selectors](topic.md#topic-selectors)). The glob, not the whole
+`<topic>[=<yaml>]` entry, is what expands: `<glob>` alone expands to a bare
+`<topic>` per match (sharing `--yaml`), and `<glob>=<yaml>` expands to
+`<topic>=<yaml>` for every matched topic, applying that one YAML to all of
+them.
 
 For every message on the chosen topic(s), the calibration fields are taken from
 that topic's YAML while each message's own `header` timestamp, `header.frame_id`
@@ -60,18 +66,22 @@ bagwiz cam-info replace -i drive.mcap \
 # Mix both forms: the bare topic falls back to --yaml.
 bagwiz cam-info replace -i drive.mcap --yaml shared.yaml \
   -t /camera/camera_info /camera/wide/camera_info=wide.yaml
+
+# Apply one calibration to every CameraInfo topic under /camera/ via a glob
+# (quoted so the shell doesn't expand it).
+bagwiz cam-info replace -i drive.mcap -t '/camera/*=shared.yaml'
 ```
 
 ### Options
 
-| Flag                             | Description                                                                                                                                                                                               |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>`          | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                  |
-| `--yaml <yaml>`                  | Camera calibration YAML in the `camera_calibration` / `camera_info_manager` format, applied to every bare `<topic>` entry of `-t`. Required when at least one entry is bare; rejected when none is.       |
-| `-t`, `--topics <t>[=<yaml>]...` | **Required.** One or more CameraInfo topics to rewrite, each as `<topic>` (uses `--yaml`) or `<topic>=<yaml>` (its own file). Each type must be `sensor_msgs/msg/CameraInfo`. The two forms can be mixed. |
-| `--frame-id <id>`                | Override `header.frame_id` on the rewritten messages. When omitted, each message keeps its frame_id.                                                                                                      |
-| `-o`, `--output <p>`             | Write the result to a new bag instead of rewriting `<input>` in place.                                                                                                                                    |
-| `-w`, `--overwrite`              | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                     |
+| Flag                             | Description                                                                                                                                                                                                                                                                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>`          | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                                                                                                              |
+| `--yaml <yaml>`                  | Camera calibration YAML in the `camera_calibration` / `camera_info_manager` format, applied to every bare `<topic>` entry of `-t`. Required when at least one entry is bare; rejected when none is.                                                                                                                   |
+| `-t`, `--topics <t>[=<yaml>]...` | **Required.** One or more CameraInfo topic selectors to rewrite, each as `<topic>` (uses `--yaml`) or `<topic>=<yaml>` (its own file), where `<topic>` is a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Each type must be `sensor_msgs/msg/CameraInfo`. The two forms can be mixed. |
+| `--frame-id <id>`                | Override `header.frame_id` on the rewritten messages. When omitted, each message keeps its frame_id.                                                                                                                                                                                                                  |
+| `-o`, `--output <p>`             | Write the result to a new bag instead of rewriting `<input>` in place.                                                                                                                                                                                                                                                |
+| `-w`, `--overwrite`              | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                                                                                                                                 |
 
 ### YAML format and field mapping
 
@@ -118,14 +128,18 @@ with an error before the bag is touched.
 
 ### Topic selection
 
-One or more topics are given via `-t`/`--topics`, each as `<topic>` or
-`<topic>=<yaml>`; every topic must be a `sensor_msgs/msg/CameraInfo` topic.
+One or more entries are given via `-t`/`--topics`, each as `<topic>` or
+`<topic>=<yaml>`, where `<topic>` is a topic selector — a literal name or a
+`*` glob restricted to `sensor_msgs/msg/CameraInfo` topics (see
+[Topic selectors](topic.md#topic-selectors)).
 
-- Only the named topics are rewritten; their message type is unchanged, so the
-  bag's other topics and metadata are preserved exactly.
+- Only the resolved topics are rewritten; their message type is unchanged, so
+  the bag's other topics and metadata are preserved exactly.
 - A bare `<topic>` receives the shared `--yaml`; `<topic>=<yaml>` gives that
   topic its own calibration file. Topic names cannot contain `=`, so the split
-  is at the first `=` — a YAML path containing `=` is fine.
+  is at the first `=` — a YAML path containing `=` is fine. The split happens
+  before glob expansion, so `<glob>=<yaml>` applies that one YAML to every
+  topic the glob matches.
 - `--yaml` is required when at least one entry is bare, and rejected when every
   entry carries its own `=<yaml>` (an unused `--yaml` is a likely mistake).
 - Listing the same topic with two different YAMLs is an error. Repeating the
@@ -183,6 +197,10 @@ bagwiz cam-info replace -i drive.mcap --yaml fixed.yaml -t /camera/camera_info
 # Recompute `p` directly on a bag's CameraInfo topics.
 bagwiz cam-info recompute-p -i drive.mcap -t /camera/camera_info -o drive_fixed.mcap
 
+# Recompute `p` on every CameraInfo topic under /camera/ via a glob (quoted
+# so the shell doesn't expand it).
+bagwiz cam-info recompute-p -i drive.mcap -t '/camera/*' -o drive_fixed.mcap
+
 # Pull a bag's calibration out as a YAML — that is `cam-info dump`; `recompute-p`
 # then fixes its `p` if you want.
 bagwiz cam-info dump -i drive.mcap -t /camera/camera_info -o camera_info.yaml
@@ -191,13 +209,13 @@ bagwiz cam-info recompute-p -i camera_info.yaml
 
 ### Options
 
-| Flag                    | Description                                                                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `-i`, `--input <input>` | **Required.** Calibration YAML (`camera_calibration` / `camera_info_manager` format) **or** an input ROS 2 rosbag. Must exist.       |
-| `-t`, `--topics <t>...` | Bag input only: one or more `sensor_msgs/msg/CameraInfo` topics whose `p` to recompute. **Required** for a bag, rejected for a YAML. |
-| `-a`, `--alpha <a>`     | OpenCV free-scaling parameter in `[0, 1]`. Default: `0`.                                                                             |
-| `-o`, `--output <p>`    | Write the result to a new path instead of rewriting `<input>` in place.                                                              |
-| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                |
+| Flag                    | Description                                                                                                                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-i`, `--input <input>` | **Required.** Calibration YAML (`camera_calibration` / `camera_info_manager` format) **or** an input ROS 2 rosbag. Must exist.                                                                                                 |
+| `-t`, `--topics <t>...` | Bag input only: one or more `sensor_msgs/msg/CameraInfo` topic selectors whose `p` to recompute — a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). **Required** for a bag, rejected for a YAML. |
+| `-a`, `--alpha <a>`     | OpenCV free-scaling parameter in `[0, 1]`. Default: `0`.                                                                                                                                                                       |
+| `-o`, `--output <p>`    | Write the result to a new path instead of rewriting `<input>` in place.                                                                                                                                                        |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                                          |
 
 ### Input modes and output shape
 
@@ -384,12 +402,12 @@ bagwiz cam-info replace -i drive.mcap --yaml camera_info.yaml -t /camera/camera_
 
 ### Options
 
-| Flag                    | Description                                                                                               |
-| ----------------------- | --------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                  |
-| `-t`, `--topic <topic>` | The CameraInfo topic whose calibration to write. Its type must be `sensor_msgs/msg/CameraInfo`.           |
-| `-o`, `--output <p>`    | Write the YAML to this path instead of stdout.                                                            |
-| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect without `-o`. |
+| Flag                    | Description                                                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                          |
+| `-t`, `--topic <topic>` | The CameraInfo topic whose calibration to write. Its type must be `sensor_msgs/msg/CameraInfo`. A literal topic name, not a glob. |
+| `-o`, `--output <p>`    | Write the YAML to this path instead of stdout.                                                                                    |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect without `-o`.                         |
 
 Exactly one `<topic>` is taken, since a camera calibration YAML holds exactly one
 calibration. Tab completion offers the bag's CameraInfo topics — and only those.

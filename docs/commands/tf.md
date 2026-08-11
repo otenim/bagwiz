@@ -56,18 +56,24 @@ bagwiz tf tree -i capture.mcap -t /tf
 
 # Explicit merge of two topics.
 bagwiz tf tree -i capture.mcap -t /tf /tf_static
+
+# Merge every static TF topic in the bag via a glob (quoted so the shell
+# doesn't expand it).
+bagwiz tf tree -i capture.mcap -t '*/tf_static'
 ```
 
 ### Options
 
-| Flag                    | Description                                                                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                             |
-| `-t`, `--topics <t>...` | Zero or more `tf2_msgs/msg/TFMessage` topics to merge (e.g. `/tf /tf_static`). When omitted, all TF topics in the bag are merged. |
+| Flag                    | Description                                                                                                                                                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                                                                                         |
+| `-t`, `--topics <t>...` | Zero or more `tf2_msgs/msg/TFMessage` topic selectors to merge — a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)), e.g. `/tf /tf_static` or `'*/tf_static'`. When omitted, all TF topics in the bag are merged. |
 
-Every `-t` value must name a `tf2_msgs/msg/TFMessage` topic that exists in the
-bag; an unknown name exits with an error listing the offending names and the
-bag's available TF topics on stderr.
+A `*` glob is restricted to `tf2_msgs/msg/TFMessage` topics and, if it
+matches none, the run stops with an error. A literal value must itself name
+a `tf2_msgs/msg/TFMessage` topic that exists in the bag; an unknown name
+exits with an error listing the offending names and the bag's available TF
+topics on stderr.
 
 `<topic>` names support TAB completion: only `tf2_msgs/msg/TFMessage`
 topics in the input bag are offered as candidates (see
@@ -621,14 +627,14 @@ bagwiz tf static join -i target.mcap --yaml rig.yaml
 
 ### Options
 
-| Flag                    | Description                                                                                                 |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                       |
-| `--yaml <file>`         | **Required.** Static TF YAML to embed, in the schema `tf static dump` writes. Long-form only.               |
-| `-t`, `--topic <topic>` | Topic to embed the transforms under. Default: `/tf_static`.                                                 |
-| `-o`, `--output <OUT>`  | Write the result to this new bag instead of rewriting `<input>` in place.                                   |
-| `--force`               | Replace `<topic>`'s existing messages in `<input>`; otherwise a populated `<topic>` aborts. Long-form only. |
-| `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path. No effect in in-place mode.                                       |
+| Flag                    | Description                                                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                |
+| `--yaml <file>`         | **Required.** Static TF YAML to embed, in the schema `tf static dump` writes. Long-form only.                                                        |
+| `-t`, `--topic <topic>` | Topic to embed the transforms under. A literal topic name, not a glob — it names the topic the transforms are embedded under. Default: `/tf_static`. |
+| `-o`, `--output <OUT>`  | Write the result to this new bag instead of rewriting `<input>` in place.                                                                            |
+| `--force`               | Replace `<topic>`'s existing messages in `<input>`; otherwise a populated `<topic>` aborts. Long-form only.                                          |
+| `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path. No effect in in-place mode.                                                                                |
 
 ### Rotation convention
 
@@ -820,7 +826,7 @@ bagwiz tf static update -i tmp.mcap --yaml corrected_rig.yaml
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <bag>`   | **Required.** Input bag (file or directory).                                                                                       |
 | `--yaml <file>`         | **Required.** Publisher-config YAML whose edges are added or applied as updates.                                                   |
-| `-t`, `--topic <name>`  | Topic newly added transforms are embedded under (default `/tf_static`), declared if absent.                                        |
+| `-t`, `--topic <name>`  | Topic newly added transforms are embedded under (default `/tf_static`), declared if absent. A literal topic name, not a glob.      |
 | `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#bagwiz-tf-static-join). |
 | `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                         |
 

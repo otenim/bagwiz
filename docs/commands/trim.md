@@ -33,21 +33,27 @@ bagwiz trim -i drive.mcap --start 100msg --end 1000msg -o drive_head.mcap
 
 # Keep only the span where the lidar topic has data (its first to its last message, both included).
 bagwiz trim -i drive.db3 --align /sensing/lidar/concatenated/pointcloud -o aligned.db3
+
+# Same, but align to every lidar topic under /sensing/lidar at once.
+bagwiz trim -i drive.db3 --align '/sensing/lidar/*' -o aligned.db3
 ```
+
+Quote a glob (e.g. `'/sensing/lidar/*'`) so the shell does not expand it as a
+filename pattern before bagwiz sees it.
 
 ## Options
 
-| Flag                    | Description                                                                                                                                                                                                                 |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                    |
-| `--start <bound>`       | Window start: an offset from the bag start (e.g. `5s`, `500ms`) or a message count (`100msg` skips the first 100 messages). Default: bag start.                                                                             |
-| `--end <bound>`         | Window end, exclusive: an offset from the bag start (e.g. `90s`) or a message count (`500msg` keeps the first 500 messages). Default: bag end.                                                                              |
-| `--duration <len>`      | Window length measured from the window start (e.g. `30s`). Time only — no `msg`. Mutually exclusive with `--end`.                                                                                                           |
-| `--both <bound>`        | Trim this much from both the bag start and the bag end: a time offset (`5s`) or a message count (`50msg`). Mutually exclusive with `--start`, `--end`, and `--duration`.                                                    |
-| `--align <topics>...`   | Trim to the common time span of these topics — from their latest first message to their earliest last message, both included. Literal names or `*` globs (as in `topic drop -t`). Mutually exclusive with the offset flags. |
-| `--stamp <clock>`       | Reference clock for the window: `header` (default — `header.stamp`, with per-message fallback to receive time) or `recv` (record time). See Reference clock below.                                                          |
-| `-o`, `--output <p>`    | Write the result to a new bag instead of rewriting `<input>` in place.                                                                                                                                                      |
-| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                                       |
+| Flag                    | Description                                                                                                                                                                                                                                                                |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                                                                   |
+| `--start <bound>`       | Window start: an offset from the bag start (e.g. `5s`, `500ms`) or a message count (`100msg` skips the first 100 messages). Default: bag start.                                                                                                                            |
+| `--end <bound>`         | Window end, exclusive: an offset from the bag start (e.g. `90s`) or a message count (`500msg` keeps the first 500 messages). Default: bag end.                                                                                                                             |
+| `--duration <len>`      | Window length measured from the window start (e.g. `30s`). Time only — no `msg`. Mutually exclusive with `--end`.                                                                                                                                                          |
+| `--both <bound>`        | Trim this much from both the bag start and the bag end: a time offset (`5s`) or a message count (`50msg`). Mutually exclusive with `--start`, `--end`, and `--duration`.                                                                                                   |
+| `--align <topics>...`   | Trim to the common time span of these topics — from their latest first message to their earliest last message, both included. Topic selector(s): a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Mutually exclusive with the offset flags. |
+| `--stamp <clock>`       | Reference clock for the window: `header` (default — `header.stamp`, with per-message fallback to receive time) or `recv` (record time). See Reference clock below.                                                                                                         |
+| `-o`, `--output <p>`    | Write the result to a new bag instead of rewriting `<input>` in place.                                                                                                                                                                                                     |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                                                                                      |
 
 At least one of `--start`, `--end`, `--duration`, `--both`, or `--align` must be
 given — a windowless trim would be a plain copy, which is `cp -r`'s job.
@@ -88,13 +94,15 @@ given — a windowless trim would be a plain copy, which is `cp -r`'s job.
   an end past the bag end (warn, keep to the end); a `--start` count at or past
   it is an error. Counts are whole numbers ≥ 0; `--duration` takes only time
   lengths.
-- `--align` takes topic selectors instead of offsets: the window runs from the
-  **latest first message** to the **earliest last message** across the selected
-  topics — the span where every selected topic has data — and, unlike `--end`,
-  **both boundary messages are included** (the option's contract is that the
-  selected topics' first and last messages are part of the output). The run
-  stops with an error when a selector matches no topic, a selected topic has
-  no messages, or the selected topics do not overlap in time.
+- `--align` takes topic selectors instead of offsets (see
+  [Topic selectors](topic.md#topic-selectors) for the glob rules): the window
+  runs from the **latest first message** to the **earliest last message**
+  across the selected topics — the span where every selected topic has data —
+  and, unlike `--end`, **both boundary messages are included** (the option's
+  contract is that the selected topics' first and last messages are part of
+  the output). The run stops with an error when a selector matches no topic
+  — including a literal that names no topic in the bag — a selected topic
+  has no messages, or the selected topics do not overlap in time.
 - The window is resolved against the bag's time extent before anything is
   written; bad offsets or an out-of-range start fail the run and leave the
   input untouched.

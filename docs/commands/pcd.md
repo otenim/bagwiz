@@ -41,28 +41,70 @@ bagwiz pcd concat -i drive.mcap -t /sensing/lidar/concatenated/points \
   --stamp-offset /sensing/lidar/left/seyond_points=50ms \
                  /sensing/lidar/right/seyond_points=50ms \
   -o concatenated.mcap
+
+# Same rig, selected with a glob instead of listing every sensor (quoted so
+# the shell doesn't expand it). --stamp-offset's glob resolves against the
+# --pcd selection, so it can still target all four; here every sensor gets
+# the same 50 ms offset. The reference topic is now whichever seyond topic
+# sorts first by name, rather than an explicit choice — see
+# "Reference topic and --pcd order" below.
+bagwiz pcd concat -i drive.mcap -t /sensing/lidar/concatenated/points \
+  --frame base_link \
+  --pcd '/sensing/lidar/*/seyond_points' \
+  --stamp-offset '/sensing/lidar/*/seyond_points=50ms' \
+  -o concatenated.mcap
 ```
 
 ### Options
 
-| Flag                           | Description                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `-i`, `--input <input>`        | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                                                                   |
-| `-t`, `--topic <output_topic>` | **Required.** Name of the new concatenated PointCloud2 topic.                                                                                                                                                                                                                                                                  |
-| `--pcd <t...>`                 | **Required.** PointCloud2 topics to concatenate (2 or more). The first topic is the reference; concatenation order follows this list.                                                                                                                                                                                          |
-| `--frame <frame>`              | Target frame all clouds are transformed into. Default: `base_link`. Required when the default is not reachable from every `--pcd` frame via the bag's static TF.                                                                                                                                                               |
-| `-o`, `--output <path>`        | Output bag. When omitted, the input bag is rewritten in place (atomic tmp swap).                                                                                                                                                                                                                                               |
-| `--tolerance <val>`            | Nearest-match tolerance for pairing the other topics to the first `--pcd` topic. Takes an optional unit `ns`/`us`/`ms`/`s` (no unit = ms), e.g. `50ms`. Default: half the first topic's median header-stamp period, or 50 ms when that period cannot be measured (fewer than two reference messages, or a zero median period). |
-| `--stamp-offset <topic>=<val>` | Per-topic offset **added to `header.stamp` for matching only** (the real stamp and per-point times are never rewritten). `<val>` takes an optional unit `ns`/`us`/`ms`/`s` (no unit = ms), signed, e.g. `=-50ms`, `=500ns`. Repeatable. Use it when a sensor triggers early/late relative to the first topic.                  |
-| `--drop-inputs`                | Drop the source `--pcd` topics from the output. Default: keep them.                                                                                                                                                                                                                                                            |
-| `--force`                      | Proceed even if `<output_topic>` already exists in the bag (replaces that topic).                                                                                                                                                                                                                                              |
-| `-w`, `--overwrite`            | Overwrite an existing `-o/--output` path.                                                                                                                                                                                                                                                                                      |
-| `-j`, `--threads <N>`          | Number of worker threads. Default: `8`. Accepts `0`–`256`; `0` uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; in-range values above hardware concurrency are capped to it.                                                                                                                       |
+| Flag                           | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>`        | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `-t`, `--topic <output_topic>` | **Required.** Name of the new concatenated PointCloud2 topic. A literal topic name, not a glob — it names the topic being created.                                                                                                                                                                                                                                                                                                                                                                       |
+| `--pcd <t...>`                 | **Required.** PointCloud2 topic selectors to concatenate (2 or more resolved topics), a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Concatenation order follows this list, and a glob contributes its matches in topic-name order. The first topic in the resolved list is the reference — see [Reference topic and `--pcd` order](#reference-topic-and---pcd-order).                                                                                                  |
+| `--frame <frame>`              | Target frame all clouds are transformed into. Default: `base_link`. Required when the default is not reachable from every `--pcd` frame via the bag's static TF.                                                                                                                                                                                                                                                                                                                                         |
+| `-o`, `--output <path>`        | Output bag. When omitted, the input bag is rewritten in place (atomic tmp swap).                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `--tolerance <val>`            | Nearest-match tolerance for pairing the other topics to the first `--pcd` topic. Takes an optional unit `ns`/`us`/`ms`/`s` (no unit = ms), e.g. `50ms`. Default: half the first topic's median header-stamp period, or 50 ms when that period cannot be measured (fewer than two reference messages, or a zero median period).                                                                                                                                                                           |
+| `--stamp-offset <topic>=<val>` | Per-topic offset **added to `header.stamp` for matching only** (the real stamp and per-point times are never rewritten). `<topic>` is a selector — a literal name or a `*` glob — resolved against the **resolved `--pcd` list**, not the whole bag; see [`--stamp-offset` resolution](#--stamp-offset-resolution). `<val>` takes an optional unit `ns`/`us`/`ms`/`s` (no unit = ms), signed, e.g. `=-50ms`, `=500ns`. Repeatable. Use it when a sensor triggers early/late relative to the first topic. |
+| `--drop-inputs`                | Drop the source `--pcd` topics from the output. Default: keep them.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--force`                      | Proceed even if `<output_topic>` already exists in the bag (replaces that topic).                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `-w`, `--overwrite`            | Overwrite an existing `-o/--output` path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `-j`, `--threads <N>`          | Number of worker threads. Default: `8`. Accepts `0`–`256`; `0` uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; in-range values above hardware concurrency are capped to it.                                                                                                                                                                                                                                                                                                 |
 
 ### Field layout
 
 All `--pcd` topics must share an identical PointField layout (fields and
 `point_step`); a mismatch is an error.
+
+### Reference topic and `--pcd` order
+
+`--pcd`'s topics are concatenated in list order, and the **first** topic in
+the resolved list is the time-matching reference: every other topic is
+paired to it within `--tolerance`, and `--tolerance`'s own default (half the
+reference topic's median `header.stamp` period) is derived from that same
+topic.
+
+When `--pcd` includes a `'*'` glob, its matches are contributed in
+topic-name order (see [Topic selectors](topic.md#topic-selectors)), so
+whichever matched topic sorts first alphabetically becomes the reference —
+a deterministic choice, but one the glob makes implicitly rather than by an
+explicit position in the command line. To pick the reference explicitly
+while still globbing the rest, list it first as its own literal, ahead of
+the glob: the literal claims the first slot, and the glob's own match for
+that same topic is dropped as a duplicate (deduplication only removes a
+glob-produced entry, never a literal — see
+[Topic selectors](topic.md#topic-selectors)).
+
+### `--stamp-offset` resolution
+
+`--stamp-offset`'s `<topic>` half is a selector — a literal name or a `*`
+glob — resolved against the **already-resolved `--pcd` list**, not the whole
+bag: only a topic that ended up in `--pcd` is a valid `--stamp-offset`
+target, so a typo or an omission in `--pcd` also breaks the matching
+`--stamp-offset` entry. Two entries can still land on the same topic — a
+literal repeated, or a literal and a glob overlapping it — and when that
+happens the **last** one in argument order wins; earlier ones for that topic
+are silently superseded.
 
 ### Missing sensors (partial emit)
 
@@ -146,23 +188,28 @@ bagwiz pcd undistort -i drive.mcap --twist /vehicle/status/velocity_status \
 bagwiz map slam -i drive.mcap --pcd /points -o out/                 # -> out/traj.tum
 bagwiz traj join -i drive.mcap --traj out/traj.tum -t /slam/tf --ref map --of base_link
 bagwiz pcd undistort -i drive.mcap --pose /slam/tf --pcd /points -o undistorted.mcap
+
+# Deskew every lidar topic under /sensing/lidar via a glob (quoted so the
+# shell doesn't expand it).
+bagwiz pcd undistort -i drive.mcap --pose /localization/kinematic_state \
+  --pcd '/sensing/lidar/*/pointcloud' -o undistorted.mcap
 ```
 
 ### Options
 
-| Flag                          | Description                                                                                                                                                                                                                                                                                                          |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>`       | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                                                         |
-| `--pose <pose_topic>`         | Self-position source topic already in the bag. Type must be one of `tf2_msgs/msg/TFMessage`, `nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped`, `geometry_msgs/msg/PoseWithCovarianceStamped`. Exactly one of `--pose` / `--twist` is required.                                                               |
-| `--twist <twist_topic>`       | Vehicle-velocity source topic already in the bag, integrated (dead-reckoned) into the deskew motion. Type must be one of `geometry_msgs/msg/Twist`, `geometry_msgs/msg/TwistStamped`, `geometry_msgs/msg/TwistWithCovarianceStamped`. Exactly one of `--pose` / `--twist` is required.                               |
-| `--pcd <topic>`               | **Required.** PointCloud2 topic(s) to deskew. Variadic and repeatable — `--pcd /a /b` and `--pcd /a --pcd /b` are equivalent. At least one is required.                                                                                                                                                              |
-| `--ref <frame>`               | Reference frame the trajectory is resolved in (same convention as `traj dump`). Default: `map`. Has no effect with `--twist` (a velocity source carries only relative motion).                                                                                                                                       |
-| `--of <frame>`                | Tracked body frame. The trajectory is obtained as `T_ref_of` (e.g. `T_map_base_link`). Default: `base_link`.                                                                                                                                                                                                         |
-| `-o`, `--output <path>`       | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                                                                                                                                                         |
-| `-w`, `--overwrite`           | Replace `-o/--output` if it already exists. Has no effect in in-place mode.                                                                                                                                                                                                                                          |
-| `-j`, `--threads <N>`         | Number of worker threads for Pass 2. Default: `8`. Accepts `0`–`256`; `0` uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; in-range values above hardware concurrency are capped to it.                                                                                                  |
-| `--no-extrap`                 | Do not extrapolate the motion trajectory beyond its samples. Clouds outside the trajectory's time span are deskewed against the clamped endpoint poses (with a warning), instead of being covered by extrapolation. Mutually exclusive with `--max-extrap-duration`.                                                 |
-| `--max-extrap-duration <val>` | Per-side cap on the trajectory extrapolation. Default: `1s`; `0` is equivalent to `--no-extrap`. Takes an optional unit `ns`/`us`/`ms`/`s` (no unit = ms), e.g. `500ms`. If covering the `--pcd` topics' first clouds needs more extrapolation than this on either side, the run errors out before writing anything. |
+| Flag                          | Description                                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-i`, `--input <input>`       | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                                                             |
+| `--pose <pose_topic>`         | Self-position source topic already in the bag. Type must be one of `tf2_msgs/msg/TFMessage`, `nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped`, `geometry_msgs/msg/PoseWithCovarianceStamped`. A literal topic name, not a glob. Exactly one of `--pose` / `--twist` is required.                                 |
+| `--twist <twist_topic>`       | Vehicle-velocity source topic already in the bag, integrated (dead-reckoned) into the deskew motion. Type must be one of `geometry_msgs/msg/Twist`, `geometry_msgs/msg/TwistStamped`, `geometry_msgs/msg/TwistWithCovarianceStamped`. A literal topic name, not a glob. Exactly one of `--pose` / `--twist` is required. |
+| `--pcd <topic>`               | **Required.** PointCloud2 topic selector(s) to deskew — a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Variadic and repeatable — `--pcd /a /b` and `--pcd /a --pcd /b` are equivalent. At least one resolved topic is required.                                                         |
+| `--ref <frame>`               | Reference frame the trajectory is resolved in (same convention as `traj dump`). Default: `map`. Has no effect with `--twist` (a velocity source carries only relative motion).                                                                                                                                           |
+| `--of <frame>`                | Tracked body frame. The trajectory is obtained as `T_ref_of` (e.g. `T_map_base_link`). Default: `base_link`.                                                                                                                                                                                                             |
+| `-o`, `--output <path>`       | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                                                                                                                                                             |
+| `-w`, `--overwrite`           | Replace `-o/--output` if it already exists. Has no effect in in-place mode.                                                                                                                                                                                                                                              |
+| `-j`, `--threads <N>`         | Number of worker threads for Pass 2. Default: `8`. Accepts `0`–`256`; `0` uses `std::thread::hardware_concurrency()`; `1` forces the synchronous path; in-range values above hardware concurrency are capped to it.                                                                                                      |
+| `--no-extrap`                 | Do not extrapolate the motion trajectory beyond its samples. Clouds outside the trajectory's time span are deskewed against the clamped endpoint poses (with a warning), instead of being covered by extrapolation. Mutually exclusive with `--max-extrap-duration`.                                                     |
+| `--max-extrap-duration <val>` | Per-side cap on the trajectory extrapolation. Default: `1s`; `0` is equivalent to `--no-extrap`. Takes an optional unit `ns`/`us`/`ms`/`s` (no unit = ms), e.g. `500ms`. If covering the `--pcd` topics' first clouds needs more extrapolation than this on either side, the run errors out before writing anything.     |
 
 ### Trajectory resolution
 
