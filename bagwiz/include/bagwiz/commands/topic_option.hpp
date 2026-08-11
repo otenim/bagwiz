@@ -122,14 +122,26 @@ CLI::Option * add_topic_option(
   const TopicSlotSpec & spec);
 // For a slot whose absence is meaningfully different from an empty value (the
 // command auto-resolves the topic when the flag is omitted). Only
-// TopicSelectorMode::kLiteral is supported: the expansion pass's kLiteral
-// branch only ever reads a slot's current value, never writes it back (there
-// is nothing to expand into a literal), so `target` needs no post-expansion
-// sync. A kGlob slot's expanded result gets written back through
-// TopicSlot::single_target, which this overload cannot route to `target` —
-// declaring one this way would silently strand the expansion in an internal
-// proxy. `target` holds a value exactly when the flag was given: CLI11 never
-// touches it otherwise, matching CLI::App::add_option's own optional handling.
+// TopicSelectorMode::kLiteral is supported — enforced with a thrown
+// std::logic_error, not just documented, because a kGlob slot's expanded
+// result gets written back through TopicSlot::single_target, which for this
+// overload points at an internal proxy, not `target`; declaring one this way
+// would silently strand the expansion there (the expansion pass's kLiteral
+// branch, by contrast, only ever reads a slot's current value and never
+// writes it back, so kLiteral needs no such sync).
+//
+// `target` holds a value whenever the flag was given a token at all —
+// including an explicit empty string (`--cam-info ""`), which this overload
+// treats as a real (empty) value rather than "absent". That differs from
+// CLI::App::add_option's native std::optional<T> handling, whose
+// lexical_assign specialization maps an empty input to nullopt instead; the
+// new behavior is arguably more useful (an explicit "" stops being silently
+// indistinguishable from omitting the flag), and no call site in this
+// codebase relied on the old one. `target` is otherwise left untouched when
+// the flag is omitted — except that a caller chaining ->default_val(...) or
+// ->force_callback() onto the returned option would engage it even then (no
+// call site does this today). ->capture_default_str() reads the internal
+// proxy's value (always "" before parsing), not `target`'s.
 CLI::Option * add_topic_option(
   CLI::App & app, std::string flags, std::optional<std::string> & target, std::string description,
   const TopicSlotSpec & spec);

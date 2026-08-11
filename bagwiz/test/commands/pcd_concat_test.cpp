@@ -13,6 +13,7 @@
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <gtest/gtest.h>
 #include <sqlite3.h>
@@ -425,25 +426,28 @@ TEST(PcdCliWiring, ConcatTopicAndUndistortPoseTwistAreLiteralOnly)
   ASSERT_NE(concat_sub, nullptr);
   const auto concat_slots = bagwiz::commands::topic_slots_of(*concat_sub);
   ASSERT_EQ(concat_slots.size(), 3U);
-  EXPECT_EQ(concat_slots[0].option->get_lnames(), (std::vector<std::string>{"topic"}));
-  EXPECT_EQ(concat_slots[0].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  EXPECT_TRUE(concat_slots[0].spec.allowed_types.empty());
+  const auto * concat_topic_slot = bagwiz::test::slot_for(concat_slots, "topic");
+  ASSERT_NE(concat_topic_slot, nullptr);
+  EXPECT_EQ(concat_topic_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_TRUE(concat_topic_slot->spec.allowed_types.empty());
 
   auto * undistort_sub = app.get_subcommand_no_throw("undistort");
   ASSERT_NE(undistort_sub, nullptr);
   const auto undistort_slots = bagwiz::commands::topic_slots_of(*undistort_sub);
-  // --pose, --twist, then --pcd (glob-capable, unaffected by Task 8), in
-  // declaration order.
-  ASSERT_EQ(undistort_slots.size(), 3U);
+  ASSERT_EQ(undistort_slots.size(), 3U);  // --pose, --twist, --pcd
 
-  EXPECT_EQ(undistort_slots[0].option->get_lnames(), (std::vector<std::string>{"pose"}));
-  EXPECT_EQ(undistort_slots[0].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  ASSERT_EQ(undistort_slots[0].spec.allowed_types.size(), 4U);
+  const auto * pose_slot = bagwiz::test::slot_for(undistort_slots, "pose");
+  ASSERT_NE(pose_slot, nullptr);
+  EXPECT_EQ(pose_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  ASSERT_EQ(pose_slot->spec.allowed_types.size(), 4U);
 
-  EXPECT_EQ(undistort_slots[1].option->get_lnames(), (std::vector<std::string>{"twist"}));
-  EXPECT_EQ(undistort_slots[1].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  ASSERT_EQ(undistort_slots[1].spec.allowed_types.size(), 3U);
+  const auto * twist_slot = bagwiz::test::slot_for(undistort_slots, "twist");
+  ASSERT_NE(twist_slot, nullptr);
+  EXPECT_EQ(twist_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  ASSERT_EQ(twist_slot->spec.allowed_types.size(), 3U);
 
-  EXPECT_EQ(undistort_slots[2].option->get_lnames(), (std::vector<std::string>{"pcd"}));
-  EXPECT_EQ(undistort_slots[2].spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
+  const auto * undistort_pcd_slot = bagwiz::test::slot_for(undistort_slots, "pcd");
+  ASSERT_NE(undistort_pcd_slot, nullptr);
+  // Glob-capable, unaffected by Task 8.
+  EXPECT_EQ(undistort_pcd_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
 }

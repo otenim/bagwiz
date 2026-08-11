@@ -16,6 +16,7 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/commands/topic_types.hpp"
+#include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -146,17 +147,19 @@ TEST(WalkCommand, TopicOptionsAreLiteralOnly)
   walk->configure(app);
 
   const auto slots = bagwiz::commands::topic_slots_of(app);
-  ASSERT_EQ(slots.size(), 2U);  // -t/--topic then --cam-info, in declaration order
+  ASSERT_EQ(slots.size(), 2U);  // -t/--topic, --cam-info
 
-  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"topic"}));
-  EXPECT_EQ(slots[0].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  EXPECT_TRUE(slots[0].spec.allowed_types.empty());
-  EXPECT_TRUE(slots[0].option->get_required());
+  const auto * topic_slot = bagwiz::test::slot_for(slots, "topic");
+  ASSERT_NE(topic_slot, nullptr);
+  EXPECT_EQ(topic_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_TRUE(topic_slot->spec.allowed_types.empty());
+  EXPECT_TRUE(topic_slot->option->get_required());
 
-  EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"cam-info"}));
-  EXPECT_EQ(slots[1].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  ASSERT_EQ(slots[1].spec.allowed_types.size(), 1U);
-  EXPECT_EQ(slots[1].spec.allowed_types[0], "sensor_msgs/msg/CameraInfo");
+  const auto * cam_info_slot = bagwiz::test::slot_for(slots, "cam-info");
+  ASSERT_NE(cam_info_slot, nullptr);
+  EXPECT_EQ(cam_info_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  ASSERT_EQ(cam_info_slot->spec.allowed_types.size(), 1U);
+  EXPECT_EQ(cam_info_slot->spec.allowed_types[0], "sensor_msgs/msg/CameraInfo");
 }
 
 }  // namespace

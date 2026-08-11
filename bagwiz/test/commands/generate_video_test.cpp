@@ -16,6 +16,7 @@
 #include "bagwiz/core/video/video_encoder.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "core/image/image_fixture.hpp"
+#include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
@@ -1085,24 +1086,27 @@ TEST(GenerateVideoCliWiring, TopicOptionsAreDeclaredLiteralOnly)
   auto * video_sub = app.get_subcommand_no_throw("video");
   ASSERT_NE(video_sub, nullptr);
   const auto slots = bagwiz::commands::topic_slots_of(*video_sub);
-  ASSERT_EQ(slots.size(), 3U);  // -t/--topic, --cam-info, --pcd, in declaration order
+  ASSERT_EQ(slots.size(), 3U);  // -t/--topic, --cam-info, --pcd
 
-  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"topic"}));
-  EXPECT_EQ(slots[0].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  EXPECT_EQ(slots[0].spec.allowed_types.size(), 2U);  // Image, CompressedImage
-  EXPECT_TRUE(slots[0].option->get_required());
+  const auto * topic_slot = bagwiz::test::slot_for(slots, "topic");
+  ASSERT_NE(topic_slot, nullptr);
+  EXPECT_EQ(topic_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_EQ(topic_slot->spec.allowed_types.size(), 2U);  // Image, CompressedImage
+  EXPECT_TRUE(topic_slot->option->get_required());
 
-  EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"cam-info"}));
-  EXPECT_EQ(slots[1].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  ASSERT_EQ(slots[1].spec.allowed_types.size(), 1U);
-  EXPECT_EQ(slots[1].spec.allowed_types[0], "sensor_msgs/msg/CameraInfo");
+  const auto * cam_info_slot = bagwiz::test::slot_for(slots, "cam-info");
+  ASSERT_NE(cam_info_slot, nullptr);
+  EXPECT_EQ(cam_info_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  ASSERT_EQ(cam_info_slot->spec.allowed_types.size(), 1U);
+  EXPECT_EQ(cam_info_slot->spec.allowed_types[0], "sensor_msgs/msg/CameraInfo");
   // std::optional<std::string>-backed: single_target points at the internal
   // proxy add_topic_option() owns, never null.
-  EXPECT_NE(slots[1].single_target, nullptr);
+  EXPECT_NE(cam_info_slot->single_target, nullptr);
 
-  EXPECT_EQ(slots[2].option->get_lnames(), (std::vector<std::string>{"pcd"}));
+  const auto * pcd_slot = bagwiz::test::slot_for(slots, "pcd");
+  ASSERT_NE(pcd_slot, nullptr);
   EXPECT_EQ(
-    slots[2].spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);  // unaffected by Task 8
+    pcd_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);  // unaffected by Task 8
 }
 
 }  // namespace

@@ -13,6 +13,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -35,6 +36,13 @@ struct Registration
   // element's address at registration time — that address must stay valid
   // even as a later optional-target slot on the same app pushes another
   // element in, which push_back on a vector is not guaranteed to preserve.
+  //
+  // This is also why App::remove_option() — already flagged in arm_guard()'s
+  // comment as a hazard for erasing a live Registration out from under a
+  // still-registered sibling slot — is strictly worse for an optional-target
+  // slot: the store now OWNS memory (this proxy) that the removed Option's
+  // CLI11-side binding still references, not just non-owning pointers into
+  // caller-owned storage. Nothing in this codebase calls remove_option().
   std::deque<std::string> optional_proxies;
 };
 
@@ -88,7 +96,14 @@ struct StoreGuard
 // would both change every topic option's --help output and make this guard
 // answer to option->get_validator("") / get_validator(0) — the two lookups
 // CLI11 falls back to for an unnamed validator — ahead of whatever real
-// validator Tasks 5-9 attach to the same option.
+// validator Tasks 5-9 attach to the same option. That ordering claim holds
+// for the string/vector<string> overloads, which call arm_guard() first
+// among an option's checks; the std::optional<std::string> overload
+// registers its own unnamed value-sync check() before arm_guard(), so on
+// THAT overload's option the sync check is what get_validator("")/(0)
+// actually answers, not this guard — still harmless, since nothing calls
+// get_validator on a topic option in production, but worth knowing if that
+// ever changes.
 void arm_guard(const CLI::App & app, CLI::Option * option)
 {
   const auto guard = std::make_shared<StoreGuard>(&app);
@@ -125,6 +140,17 @@ CLI::Option * add_topic_option(
   CLI::App & app, std::string flags, std::optional<std::string> & target, std::string description,
   const TopicSlotSpec & spec)
 {
+  // Enforced, not just documented: a kGlob slot's expanded result is written
+  // back through TopicSlot::single_target, which for this overload points at
+  // the internal proxy below, not at `target` — declaring one this way would
+  // silently strand the expansion there. Fail loudly at declaration time,
+  // the same standard Task 8 held assign_slot_result()'s single-target guard
+  // to, rather than leaving this precondition doc-comment-only.
+  if (spec.mode != TopicSelectorMode::kLiteral) {
+    throw std::logic_error(
+      "add_topic_option(CLI::App&, std::string, std::optional<std::string>&, ...) only supports "
+      "TopicSelectorMode::kLiteral");
+  }
   Registration & registration = store()[&app];
   std::string & proxy = registration.optional_proxies.emplace_back();
   CLI::Option * option = app.add_option(std::move(flags), proxy, std::move(description));

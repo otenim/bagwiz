@@ -13,6 +13,7 @@
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
+#include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <gtest/gtest.h>
 
@@ -401,17 +402,19 @@ TEST(TopicRenameCliWiring, SrcAndDstAreLiteralOnly)
   auto * rename_sub = app.get_subcommand_no_throw("rename");
   ASSERT_NE(rename_sub, nullptr);
   const auto slots = bagwiz::commands::topic_slots_of(*rename_sub);
-  ASSERT_EQ(slots.size(), 2U);  // --src then --dst, in declaration order
+  ASSERT_EQ(slots.size(), 2U);  // --src, --dst
 
-  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"src"}));
-  EXPECT_EQ(slots[0].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  EXPECT_TRUE(slots[0].spec.reject_reason.empty());
-  EXPECT_TRUE(slots[0].option->get_required());
+  const auto * src_slot = bagwiz::test::slot_for(slots, "src");
+  ASSERT_NE(src_slot, nullptr);
+  EXPECT_EQ(src_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_TRUE(src_slot->spec.reject_reason.empty());
+  EXPECT_TRUE(src_slot->option->get_required());
 
-  EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"dst"}));
-  EXPECT_EQ(slots[1].spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  EXPECT_EQ(slots[1].spec.reject_reason, "it names the topic to create");
-  EXPECT_TRUE(slots[1].option->get_required());
+  const auto * dst_slot = bagwiz::test::slot_for(slots, "dst");
+  ASSERT_NE(dst_slot, nullptr);
+  EXPECT_EQ(dst_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_EQ(dst_slot->spec.reject_reason, "it names the topic to create");
+  EXPECT_TRUE(dst_slot->option->get_required());
 }
 
 }  // namespace

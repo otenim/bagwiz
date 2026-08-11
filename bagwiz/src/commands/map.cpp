@@ -114,6 +114,7 @@ private:
       "--color topic, and a duplicate <image_topic> are errors.",
       TopicSlotSpec{
         .mode = TopicSelectorMode::kLiteral,
+        .pair_value = true,
         .reject_reason = "each camera needs its own CameraInfo topic, so both halves of "
                          "<image_topic>=<info_topic> must be literal names"});
     auto * color_min_dist_opt =

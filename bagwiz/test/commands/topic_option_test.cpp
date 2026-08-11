@@ -24,6 +24,7 @@
 #include <new>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -767,7 +768,8 @@ TEST_F(ExpandTopicSelectorsTest, PcdGlobExpansionOrderIsDeterministicForTheConca
 TEST(ExpandTopicSelectors, RejectReasonAppearsInTheError)
 {
   bagwiz::core::init_logging();
-  const auto bag = make_bag(scratch_dir("reason"));
+  const auto dir = scratch_dir("reason");
+  const auto bag = make_bag(dir);
   CLI::App app{"bagwiz"};
   auto * sub = app.add_subcommand("cmd", "");
   std::filesystem::path input;
@@ -786,7 +788,7 @@ TEST(ExpandTopicSelectors, RejectReasonAppearsInTheError)
   EXPECT_NE(err.find("it names the topic to create"), std::string::npos) << err;
 
   std::error_code ec;
-  std::filesystem::remove_all(bag, ec);
+  std::filesystem::remove_all(dir, ec);
 }
 
 // Task 4 added assign_slot_result()'s "single-target slot resolved to more
@@ -820,6 +822,22 @@ TEST_F(ExpandTopicSelectorsTest, SingleTargetGlobMatchingMultipleTopicsFailsLoud
   EXPECT_NE(err.find("/a"), std::string::npos) << err;
   EXPECT_NE(err.find("/a1"), std::string::npos) << err;
   EXPECT_NE(err.find("/a2"), std::string::npos) << err;
+}
+
+// add_topic_option(std::optional<std::string>&) supports only
+// TopicSelectorMode::kLiteral (a kGlob slot's expanded result would be
+// written back through the internal proxy, never reaching `target` — see the
+// declaration's doc comment). This must fail loudly at declaration time
+// rather than compiling into a slot that silently strands its expansion, the
+// same standard Task 8 held assign_slot_result()'s single-target guard to
+// (see SingleTargetGlobMatchingMultipleTopicsFailsLoudly above).
+TEST(TopicOption, OptionalTargetRejectsNonLiteralModeAtDeclaration)
+{
+  CLI::App app{"test"};
+  std::optional<std::string> topic;
+  EXPECT_THROW(
+    add_topic_option(app, "--cam-info", topic, "CameraInfo topic.", TopicSlotSpec{}),
+    std::logic_error);
 }
 
 // add_topic_option(std::optional<std::string>&) exists so a slot whose
