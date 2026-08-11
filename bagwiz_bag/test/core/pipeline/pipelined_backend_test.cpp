@@ -11,7 +11,7 @@
 #include "bag_equal.hpp"  // NOLINT(build/include_subdir)  sibling test header, resolves relative
 #include "bagwiz/core/pipeline/backend_select.hpp"
 #include "bagwiz/core/pipeline/bounded_message_queue.hpp"
-#include "bagwiz/core/pipeline/owned_message.hpp"
+#include "bagwiz/core/pipeline/queued_message.hpp"
 #include "bagwiz/core/pipeline/rewrite_backend.hpp"
 #include "bagwiz/core/pipeline/sequential_backend.hpp"
 #include "bagwiz/core/pipeline/topic_router.hpp"
@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -166,24 +167,28 @@ TEST(BackendSelectTest, ParseOverrideRecognizesNamesCaseInsensitively)
 
 // --- BoundedMessageQueue unit behavior --------------------------------------
 
-pipeline::OwnedMessage make_owned(const std::string & topic, std::size_t bytes)
+// Stand-in for what the read stage queues: a FrozenMessage owning its own
+// buffer, which is also the exact shape the transform path produces.
+pipeline::QueuedMessage make_queued(const std::string & topic, std::size_t bytes)
 {
-  pipeline::OwnedMessage msg;
+  auto buf = std::make_shared<std::vector<std::byte>>(bytes, std::byte{0x7F});
+  pipeline::QueuedMessage msg;
   msg.out_topic = topic;
-  msg.timestamp_ns = 1;
-  msg.payload.assign(bytes, std::byte{0x7F});
+  msg.frozen.timestamp_ns = 1;
+  msg.frozen.payload = std::span<const std::byte>(buf->data(), buf->size());
+  msg.frozen.owner = std::move(buf);
   return msg;
 }
 
 TEST(BoundedMessageQueueTest, PreservesFifoOrderAndDrainsAfterClose)
 {
   pipeline::BoundedMessageQueue queue;
-  EXPECT_TRUE(queue.push(make_owned("/a", 1)));
-  EXPECT_TRUE(queue.push(make_owned("/b", 1)));
-  EXPECT_TRUE(queue.push(make_owned("/c", 1)));
+  EXPECT_TRUE(queue.push(make_queued("/a", 1)));
+  EXPECT_TRUE(queue.push(make_queued("/b", 1)));
+  EXPECT_TRUE(queue.push(make_queued("/c", 1)));
   queue.close();
 
-  pipeline::OwnedMessage out;
+  pipeline::QueuedMessage out;
   ASSERT_TRUE(queue.pop(out));
   EXPECT_EQ(out.out_topic, "/a");
   ASSERT_TRUE(queue.pop(out));
@@ -195,11 +200,11 @@ TEST(BoundedMessageQueueTest, PreservesFifoOrderAndDrainsAfterClose)
 
 TEST(BoundedMessageQueueTest, AdmitsAMessageLargerThanTheCapWhenEmpty)
 {
-  pipeline::BoundedMessageQueue queue(4);            // 4-byte cap
-  EXPECT_TRUE(queue.push(make_owned("/big", 100)));  // empty -> admitted despite cap
-  pipeline::OwnedMessage out;
+  pipeline::BoundedMessageQueue queue(4);             // 4-byte cap
+  EXPECT_TRUE(queue.push(make_queued("/big", 100)));  // empty -> admitted despite cap
+  pipeline::QueuedMessage out;
   ASSERT_TRUE(queue.pop(out));
-  EXPECT_EQ(out.payload.size(), 100U);
+  EXPECT_EQ(out.frozen.payload.size(), 100U);
 }
 
 // --- Differential: Pipelined output == Sequential output --------------------

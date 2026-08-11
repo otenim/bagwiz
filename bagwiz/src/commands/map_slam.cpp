@@ -103,7 +103,7 @@ struct ColorizeWorkItem
 {
   std::int64_t stamp_ns = 0;
   std::string type;
-  std::vector<std::byte> payload;
+  io::FrozenMessage frozen;
   std::vector<std::array<float, 3>> dynamic_points;
 };
 
@@ -1387,7 +1387,7 @@ private:
           while (work_queues[cam]->pop(item)) {
             try {
               if (!colorize_one_image(
-                    *colorizers[cam], blur_picker, item.type, item.payload, item.stamp_ns,
+                    *colorizers[cam], blur_picker, item.type, item.frozen.payload, item.stamp_ns,
                     item.dynamic_points)) {
                 ++failures;
               }
@@ -1418,7 +1418,7 @@ private:
       if (parallel) {
         work_queues[img.cam]->push(
           ColorizeWorkItem{
-            img.stamp_ns, std::move(img.type), std::move(img.payload),
+            img.stamp_ns, std::move(img.type), std::move(img.frozen),
             std::vector<std::array<float, 3>>(dynamic.begin(), dynamic.end())});
         return;
       }
@@ -1427,7 +1427,7 @@ private:
       // the reader loop's catch, which warns with the message and continues.
       if (!colorize_one_image(
             *colorizers[img.cam], blur_gate ? pickers[img.cam].get() : nullptr, img.type,
-            img.payload, img.stamp_ns, dynamic)) {
+            img.frozen.payload, img.stamp_ns, dynamic)) {
         ++decode_failures[img.cam];
       }
     };
@@ -1475,7 +1475,7 @@ private:
           core::slam::ScanImagePairer::PendingImage{
             cam,
             core::image::image_capture_stamp_ns(raw.topic->type, raw.payload, raw.timestamp_ns),
-            raw.topic->type, std::vector<std::byte>(raw.payload.begin(), raw.payload.end())});
+            raw.topic->type, reader->freeze(raw)});
         drain_pairer();
       }
       // End of stream: no closer scan can still arrive; flush the rest.
