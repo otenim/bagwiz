@@ -545,7 +545,7 @@ int run_sync_undistort_pass(
 // Run Pass 2 through the shared -o vs in-place rewrite dispatch, picking the
 // sync or parallel pass by thread count. Unlike the other rewrite commands,
 // pcd undistort keeps the storage default (zstd) for MCAP compression rather
-// than forcing "none".
+// than forcing "none" — or forwards the user's --compression choice.
 int dispatch_undistort_pass(
   const PcdUndistortArgs & args, const io::BagReader & topic_reader,
   const std::unordered_set<std::string> & pcd_set, const ExtrinsicMap & extrinsics,
@@ -557,7 +557,8 @@ int dispatch_undistort_pass(
     "pcd undistort: could not detect storage format of input bag '%s'.";
   rewrite_opts.pass_failed_error = "pcd undistort: pass failed; aborting in-place swap";
   rewrite_opts.inherit_output_format = true;
-  rewrite_opts.disable_mcap_compression = false;
+  rewrite_opts.mcap_compression = args.compression.value_or("");
+  rewrite_opts.mcap_compression_level = args.compression_level.value_or("");
   return core::run_bag_rewrite(
     args.input_path, args.output_path, args.overwrite, rewrite_opts,
     [&](const io::WriterFactory & factory) {
@@ -611,6 +612,50 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
       return 1;
     }
     max_extrap_ns = *dur;
+  }
+  // CLI11 already restricts the flag values, but the runner is also a direct
+  // API entry (tests, future callers), so validate here too and fail fast.
+  if (args.compression.has_value()) {
+    const std::string & c = *args.compression;
+    if (c != "zstd" && c != "lz4" && c != "none") {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "pcd undistort: --compression '%s' is not one of zstd, lz4, none", c.c_str());
+      return 1;
+    }
+  }
+  if (args.compression_level.has_value()) {
+    const std::string & l = *args.compression_level;
+    if (l != "fastest" && l != "fast" && l != "default" && l != "slow" && l != "slowest") {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "pcd undistort: --compression-level '%s' is not one of fastest, fast, default, slow, "
+        "slowest",
+        l.c_str());
+      return 1;
+    }
+    if (args.compression.has_value() && *args.compression == "none") {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "pcd undistort: --compression-level has no effect with --compression none");
+      return 1;
+    }
+  }
+  if (args.compression.has_value() || args.compression_level.has_value()) {
+    // The flags configure mcap chunk compression; reject them when the
+    // output resolves to another storage format. An undetectable in-place
+    // input falls through to the dispatch's own format error instead.
+    const io::Format out_format = args.output_path.has_value()
+                                    ? io::resolve_write_layout(
+                                        *args.output_path, io::create_options_inheriting_format(
+                                                             args.input_path, *args.output_path))
+                                        .format
+                                    : io::detect_format(args.input_path);
+    if (out_format == io::Format::Sqlite3) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "pcd undistort: --compression/--compression-level apply only to mcap outputs; this "
+        "output is SQLite3 (.db3)");
+      return 1;
+    }
   }
 
   auto reader = io::open_read_or_log(args.input_path, kLogger);

@@ -1549,10 +1549,24 @@ TEST(FlagCompletionTest, PcdUndistortDashListsUndistortFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "pcd", "undistort", "-"}),
-    "--help\n--input\n--max-extrap-duration\n--no-extrap\n--of\n--output\n--overwrite\n--pcd\n--"
+    "--compression\n--compression-level\n--help\n--input\n--max-extrap-duration\n--no-extrap\n--"
+    "of\n--output\n--overwrite\n--pcd\n--"
     "pose\n--ref\n--threads\n--twist\n-h\n-"
     "i\n-j\n-"
     "o\n-w\n");
+}
+
+// The compression flags complete their fixed value sets.
+TEST(FlagCompletionTest, PcdUndistortCompressionValueCompletion)
+{
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "4", "bagwiz", "pcd", "undistort", "--compression", ""}),
+    "lz4\nnone\nzstd\n");
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "4", "bagwiz", "pcd", "undistort", "--compression-level", "f"}),
+    "fast\nfastest\n");
 }
 
 // `pcd undistort --pose <TAB>` completes the bag's topics of the four pose
