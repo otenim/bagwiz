@@ -69,6 +69,19 @@ std::string command_label(const CLI::App & app)
   return label.empty() ? "bagwiz" : label;
 }
 
+// Comma-joined topic names for an error message.
+std::string join_topics(const std::vector<std::string> & topics)
+{
+  std::string joined;
+  for (const auto & topic : topics) {
+    if (!joined.empty()) {
+      joined += ", ";
+    }
+    joined += topic;
+  }
+  return joined;
+}
+
 // The bag's topics as name/type pairs, or nullopt when the path is not a
 // readable bag (a calibration YAML, a missing file, an unsupported format).
 std::optional<std::vector<core::TopicEntry>> read_topics(const std::filesystem::path & path)
@@ -83,7 +96,12 @@ std::optional<std::vector<core::TopicEntry>> read_topics(const std::filesystem::
       entries.push_back(core::TopicEntry{topic.name, topic.type});
     }
     return entries;
-  } catch (const std::exception &) {
+  } catch (const std::exception & e) {
+    // Not necessarily a calibration YAML — could equally be a corrupt or
+    // truncated bag. Debug-only: an ordinary "not a bag" input (the common
+    // case for e.g. `cam-info recompute-p`) would otherwise log on every run.
+    BAGWIZ_LOG_DEBUG(
+      kLogger, "topic expansion: could not open '%s' as a bag: %s", path.c_str(), e.what());
     return std::nullopt;
   }
 }
@@ -121,27 +139,39 @@ bool reject_glob(const CLI::App & app, const TopicSlot & slot, const std::string
   return false;
 }
 
-std::vector<std::string> & values_of(const TopicSlot & slot, std::vector<std::string> & scratch)
+// A copy, not a reference: the multi-value case would otherwise alias
+// `*slot.multi_target`, which assign_slot_result() below overwrites before
+// the caller is done with the values it read out of it. Copying once here is
+// cheap (CLI argument counts) and removes that aliasing hazard entirely
+// rather than relying on call-order to keep it safe.
+std::vector<std::string> values_of(const TopicSlot & slot)
 {
   if (slot.multi_target != nullptr) {
     return *slot.multi_target;
   }
-  scratch.assign(1, *slot.single_target);
-  return scratch;
+  return {*slot.single_target};
 }
 
-// Resolution universe for a slot: another slot's expanded result when scoped,
-// else the bag's own topic list. A scoped universe carries no type
-// information (its entries come from another slot's plain names), so the
-// caller must not apply a type filter to it — the governing slot already did.
-// Nullopt means `slot.spec.scope` names an option that is not an earlier slot
-// of this command; the caller treats that as failure.
-std::optional<std::vector<core::TopicEntry>> resolution_universe(
+// Where a slot's selectors resolve against, and the type filter to apply
+// while doing so. Bundled together because the two facts are one decision:
+// a scoped universe's entries come from another slot's plain names and carry
+// no type information, so the type filter must be empty exactly when the
+// universe is scoped — expressing that as two independently-checked
+// `scope != nullptr` tests invites them to drift apart.
+struct ResolutionContext
+{
+  std::vector<core::TopicEntry> universe;
+  std::span<const std::string_view> allowed;
+};
+
+// Nullopt means `slot.spec.scope` names an option that is not an earlier
+// slot of this command; the caller treats that as failure.
+std::optional<ResolutionContext> resolve_context(
   const CLI::App & app, const TopicSlot & slot, const std::vector<core::TopicEntry> & bag_topics,
   const std::unordered_map<const CLI::Option *, std::vector<std::string>> & expanded)
 {
   if (slot.spec.scope == nullptr) {
-    return bag_topics;
+    return ResolutionContext{bag_topics, slot.spec.allowed_types};
   }
 
   const auto it = expanded.find(slot.spec.scope);
@@ -159,15 +189,33 @@ std::optional<std::vector<core::TopicEntry>> resolution_universe(
   for (const auto & name : it->second) {
     universe.push_back(core::TopicEntry{name, {}});
   }
-  return universe;
+  return ResolutionContext{std::move(universe), {}};
 }
 
-// Expand one slot's values against `universe`, filtered by `allowed`. Splits
-// pair values at '=' before resolving so only the left half is a selector,
-// and expands one value at a time so each keeps its own right half.
-std::optional<std::vector<std::string>> resolve_values(
+// One value produced while expanding a slot, tagged with whether a glob
+// selector produced it. The tag drives dedupe(): a glob-produced entry that
+// duplicates an earlier one (glob- or literal-produced) is dropped, but a
+// literal the user typed by hand is always kept, even if it duplicates
+// something else in the list — the command's own "topic given more than
+// once" checks run after expansion and must still see it.
+struct ExpandedValue
+{
+  std::string value;
+  bool from_glob{false};
+};
+
+// Expand one slot's values against `ctx.universe`, filtered by `ctx.allowed`.
+// Splits pair values at '=' before resolving so only the left half is a
+// selector, and expands one value at a time so each keeps its own right
+// half. CROSS-SELECTOR dedup is deliberately not delegated to a single
+// batched call into core::resolve_topic_selectors() — that function already
+// dedupes literals internally, but only within one call, and this loop calls
+// it once per selector so that path is never exercised. The CLI layer owns
+// the cross-selector rule (see dedupe()); do not "simplify" this into one
+// batched call, which would silently reintroduce whole-list deduplication.
+std::optional<std::vector<ExpandedValue>> resolve_values(
   const CLI::App & app, const TopicSlot & slot, const std::vector<std::string> & values,
-  const std::vector<core::TopicEntry> & universe, std::span<const std::string_view> allowed)
+  const ResolutionContext & ctx)
 {
   std::vector<std::string> selectors;
   std::vector<std::string> suffixes;
@@ -184,10 +232,11 @@ std::optional<std::vector<std::string>> resolve_values(
     }
   }
 
-  std::vector<std::string> result;
+  std::vector<ExpandedValue> result;
   for (std::size_t i = 0; i < selectors.size(); ++i) {
+    const bool from_glob = contains_glob(selectors[i]);
     const std::vector<std::string> one{selectors[i]};
-    const auto resolved = core::resolve_topic_selectors(one, universe, allowed);
+    const auto resolved = core::resolve_topic_selectors(one, ctx.universe, ctx.allowed);
     if (!resolved.unmatched.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger, "%s: %s selector '%s' matched no topic", command_label(app).c_str(),
@@ -195,23 +244,50 @@ std::optional<std::vector<std::string>> resolve_values(
       return std::nullopt;
     }
     for (const auto & name : resolved.matched) {
-      result.push_back(name + suffixes[i]);
+      result.push_back(ExpandedValue{name + suffixes[i], from_glob});
     }
   }
   return result;
 }
 
-// Deduplicate `values`, preserving first occurrence.
-std::vector<std::string> dedupe(std::vector<std::string> values)
+// Deduplicate `values`, preserving first occurrence. A glob-produced entry
+// is dropped when the list already carries it; a literal is always kept. See
+// ExpandedValue for why.
+std::vector<std::string> dedupe(std::vector<ExpandedValue> values)
 {
   std::vector<std::string> out;
   std::unordered_set<std::string> seen;
   for (auto & entry : values) {
-    if (seen.insert(entry).second) {
-      out.push_back(std::move(entry));
+    if (entry.from_glob && seen.count(entry.value) != 0) {
+      continue;
     }
+    seen.insert(entry.value);
+    out.push_back(std::move(entry.value));
   }
   return out;
+}
+
+// Writes a slot's deduplicated result back into its target. A single-target
+// slot resolving to more than one topic is a caller bug — TopicSlotSpec::mode
+// defaults to kGlob, so a single-target slot that omits `.mode = kLiteral`
+// would otherwise silently keep only the first match — and is reported as an
+// error naming the flag and every match instead of failing silently.
+bool assign_slot_result(
+  const CLI::App & app, const TopicSlot & slot, std::vector<std::string> deduped)
+{
+  if (slot.multi_target != nullptr) {
+    *slot.multi_target = std::move(deduped);
+    return true;
+  }
+  if (deduped.size() > 1) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "%s: %s takes a single topic but the selector matched %zu topics (%s)",
+      command_label(app).c_str(), flag_label(*slot.option).c_str(), deduped.size(),
+      join_topics(deduped).c_str());
+    return false;
+  }
+  *slot.single_target = deduped.empty() ? std::string{} : deduped.front();
+  return true;
 }
 
 // Expand one slot's values. `expanded` maps an already-processed slot's option
@@ -220,8 +296,7 @@ bool expand_slot(
   const CLI::App & app, const TopicSlot & slot, const std::vector<core::TopicEntry> & bag_topics,
   const std::unordered_map<const CLI::Option *, std::vector<std::string>> & expanded)
 {
-  std::vector<std::string> scratch;
-  const std::vector<std::string> & values = values_of(slot, scratch);
+  const std::vector<std::string> values = values_of(slot);
   if (values.empty()) {
     return true;
   }
@@ -235,28 +310,16 @@ bool expand_slot(
     return true;
   }
 
-  const auto universe = resolution_universe(app, slot, bag_topics, expanded);
-  if (!universe) {
+  const auto ctx = resolve_context(app, slot, bag_topics, expanded);
+  if (!ctx) {
     return false;
   }
 
-  // A scoped universe carries no types, so the type filter must not be applied
-  // to it — the governing slot already applied its own.
-  const std::span<const std::string_view> allowed =
-    slot.spec.scope != nullptr ? std::span<const std::string_view>{} : slot.spec.allowed_types;
-
-  auto resolved = resolve_values(app, slot, values, *universe, allowed);
+  auto resolved = resolve_values(app, slot, values, *ctx);
   if (!resolved) {
     return false;
   }
-  std::vector<std::string> deduped = dedupe(std::move(*resolved));
-
-  if (slot.multi_target != nullptr) {
-    *slot.multi_target = std::move(deduped);
-  } else {
-    *slot.single_target = deduped.empty() ? std::string{} : deduped.front();
-  }
-  return true;
+  return assign_slot_result(app, slot, dedupe(std::move(*resolved)));
 }
 
 bool expand_app(const CLI::App & app)

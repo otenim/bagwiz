@@ -20,7 +20,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <new>
+#include <span>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -182,9 +184,8 @@ bagwiz::io::TopicInfo make_topic(std::string name, std::string type)
   return t;
 }
 
-// Bag with two PointCloud2 topics (declared right-before-left so the test can
-// prove the result is sorted, not declaration-ordered) and one Image topic.
-std::filesystem::path make_bag(const std::filesystem::path & dir)
+std::filesystem::path write_bag(
+  const std::filesystem::path & dir, const std::vector<bagwiz::io::TopicInfo> & topics)
 {
   bagwiz::io::CreateOptions opts;
   opts.format = bagwiz::io::Format::Mcap;
@@ -192,11 +193,6 @@ std::filesystem::path make_bag(const std::filesystem::path & dir)
   opts.mcap_compression = "none";
 
   auto writer = bagwiz::io::open_write(dir, opts);
-  const auto topics = std::vector<bagwiz::io::TopicInfo>{
-    make_topic("/lidar/right/points", "sensor_msgs/msg/PointCloud2"),
-    make_topic("/lidar/left/points", "sensor_msgs/msg/PointCloud2"),
-    make_topic("/camera/image_raw", "sensor_msgs/msg/Image"),
-  };
   for (const auto & t : topics) {
     writer->declare_topic(t);
   }
@@ -208,18 +204,60 @@ std::filesystem::path make_bag(const std::filesystem::path & dir)
   return dir;
 }
 
-std::filesystem::path scratch_dir(const std::string & name)
+// Bag with two PointCloud2 topics (declared right-before-left so the test can
+// prove the result is sorted, not declaration-ordered) and one Image topic.
+std::filesystem::path make_bag(const std::filesystem::path & dir)
 {
-  auto dir = std::filesystem::temp_directory_path() / ("bagwiz_topic_expand_" + name);
-  std::error_code ec;
-  std::filesystem::remove_all(dir, ec);
-  return dir;
+  return write_bag(
+    dir, {
+           make_topic("/lidar/right/points", "sensor_msgs/msg/PointCloud2"),
+           make_topic("/lidar/left/points", "sensor_msgs/msg/PointCloud2"),
+           make_topic("/camera/image_raw", "sensor_msgs/msg/Image"),
+         });
+}
+
+// Bag with three PointCloud2 topics named /a, /a1, /a2 (declared out of
+// sorted order, same reason as make_bag() above): a literal '/a' matches only
+// itself, a glob '/a*' matches all three sorted. Mirrors the dedupe-rule
+// example in topic_expand.cpp's dedupe().
+std::filesystem::path make_dedupe_bag(const std::filesystem::path & dir)
+{
+  return write_bag(
+    dir, {
+           make_topic("/a2", "sensor_msgs/msg/PointCloud2"),
+           make_topic("/a", "sensor_msgs/msg/PointCloud2"),
+           make_topic("/a1", "sensor_msgs/msg/PointCloud2"),
+         });
 }
 }  // namespace
 
-TEST(ExpandTopicSelectors, ExpandsAGlobFilteredByTypeAndSorted)
+class ExpandTopicSelectorsTest : public ::testing::Test
 {
-  const auto bag = make_bag(scratch_dir("glob"));
+protected:
+  void SetUp() override
+  {
+    tmp_dir_ =
+      std::filesystem::temp_directory_path() /
+      ("bagwiz_topic_expand_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) +
+       "_" +
+       std::to_string(
+         reinterpret_cast<std::uintptr_t>(  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+           this)));
+    std::filesystem::create_directories(tmp_dir_);
+  }
+
+  void TearDown() override
+  {
+    std::error_code ec;
+    std::filesystem::remove_all(tmp_dir_, ec);
+  }
+
+  std::filesystem::path tmp_dir_;
+};
+
+TEST_F(ExpandTopicSelectorsTest, ExpandsAGlobFilteredByTypeAndSorted)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
   CLI::App app{"bagwiz"};
   auto * sub = app.add_subcommand("cmd", "");
   std::filesystem::path input;
@@ -234,13 +272,11 @@ TEST(ExpandTopicSelectors, ExpandsAGlobFilteredByTypeAndSorted)
   ASSERT_TRUE(expand_topic_selectors(app));
 
   EXPECT_EQ(pcd, (std::vector<std::string>{"/lidar/left/points", "/lidar/right/points"}));
-  std::error_code ec;
-  std::filesystem::remove_all(bag, ec);
 }
 
-TEST(ExpandTopicSelectors, LeavesALiteralUntouchedEvenWhenAbsentFromTheBag)
+TEST_F(ExpandTopicSelectorsTest, LeavesALiteralUntouchedEvenWhenAbsentFromTheBag)
 {
-  const auto bag = make_bag(scratch_dir("literal"));
+  const auto bag = make_bag(tmp_dir_ / "bag");
   CLI::App app{"bagwiz"};
   auto * sub = app.add_subcommand("cmd", "");
   std::filesystem::path input;
@@ -255,13 +291,11 @@ TEST(ExpandTopicSelectors, LeavesALiteralUntouchedEvenWhenAbsentFromTheBag)
   ASSERT_TRUE(expand_topic_selectors(app));
 
   EXPECT_EQ(pcd, (std::vector<std::string>{"/not/here"}));
-  std::error_code ec;
-  std::filesystem::remove_all(bag, ec);
 }
 
-TEST(ExpandTopicSelectors, RejectsAGlobInALiteralSlot)
+TEST_F(ExpandTopicSelectorsTest, RejectsAGlobInALiteralSlot)
 {
-  const auto bag = make_bag(scratch_dir("reject"));
+  const auto bag = make_bag(tmp_dir_ / "bag");
   CLI::App app{"bagwiz"};
   auto * sub = app.add_subcommand("cmd", "");
   std::filesystem::path input;
@@ -273,14 +307,11 @@ TEST(ExpandTopicSelectors, RejectsAGlobInALiteralSlot)
 
   app.parse(std::vector<std::string>{"/lidar/*", "-t", bag.string(), "-i", "cmd"});
   EXPECT_FALSE(expand_topic_selectors(app));
-
-  std::error_code ec;
-  std::filesystem::remove_all(bag, ec);
 }
 
-TEST(ExpandTopicSelectors, FailsWhenAGlobMatchesNothing)
+TEST_F(ExpandTopicSelectorsTest, FailsWhenAGlobMatchesNothing)
 {
-  const auto bag = make_bag(scratch_dir("nomatch"));
+  const auto bag = make_bag(tmp_dir_ / "bag");
   CLI::App app{"bagwiz"};
   auto * sub = app.add_subcommand("cmd", "");
   std::filesystem::path input;
@@ -293,12 +324,9 @@ TEST(ExpandTopicSelectors, FailsWhenAGlobMatchesNothing)
 
   app.parse(std::vector<std::string>{"/nope/*", "--pcd", bag.string(), "-i", "cmd"});
   EXPECT_FALSE(expand_topic_selectors(app));
-
-  std::error_code ec;
-  std::filesystem::remove_all(bag, ec);
 }
 
-TEST(ExpandTopicSelectors, SkipsExpansionWhenTheInputIsNotABag)
+TEST_F(ExpandTopicSelectorsTest, SkipsExpansionWhenTheInputIsNotABag)
 {
   // `cam-info recompute-p` accepts a calibration YAML here and rejects --topics
   // itself with a message about the YAML. Expansion must not pre-empt that.
@@ -316,9 +344,9 @@ TEST(ExpandTopicSelectors, SkipsExpansionWhenTheInputIsNotABag)
   EXPECT_EQ(topics, (std::vector<std::string>{"/a"}));
 }
 
-TEST(ExpandTopicSelectors, PairValueGlobsOnlyTheLeftHalf)
+TEST_F(ExpandTopicSelectorsTest, PairValueGlobsOnlyTheLeftHalf)
 {
-  const auto bag = make_bag(scratch_dir("pair"));
+  const auto bag = make_bag(tmp_dir_ / "bag");
   CLI::App app{"bagwiz"};
   auto * sub = app.add_subcommand("cmd", "");
   std::filesystem::path input;
@@ -340,6 +368,154 @@ TEST(ExpandTopicSelectors, PairValueGlobsOnlyTheLeftHalf)
 
   EXPECT_EQ(
     offsets, (std::vector<std::string>{"/lidar/left/points=50ms", "/lidar/right/points=50ms"}));
-  std::error_code ec;
-  std::filesystem::remove_all(bag, ec);
+}
+
+TEST_F(ExpandTopicSelectorsTest, PairValuesKeepTheirOwnSuffixAndLiteralsPassThrough)
+{
+  // Two --stamp-offset occurrences, each a literal (unglobbed) left half with
+  // a different right half: proves values from different selectors never
+  // cross-contaminate suffixes, and that a literal inside a pair-value slot
+  // passes through untouched (unvalidated against the scope), same as a
+  // literal anywhere else.
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  std::vector<std::string> offsets;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  auto * pcd_opt = add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+  add_topic_option(
+    *sub, "--stamp-offset", offsets, "Offsets.",
+    TopicSlotSpec{.pair_value = true, .scope = pcd_opt});
+
+  app.parse(
+    std::vector<std::string>{
+      "/lidar/right/points=20ms", "--stamp-offset", "/lidar/left/points=10ms", "--stamp-offset",
+      "/lidar/*", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/lidar/left/points", "/lidar/right/points"}));
+  EXPECT_EQ(
+    offsets, (std::vector<std::string>{"/lidar/left/points=10ms", "/lidar/right/points=20ms"}));
+}
+
+TEST_F(ExpandTopicSelectorsTest, ScopedSlotResolvesAgainstGoverningResultIgnoringItsOwnTypeFilter)
+{
+  // Two properties a naive implementation could get away with skipping: (1)
+  // the scoped slot below sets allowed_types itself, so applying it to the
+  // (untyped) scoped universe would wrongly filter out every entry and fail
+  // the glob instead of succeeding; (2) --pcd names exactly one topic, so a
+  // '*' scoped to it must resolve to that one topic, not to all three topics
+  // the bag itself would offer if the scope were (wrongly) substituted with
+  // the bag.
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  std::vector<std::string> offsets;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  auto * pcd_opt = add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+  add_topic_option(
+    *sub, "--stamp-offset", offsets, "Offsets.",
+    TopicSlotSpec{
+      .allowed_types = bagwiz::commands::kPointCloud2Type, .pair_value = true, .scope = pcd_opt});
+
+  app.parse(
+    std::vector<std::string>{
+      "*=50ms", "--stamp-offset", "/lidar/left/points", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/lidar/left/points"}));
+  EXPECT_EQ(offsets, (std::vector<std::string>{"/lidar/left/points=50ms"}));
+}
+
+TEST_F(ExpandTopicSelectorsTest, ExpandsSlotsOnANestedSubcommand)
+{
+  // `pcd undistort`-shaped: a subcommand of a subcommand. Slots two levels
+  // deep must still be reached by the recursive walk in
+  // expand_topic_selectors().
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * pcd = app.add_subcommand("pcd", "");
+  auto * undistort = pcd->add_subcommand("undistort", "");
+  std::filesystem::path input;
+  std::vector<std::string> topics;
+  set_topic_input(*undistort, input);
+  undistort->add_option("-i,--input", input, "");
+  add_topic_option(
+    *undistort, "--pcd", topics, "Clouds.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"*", "--pcd", bag.string(), "-i", "undistort", "pcd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(topics, (std::vector<std::string>{"/lidar/left/points", "/lidar/right/points"}));
+}
+
+TEST_F(ExpandTopicSelectorsTest, DedupeKeepsDuplicateLiterals)
+{
+  // Two identical literals must both survive: the command's own "topic given
+  // more than once" checks (map_slam.cpp, pcd_concat.cpp) run after
+  // expansion and need to see the duplicate to fire.
+  const auto bag = make_dedupe_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> topics;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "-t,--topics", topics, "Topics.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"/a", "-t", "/a", "-t", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(topics, (std::vector<std::string>{"/a", "/a"}));
+}
+
+TEST_F(ExpandTopicSelectorsTest, DedupeSkipsGlobDuplicateOfALiteral)
+{
+  const auto bag = make_dedupe_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> topics;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "-t,--topics", topics, "Topics.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"/a*", "-t", "/a", "-t", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(topics, (std::vector<std::string>{"/a", "/a1", "/a2"}));
+}
+
+TEST_F(ExpandTopicSelectorsTest, DedupeSkipsGlobDuplicateOfAGlob)
+{
+  const auto bag = make_dedupe_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> topics;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "-t,--topics", topics, "Topics.",
+    TopicSlotSpec{.allowed_types = bagwiz::commands::kPointCloud2Type});
+
+  app.parse(std::vector<std::string>{"/a*", "-t", "/a*", "-t", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(topics, (std::vector<std::string>{"/a", "/a1", "/a2"}));
 }

@@ -30,8 +30,9 @@ namespace bagwiz::commands
 // Returns false after logging when a glob matches no topic, when a literal-only
 // slot is given a glob, or when a slot's `scope` names an option that is not an
 // earlier slot of the same command. An input that cannot be opened as a bag is
-// not an error here: expansion is skipped and the command's own validation
-// reports it.
+// not an error here: expansion is skipped entirely for that command, including
+// the kLiteral '*' rejection above — the command's own validation reports the
+// bad input in its own terms instead.
 [[nodiscard]] bool expand_topic_selectors(const CLI::App & root);
 
 }  // namespace bagwiz::commands
