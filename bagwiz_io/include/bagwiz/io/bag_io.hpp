@@ -55,12 +55,25 @@ struct TopicInfo
 
 // Zero-copy view of a single message returned by BagReader::next(). Pointers
 // and spans are invalidated by the next call to next() or by reader
-// destruction.
+// destruction. Use BagReader::freeze() when a message must outlive that
+// window.
 struct RawMessage
 {
   const TopicInfo * topic = nullptr;
   int64_t timestamp_ns = 0;
   std::span<const std::byte> payload;
+};
+
+// Owning counterpart of RawMessage, produced by BagReader::freeze(). The
+// payload span stays valid for as long as the FrozenMessage (or a copy of it)
+// lives — across later next() calls, chunk-buffer evictions, and reader
+// destruction. `topic` remains reader-owned: valid while the reader is alive.
+struct FrozenMessage
+{
+  const TopicInfo * topic = nullptr;
+  int64_t timestamp_ns = 0;
+  std::span<const std::byte> payload;
+  std::shared_ptr<const void> owner;  // keeps the payload's backing store alive
 };
 
 // Pre-iteration filter pushed down into the storage layer. SQLite3 uses it
@@ -114,6 +127,15 @@ public:
 
   // Stream the next message. Returns false at EOF; throws on IO error.
   virtual bool next(RawMessage & out) = 0;
+
+  // Upgrade the RawMessage returned by the most recent next() call into an
+  // owning FrozenMessage. Must be called while `msg` is still valid, i.e.
+  // before the next next() call. Readers whose backing store can be shared
+  // (the parallel indexed MCAP path) alias it, making freeze() zero-copy;
+  // every other reader copies the payload into a fresh buffer. Callers must
+  // treat freeze() as a lifetime operation only and never assume which of
+  // the two a given backend does.
+  virtual FrozenMessage freeze(const RawMessage & msg) const;
 
   struct Stats
   {

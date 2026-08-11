@@ -115,6 +115,20 @@ public:
     return false;
   }
 
+  FrozenMessage freeze(const RawMessage & msg) const override
+  {
+    // Forward to the shard that emitted the message: its backend decides
+    // whether freeze() aliases or copies. The remapped bag-level topic
+    // pointer is kept — the shard's freeze() would return its shard-local
+    // TopicInfo, which callers never see.
+    if (current_ < shards_.size() && shards_[current_]) {
+      FrozenMessage frozen = shards_[current_]->freeze(msg);
+      frozen.topic = msg.topic;
+      return frozen;
+    }
+    return BagReader::freeze(msg);
+  }
+
   Stats compute_stats() override
   {
     if (metadata_.has_summary) {
