@@ -151,7 +151,7 @@ private:
     sub
       ->add_option(
         "-j,--threads", undistort_args_.threads,
-        "Number of worker threads for deskew (default: 8; 0 = hardware concurrency, "
+        "Number of worker threads for deskew (default: 0 = hardware concurrency; "
         "1 = sync). Range 0-256; in-range values above hardware concurrency are capped.")
       ->check(CLI::Range(0, 256));
     auto * no_extrap_flag = sub->add_flag(
