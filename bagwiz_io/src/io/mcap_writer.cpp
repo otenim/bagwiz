@@ -49,6 +49,35 @@ mcap::Compression parse_compression(std::string_view name)
   throw std::runtime_error("unknown mcap compression: " + std::string(name));
 }
 
+mcap::CompressionLevel parse_compression_level(std::string_view name, mcap::Compression codec)
+{
+  if (name.empty()) {
+    // Codec-appropriate default. mcap maps lz4 + CompressionLevel::Default
+    // onto LZ4-HC, which measures several times slower than zstd's default
+    // for a larger output — the opposite of what choosing lz4 means — so an
+    // unset level selects lz4's fast mode instead. An explicit "default"
+    // still forces CompressionLevel::Default for any codec.
+    return codec == mcap::Compression::Lz4 ? mcap::CompressionLevel::Fastest
+                                           : mcap::CompressionLevel::Default;
+  }
+  if (name == "default") {
+    return mcap::CompressionLevel::Default;
+  }
+  if (name == "fastest") {
+    return mcap::CompressionLevel::Fastest;
+  }
+  if (name == "fast") {
+    return mcap::CompressionLevel::Fast;
+  }
+  if (name == "slow") {
+    return mcap::CompressionLevel::Slow;
+  }
+  if (name == "slowest") {
+    return mcap::CompressionLevel::Slowest;
+  }
+  throw std::runtime_error("unknown mcap compression level: " + std::string(name));
+}
+
 // ---------------------------------------------------------------------------
 // Single .mcap file writer.
 // ---------------------------------------------------------------------------
@@ -58,19 +87,21 @@ public:
   McapFileWriter(const std::filesystem::path & path, const CreateOptions & options)
   {
     const auto compression = parse_compression(options.mcap_compression);
+    const auto level = parse_compression_level(options.mcap_compression_level, compression);
     // Compressed output goes through the parallel chunk writer when write
     // threads are available: chunk compression is the write path's CPU
     // bottleneck and parallelizes across chunks. Uncompressed output has no
     // chunk encode to parallelize and stays on the serial libmcap writer.
     if (compression != mcap::Compression::None && resolve_write_threads() > 1) {
       parallel_ = std::make_unique<ParallelChunkMcapWriter>(
-        path, compression == mcap::Compression::Zstd ? "zstd" : "lz4", options.mcap_chunk_size,
-        resolve_write_threads());
+        path, compression == mcap::Compression::Zstd ? "zstd" : "lz4", level,
+        options.mcap_chunk_size, resolve_write_threads());
       return;
     }
 
     mcap::McapWriterOptions wopts("ros2");
     wopts.compression = compression;
+    wopts.compressionLevel = level;
     wopts.chunkSize = options.mcap_chunk_size;
     // Chunk CRCs cost a CRC32 pass over every written byte, and the common
     // readers (libmcap, rosbag2, foxglove) do not validate them on their

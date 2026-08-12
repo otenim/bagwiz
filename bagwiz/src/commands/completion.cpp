@@ -1441,9 +1441,23 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
     if (sub == "undistort") {
       return matching(
         with_help(
-          {"--input", "--max-extrap-duration", "--no-extrap", "--of", "--output", "--overwrite",
-           "--pcd", "--pose", "--ref", "--threads", "--twist", "-i", "-j", "-o", "-w"}),
+          {"--compression", "--compression-level", "--input", "--max-extrap-duration",
+           "--no-extrap", "--of", "--output", "--overwrite", "--pcd", "--pose", "--ref",
+           "--threads", "--twist", "-i", "-j", "-o", "-w"}),
         current);
+    }
+  }
+
+  // Fixed value sets of `undistort`'s compression flags (the --storage idiom).
+  if (
+    request.cursor_word > kFirstCommandArgWord &&
+    request.words[kFirstCommandArgWord] == "undistort") {
+    const auto & prev = request.words[request.cursor_word - 1];
+    if (prev == "--compression") {
+      return matching({"lz4", "none", "zstd"}, current);
+    }
+    if (prev == "--compression-level") {
+      return matching({"default", "fast", "fastest", "slow", "slowest"}, current);
     }
   }
 

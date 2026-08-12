@@ -11,6 +11,7 @@
 #include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/duration_parse.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/pipeline/stage_profiler.hpp"
 #include "bagwiz/core/pointcloud/deskew.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
@@ -27,8 +28,10 @@
 #include <cinttypes>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -48,40 +51,36 @@ namespace
 {
 
 constexpr const char * kLogger = "bagwiz.cmd.pcd";
+// BAGWIZ_PROFILE report label, shared by the sync and parallel passes.
+constexpr const char * kProfileLabel = "pcd_undistort";
 constexpr std::chrono::hours kTfBufferCacheTime{24 * 365};
 constexpr const char * kDefaultRefFrame = "map";
 constexpr const char * kDefaultOfFrame = "base_link";
 
 // One PointCloud2 message handed off from the bag reader to a worker thread.
+// `frozen` shares the reader's chunk backing (BagReader::freeze) instead of
+// copying the bytes; it pins that whole chunk while the job is in flight, so
+// peak pinned memory is bounded by ParallelContext::max_in_flight chunks.
 struct DeskewJob
 {
   std::size_t seq;
   std::string topic;
   std::int64_t timestamp_ns;
-  std::vector<std::byte> payload;
+  io::FrozenMessage frozen;
   std::optional<geometry_msgs::msg::Transform> extrinsic;
 };
 
 // One output message waiting in the in-order completion map for the collector.
+// `frozen` is either the frozen input bytes (copy-through and undecodable
+// pass-through messages) or a freshly serialized cloud the item owns; the
+// collector writes both the same way.
 struct OutputItem
 {
   std::string topic;
   std::int64_t timestamp_ns;
-  std::vector<std::byte> payload;
+  io::FrozenMessage frozen;
+  std::uint64_t in_bytes = 0;  // input payload size, for the profiler's byte counters
   std::optional<std::string> error;
-};
-
-// Rendezvous slot for a copy-through message written without a payload copy.
-// When nothing is in flight, the reader hands the collector the borrowed
-// payload span (valid until the reader's next next() call) instead of copying
-// it into the completion map; the reader blocks until the collector sets
-// `done`, so the span never outlives its backing store.
-struct DirectWrite
-{
-  std::string topic;
-  std::int64_t timestamp_ns;
-  std::span<const std::byte> payload;
-  bool done = false;
 };
 
 // Shared state for the parallel reader / worker pool / collector pipeline.
@@ -91,7 +90,6 @@ struct ParallelContext
   std::condition_variable cv;
   std::queue<DeskewJob> job_queue;
   std::map<std::size_t, OutputItem> completed;
-  std::optional<DirectWrite> direct;
   std::size_t next_output_seq = 0;
   std::size_t total_submitted = 0;
   std::size_t in_flight = 0;
@@ -104,7 +102,7 @@ struct ParallelContext
 // reference stamp) is deskewed against a pose at a different time than its
 // own — up to no correction at all — while its per-point time is still
 // rewritten to the reference value, so this must never be silent.
-void log_out_of_span_warnings(const core::pointcloud::DeskewResult & res, const char * topic)
+void log_out_of_span_warnings(const core::pointcloud::DeskewCdrResult & res, const char * topic)
 {
   if (res.ref_out_of_span) {
     BAGWIZ_LOG_WARN(
@@ -123,40 +121,42 @@ void log_out_of_span_warnings(const core::pointcloud::DeskewResult & res, const 
   }
 }
 
-// Parse, deskew, and serialize a single cloud.  Runs on a worker thread and
-// only touches local state plus the read-only trajectory span.
+// Deskew a single cloud by patching one owned copy of its CDR payload in
+// place — no parse-side data copy and no re-serialize. Runs on a worker
+// thread and only touches local state plus the read-only trajectory span.
 OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPose> trajectory)
 {
   OutputItem item;
   item.topic = job.topic;
   item.timestamp_ns = job.timestamp_ns;
+  item.in_bytes = static_cast<std::uint64_t>(job.frozen.payload.size());
 
   try {
-    auto parsed = core::pointcloud::parse_pointcloud2(job.payload);
-    if (!parsed.ok()) {
+    // The one copy this path still makes: the frozen payload may alias the
+    // reader's chunk buffer, which is shared with the prefetcher and the other
+    // messages in that chunk, so patching it in place is not an option.
+    std::vector<std::byte> patched(job.frozen.payload.begin(), job.frozen.payload.end());
+    const auto res = core::pointcloud::deskew_pointcloud2_cdr(
+      std::span<std::byte>(patched.data(), patched.size()), trajectory, job.extrinsic);
+    if (!res.parse_error.empty()) {
       BAGWIZ_LOG_WARN(
         kLogger, "pcd undistort: skipping undecodable cloud on '%s': %s", job.topic.c_str(),
-        parsed.error.c_str());
-      item.payload = std::move(job.payload);
+        res.parse_error.c_str());
+      item.frozen = std::move(job.frozen);
+    } else if (!res.error.empty()) {
+      item.error = res.error;
     } else {
-      const std::int64_t t_ref = parsed.cloud->timestamp_ns;
-      auto res = core::pointcloud::deskew_pointcloud2(
-        std::move(*parsed.cloud), t_ref, trajectory, job.extrinsic);
-      if (!res.ok()) {
-        item.error = res.error;
-      } else {
-        if (res.points_deskewed == 0 && res.points_total > 0) {
-          BAGWIZ_LOG_WARN(
-            kLogger,
-            "pcd undistort: cloud on '%s' had nothing deskewed of %" PRIu64
-            " point(s) (no_time=%" PRIu64 ", no_pose=%" PRIu64 ", nonfinite=%" PRIu64
-            "); passed through un-deskewed",
-            job.topic.c_str(), res.points_total, res.points_no_time, res.points_no_pose,
-            res.points_nonfinite);
-        }
-        log_out_of_span_warnings(res, job.topic.c_str());
-        item.payload = core::pointcloud::serialize_pointcloud2(*res.cloud);
+      if (res.points_deskewed == 0 && res.points_total > 0) {
+        BAGWIZ_LOG_WARN(
+          kLogger,
+          "pcd undistort: cloud on '%s' had nothing deskewed of %" PRIu64
+          " point(s) (no_time=%" PRIu64 ", no_pose=%" PRIu64 ", nonfinite=%" PRIu64
+          "); passed through un-deskewed",
+          job.topic.c_str(), res.points_total, res.points_no_time, res.points_no_pose,
+          res.points_nonfinite);
       }
+      log_out_of_span_warnings(res, job.topic.c_str());
+      item.frozen = io::own_payload(std::move(patched));
     }
   } catch (const std::exception & e) {
     item.error = std::string("exception: ") + e.what();
@@ -170,7 +170,7 @@ OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPos
 // straight into the in-order completion map.  Output message order and bytes
 // are identical to the synchronous path; note the summary cloud count is not
 // (this path counts every submitted `--pcd` message, including undecodable
-// ones).
+// ones).  Reports per-stage timings on success when BAGWIZ_PROFILE is enabled.
 int run_parallel_undistort_pass(
   io::BagWriter & writer, const io::BagReader & topic_reader,
   const std::filesystem::path & input_path, const std::unordered_set<std::string> & pcd_set,
@@ -190,12 +190,28 @@ int run_parallel_undistort_pass(
   }
   rd->populate_schemas();
 
+  // StageProfiler has no internal locking, so each thread accumulates into
+  // its own instance: this reader thread times kRead, each worker times
+  // kProcess, and the collector times kWrite. The collector's profiler also
+  // owns every message/byte counter -- it is the one thread that sees each
+  // output message exactly once. The totals are merged after the joins into
+  // a single report.
+  const bool profiling = core::pipeline::profile_value_enabled(std::getenv("BAGWIZ_PROFILE"));
+  core::pipeline::StageProfiler read_prof(profiling);
+  core::pipeline::StageProfiler write_prof(profiling);
+  std::vector<core::pipeline::StageProfiler> worker_profs;
+  worker_profs.reserve(static_cast<std::size_t>(num_threads));
+  for (int i = 0; i < num_threads; ++i) {
+    worker_profs.emplace_back(profiling);
+  }
+  const auto started_at = std::chrono::steady_clock::now();
+
   ParallelContext ctx;
   ctx.max_in_flight = static_cast<std::size_t>(num_threads) * 3;
 
   int collector_status = 0;
 
-  auto worker = [&]() {
+  auto worker = [&](core::pipeline::StageProfiler & prof) {
     while (true) {
       DeskewJob job;
       {
@@ -209,7 +225,11 @@ int run_parallel_undistort_pass(
       }
 
       const std::size_t seq = job.seq;
-      OutputItem item = process_deskew_job(std::move(job), trajectory);
+      OutputItem item;
+      {
+        auto s = prof.time(core::pipeline::Stage::kProcess);
+        item = process_deskew_job(std::move(job), trajectory);
+      }
 
       {
         std::lock_guard lock(ctx.mutex);
@@ -223,47 +243,26 @@ int run_parallel_undistort_pass(
     try {
       while (true) {
         OutputItem item;
-        bool wrote_direct = false;
         {
           std::unique_lock lock(ctx.mutex);
           ctx.cv.wait(lock, [&] {
-            auto it = ctx.completed.find(ctx.next_output_seq);
-            // A served (done) rendezvous stays visible until the reader
-            // resets it; it must not be served again.
-            const bool direct_pending = ctx.direct.has_value() && !ctx.direct->done;
-            return direct_pending || (it != ctx.completed.end()) ||
+            return ctx.completed.count(ctx.next_output_seq) != 0 ||
                    (ctx.reader_done && ctx.next_output_seq == ctx.total_submitted);
           });
 
-          if (ctx.direct.has_value() && !ctx.direct->done) {
-            // Serve the rendezvous: the reader is blocked until `done`, so the
-            // borrowed span is still valid. writer.write stays on this thread
-            // (the BagWriter single-thread contract).
-            const std::string topic = ctx.direct->topic;
-            const std::int64_t timestamp_ns = ctx.direct->timestamp_ns;
-            const std::span<const std::byte> payload = ctx.direct->payload;
-            lock.unlock();
-            writer.write(topic, timestamp_ns, payload);
-            lock.lock();
-            ctx.direct->done = true;
-            wrote_direct = true;
-          } else if (ctx.reader_done && ctx.next_output_seq == ctx.total_submitted) {
+          if (ctx.reader_done && ctx.next_output_seq == ctx.total_submitted) {
             break;
-          } else {
-            auto it = ctx.completed.find(ctx.next_output_seq);
-            if (it == ctx.completed.end()) {
-              continue;
-            }
-            item = std::move(it->second);
-            ctx.completed.erase(it);
-            ++ctx.next_output_seq;
-            --ctx.in_flight;
           }
+          auto it = ctx.completed.find(ctx.next_output_seq);
+          if (it == ctx.completed.end()) {
+            continue;
+          }
+          item = std::move(it->second);
+          ctx.completed.erase(it);
+          ++ctx.next_output_seq;
+          --ctx.in_flight;
         }
         ctx.cv.notify_all();
-        if (wrote_direct) {
-          continue;
-        }
 
         if (item.error.has_value()) {
           BAGWIZ_LOG_ERROR(
@@ -283,10 +282,22 @@ int run_parallel_undistort_pass(
           return;
         }
 
-        writer.write(item.topic, item.timestamp_ns, item.payload);
+        {
+          auto s = write_prof.time(core::pipeline::Stage::kWrite);
+          writer.write(item.topic, item.timestamp_ns, item.frozen.payload);
+        }
+        write_prof.add_message(
+          item.in_bytes, static_cast<std::uint64_t>(item.frozen.payload.size()));
       }
 
-      if (!io::close_writer_or_log(writer, kLogger)) {
+      // close() drains the writer's remaining compression backlog, so its
+      // time belongs to the write stage.
+      bool closed = false;
+      {
+        auto s = write_prof.time(core::pipeline::Stage::kWrite);
+        closed = io::close_writer_or_log(writer, kLogger);
+      }
+      if (!closed) {
         collector_status = 1;
       }
     } catch (const std::exception & e) {
@@ -303,13 +314,21 @@ int run_parallel_undistort_pass(
   std::vector<std::jthread> workers;
   workers.reserve(num_threads);
   for (int i = 0; i < num_threads; ++i) {
-    workers.emplace_back(worker);
+    workers.emplace_back(worker, std::ref(worker_profs[static_cast<std::size_t>(i)]));
   }
   std::jthread collector_thread(collector);
 
   io::RawMessage raw;
   try {
-    while (rd->next(raw)) {
+    while (true) {
+      bool got = false;
+      {
+        auto s = read_prof.time(core::pipeline::Stage::kRead);
+        got = rd->next(raw);
+      }
+      if (!got) {
+        break;
+      }
       const std::string & name = raw.topic->name;
       const bool is_pcd = pcd_set.count(name) != 0;
 
@@ -317,7 +336,13 @@ int run_parallel_undistort_pass(
         DeskewJob job;
         job.topic = name;
         job.timestamp_ns = raw.timestamp_ns;
-        job.payload.assign(raw.payload.begin(), raw.payload.end());
+        {
+          // freeze() shares the reader's chunk backing instead of copying the
+          // payload; it stays on this reader thread's critical path, so it is
+          // charged to the read stage.
+          auto s = read_prof.time(core::pipeline::Stage::kRead);
+          job.frozen = rd->freeze(raw);
+        }
         job.extrinsic = extrinsics.at(name);
 
         std::unique_lock lock(ctx.mutex);
@@ -332,37 +357,21 @@ int run_parallel_undistort_pass(
         lock.unlock();
         ctx.cv.notify_all();
       } else {
-        // Copy-through message. When the pipeline has drained (nothing in
-        // flight — which implies the queue and completion map are empty and
-        // every submitted item has been popped by the collector), this message
-        // is exactly next in output order: hand the collector the borrowed
-        // payload span for an immediate write instead of copying it into the
-        // completion map. The reader blocks until the write completes, so the
-        // span stays valid. in_flight is only ever incremented by this reader
-        // thread, so the check is race-free.
-        bool used_fast_path = false;
-        {
-          std::unique_lock lock(ctx.mutex);
-          if (!ctx.stop && ctx.in_flight == 0) {
-            ctx.direct = DirectWrite{name, raw.timestamp_ns, raw.payload, false};
-            ctx.cv.notify_all();
-            ctx.cv.wait(lock, [&] { return ctx.direct->done || ctx.stop; });
-            const bool wrote = ctx.direct->done;
-            ctx.direct.reset();
-            used_fast_path = true;
-            if (!wrote) {
-              break;  // stop requested (collector error)
-            }
-          }
-        }
-        if (used_fast_path) {
-          continue;
-        }
-
+        // Copy-through message: freeze the reader's chunk backing and hand it
+        // to the collector through the in-order completion map. The frozen
+        // payload keeps the bytes alive until the collector writes and drops
+        // the item, so neither a payload copy nor the reader-blocking
+        // rendezvous this used to need is required.
         OutputItem item;
         item.topic = name;
         item.timestamp_ns = raw.timestamp_ns;
-        item.payload.assign(raw.payload.begin(), raw.payload.end());
+        {
+          // Charged to the read stage for the same reason as the pcd freeze
+          // above.
+          auto s = read_prof.time(core::pipeline::Stage::kRead);
+          item.frozen = rd->freeze(raw);
+        }
+        item.in_bytes = static_cast<std::uint64_t>(item.frozen.payload.size());
 
         std::unique_lock lock(ctx.mutex);
         ctx.cv.wait(lock, [&] { return ctx.in_flight < ctx.max_in_flight || ctx.stop; });
@@ -406,12 +415,27 @@ int run_parallel_undistort_pass(
   ctx.cv.notify_all();
   collector_thread.join();
 
+  if (collector_status == 0) {
+    // Merge the reader's and workers' timings into the collector's profiler
+    // (which holds the message/byte counters) for one report. A failed pass
+    // aborts the in-place swap, so its truncated timings are not reported.
+    write_prof.add(
+      core::pipeline::Stage::kRead, std::chrono::nanoseconds(read_prof.totals().read_ns));
+    for (const auto & wp : worker_profs) {
+      write_prof.add(
+        core::pipeline::Stage::kProcess, std::chrono::nanoseconds(wp.totals().process_ns));
+    }
+    write_prof.set_elapsed(std::chrono::steady_clock::now() - started_at);
+    write_prof.report(kProfileLabel);
+  }
+
   return collector_status;
 }
 
 // Synchronous version of Pass 2 (num_threads <= 1): same declare + reopen +
 // stream shape as run_parallel_undistort_pass, but deskews each cloud inline
 // on the reader thread. Output message order is trivially the bag's order.
+// Reports per-stage timings on success when BAGWIZ_PROFILE is enabled.
 int run_sync_undistort_pass(
   io::BagWriter & writer, const io::BagReader & topic_reader,
   const std::filesystem::path & input_path, const std::unordered_set<std::string> & pcd_set,
@@ -431,25 +455,50 @@ int run_sync_undistort_pass(
   }
   rd->populate_schemas();
 
+  core::pipeline::StageProfiler prof;
+  const auto started_at = std::chrono::steady_clock::now();
+
+  std::vector<std::byte> patch_buf;  // reused across clouds
   io::RawMessage raw;
-  while (rd->next(raw)) {
+  while (true) {
+    bool got = false;
+    {
+      auto s = prof.time(core::pipeline::Stage::kRead);
+      got = rd->next(raw);
+    }
+    if (!got) {
+      break;
+    }
     const std::string & name = raw.topic->name;
+    const auto in_size = static_cast<std::uint64_t>(raw.payload.size());
     if (pcd_set.count(name) == 0) {
-      writer.write(name, raw.timestamp_ns, raw.payload);
+      {
+        auto s = prof.time(core::pipeline::Stage::kWrite);
+        writer.write(name, raw.timestamp_ns, raw.payload);
+      }
+      prof.add_message(in_size, in_size);
       continue;
     }
-    auto parsed = core::pointcloud::parse_pointcloud2(raw.payload);
-    if (!parsed.ok()) {
+    // Deskew by patching one owned copy of the CDR payload in place — no
+    // parse-side data copy and no re-serialize.
+    const auto res = [&] {
+      auto s = prof.time(core::pipeline::Stage::kProcess);
+      patch_buf.assign(raw.payload.begin(), raw.payload.end());
+      return core::pointcloud::deskew_pointcloud2_cdr(
+        std::span<std::byte>(patch_buf.data(), patch_buf.size()), trajectory, extrinsics.at(name));
+    }();
+    if (!res.parse_error.empty()) {
       BAGWIZ_LOG_WARN(
         kLogger, "pcd undistort: skipping undecodable cloud on '%s': %s", name.c_str(),
-        parsed.error.c_str());
-      writer.write(name, raw.timestamp_ns, raw.payload);
+        res.parse_error.c_str());
+      {
+        auto s = prof.time(core::pipeline::Stage::kWrite);
+        writer.write(name, raw.timestamp_ns, raw.payload);
+      }
+      prof.add_message(in_size, in_size);
       continue;
     }
-    const std::int64_t t_ref = parsed.cloud->timestamp_ns;  // header.stamp
-    auto res = core::pointcloud::deskew_pointcloud2(
-      std::move(*parsed.cloud), t_ref, trajectory, extrinsics.at(name));
-    if (!res.ok()) {
+    if (!res.error.empty()) {
       BAGWIZ_LOG_ERROR(
         kLogger, "pcd undistort: deskew failed on '%s': %s", name.c_str(), res.error.c_str());
       return 1;
@@ -470,21 +519,33 @@ int run_sync_undistort_pass(
         res.points_nonfinite);
     }
     log_out_of_span_warnings(res, name.c_str());
-    const auto payload = core::pointcloud::serialize_pointcloud2(*res.cloud);
-    writer.write(name, raw.timestamp_ns, payload);
+    {
+      auto s = prof.time(core::pipeline::Stage::kWrite);
+      writer.write(name, raw.timestamp_ns, patch_buf);
+    }
+    prof.add_message(in_size, static_cast<std::uint64_t>(patch_buf.size()));
     ++total_clouds;
   }
 
-  if (!io::close_writer_or_log(writer, kLogger)) {
+  // close() drains the writer's remaining compression backlog, so its time
+  // belongs to the write stage.
+  bool closed = false;
+  {
+    auto s = prof.time(core::pipeline::Stage::kWrite);
+    closed = io::close_writer_or_log(writer, kLogger);
+  }
+  if (!closed) {
     return 1;
   }
+  prof.set_elapsed(std::chrono::steady_clock::now() - started_at);
+  prof.report(kProfileLabel);
   return 0;
 }
 
 // Run Pass 2 through the shared -o vs in-place rewrite dispatch, picking the
 // sync or parallel pass by thread count. Unlike the other rewrite commands,
 // pcd undistort keeps the storage default (zstd) for MCAP compression rather
-// than forcing "none".
+// than forcing "none" — or forwards the user's --compression choice.
 int dispatch_undistort_pass(
   const PcdUndistortArgs & args, const io::BagReader & topic_reader,
   const std::unordered_set<std::string> & pcd_set, const ExtrinsicMap & extrinsics,
@@ -496,7 +557,8 @@ int dispatch_undistort_pass(
     "pcd undistort: could not detect storage format of input bag '%s'.";
   rewrite_opts.pass_failed_error = "pcd undistort: pass failed; aborting in-place swap";
   rewrite_opts.inherit_output_format = true;
-  rewrite_opts.disable_mcap_compression = false;
+  rewrite_opts.mcap_compression = args.compression.value_or("");
+  rewrite_opts.mcap_compression_level = args.compression_level.value_or("");
   return core::run_bag_rewrite(
     args.input_path, args.output_path, args.overwrite, rewrite_opts,
     [&](const io::WriterFactory & factory) {
@@ -550,6 +612,50 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
       return 1;
     }
     max_extrap_ns = *dur;
+  }
+  // CLI11 already restricts the flag values, but the runner is also a direct
+  // API entry (tests, future callers), so validate here too and fail fast.
+  if (args.compression.has_value()) {
+    const std::string & c = *args.compression;
+    if (c != "zstd" && c != "lz4" && c != "none") {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "pcd undistort: --compression '%s' is not one of zstd, lz4, none", c.c_str());
+      return 1;
+    }
+  }
+  if (args.compression_level.has_value()) {
+    const std::string & l = *args.compression_level;
+    if (l != "fastest" && l != "fast" && l != "default" && l != "slow" && l != "slowest") {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "pcd undistort: --compression-level '%s' is not one of fastest, fast, default, slow, "
+        "slowest",
+        l.c_str());
+      return 1;
+    }
+    if (args.compression.has_value() && *args.compression == "none") {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "pcd undistort: --compression-level has no effect with --compression none");
+      return 1;
+    }
+  }
+  if (args.compression.has_value() || args.compression_level.has_value()) {
+    // The flags configure mcap chunk compression; reject them when the
+    // output resolves to another storage format. An undetectable in-place
+    // input falls through to the dispatch's own format error instead.
+    const io::Format out_format = args.output_path.has_value()
+                                    ? io::resolve_write_layout(
+                                        *args.output_path, io::create_options_inheriting_format(
+                                                             args.input_path, *args.output_path))
+                                        .format
+                                    : io::detect_format(args.input_path);
+    if (out_format == io::Format::Sqlite3) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "pcd undistort: --compression/--compression-level apply only to mcap outputs; this "
+        "output is SQLite3 (.db3)");
+      return 1;
+    }
   }
 
   auto reader = io::open_read_or_log(args.input_path, kLogger);
@@ -655,8 +761,14 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
   // ---- Pass 2: copy-through + deskew (-o vs in-place shared dispatch) -------
   const std::unordered_set<std::string> pcd_set(args.pcd_topics.begin(), args.pcd_topics.end());
   std::uint64_t total_clouds = 0;
+  // Default to the hardware concurrency (0 = "auto"): with the payload
+  // copies out of the pipeline, extra deskew workers cost no additional CPU
+  // (measured flat user time from 8 through 24 workers on a 24-core host)
+  // while cutting wall time ~30% — the earlier fixed default of 8 predates
+  // that and left the win on the table. Output bytes are identical at any
+  // worker count, so the default only affects speed.
   const int num_threads =
-    resolve_num_threads(args.threads.value_or(8), std::thread::hardware_concurrency());
+    resolve_num_threads(args.threads.value_or(0), std::thread::hardware_concurrency());
   const int status = dispatch_undistort_pass(
     args, *reader, pcd_set, *extrinsics, trajectory, num_threads, total_clouds);
   if (status != 0) {

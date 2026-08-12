@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace bagwiz::core::pointcloud
 {
@@ -43,6 +44,11 @@ inline constexpr double kRelativeTimeThresholdSec = 1.0e6;
 // A field that fails any check is ignored (the cloud is treated as having no
 // per-point time); the search falls through to the next name.
 [[nodiscard]] std::optional<PointTimeField> find_point_time_field(const PointCloud2 & cloud);
+
+// Same search over a bare field table, for callers that hold a
+// PointCloud2Header (or any field list) instead of a materialised cloud.
+[[nodiscard]] std::optional<PointTimeField> find_point_time_field(
+  std::span<const PointField> fields);
 
 // The per-point time at `field_bytes` (a pointer to the field's first byte for
 // one point) as seconds: a UINT32 value is divided by 1e9, a FLOAT32 / FLOAT64

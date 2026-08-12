@@ -26,7 +26,7 @@ slam::ScanImagePairer::PendingImage make_image(std::size_t cam, std::int64_t sta
   image.cam = cam;
   image.stamp_ns = stamp_ns;
   image.type = "sensor_msgs/msg/Image";
-  image.payload = {std::byte{0x01}, std::byte{0x02}};
+  image.frozen = bagwiz::io::own_payload({std::byte{0x01}, std::byte{0x02}});
   return image;
 }
 
@@ -170,9 +170,9 @@ TEST(ScanImagePairer, ImageFieldsAreCarriedThrough)
   EXPECT_EQ(decision.image.cam, 3U);
   EXPECT_EQ(decision.image.stamp_ns, 42);
   EXPECT_EQ(decision.image.type, "sensor_msgs/msg/Image");
-  ASSERT_EQ(decision.image.payload.size(), 2U);
-  EXPECT_EQ(decision.image.payload[0], std::byte{0x01});
-  EXPECT_EQ(decision.image.payload[1], std::byte{0x02});
+  ASSERT_EQ(decision.image.frozen.payload.size(), 2U);
+  EXPECT_EQ(decision.image.frozen.payload[0], std::byte{0x01});
+  EXPECT_EQ(decision.image.frozen.payload[1], std::byte{0x02});
 }
 
 }  // namespace

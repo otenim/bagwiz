@@ -40,12 +40,13 @@ int resolve_write_threads();
 class ParallelChunkMcapWriter
 {
 public:
-  // `compression` is "zstd" or "lz4" (the normalized mcap codec name).
-  // `num_threads` is the compression worker count (>= 2; the caller resolves
-  // it via resolve_write_threads).
+  // `compression` is "zstd" or "lz4" (the normalized mcap codec name);
+  // `level` is the encoder effort every worker's chunk encoder is built
+  // with. `num_threads` is the compression worker count (>= 2; the caller
+  // resolves it via resolve_write_threads).
   ParallelChunkMcapWriter(
-    const std::filesystem::path & path, std::string compression, std::uint64_t chunk_size,
-    int num_threads);
+    const std::filesystem::path & path, std::string compression, mcap::CompressionLevel level,
+    std::uint64_t chunk_size, int num_threads);
   ~ParallelChunkMcapWriter();
 
   ParallelChunkMcapWriter(const ParallelChunkMcapWriter &) = delete;

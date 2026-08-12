@@ -169,7 +169,7 @@ private:
     sub
       ->add_option(
         "-j,--threads", undistort_args_.threads,
-        "Number of worker threads for deskew (default: 8; 0 = hardware concurrency, "
+        "Number of worker threads for deskew (default: 0 = hardware concurrency; "
         "1 = sync). Range 0-256; in-range values above hardware concurrency are capped.")
       ->check(CLI::Range(0, 256));
     auto * no_extrap_flag = sub->add_flag(
@@ -185,6 +185,19 @@ private:
         "--pcd topics' first clouds needs more extrapolation than this, the run errors "
         "out before writing anything.")
       ->excludes(no_extrap_flag);
+    sub
+      ->add_option(
+        "--compression", undistort_args_.compression,
+        "MCAP chunk codec for the output: zstd (default), lz4 (much cheaper to encode, "
+        "larger output), or none. mcap outputs only.")
+      ->check(CLI::IsMember({"zstd", "lz4", "none"}));
+    sub
+      ->add_option(
+        "--compression-level", undistort_args_.compression_level,
+        "Encoder effort for the chosen (or default) codec: fastest, fast, default, slow, "
+        "slowest. Unset: default for zstd, fastest for lz4 (lz4's 'default' is the far "
+        "slower LZ4-HC mode). Not combinable with --compression none.")
+      ->check(CLI::IsMember({"fastest", "fast", "default", "slow", "slowest"}));
     sub->callback([this]() { selected_ = Subcommand::kUndistort; });
   }
 };

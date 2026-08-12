@@ -14,7 +14,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace bagwiz::core::pointcloud
 {
@@ -155,9 +157,13 @@ Vec3 vec_add(const Vec3 & a, const Vec3 & b)
   return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
-const PointField * find_xyz(const PointCloud2 & c, const char * name)
+// Takes the field table by const reference rather than std::span: newer
+// cppcheck releases misread a by-value span as call-local storage and flag
+// the returned pointer as dangling (the same view-type false-positive class
+// that keeps std::string_view out of this codebase's signatures).
+const PointField * find_field(const std::vector<PointField> & fields, const char * name)
 {
-  for (const auto & f : c.fields) {
+  for (const auto & f : fields) {
     if (f.name == name) return &f;
   }
   return nullptr;
@@ -215,110 +221,144 @@ void write_ref_time(std::byte * base, PointFieldType dt, bool relative, std::int
   }
 }
 
-}  // namespace
-
-DeskewResult deskew_pointcloud2(
-  PointCloud2 input, std::int64_t t_ref_ns, std::span<const core::TrajectoryPose> trajectory,
-  const std::optional<geometry_msgs::msg::Transform> & extrinsic)
+// Field layout resolved and validated for the deskew kernel, shared by the
+// struct and CDR entry points so both accept and reject exactly the same
+// clouds. `error` non-empty rejects the cloud outright; an unset time_field
+// means "no usable per-point time" (including a time field declared out of
+// bounds) and the cloud passes through verbatim.
+struct KernelLayout
 {
-  DeskewResult out;
-  if (input.is_bigendian) {
-    out.error = "big-endian point clouds are not supported";
-    return out;
+  PointField fx, fy, fz;  // copies: valid independently of the source field table
+  std::optional<PointTimeField> time_field;
+  std::uint32_t rstep = 0;
+  std::string error;
+};
+
+KernelLayout resolve_kernel_layout(
+  bool is_bigendian, const std::vector<PointField> & fields, std::uint32_t point_step,
+  std::uint32_t row_step, std::uint32_t width, std::uint32_t height, std::size_t data_size)
+{
+  KernelLayout lay;
+  if (is_bigendian) {
+    lay.error = "big-endian point clouds are not supported";
+    return lay;
   }
-  const PointField * fx = find_xyz(input, "x");
-  const PointField * fy = find_xyz(input, "y");
-  const PointField * fz = find_xyz(input, "z");
+  const PointField * fx = find_field(fields, "x");
+  const PointField * fy = find_field(fields, "y");
+  const PointField * fz = find_field(fields, "z");
   if (fx == nullptr || fy == nullptr || fz == nullptr) {
-    out.error = "cloud is missing one of the x/y/z fields";
-    return out;
+    lay.error = "cloud is missing one of the x/y/z fields";
+    return lay;
   }
   if (!is_float(fx->datatype) || fx->datatype != fy->datatype || fx->datatype != fz->datatype) {
-    out.error = "x/y/z must all be the same float type (FLOAT32 or FLOAT64)";
-    return out;
+    lay.error = "x/y/z must all be the same float type (FLOAT32 or FLOAT64)";
+    return lay;
   }
   if (fx->count != 1 || fy->count != 1 || fz->count != 1) {
-    out.error = "x/y/z count must be 1";
-    return out;
+    lay.error = "x/y/z count must be 1";
+    return lay;
   }
-  if (input.point_step == 0) {
-    out.error = "point_step is zero";
-    return out;
+  if (point_step == 0) {
+    lay.error = "point_step is zero";
+    return lay;
   }
   const auto fits = [&](std::uint32_t offset, PointFieldType dt) {
-    return static_cast<std::size_t>(offset) + datatype_size(dt) <= input.point_step;
+    return static_cast<std::size_t>(offset) + datatype_size(dt) <= point_step;
   };
   if (
     !fits(fx->offset, fx->datatype) || !fits(fy->offset, fy->datatype) ||
     !fits(fz->offset, fz->datatype)) {
-    out.error = "x/y/z field exceeds point_step";
-    return out;
+    lay.error = "x/y/z field exceeds point_step";
+    return lay;
   }
-  const std::uint32_t rstep = input.row_step != 0 ? input.row_step : input.width * input.point_step;
-  if (static_cast<std::size_t>(input.width) * input.point_step > rstep) {
-    out.error = "row_step is smaller than width*point_step";
-    return out;
+  lay.rstep = row_step != 0 ? row_step : width * point_step;
+  if (static_cast<std::size_t>(width) * point_step > lay.rstep) {
+    lay.error = "row_step is smaller than width*point_step";
+    return lay;
   }
-  if (input.data.size() < static_cast<std::size_t>(input.height) * rstep) {
-    out.error = "point data buffer too small";
-    return out;
+  if (data_size < static_cast<std::size_t>(height) * lay.rstep) {
+    lay.error = "point data buffer too small";
+    return lay;
   }
+  lay.fx = *fx;
+  lay.fy = *fy;
+  lay.fz = *fz;
 
-  out.points_total = static_cast<std::uint64_t>(input.width) * input.height;
-
-  const auto time_field = find_point_time_field(input);
-  if (!time_field) {
-    out.cloud = std::move(input);
-    out.points_no_time = out.points_total;
-    return out;
-  }
-  if (!fits(time_field->offset, time_field->datatype)) {
+  auto time_field = find_point_time_field(fields);
+  if (time_field && !fits(time_field->offset, time_field->datatype)) {
     // find_point_time_field / point_time_seconds do not bounds-check the
     // field against point_step (point_time.hpp: that is the caller's job) --
     // a malformed cloud whose declared time field runs past point_step would
     // otherwise read past its own point and write past it too, corrupting
-    // the next point (or, for the last point, the end of `data`). Treat it
-    // exactly like "no usable time field".
-    out.cloud = std::move(input);
-    out.points_no_time = out.points_total;
-    return out;
+    // the next point (or, for the last point, the end of the data buffer).
+    // Treat it exactly like "no usable time field".
+    time_field.reset();
   }
+  lay.time_field = time_field;
+  return lay;
+}
 
-  const auto ref_pose = core::lookup_pose(t_ref_ns, trajectory);
-  if (!ref_pose) {
-    out.cloud = std::move(input);
-    out.points_no_pose = out.points_total;
-    return out;
-  }
-  // lookup_pose clamps out-of-span stamps to the endpoint poses; report that
-  // on the result so callers can warn, since a clamped reference can silently
-  // turn the whole deskew into a no-op.
-  out.ref_out_of_span =
-    t_ref_ns < trajectory.front().timestamp_ns || t_ref_ns > trajectory.back().timestamp_ns;
+// The reference / extrinsic frame composition, precomputed once per cloud
+// (tf2::Transform semantics; see the Mat3/Vec3 note above).
+struct FrameComposition
+{
+  Mat3 r_ri;  // T_ref^{-1} rotation
+  Vec3 t_ri;  // T_ref^{-1} translation
+  Mat3 r_e;   // E rotation
+  Vec3 t_e;   // E translation
+  Mat3 r_ei;  // E^{-1} rotation
+  Vec3 t_ei;  // E^{-1} translation
+};
 
-  // T_ref_inv and the extrinsic E / E_inv, once per cloud (tf2::Transform
-  // semantics; see the Mat3/Vec3 note above).
-  const Mat3 r_ref = mat_from_quat(ref_pose->qx, ref_pose->qy, ref_pose->qz, ref_pose->qw);
-  const Mat3 r_ri = mat_transpose(r_ref);
-  const Vec3 t_ri = mat_vec(r_ri, vec_neg({ref_pose->tx, ref_pose->ty, ref_pose->tz}));
+FrameComposition compose_frames(
+  const core::TrajectoryPose & ref_pose,
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic)
+{
+  FrameComposition fc;
+  const Mat3 r_ref = mat_from_quat(ref_pose.qx, ref_pose.qy, ref_pose.qz, ref_pose.qw);
+  fc.r_ri = mat_transpose(r_ref);
+  fc.t_ri = mat_vec(fc.r_ri, vec_neg({ref_pose.tx, ref_pose.ty, ref_pose.tz}));
 
-  Mat3 r_e{{{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}}};
-  Vec3 t_e{0.0, 0.0, 0.0};
+  fc.r_e = Mat3{{{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}}};
+  fc.t_e = Vec3{0.0, 0.0, 0.0};
   if (extrinsic) {
-    r_e = mat_from_quat(
+    fc.r_e = mat_from_quat(
       extrinsic->rotation.x, extrinsic->rotation.y, extrinsic->rotation.z, extrinsic->rotation.w);
-    t_e = {extrinsic->translation.x, extrinsic->translation.y, extrinsic->translation.z};
+    fc.t_e = {extrinsic->translation.x, extrinsic->translation.y, extrinsic->translation.z};
   }
-  const Mat3 r_ei = mat_transpose(r_e);
-  const Vec3 t_ei = mat_vec(r_ei, vec_neg(t_e));
+  fc.r_ei = mat_transpose(fc.r_e);
+  fc.t_ei = mat_vec(fc.r_ei, vec_neg(fc.t_e));
+  return fc;
+}
+
+// Counters the kernel accumulates; points_total, points_no_pose, and the
+// reference clamp flag are the callers' to set.
+struct KernelCounters
+{
+  std::uint64_t deskewed = 0;
+  std::uint64_t no_time = 0;
+  std::uint64_t nonfinite = 0;
+  std::uint64_t out_of_span = 0;
+};
+
+// The per-point patch loop -- relative/absolute pre-scan, trajectory cursor,
+// transform, in-place store -- shared verbatim between deskew_pointcloud2 and
+// deskew_pointcloud2_cdr so both produce bit-identical points.
+void run_deskew_kernel(
+  std::byte * data, const KernelLayout & lay, std::uint32_t width, std::uint32_t height,
+  std::uint32_t point_step, std::int64_t t_ref_ns, std::span<const core::TrajectoryPose> trajectory,
+  const FrameComposition & fc, KernelCounters & out)
+{
+  const PointTimeField & time_field = *lay.time_field;
+  const std::uint32_t rstep = lay.rstep;
 
   // Detect relative vs absolute times (one scan of the time field).
   double max_abs_sec = 0.0;
-  for (std::uint32_t r = 0; r < input.height; ++r) {
-    for (std::uint32_t col = 0; col < input.width; ++col) {
-      const std::byte * b = input.data.data() + static_cast<std::size_t>(r) * rstep +
-                            static_cast<std::size_t>(col) * input.point_step + time_field->offset;
-      const double s = point_time_seconds(b, *time_field);
+  for (std::uint32_t r = 0; r < height; ++r) {
+    for (std::uint32_t col = 0; col < width; ++col) {
+      const std::byte * b = data + static_cast<std::size_t>(r) * rstep +
+                            static_cast<std::size_t>(col) * point_step + time_field.offset;
+      const double s = point_time_seconds(b, time_field);
       if (std::isfinite(s)) max_abs_sec = std::max(max_abs_sec, std::abs(s));
     }
   }
@@ -335,20 +375,20 @@ DeskewResult deskew_pointcloud2(
   std::size_t lo = 0;
   std::int64_t prev_t = std::numeric_limits<std::int64_t>::min();
 
-  for (std::uint32_t r = 0; r < input.height; ++r) {
-    for (std::uint32_t col = 0; col < input.width; ++col) {
-      std::byte * base = input.data.data() + static_cast<std::size_t>(r) * rstep +
-                         static_cast<std::size_t>(col) * input.point_step;
-      const double x = load_xyz(base + fx->offset, fx->datatype);
-      const double y = load_xyz(base + fy->offset, fy->datatype);
-      const double z = load_xyz(base + fz->offset, fz->datatype);
+  for (std::uint32_t r = 0; r < height; ++r) {
+    for (std::uint32_t col = 0; col < width; ++col) {
+      std::byte * base =
+        data + static_cast<std::size_t>(r) * rstep + static_cast<std::size_t>(col) * point_step;
+      const double x = load_xyz(base + lay.fx.offset, lay.fx.datatype);
+      const double y = load_xyz(base + lay.fy.offset, lay.fy.datatype);
+      const double z = load_xyz(base + lay.fz.offset, lay.fz.datatype);
       if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
-        ++out.points_nonfinite;
+        ++out.nonfinite;
         continue;
       }
-      const double sec = point_time_seconds(base + time_field->offset, *time_field);
+      const double sec = point_time_seconds(base + time_field.offset, time_field);
       if (!std::isfinite(sec)) {
-        ++out.points_no_time;
+        ++out.no_time;
         continue;
       }
       const std::int64_t t_i_ns =
@@ -371,12 +411,12 @@ DeskewResult deskew_pointcloud2(
       core::TrajectoryPose pose_i;
       if (lo == n_poses) {
         pose_i = trajectory.back();
-        ++out.points_out_of_span;  // t_i past the last pose: clamped to it
+        ++out.out_of_span;  // t_i past the last pose: clamped to it
       } else if (trajectory[lo].timestamp_ns == t_i_ns) {
         pose_i = trajectory[lo];
       } else if (lo == 0) {
         pose_i = trajectory.front();
-        ++out.points_out_of_span;  // t_i before the first pose: clamped to it
+        ++out.out_of_span;  // t_i before the first pose: clamped to it
       } else {
         const auto & prev = trajectory[lo - 1];
         const auto & next = trajectory[lo];
@@ -393,22 +433,118 @@ DeskewResult deskew_pointcloud2(
       // the equivalent tf2::Transform chain.
       const Mat3 r_i = mat_from_quat(pose_i.qx, pose_i.qy, pose_i.qz, pose_i.qw);
       const Vec3 t_i{pose_i.tx, pose_i.ty, pose_i.tz};
-      const Mat3 inner_r = mat_mul(r_ri, r_i);
-      const Vec3 inner_t = vec_add(mat_vec(r_ri, t_i), t_ri);
-      const Mat3 rel2_r = mat_mul(r_ei, inner_r);
-      const Vec3 rel2_t = vec_add(mat_vec(r_ei, inner_t), t_ei);
-      const Mat3 rel_r = mat_mul(rel2_r, r_e);
-      const Vec3 rel_t = vec_add(mat_vec(rel2_r, t_e), rel2_t);
+      const Mat3 inner_r = mat_mul(fc.r_ri, r_i);
+      const Vec3 inner_t = vec_add(mat_vec(fc.r_ri, t_i), fc.t_ri);
+      const Mat3 rel2_r = mat_mul(fc.r_ei, inner_r);
+      const Vec3 rel2_t = vec_add(mat_vec(fc.r_ei, inner_t), fc.t_ei);
+      const Mat3 rel_r = mat_mul(rel2_r, fc.r_e);
+      const Vec3 rel_t = vec_add(mat_vec(rel2_r, fc.t_e), rel2_t);
       const Vec3 p = vec_add(mat_vec(rel_r, {x, y, z}), rel_t);
 
-      store_xyz(base + fx->offset, fx->datatype, p.x);
-      store_xyz(base + fy->offset, fy->datatype, p.y);
-      store_xyz(base + fz->offset, fz->datatype, p.z);
-      write_ref_time(base + time_field->offset, time_field->datatype, relative, t_ref_ns);
-      ++out.points_deskewed;
+      store_xyz(base + lay.fx.offset, lay.fx.datatype, p.x);
+      store_xyz(base + lay.fy.offset, lay.fy.datatype, p.y);
+      store_xyz(base + lay.fz.offset, lay.fz.datatype, p.z);
+      write_ref_time(base + time_field.offset, time_field.datatype, relative, t_ref_ns);
+      ++out.deskewed;
     }
   }
+}
+
+}  // namespace
+
+DeskewResult deskew_pointcloud2(
+  PointCloud2 input, std::int64_t t_ref_ns, std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic)
+{
+  DeskewResult out;
+  const KernelLayout lay = resolve_kernel_layout(
+    input.is_bigendian, input.fields, input.point_step, input.row_step, input.width, input.height,
+    input.data.size());
+  if (!lay.error.empty()) {
+    out.error = lay.error;
+    return out;
+  }
+
+  out.points_total = static_cast<std::uint64_t>(input.width) * input.height;
+
+  if (!lay.time_field) {
+    out.cloud = std::move(input);
+    out.points_no_time = out.points_total;
+    return out;
+  }
+
+  const auto ref_pose = core::lookup_pose(t_ref_ns, trajectory);
+  if (!ref_pose) {
+    out.cloud = std::move(input);
+    out.points_no_pose = out.points_total;
+    return out;
+  }
+  // lookup_pose clamps out-of-span stamps to the endpoint poses; report that
+  // on the result so callers can warn, since a clamped reference can silently
+  // turn the whole deskew into a no-op.
+  out.ref_out_of_span =
+    t_ref_ns < trajectory.front().timestamp_ns || t_ref_ns > trajectory.back().timestamp_ns;
+
+  const FrameComposition fc = compose_frames(*ref_pose, extrinsic);
+  KernelCounters counters;
+  run_deskew_kernel(
+    input.data.data(), lay, input.width, input.height, input.point_step, t_ref_ns, trajectory, fc,
+    counters);
+  out.points_deskewed = counters.deskewed;
+  out.points_no_time = counters.no_time;
+  out.points_nonfinite = counters.nonfinite;
+  out.points_out_of_span = counters.out_of_span;
   out.cloud = std::move(input);
+  return out;
+}
+
+DeskewCdrResult deskew_pointcloud2_cdr(
+  std::span<std::byte> payload, std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic)
+{
+  DeskewCdrResult out;
+  const auto parsed =
+    parse_pointcloud2_cdr_layout(std::span<const std::byte>(payload.data(), payload.size()));
+  if (!parsed.ok()) {
+    out.parse_error = parsed.error;
+    return out;
+  }
+  const PointCloud2CdrLayout & pl = *parsed.layout;
+  const PointCloud2Header & h = pl.header;
+  out.t_ref_ns = h.timestamp_ns;
+
+  const KernelLayout lay = resolve_kernel_layout(
+    h.is_bigendian, h.fields, h.point_step, h.row_step, h.width, h.height, pl.data_size);
+  if (!lay.error.empty()) {
+    out.error = lay.error;
+    return out;
+  }
+
+  out.points_total = static_cast<std::uint64_t>(h.width) * h.height;
+
+  if (!lay.time_field) {
+    out.points_no_time = out.points_total;
+    return out;
+  }
+
+  const auto ref_pose = core::lookup_pose(h.timestamp_ns, trajectory);
+  if (!ref_pose) {
+    out.points_no_pose = out.points_total;
+    return out;
+  }
+  // Same reference-clamp report as deskew_pointcloud2 above.
+  out.ref_out_of_span = h.timestamp_ns < trajectory.front().timestamp_ns ||
+                        h.timestamp_ns > trajectory.back().timestamp_ns;
+
+  const FrameComposition fc = compose_frames(*ref_pose, extrinsic);
+  KernelCounters counters;
+  run_deskew_kernel(
+    payload.data() + pl.data_offset, lay, h.width, h.height, h.point_step, h.timestamp_ns,
+    trajectory, fc, counters);
+  out.points_deskewed = counters.deskewed;
+  out.points_no_time = counters.no_time;
+  out.points_nonfinite = counters.nonfinite;
+  out.points_out_of_span = counters.out_of_span;
   return out;
 }
 

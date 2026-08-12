@@ -153,6 +153,19 @@ std::vector<std::byte> garbage_payload()
   return {std::byte{0}, std::byte{1}, std::byte{2}, std::byte{3}};
 }
 
+// Stand-in for what the reader hands the tracker: own_payload() produces the
+// same shape as BagReader::freeze() on a backend that has to copy, which is
+// all these tests need.
+bagwiz::io::FrozenMessage frozen(std::vector<std::byte> bytes)
+{
+  return bagwiz::io::own_payload(std::move(bytes));
+}
+
+std::vector<std::byte> bytes_of(const bagwiz::io::FrozenMessage & msg)
+{
+  return {msg.payload.begin(), msg.payload.end()};
+}
+
 TEST(ConcatAssembler, FiresGroupWhenLastPickArrives)
 {
   ConcatAssembler a({input(1), input(1)}, {{1000, {0, 0}}}, "base_link");
@@ -302,19 +315,19 @@ TEST(ConcatGroupTracker, FiresJobWhenLastPickArrives)
   ConcatGroupTracker t({input(1), input(1)}, {{1000, {0, 0}}});
 
   const auto payload_a = xyz_payload(1000, 1.0F);
-  EXPECT_TRUE(t.on_message(0, 0, payload_a).empty());
+  EXPECT_TRUE(t.on_message(0, 0, frozen(payload_a)).empty());
 
   const auto payload_b = xyz_payload(1000, 2.0F);
-  const auto jobs = t.on_message(1, 0, payload_b);
+  const auto jobs = t.on_message(1, 0, frozen(payload_b));
   ASSERT_EQ(jobs.size(), 1u);
   EXPECT_EQ(jobs[0].output_stamp_ns, 1000);
   ASSERT_EQ(jobs[0].picks.size(), 2u);
   EXPECT_EQ(jobs[0].picks[0].topic, 0u);
   EXPECT_EQ(jobs[0].picks[1].topic, 1u);
-  ASSERT_NE(jobs[0].picks[0].payload, nullptr);
-  ASSERT_NE(jobs[0].picks[1].payload, nullptr);
-  EXPECT_EQ(*jobs[0].picks[0].payload, payload_a);  // raw bytes intact, --pcd order
-  EXPECT_EQ(*jobs[0].picks[1].payload, payload_b);
+  ASSERT_NE(jobs[0].picks[0].frozen.owner, nullptr);
+  ASSERT_NE(jobs[0].picks[1].frozen.owner, nullptr);
+  EXPECT_EQ(bytes_of(jobs[0].picks[0].frozen), payload_a);  // raw bytes intact, --pcd order
+  EXPECT_EQ(bytes_of(jobs[0].picks[1].frozen), payload_b);
 }
 
 TEST(ConcatGroupTracker, UnpickedMessageIsIgnored)
@@ -322,9 +335,10 @@ TEST(ConcatGroupTracker, UnpickedMessageIsIgnored)
   // Two reference messages but only one group: reference message 1 is unpicked.
   ConcatGroupTracker t({input(2), input(1)}, {{1000, {0, 0}}});
 
-  EXPECT_TRUE(t.on_message(0, 1, garbage_payload()).empty());
-  EXPECT_TRUE(t.on_message(1, 0, xyz_payload(1000, 2.0F)).empty());
-  EXPECT_EQ(t.on_message(0, 0, xyz_payload(1000, 1.0F)).size(), 1u);
+  EXPECT_FALSE(t.is_picked(0, 1));  // the caller skips freezing it entirely
+  EXPECT_TRUE(t.on_message(0, 1, frozen(garbage_payload())).empty());
+  EXPECT_TRUE(t.on_message(1, 0, frozen(xyz_payload(1000, 2.0F))).empty());
+  EXPECT_EQ(t.on_message(0, 0, frozen(xyz_payload(1000, 1.0F))).size(), 1u);
 }
 
 TEST(ConcatGroupTracker, SharedPickServesEveryReferencingGroup)
@@ -334,18 +348,18 @@ TEST(ConcatGroupTracker, SharedPickServesEveryReferencingGroup)
   ConcatGroupTracker t({input(2), input(1)}, {{1000, {0, 0}}, {2000, {1, 0}}});
 
   const auto shared = xyz_payload(1000, 2.0F);
-  EXPECT_TRUE(t.on_message(1, 0, shared).empty());
+  EXPECT_TRUE(t.on_message(1, 0, frozen(shared)).empty());
 
-  const auto first = t.on_message(0, 0, xyz_payload(1000, 1.0F));
+  const auto first = t.on_message(0, 0, frozen(xyz_payload(1000, 1.0F)));
   ASSERT_EQ(first.size(), 1u);
   EXPECT_EQ(first[0].output_stamp_ns, 1000);
 
-  const auto second = t.on_message(0, 1, xyz_payload(2000, 1.0F));
+  const auto second = t.on_message(0, 1, frozen(xyz_payload(2000, 1.0F)));
   ASSERT_EQ(second.size(), 1u);
   EXPECT_EQ(second[0].output_stamp_ns, 2000);
   ASSERT_EQ(second[0].picks.size(), 2u);
-  ASSERT_NE(second[0].picks[1].payload, nullptr);
-  EXPECT_EQ(*second[0].picks[1].payload, shared);  // still served after group 0
+  ASSERT_NE(second[0].picks[1].frozen.owner, nullptr);
+  EXPECT_EQ(bytes_of(second[0].picks[1].frozen), shared);  // still served after group 0
 }
 
 TEST(ConcatGroupTracker, OneArrivalCanFireMultipleGroups)
@@ -354,10 +368,10 @@ TEST(ConcatGroupTracker, OneArrivalCanFireMultipleGroups)
   // fire together, in group order.
   ConcatGroupTracker t({input(1), input(2)}, {{1000, {0, 0}}, {2000, {0, 1}}});
 
-  EXPECT_TRUE(t.on_message(1, 0, xyz_payload(1000, 2.0F)).empty());
-  EXPECT_TRUE(t.on_message(1, 1, xyz_payload(2000, 3.0F)).empty());
+  EXPECT_TRUE(t.on_message(1, 0, frozen(xyz_payload(1000, 2.0F))).empty());
+  EXPECT_TRUE(t.on_message(1, 1, frozen(xyz_payload(2000, 3.0F))).empty());
 
-  const auto jobs = t.on_message(0, 0, xyz_payload(1000, 1.0F));
+  const auto jobs = t.on_message(0, 0, frozen(xyz_payload(1000, 1.0F)));
   ASSERT_EQ(jobs.size(), 2u);
   EXPECT_EQ(jobs[0].output_stamp_ns, 1000);
   EXPECT_EQ(jobs[1].output_stamp_ns, 2000);
@@ -366,11 +380,6 @@ TEST(ConcatGroupTracker, OneArrivalCanFireMultipleGroups)
 // ---------------------------------------------------------------------------
 // process_concat_group (parallel Pass B: per-group worker computation)
 // ---------------------------------------------------------------------------
-
-std::shared_ptr<const std::vector<std::byte>> shared_payload(std::vector<std::byte> bytes)
-{
-  return std::make_shared<const std::vector<std::byte>>(std::move(bytes));
-}
 
 std::vector<pc::RigidTransform> identities(std::size_t n)
 {
@@ -382,8 +391,8 @@ TEST(ProcessConcatGroup, MergesPicksInPcdOrder)
   ConcatGroupJob job;
   job.output_stamp_ns = 1000;
   job.picks = {
-    {0, 0, shared_payload(xyz_payload(1000, 1.0F))},
-    {1, 0, shared_payload(xyz_payload(1000, 2.0F))},
+    {0, 0, frozen(xyz_payload(1000, 1.0F))},
+    {1, 0, frozen(xyz_payload(1000, 2.0F))},
   };
   const auto res = process_concat_group(job, identities(2), "base_link", 2);
   EXPECT_TRUE(res.error.empty());
@@ -406,8 +415,8 @@ TEST(ProcessConcatGroup, ParseFailureYieldsPartialOutput)
   ConcatGroupJob job;
   job.output_stamp_ns = 1000;
   job.picks = {
-    {0, 0, shared_payload(garbage_payload())},
-    {1, 0, shared_payload(xyz_payload(1000, 2.0F))},
+    {0, 0, frozen(garbage_payload())},
+    {1, 0, frozen(xyz_payload(1000, 2.0F))},
   };
   const auto res = process_concat_group(job, identities(2), "base_link", 2);
   EXPECT_TRUE(res.error.empty());
@@ -427,8 +436,8 @@ TEST(ProcessConcatGroup, TransformFailureYieldsPartialOutput)
   ConcatGroupJob job;
   job.output_stamp_ns = 1000;
   job.picks = {
-    {0, 0, shared_payload(xy_payload(1000))},  // no z field -> transform fails
-    {1, 0, shared_payload(xyz_payload(1000, 2.0F))},
+    {0, 0, frozen(xy_payload(1000))},  // no z field -> transform fails
+    {1, 0, frozen(xyz_payload(1000, 2.0F))},
   };
   const auto res = process_concat_group(job, identities(2), "base_link", 2);
   EXPECT_TRUE(res.error.empty());
@@ -442,8 +451,8 @@ TEST(ProcessConcatGroup, AllPicksFailedEmitsNoPayload)
   ConcatGroupJob job;
   job.output_stamp_ns = 1000;
   job.picks = {
-    {0, 0, shared_payload(garbage_payload())},
-    {1, 0, shared_payload(garbage_payload())},
+    {0, 0, frozen(garbage_payload())},
+    {1, 0, frozen(garbage_payload())},
   };
   const auto res = process_concat_group(job, identities(2), "base_link", 2);
   EXPECT_TRUE(res.error.empty());
@@ -456,8 +465,8 @@ TEST(ProcessConcatGroup, LayoutMismatchSetsError)
   ConcatGroupJob job;
   job.output_stamp_ns = 1000;
   job.picks = {
-    {0, 0, shared_payload(xyz_payload(1000, 1.0F))},
-    {1, 0, shared_payload(xyzi_payload(1000))},  // extra intensity field
+    {0, 0, frozen(xyz_payload(1000, 1.0F))},
+    {1, 0, frozen(xyzi_payload(1000))},  // extra intensity field
   };
   const auto res = process_concat_group(job, identities(2), "base_link", 2);
   EXPECT_FALSE(res.error.empty());
@@ -480,8 +489,8 @@ TEST(ConcatCounterMerger, ReplicatesSerialCounters)
   ConcatGroupJob full;
   full.output_stamp_ns = 1000;
   full.picks = {
-    {0, 0, shared_payload(xyz_payload(1000, 1.0F))},
-    {1, 0, shared_payload(xyz_payload(1000, 2.0F))},
+    {0, 0, frozen(xyz_payload(1000, 1.0F))},
+    {1, 0, frozen(xyz_payload(1000, 2.0F))},
   };
   m.merge(process_concat_group(full, identities(2), "base_link", 2));
 
@@ -489,8 +498,8 @@ TEST(ConcatCounterMerger, ReplicatesSerialCounters)
   ConcatGroupJob partial;
   partial.output_stamp_ns = 2000;
   partial.picks = {
-    {0, 1, shared_payload(garbage_payload())},
-    {1, 1, shared_payload(xyz_payload(2000, 2.0F))},
+    {0, 1, frozen(garbage_payload())},
+    {1, 1, frozen(xyz_payload(2000, 2.0F))},
   };
   m.merge(process_concat_group(partial, identities(2), "base_link", 2));
 
@@ -511,9 +520,8 @@ TEST(ConcatCounterMerger, SharedPickFailureCountsOnce)
     ConcatGroupJob job;
     job.output_stamp_ns = stamp;
     job.picks = {
-      {0, static_cast<std::size_t>(stamp == 1000 ? 0 : 1),
-       shared_payload(xyz_payload(stamp, 1.0F))},
-      {1, 0, shared_payload(garbage_payload())},  // the shared failing pick
+      {0, static_cast<std::size_t>(stamp == 1000 ? 0 : 1), frozen(xyz_payload(stamp, 1.0F))},
+      {1, 0, frozen(garbage_payload())},  // the shared failing pick
     };
     m.merge(process_concat_group(job, identities(2), "base_link", 2));
   }

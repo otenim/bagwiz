@@ -42,8 +42,11 @@ int run_bag_rewrite(
       copts.format = io::Format::Auto;
       copts.layout = io::Layout::Auto;
     }
-    if (options.disable_mcap_compression) {
-      copts.mcap_compression = "none";
+    if (!options.mcap_compression.empty()) {
+      copts.mcap_compression = options.mcap_compression;
+    }
+    if (!options.mcap_compression_level.empty()) {
+      copts.mcap_compression_level = options.mcap_compression_level;
     }
     const io::WriterFactory make_writer = [output, copts]() {
       return io::open_write(output, copts);
@@ -59,8 +62,11 @@ int run_bag_rewrite(
     BAGWIZ_LOG_ERROR(options.logger, options.format_unknown_error, input_path.string().c_str());
     return 1;
   }
-  if (options.disable_mcap_compression) {
-    inplace_copts.mcap_compression = "none";
+  if (!options.mcap_compression.empty()) {
+    inplace_copts.mcap_compression = options.mcap_compression;
+  }
+  if (!options.mcap_compression_level.empty()) {
+    inplace_copts.mcap_compression_level = options.mcap_compression_level;
   }
 
   // The pass reports command-level failures via its return value rather than

@@ -32,8 +32,13 @@ bool is_supported(PointFieldType datatype)
 
 std::optional<PointTimeField> find_point_time_field(const PointCloud2 & cloud)
 {
+  return find_point_time_field(std::span<const PointField>(cloud.fields));
+}
+
+std::optional<PointTimeField> find_point_time_field(std::span<const PointField> fields)
+{
   for (const auto * const name : kTimeFieldNames) {
-    for (const auto & f : cloud.fields) {
+    for (const auto & f : fields) {
       if (f.name == name && f.count == 1 && is_supported(f.datatype)) {
         return PointTimeField{f.offset, f.datatype};
       }

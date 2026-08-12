@@ -55,13 +55,34 @@ struct TopicInfo
 
 // Zero-copy view of a single message returned by BagReader::next(). Pointers
 // and spans are invalidated by the next call to next() or by reader
-// destruction.
+// destruction. Use BagReader::freeze() when a message must outlive that
+// window.
 struct RawMessage
 {
   const TopicInfo * topic = nullptr;
   int64_t timestamp_ns = 0;
   std::span<const std::byte> payload;
 };
+
+// Owning counterpart of RawMessage, produced by BagReader::freeze(). The
+// payload span stays valid for as long as the FrozenMessage (or a copy of it)
+// lives — across later next() calls, chunk-buffer evictions, and reader
+// destruction. `topic` remains reader-owned: valid while the reader is alive.
+struct FrozenMessage
+{
+  const TopicInfo * topic = nullptr;
+  int64_t timestamp_ns = 0;
+  std::span<const std::byte> payload;
+  std::shared_ptr<const void> owner;  // keeps the payload's backing store alive
+};
+
+// Wrap a buffer the caller already owns in a FrozenMessage. Payloads a consumer
+// produced itself — a transform's output, a re-serialized point cloud — cannot
+// come from freeze(), but a stage draining a queue should not have to care
+// which of the two it is handling. This gives a locally built buffer the same
+// shared-ownership shape, so both can travel as one type.
+[[nodiscard]] FrozenMessage own_payload(
+  std::vector<std::byte> && bytes, const TopicInfo * topic = nullptr, int64_t timestamp_ns = 0);
 
 // Pre-iteration filter pushed down into the storage layer. SQLite3 uses it
 // in WHERE clauses; MCAP uses it to skip chunks via the chunk index.
@@ -114,6 +135,15 @@ public:
 
   // Stream the next message. Returns false at EOF; throws on IO error.
   virtual bool next(RawMessage & out) = 0;
+
+  // Upgrade the RawMessage returned by the most recent next() call into an
+  // owning FrozenMessage. Must be called while `msg` is still valid, i.e.
+  // before the next next() call. Readers whose backing store can be shared
+  // (the parallel indexed MCAP path) alias it, making freeze() zero-copy;
+  // every other reader copies the payload into a fresh buffer. Callers must
+  // treat freeze() as a lifetime operation only and never assume which of
+  // the two a given backend does.
+  virtual FrozenMessage freeze(const RawMessage & msg) const;
 
   struct Stats
   {
@@ -207,7 +237,13 @@ struct CreateOptions
   std::optional<int64_t> split_duration_ns;
 
   // MCAP-specific
-  std::string mcap_compression = "zstd";  // "", "lz4", "zstd"
+  std::string mcap_compression = "zstd";  // "", "none", "lz4", "zstd"
+  // Encoder effort for the chunk codec: "fastest", "fast", "default",
+  // "slow", or "slowest" (mcap::CompressionLevel names). Empty selects the
+  // codec-appropriate default — "default" for zstd, but "fastest" for lz4,
+  // whose "default" mcap maps onto the far slower LZ4-HC mode. Meaningless
+  // (and ignored) when compression is off.
+  std::string mcap_compression_level;
   // 1 MiB keeps libmcap's chunk staging buffer L2-resident: every payload is
   // memcpy'd into that buffer and read back by the chunk flush, and once the
   // buffer outgrows the per-core cache both passes round-trip DRAM instead

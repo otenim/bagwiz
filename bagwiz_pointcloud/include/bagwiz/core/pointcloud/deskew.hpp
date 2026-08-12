@@ -70,6 +70,42 @@ DeskewResult deskew_pointcloud2(
   PointCloud2 input, std::int64_t t_ref_ns, std::span<const core::TrajectoryPose> trajectory,
   const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt);
 
+// Outcome of deskew_pointcloud2_cdr(): the counters and clamp flags of
+// DeskewResult (same meanings), without a materialised cloud -- the points
+// were patched directly inside the caller's payload buffer. `parse_error`
+// and `error` are distinct so callers can keep parse_pointcloud2's
+// pass-through-with-warning semantics for undecodable messages while
+// treating a rejected cloud layout as a hard failure.
+struct DeskewCdrResult
+{
+  std::string parse_error;    // payload is not a decodable PointCloud2; buffer untouched
+  std::string error;          // cloud layout rejected by validation; buffer untouched
+  std::int64_t t_ref_ns = 0;  // the header stamp the points were deskewed to
+  std::uint64_t points_total = 0;
+  std::uint64_t points_deskewed = 0;
+  std::uint64_t points_no_time = 0;
+  std::uint64_t points_no_pose = 0;
+  std::uint64_t points_nonfinite = 0;
+  std::uint64_t points_out_of_span = 0;
+  bool ref_out_of_span = false;
+
+  [[nodiscard]] bool ok() const noexcept { return parse_error.empty() && error.empty(); }
+};
+
+// Deskew a serialized PointCloud2 in place: parse the CDR header, then patch
+// only the x/y/z and per-point time bytes of the point-data section inside
+// `payload`. Every other byte -- header, field table, alignment padding, any
+// trailing bytes -- is left untouched, so this produces the same message as
+// parse_pointcloud2 + deskew_pointcloud2 + serialize_pointcloud2 without the
+// parse-side data copy or the full re-serialize. The reference timestamp is
+// the message's own header.stamp (reported back via t_ref_ns); semantics
+// otherwise match deskew_pointcloud2, including the pass-through cases (no
+// usable time field, no resolvable reference pose), which leave the payload
+// bytes verbatim with the corresponding counter set.
+DeskewCdrResult deskew_pointcloud2_cdr(
+  std::span<std::byte> payload, std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt);
+
 }  // namespace bagwiz::core::pointcloud
 
 #endif  // BAGWIZ__CORE__POINTCLOUD__DESKEW_HPP_

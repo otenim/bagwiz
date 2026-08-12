@@ -12,6 +12,7 @@
 #include "bagwiz/core/pointcloud/cloud_transform.hpp"
 #include "bagwiz/core/pointcloud/concat_sync.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
+#include "bagwiz/io/bag_io.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -151,12 +152,15 @@ private:
 // ---------------------------------------------------------------------------
 
 // One planned pick of a fired group: which input message it is, plus shared
-// ownership of its raw (unparsed) payload.
+// ownership of its raw (unparsed) payload. A group is picked by at most one
+// message per topic but a message may be picked by several groups, so the
+// payload is shared, not moved — which is exactly what a frozen payload
+// already is.
 struct ConcatPick
 {
   std::size_t topic = 0;
   std::size_t index = 0;
-  std::shared_ptr<const std::vector<std::byte>> payload;
+  io::FrozenMessage frozen;
 };
 
 // One fired sync group as a self-contained worker job (picks in --pcd order).
@@ -178,20 +182,27 @@ public:
   ConcatGroupTracker(
     const std::vector<TopicState> & topics, std::vector<core::pointcloud::SyncGroup> groups);
 
+  // True when message `index` of pcd input `topic` is referenced by some
+  // group. Callers test this before freezing the message: an unpicked arrival
+  // changes no tracker state, so skipping it entirely keeps the "unpicked
+  // messages are not even copied" property of the serial pass — freeze() is
+  // only free on backends that can share their backing store, and copies on
+  // the rest.
+  [[nodiscard]] bool is_picked(std::size_t topic, std::size_t index) const;
+
   // Ingest one message of pcd input `topic` (`index` = its 0-based position on
   // that topic in bag order). Returns one job per group this arrival
-  // completed, in group order — empty when none fired. Unpicked messages are
-  // not even copied, mirroring the serial pass.
+  // completed, in group order — empty when none fired.
   [[nodiscard]] std::vector<ConcatGroupJob> on_message(
-    std::size_t topic, std::size_t index, std::span<const std::byte> payload);
+    std::size_t topic, std::size_t index, io::FrozenMessage msg);
 
 private:
   // A raw payload awaiting its referencing groups, with a refcount so the
-  // cache entry is dropped once every referencing group's job took its
-  // shared_ptr.
+  // cache entry is dropped once every referencing group's job took its share
+  // of the ownership.
   struct Entry
   {
-    std::shared_ptr<const std::vector<std::byte>> payload;
+    io::FrozenMessage frozen;
     std::size_t refcount = 0;
   };
 
