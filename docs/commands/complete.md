@@ -130,12 +130,18 @@ source ~/.config/fish/completions/bagwiz.fish
 
 ## Command and flag completion
 
-- Top-level commands and known nested subcommands are completed from the same
-  command tree the binary registers at startup, so completion only ever offers
-  commands this binary actually contains. In particular, `map` (and its
-  `slam` / `viewer` subcommands) appears only in a build configured with
-  `-DBAGWIZ_WITH_SLAM=ON` — see [`map`](map.md); a core build offers no `map`
-  completions at all, matching that the binary has no such command.
+- The top-level command list is read from the same command tree the binary
+  registers at startup, so it only ever offers commands this binary actually
+  contains. In particular, `map` appears in `bagwiz <TAB>` only in a build
+  configured with `-DBAGWIZ_WITH_SLAM=ON` — see [`map`](map.md). Past the
+  top level, subcommand names, flag lists, and closed-set enum values (e.g.
+  `map slam --backend`) are matched against a static per-command table and
+  still complete for an explicitly typed `map ...` line even in a core
+  build, since that table does not check whether `map` is actually
+  registered. Only topic-slot _value_ completion is gated on the real tree:
+  a core build's `map slam --pcd`/`--color`/`--cam-info`/`--imu`/`--gnss`
+  offer no topic candidates, because the slot lookup walks the actual
+  `CLI::App` tree and finds no `map` subcommand there.
 - Typing `-` and pressing TAB lists the option flags available at the current
   position. Every command and subcommand responds, including ones that take
   only flags — in that case the listing falls back to the
@@ -143,8 +149,10 @@ source ~/.config/fish/completions/bagwiz.fish
   `-<TAB>` also surfaces `--version`. The covered positions are:
   - `bagwiz -<TAB>` → `--help`, `--version`, `-h`
   - `bagwiz <cmd> -<TAB>` for every command (`cam-info`, `complete`, `convert`,
-    `generate`, `ls`, `map`, `pcd`, `tf`, `topic`, `traj`, `trim`, `walk`;
-    `map` only in a `BAGWIZ_WITH_SLAM` build);
+    `generate`, `ls`, `map`, `pcd`, `tf`, `topic`, `traj`, `trim`, `walk`).
+    `map`'s own flag/subcommand completion responds the same way regardless
+    of `BAGWIZ_WITH_SLAM` — see the note above; only `bagwiz <TAB>` (the
+    top-level list) and topic-slot values are build-gated;
     `walk -<TAB>` also surfaces `--cam-info`, `ls -<TAB>` surfaces `-l`/`--long`,
     and `trim -<TAB>` surfaces `--start`, `--end`, `--duration`, `--both`,
     `--align`, `--stamp`, `--output`/`-o`, `--overwrite`/`-w`
