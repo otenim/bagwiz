@@ -325,6 +325,30 @@ which part of the repository the change touches.
   every affected `bagwiz` command. Fix each inconsistency you find as
   part of the same change so these descriptions never drift from the
   actual behavior.
+- Name every environment variable that bagwiz itself defines with a
+  `BAGWIZ_` prefix, in `UPPER_SNAKE_CASE` — without exception, so that
+  any variable appearing in a user's environment is immediately
+  attributable to bagwiz and can never collide with an unrelated tool.
+  The rule covers every variable bagwiz introduces regardless of who
+  reads it: the `bagwiz` binary (`BAGWIZ_LOG_LEVEL`), the launcher,
+  installer, and build scripts (`BAGWIZ_INSTALL_DIR`), the contributor
+  tooling (`BAGWIZ_BENCH_RUNS` in `scripts/bench-rewrite.sh`), and the
+  test suite (`BAGWIZ_REAL_BAG`). Where a group of variables belongs to
+  one tool rather than to the CLI's runtime behavior, add an infix
+  naming that tool (`BAGWIZ_BENCH_*`) so the two sets stay
+  distinguishable; never claim a bare generic name like `BAGWIZ_BAG` or
+  `BAGWIZ_ENV`, which reads as a global default for the CLI itself.
+- Do **not** prefix a variable that bagwiz merely _consumes_ under
+  someone else's published convention — `NO_COLOR` (no-color.org),
+  `RCUTILS_COLORIZED_OUTPUT` (rcutils), `HOME` / `XDG_DATA_HOME` /
+  `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` (XDG), `AMENT_PREFIX_PATH` and
+  `LD_LIBRARY_PATH` (ROS 2 / the loader), `PIXI_*`, `CONDA_PREFIX`,
+  `CMAKE_*`, `CCACHE_*`. Renaming these would break the very convention
+  that makes them useful, since the value is set by the ecosystem rather
+  than by us. The distinction is ownership, not who calls `getenv`: if
+  bagwiz decides the variable's name and meaning, it takes the prefix;
+  if bagwiz is honoring a name someone else published, it keeps that
+  name verbatim.
 - When adding, renaming, or changing the behavior of an environment
   variable read by bagwiz code or its scripts (the `BAGWIZ_*` variables
   and conventional ones like `NO_COLOR`), update `docs/environment.md`
