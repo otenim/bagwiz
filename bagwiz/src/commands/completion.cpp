@@ -1513,8 +1513,7 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
         }
         const auto bag_arg = find_flag_value(request, kInputFlags);
         if (bag_arg && !bag_arg->empty() && !bag_arg->starts_with("-")) {
-          auto topics =
-            complete_topics(expand_current_user_home(*bag_arg), "", kPointCloud2Type);
+          auto topics = complete_topics(expand_current_user_home(*bag_arg), "", kPointCloud2Type);
           // The command resolves --stamp-offset's <topic> half against the
           // resolved --pcd list (TopicSlotSpec::scope in configure_concat),
           // not the whole bag, so once --pcd values are on the line the
