@@ -10,6 +10,7 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/topic_drop.hpp"
 #include "bagwiz/commands/topic_keep.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/commands/topic_rename.hpp"
 #include "bagwiz/core/base/logging.hpp"
 
@@ -78,10 +79,11 @@ private:
     sub->add_option("-i,--input", drop_args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub
-      ->add_option(
-        "-t,--topics", drop_args_.topics,
-        "Topic selector(s) to remove. A literal topic name or a '*' glob. Repeat for several.")
+    set_topic_input(*sub, drop_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topics", drop_args_.topics,
+      "Topic selector(s) to remove. A literal topic name or a '*' glob. Repeat for several.",
+      TopicSlotSpec{.require_present = true})
       ->required();
     sub->add_option(
       "-o,--output", drop_args_.output_path,
@@ -102,10 +104,11 @@ private:
     sub->add_option("-i,--input", keep_args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub
-      ->add_option(
-        "-t,--topics", keep_args_.topics,
-        "Topic selector(s) to keep. A literal topic name or a '*' glob. Repeat for several.")
+    set_topic_input(*sub, keep_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topics", keep_args_.topics,
+      "Topic selector(s) to keep. A literal topic name or a '*' glob. Repeat for several.",
+      TopicSlotSpec{.require_present = true})
       ->required();
     sub->add_option(
       "-o,--output", keep_args_.output_path,
@@ -126,9 +129,15 @@ private:
     sub->add_option("-i,--input", rename_args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option("--src", rename_args_.src_topic, "Existing topic to rename (literal name).")
+    set_topic_input(*sub, rename_args_.input_path);
+    add_topic_option(
+      *sub, "--src", rename_args_.src_topic, "Existing topic to rename (literal name).",
+      TopicSlotSpec{.mode = TopicSelectorMode::kLiteral})
       ->required();
-    sub->add_option("--dst", rename_args_.dst_topic, "New name for the topic (literal name).")
+    add_topic_option(
+      *sub, "--dst", rename_args_.dst_topic, "New name for the topic (literal name).",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral, .reject_reason = "it names the topic to create"})
       ->required();
     sub->add_option(
       "-o,--output", rename_args_.output_path,

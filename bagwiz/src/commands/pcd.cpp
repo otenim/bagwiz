@@ -10,6 +10,8 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/pcd_concat.hpp"
 #include "bagwiz/commands/pcd_undistort.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 
 #include <string_view>
@@ -72,16 +74,24 @@ private:
     sub->add_option("-i,--input", concat_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub
-      ->add_option(
-        "-t,--topic", concat_args_.output_topic, "Name of the new concatenated PointCloud2 topic")
+    set_topic_input(*sub, concat_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topic", concat_args_.output_topic,
+      "Name of the new concatenated PointCloud2 topic",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral,
+        .reject_reason = "it names the new concatenated topic to create"})
       ->required();
-    sub
-      ->add_option(
-        "--pcd", concat_args_.pcd_topics,
-        "PointCloud2 topics to concatenate (2 or more). Concatenation order follows this list.")
-      ->required()
-      ->expected(-1);
+    auto * pcd_opt =
+      add_topic_option(
+        *sub, "--pcd", concat_args_.pcd_topics,
+        "PointCloud2 topics to concatenate (2 or more); each a literal name or a '*' glob. "
+        "Concatenation order follows this list, and a glob contributes its matches in "
+        "topic-name order. The first topic in the resulting list is the time-matching "
+        "reference.",
+        TopicSlotSpec{.allowed_types = kPointCloud2Type})
+        ->required()
+        ->expected(-1);
     sub->add_option(
       "--frame", concat_args_.frame,
       "Target frame all clouds are transformed into. Default: base_link. Required when the "
@@ -94,11 +104,14 @@ private:
       "Nearest-match tolerance for pairing the other topics to the first --pcd topic. "
       "Takes an optional unit ns/us/ms/s (no unit = ms), e.g. 50ms. "
       "Default: half the first topic's median period (50 ms when that cannot be measured).");
-    sub->add_option(
-      "--stamp-offset", concat_args_.stamp_offsets,
+    add_topic_option(
+      *sub, "--stamp-offset", concat_args_.stamp_offsets,
       "Per-topic matching offset as topic=value, added to header.stamp for MATCHING ONLY "
-      "(the real stamp and per-point times are never rewritten). Value takes an optional unit "
-      "ns/us/ms/s (no unit = ms), e.g. '/lidar/left/points=50ms'. Repeatable.");
+      "(the real stamp and per-point times are never rewritten). <topic> is a literal name or "
+      "a '*' glob over the --pcd topics; when several entries match one topic the last wins. "
+      "Value takes an optional unit ns/us/ms/s (no unit = ms), e.g. "
+      "'/lidar/left/points=50ms'. Repeatable.",
+      TopicSlotSpec{.pair_value = true, .scope = pcd_opt});
     sub->add_flag(
       "--drop-inputs", concat_args_.drop_inputs,
       "Drop the source --pcd topics from the output (default: keep them).");
@@ -124,21 +137,26 @@ private:
     sub->add_option("-i,--input", undistort_args_.input_path, "Input bag (file or directory).")
       ->required()
       ->check(CLI::ExistingPath);
-    auto * pose_opt = sub->add_option(
-      "--pose", undistort_args_.pose_topic,
+    set_topic_input(*sub, undistort_args_.input_path);
+    auto * pose_opt = add_topic_option(
+      *sub, "--pose", undistort_args_.pose_topic,
       "Self-position topic (TFMessage / Odometry / PoseStamped / "
-      "PoseWithCovarianceStamped). Exactly one of --pose / --twist is required.");
-    sub
-      ->add_option(
-        "--twist", undistort_args_.twist_topic,
-        "Vehicle-velocity topic (Twist / TwistStamped / TwistWithCovarianceStamped), integrated "
-        "into the deskew motion. Alternative to --pose; exactly one of them is required. A bare "
-        "Twist has no header: its samples are stamped with the bag's log time and assumed to be "
-        "expressed in the --of frame.")
+      "PoseWithCovarianceStamped). Exactly one of --pose / --twist is required.",
+      TopicSlotSpec{
+        .allowed_types = kUndistortPoseTopicTypes, .mode = TopicSelectorMode::kLiteral});
+    add_topic_option(
+      *sub, "--twist", undistort_args_.twist_topic,
+      "Vehicle-velocity topic (Twist / TwistStamped / TwistWithCovarianceStamped), integrated "
+      "into the deskew motion. Alternative to --pose; exactly one of them is required. A bare "
+      "Twist has no header: its samples are stamped with the bag's log time and assumed to be "
+      "expressed in the --of frame.",
+      TopicSlotSpec{
+        .allowed_types = kUndistortTwistTopicTypes, .mode = TopicSelectorMode::kLiteral})
       ->excludes(pose_opt);
-    sub
-      ->add_option(
-        "--pcd", undistort_args_.pcd_topics, "PointCloud2 topic(s) to deskew (repeatable).")
+    add_topic_option(
+      *sub, "--pcd", undistort_args_.pcd_topics,
+      "PointCloud2 topic(s) to deskew; a literal name or a '*' glob (repeatable).",
+      TopicSlotSpec{.allowed_types = kPointCloud2Type})
       ->required()
       ->expected(-1);
     sub->add_option("--ref", undistort_args_.ref_frame, "Reference frame (default: map).");

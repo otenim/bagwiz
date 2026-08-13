@@ -8,8 +8,12 @@
 
 #include "bagwiz/commands/pcd_concat.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <gtest/gtest.h>
 #include <sqlite3.h>
@@ -356,4 +360,94 @@ TEST_F(PcdConcatTest, ParallelDropInputsPreservesCopyThrough)
   EXPECT_FALSE(read_topic(out, "/front").present);
   EXPECT_FALSE(read_topic(out, "/rear").present);
   EXPECT_EQ(read_raw_payloads(out, "/other"), read_raw_payloads(in, "/other"));
+}
+
+// Exercises the real PcdCommand::configure_concat() — reached through the
+// process-wide command registry that pcd.cpp's BAGWIZ_REGISTER_COMMAND
+// registrar populates — rather than a hand-mirrored copy of its wiring.
+// Reordering --stamp-offset before --pcd, or dropping `.scope = pcd_opt`
+// from pcd.cpp's declaration, fails this test directly; it does not rest on
+// a manual CLI run staying correct. `pcd concat` is the mechanism's first
+// real `scope` user, so this is also the first test that would catch a
+// future edit silently losing it.
+TEST(PcdConcatCliWiring, StampOffsetIsScopedToThePcdOptionInDeclarationOrder)
+{
+  bagwiz::commands::Command * pcd_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "pcd") {
+      pcd_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(pcd_cmd, nullptr);
+
+  CLI::App app{"pcd"};
+  pcd_cmd->configure(app);
+
+  auto * concat_sub = app.get_subcommand_no_throw("concat");
+  ASSERT_NE(concat_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*concat_sub);
+  // -t/--topic, then --pcd, then --stamp-offset, in declaration order.
+  ASSERT_EQ(slots.size(), 3U);
+
+  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"topic"}));
+  EXPECT_EQ(slots[0].spec.scope, nullptr);
+  EXPECT_TRUE(slots[0].option->get_required());
+
+  EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"pcd"}));
+  EXPECT_EQ(slots[1].spec.scope, nullptr);
+  EXPECT_TRUE(slots[1].option->get_required());
+
+  EXPECT_EQ(slots[2].option->get_lnames(), (std::vector<std::string>{"stamp-offset"}));
+  EXPECT_TRUE(slots[2].spec.pair_value);
+  EXPECT_EQ(slots[2].spec.scope, slots[1].option);
+}
+
+// Task 8: -t/--topic is a literal-only write-side operand (it names the topic
+// to CREATE, so there is nothing existing for a glob to match against), and
+// `pcd undistort --pose`/`--twist` are literal-only single-value slots on the
+// sibling subcommand PcdCommand::configure() also wires. Same registry-driven
+// idiom as StampOffsetIsScopedToThePcdOptionInDeclarationOrder above.
+TEST(PcdCliWiring, ConcatTopicAndUndistortPoseTwistAreLiteralOnly)
+{
+  bagwiz::commands::Command * pcd_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "pcd") {
+      pcd_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(pcd_cmd, nullptr);
+
+  CLI::App app{"pcd"};
+  pcd_cmd->configure(app);
+
+  auto * concat_sub = app.get_subcommand_no_throw("concat");
+  ASSERT_NE(concat_sub, nullptr);
+  const auto concat_slots = bagwiz::commands::topic_slots_of(*concat_sub);
+  ASSERT_EQ(concat_slots.size(), 3U);
+  const auto * concat_topic_slot = bagwiz::test::slot_for(concat_slots, "topic");
+  ASSERT_NE(concat_topic_slot, nullptr);
+  EXPECT_EQ(concat_topic_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_TRUE(concat_topic_slot->spec.allowed_types.empty());
+
+  auto * undistort_sub = app.get_subcommand_no_throw("undistort");
+  ASSERT_NE(undistort_sub, nullptr);
+  const auto undistort_slots = bagwiz::commands::topic_slots_of(*undistort_sub);
+  ASSERT_EQ(undistort_slots.size(), 3U);  // --pose, --twist, --pcd
+
+  const auto * pose_slot = bagwiz::test::slot_for(undistort_slots, "pose");
+  ASSERT_NE(pose_slot, nullptr);
+  EXPECT_EQ(pose_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  ASSERT_EQ(pose_slot->spec.allowed_types.size(), 4U);
+
+  const auto * twist_slot = bagwiz::test::slot_for(undistort_slots, "twist");
+  ASSERT_NE(twist_slot, nullptr);
+  EXPECT_EQ(twist_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  ASSERT_EQ(twist_slot->spec.allowed_types.size(), 3U);
+
+  const auto * undistort_pcd_slot = bagwiz::test::slot_for(undistort_slots, "pcd");
+  ASSERT_NE(undistort_pcd_slot, nullptr);
+  // Glob-capable, unaffected by Task 8.
+  EXPECT_EQ(undistort_pcd_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
 }

@@ -21,11 +21,16 @@ bagwiz walk -i capture.mcap -t /sensing/imu/data
 
 ## Options
 
-| Flag                    | Description                                                                                                                                                                                                                                                    |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`). Must exist.                                                                                                                                                              |
-| `-t`, `--topic <topic>` | **Required.** Topic name to inspect. Must exist in the bag.                                                                                                                                                                                                    |
-| `--cam-info <topic>`    | Long-form only. Explicit `sensor_msgs/msg/CameraInfo` topic for the preview's undistort toggle and the PointCloud2 projection overlay. When omitted, bagwiz auto-resolves it from `<topic>` using the rules documented for `bagwiz generate video --cam-info`. |
+| Flag                    | Description                                                                                                                                                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`). Must exist.                                                                                                                                                                                                |
+| `-t`, `--topic <topic>` | **Required.** Topic name to inspect. Must exist in the bag. A literal topic name, not a glob.                                                                                                                                                                                                    |
+| `--cam-info <topic>`    | Long-form only. Explicit `sensor_msgs/msg/CameraInfo` topic for the preview's undistort toggle and the PointCloud2 projection overlay. A literal topic name, not a glob. When omitted, bagwiz auto-resolves it from `<topic>` using the rules documented for `bagwiz generate video --cam-info`. |
+
+An explicit empty value (`--cam-info ""`) is a real value, not "omitted": it
+skips auto-resolution and is then rejected as not naming a CameraInfo topic,
+the same as any other absent topic. Only leaving the flag off entirely
+triggers auto-resolution.
 
 ## Decoding
 

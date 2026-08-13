@@ -8,6 +8,9 @@
 
 #include "bagwiz/commands/trim.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "trim_stamp.hpp"  // NOLINT(build/include_subdir) src-local shared header
@@ -367,22 +370,15 @@ TEST_F(TrimTest, AlignToMultipleTopicsUsesCommonSpan)
   EXPECT_EQ(out.at("/fast"), (std::vector<std::int64_t>{kT0 + kSecond, kT0 + 2 * kSecond}));
 }
 
-TEST_F(TrimTest, AlignAcceptsGlobSelectors)
-{
-  const auto in_path = build_input(tmp_dir_);
-  const auto out_path = tmp_dir_ / "out";
-
-  bagwiz::commands::TrimArgs args;
-  args.input_path = in_path;
-  args.align = {"/s*"};  // matches only /slow
-  args.output_path = out_path;
-
-  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
-
-  const auto out = collect(out_path);
-  EXPECT_EQ(out.at("/fast"), (std::vector<std::int64_t>{kT0 + kSecond, kT0 + 2 * kSecond}));
-}
-
+// run_trim() called directly bypasses the CLI's expansion pass entirely, so
+// this does not exercise --align's TopicSlotSpec::require_present (that only
+// runs from commands/topic_expand.cpp, reached via expand_topic_selectors()
+// in main.cpp — see bagwiz_topic_option_test's
+// RequirePresentRejectsAnAbsentLiteral for that layer). resolve_align_window()
+// itself has no independent presence check either, but it fails anyway for a
+// different reason: a topic with no messages in the filtered scan — absent or
+// merely empty, both look the same to the span map — trips the same
+// "topic '%s' has no messages" check as AlignTopicWithNoMessagesFails below.
 TEST_F(TrimTest, AlignUnmatchedSelectorFails)
 {
   const auto in_path = build_input(tmp_dir_);
@@ -1048,6 +1044,30 @@ TEST_F(TrimTest, PassthroughMatchesPipelineAndPreservesCompression)
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "ref" / "metadata.yaml").compression_format, "none");
   EXPECT_EQ(
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml").compression_format, "zstd");
+}
+
+// Exercises the real TrimCommand::configure() — reached through the
+// process-wide command registry that its BAGWIZ_REGISTER_COMMAND registrar
+// populates — rather than a hand-mirrored copy of its wiring. Deleting
+// `.require_present = true` from trim.cpp's --align declaration fails this
+// test directly; it does not rest on a manual CLI run staying correct.
+TEST(TrimCliWiring, AlignFlagRequiresPresence)
+{
+  bagwiz::commands::Command * trim_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "trim") {
+      trim_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(trim_cmd, nullptr);
+
+  CLI::App app{"trim"};
+  trim_cmd->configure(app);
+
+  const auto slots = bagwiz::commands::topic_slots_of(app);
+  ASSERT_EQ(slots.size(), 1U);  // just --align
+  EXPECT_TRUE(slots[0].spec.require_present);
 }
 
 }  // namespace

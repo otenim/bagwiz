@@ -8,6 +8,8 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/bag/bag_copy.hpp"
 #include "bagwiz/core/bag/bag_topic_plan.hpp"
 #include "bagwiz/core/bag/rewrite.hpp"
@@ -67,6 +69,9 @@ namespace
 constexpr const char * kLogger = "bagwiz.cmd.traj";
 constexpr const char * kFormatTum = "tum";
 constexpr const char * kJoinMsgTypeTf = "tf";
+// This foursome mirrors topic_types.hpp's kTrajDumpSupportedTypes (traj dump
+// -t's allowed_types); run_dump()'s dispatch below is the validator. Keep
+// both in sync by hand.
 constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
 constexpr const char * kPoseStampedType = "geometry_msgs/msg/PoseStamped";
 constexpr const char * kPoseWithCovarianceStampedType =
@@ -386,8 +391,10 @@ private:
     sub->add_option("-i,--input", dump_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub
-      ->add_option("-t,--topic", dump_args_.topic, "Topic to sample (e.g. /tf, /localization/pose)")
+    set_topic_input(*sub, dump_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topic", dump_args_.topic, "Topic to sample (e.g. /tf, /localization/pose)",
+      TopicSlotSpec{.allowed_types = kTrajDumpSupportedTypes, .mode = TopicSelectorMode::kLiteral})
       ->required();
     sub->add_option("-o,--output", dump_args_.output_path, "Output file path")->required();
     sub
@@ -790,6 +797,7 @@ private:
     sub->add_option("-i,--input", join_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(*sub, join_args_.input_path);
     sub
       ->add_option(
         "--traj", join_args_.traj_path,
@@ -797,11 +805,13 @@ private:
         "when --format is omitted.")
       ->required()
       ->check(CLI::ExistingFile);
-    sub
-      ->add_option(
-        "-t,--topic", join_args_.topic,
-        "Topic name to embed the trajectory under. When the topic already exists in <input>, "
-        "pass --force to drop its existing messages and replace them.")
+    add_topic_option(
+      *sub, "-t,--topic", join_args_.topic,
+      "Topic name to embed the trajectory under. When the topic already exists in <input>, "
+      "pass --force to drop its existing messages and replace them.",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral,
+        .reject_reason = "it names the topic the trajectory is embedded under"})
       ->required();
     sub->add_option(
       "-o,--output", join_args_.output_path,

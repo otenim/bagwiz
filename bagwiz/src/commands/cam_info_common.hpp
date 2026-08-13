@@ -27,13 +27,19 @@
 #include <vector>
 
 // Shared internals of the `cam-info` subcommands that round-trip typed
-// sensor_msgs/msg/CameraInfo payloads through rmw (replace, recompute-p) plus
-// the CameraInfo topic validation shared with `cam-info dump`. CLI-internal:
-// this header lives with the command sources and is not installed.
+// sensor_msgs/msg/CameraInfo payloads through rmw (replace, recompute-p).
+// `cam-info dump` validates against its own separate copy of the type
+// constant in cam_info_dump.cpp, not this one — see the note below.
+// CLI-internal: this header lives with the command sources and is not
+// installed.
 namespace bagwiz::commands
 {
 
-// The message type every `cam-info` subcommand validates against.
+// The message type `cam-info replace` and `cam-info recompute-p` validate
+// against. Mirrors topic_types.hpp's kCameraInfoType (used for those two
+// subcommands' allowed_types, plus `cam-info dump`'s, `generate video
+// --cam-info`'s, and `walk --cam-info`'s — see that header for the full
+// mirror list). Keep both in sync by hand.
 inline constexpr const char * kCameraInfoType = "sensor_msgs/msg/CameraInfo";
 
 // Most recent rmw error as a string, then reset so it does not leak into a

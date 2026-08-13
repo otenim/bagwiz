@@ -16,6 +16,10 @@ namespace bagwiz::core::camera_info
 {
 namespace
 {
+// Mirrors bagwiz::commands::kCameraInfoType in
+// bagwiz/include/bagwiz/commands/topic_types.hpp (`generate video --cam-info`
+// and `walk --cam-info`'s allowed_types, resolved through this file). Keep
+// both in sync by hand.
 constexpr std::string_view kCameraInfoType = "sensor_msgs/msg/CameraInfo";
 constexpr std::string_view kCameraInfoSuffix = "/camera_info";
 

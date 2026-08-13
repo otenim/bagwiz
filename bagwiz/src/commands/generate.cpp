@@ -9,6 +9,8 @@
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/generate_video.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
@@ -68,11 +70,12 @@ private:
     sub->add_option("-i,--input", video_args_.input_path, "Input ROS 2 rosbag (file or directory).")
       ->required()
       ->check(CLI::ExistingPath);
-    sub
-      ->add_option(
-        "-t,--topic", video_args_.topic,
-        "Image topic to render. Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
-        "sensor_msgs/msg/CompressedImage (JPEG/PNG).")
+    set_topic_input(*sub, video_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topic", video_args_.topic,
+      "Image topic to render. Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
+      "sensor_msgs/msg/CompressedImage (JPEG/PNG).",
+      TopicSlotSpec{.allowed_types = kImageTopicTypes, .mode = TopicSelectorMode::kLiteral})
       ->required();
     sub
       ->add_option(
@@ -83,11 +86,11 @@ private:
     sub->add_flag(
       "-w,--overwrite", video_args_.overwrite,
       "Replace an existing <output>. Without it, an existing output path stops the run.");
-    sub
-      ->add_option(
-        "--cam-info", video_args_.camera_info_topic,
-        "CameraInfo topic for --undistort and --pcd. When omitted, it is derived from "
-        "<img_topic> following the standard /camera_info suffix rules.")
+    add_topic_option(
+      *sub, "--cam-info", video_args_.camera_info_topic,
+      "CameraInfo topic for --undistort and --pcd. When omitted, it is derived from "
+      "<img_topic> following the standard /camera_info suffix rules.",
+      TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral})
       ->check([](const std::string & topic) {
         if (topic.empty()) {
           return std::string{"cam-info topic must not be empty"};
@@ -105,12 +108,12 @@ private:
         "1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them.")
       ->default_val(1.0f)
       ->check(CLI::Range(0.01f, 10.0f));
-    sub
-      ->add_option(
-        "--pcd", video_args_.pointcloud_topics,
-        "PointCloud2 topic(s) to project onto each frame. Repeatable. Implies distortion "
-        "correction and requires a CameraInfo topic and a TF chain from each cloud frame "
-        "to the camera frame.")
+    add_topic_option(
+      *sub, "--pcd", video_args_.pointcloud_topics,
+      "PointCloud2 topic(s) to project onto each frame; a literal name or a '*' glob. "
+      "Repeatable. Implies distortion correction and requires a CameraInfo topic and a TF chain "
+      "from each cloud frame to the camera frame.",
+      TopicSlotSpec{.allowed_types = kPointCloud2Type})
       ->check([](const std::string & topic) {
         if (topic.empty()) {
           return std::string{"pcd topic must not be empty"};

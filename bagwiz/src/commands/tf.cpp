@@ -13,6 +13,8 @@
 #include "bagwiz/commands/tf_static_dump.hpp"
 #include "bagwiz/commands/tf_static_join.hpp"
 #include "bagwiz/commands/tf_static_update.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/base/str_utils.hpp"
 #include "bagwiz/core/tf/tf_buffer_loader.hpp"
@@ -498,10 +500,12 @@ private:
     sub->add_option("-i,--input", tree_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option(
-      "-t,--topics", tree_args_.topics,
-      "tf2_msgs/msg/TFMessage topic(s) to merge and render; defaults to all TF topics in the bag "
-      "when omitted.");
+    set_topic_input(*sub, tree_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topics", tree_args_.topics,
+      "tf2_msgs/msg/TFMessage topic(s) to merge and render; a literal name or a '*' glob. "
+      "Defaults to all TF topics in the bag when omitted.",
+      TopicSlotSpec{.allowed_types = kTfMessageTypes});
     sub->callback([this]() { selected_ = Subcommand::kTree; });
   }
 
@@ -722,17 +726,20 @@ private:
     sub->add_option("-i,--input", static_join_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(*sub, static_join_args_.input_path);
     sub
       ->add_option(
         "--yaml", static_join_args_.yaml_path,
         "Static TF YAML to embed, in the schema `tf static dump` writes.")
       ->required()
       ->check(CLI::ExistingFile);
-    sub
-      ->add_option(
-        "-t,--topic", static_join_args_.topic,
-        "Topic to embed the transforms under. When it already carries messages, pass --force to "
-        "replace them.")
+    add_topic_option(
+      *sub, "-t,--topic", static_join_args_.topic,
+      "Topic to embed the transforms under. When it already carries messages, pass --force to "
+      "replace them.",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral,
+        .reject_reason = "it names the topic the transforms are embedded under"})
       ->capture_default_str();
     sub->add_option(
       "-o,--output", static_join_args_.output_path,
@@ -780,6 +787,7 @@ private:
     sub->add_option("-i,--input", static_update_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(*sub, static_update_args_.input_path);
     sub
       ->add_option(
         "--yaml", static_update_args_.yaml_path,
@@ -787,11 +795,13 @@ private:
         "updates (existing child, edited in its own topic; a differing parent re-parents it).")
       ->required()
       ->check(CLI::ExistingFile);
-    sub
-      ->add_option(
-        "-t,--topic", static_update_args_.topic,
-        "Topic that newly added transforms are embedded under (declared if absent). Existing "
-        "edges are always edited in the topic that carries them.")
+    add_topic_option(
+      *sub, "-t,--topic", static_update_args_.topic,
+      "Topic that newly added transforms are embedded under (declared if absent). Existing "
+      "edges are always edited in the topic that carries them.",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral,
+        .reject_reason = "it names the topic newly added transforms are embedded under"})
       ->capture_default_str();
     sub->add_option(
       "-o,--output", static_update_args_.output_path,

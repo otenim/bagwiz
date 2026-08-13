@@ -35,6 +35,10 @@ namespace bagwiz::commands
 namespace
 {
 
+// kPointCloud2Type mirrors topic_types.hpp's kPointCloud2Type (pcd undistort
+// --pcd's allowed_types); the rest mirror kUndistortPoseTopicTypes /
+// kUndistortTwistTopicTypes via is_supported_pose_topic_type() /
+// is_supported_twist_topic_type() below. Keep both in sync by hand.
 constexpr const char * kPointCloud2Type = "sensor_msgs/msg/PointCloud2";
 constexpr const char * kTfMessageType = "tf2_msgs/msg/TFMessage";
 constexpr const char * kOdometryType = "nav_msgs/msg/Odometry";

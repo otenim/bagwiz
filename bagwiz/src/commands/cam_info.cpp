@@ -11,6 +11,8 @@
 #include "bagwiz/commands/cam_info_recompute_p.hpp"
 #include "bagwiz/commands/cam_info_replace.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 
 #include <string_view>
@@ -82,6 +84,7 @@ private:
       ->add_option("-i,--input", replace_args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(*sub, replace_args_.input_path);
     sub
       ->add_option(
         "--yaml", replace_args_.yaml_path,
@@ -89,12 +92,13 @@ private:
         "to every bare <topic> entry of -t. Required when at least one entry is bare; rejected "
         "when every entry carries its own =<yaml>.")
       ->check(CLI::ExistingFile);
-    sub
-      ->add_option(
-        "-t,--topics", replace_args_.topics,
-        "One or more CameraInfo topics to rewrite, each as <topic> or <topic>=<yaml> (each type "
-        "must be sensor_msgs/msg/CameraInfo). A bare <topic> receives the shared --yaml; "
-        "<topic>=<yaml> gives that topic its own calibration YAML. The two forms can be mixed.")
+    add_topic_option(
+      *sub, "-t,--topics", replace_args_.topics,
+      "One or more CameraInfo topics to rewrite, each as <topic> or <topic>=<yaml> (each type "
+      "must be sensor_msgs/msg/CameraInfo). <topic> is a literal name or a '*' glob. A bare "
+      "<topic> receives the shared --yaml; <topic>=<yaml> gives that topic its own calibration "
+      "YAML. The two forms can be mixed.",
+      TopicSlotSpec{.allowed_types = kCameraInfoType, .pair_value = true})
       ->required();
     sub->add_option(
       "--frame-id", replace_args_.frame_id,
@@ -124,11 +128,13 @@ private:
         "format) or an input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub->add_option(
-      "-t,--topics", recompute_p_args_.topics,
-      "Bag input only: one or more CameraInfo topics whose p to recompute (each type must be "
-      "sensor_msgs/msg/CameraInfo). Required when <input> is a bag; rejected when <input> is a "
-      "calibration YAML, which carries no topics.");
+    set_topic_input(*sub, recompute_p_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topics", recompute_p_args_.topics,
+      "Bag input only: one or more CameraInfo topics whose p to recompute, each a literal name "
+      "or a '*' glob (each type must be sensor_msgs/msg/CameraInfo). Required when <input> is a "
+      "bag; rejected when <input> is a calibration YAML, which carries no topics.",
+      TopicSlotSpec{.allowed_types = kCameraInfoType});
     sub
       ->add_option(
         "-a,--alpha", recompute_p_args_.alpha,
@@ -157,11 +163,12 @@ private:
     sub->add_option("-i,--input", dump_args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    sub
-      ->add_option(
-        "-t,--topic", dump_args_.topic,
-        "The CameraInfo topic whose calibration to write (its type must be "
-        "sensor_msgs/msg/CameraInfo)")
+    set_topic_input(*sub, dump_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topic", dump_args_.topic,
+      "The CameraInfo topic whose calibration to write (its type must be "
+      "sensor_msgs/msg/CameraInfo)",
+      TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral})
       ->required();
     sub->add_option(
       "-o,--output", dump_args_.output_path, "Write the YAML to this path instead of stdout.");

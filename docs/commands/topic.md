@@ -10,6 +10,57 @@ Topic-level bag surgery. Subcommands:
 
 ---
 
+## Topic selectors
+
+Across bagwiz, most topic-valued flags accept a **selector**: either a
+literal topic name or a glob whose only wildcard is `*`. This section is the
+shared reference for what a selector means; other command pages link back
+here instead of repeating it.
+
+- `*` matches any run of characters, including `/` and the empty string.
+  Every other character matches literally, so a selector without `*` is an
+  exact topic-name match — a **literal**.
+- A literal is passed straight through to the command, which checks it for
+  presence and message type exactly as if selectors did not exist — the
+  error wording does not change. The exception is `topic drop -t`,
+  `topic keep -t`, and `trim --align`: an absent literal on those three is
+  rejected centrally, with the same "selector matched no topic" wording a
+  non-matching glob gets, because a plain presence check was already all
+  those three commands did with the value — there is no more specific,
+  command-owned error underneath it to defer to.
+- A `*` glob is resolved against the bag's topic list, restricted to the
+  message type(s) the flag accepts (a `--pcd` glob only ever matches
+  `PointCloud2` topics, never "every topic, then a type error"), and expands
+  to every matching topic name before the command runs. A glob that matches
+  no topic stops the run with an error naming the flag and the selector.
+- Matches contributed by one glob come out in topic-name order. Several
+  selectors on the same flag contribute their matches in the order they
+  appear on the command line, so a selector's position controls where its
+  matches land in the resolved list.
+- Deduplication only drops a glob-produced entry that an earlier selector
+  (glob or literal) already produced; a topic named twice by hand is kept
+  twice, so a command's own "topic given more than once" check still sees
+  it.
+
+Not every topic-valued flag accepts a glob. A flag that takes exactly one
+topic, and a flag whose value **names a topic to create** rather than select
+an existing one (a rename target, a new concatenated topic, and similar),
+only accept a literal; passing either a `*` is rejected with an error naming
+the flag and the reason. Each command's Options table says which rule
+applies to which flag.
+
+Quote a glob (e.g. `'/sensing/*'`) so the shell does not expand it as a
+filename pattern before bagwiz sees it.
+
+| Selector         | Matches                                                      |
+| ---------------- | ------------------------------------------------------------ |
+| `/sensing/lidar` | exactly the topic `/sensing/lidar`                           |
+| `/sensing/*`     | every topic under `/sensing/` (e.g. `/sensing/camera/image`) |
+| `*/image_raw`    | any topic ending in `/image_raw`                             |
+| `*`              | every topic in the bag                                       |
+
+---
+
 ## `bagwiz topic drop`
 
 Remove one or more topics from a rosbag. Every removed topic disappears
@@ -41,39 +92,26 @@ filename patterns before bagwiz sees them.
 
 ### Options
 
-| Flag                    | Description                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                              |
-| `-t`, `--topics <t>...` | **Required.** One or more topic selectors to remove (see [Selectors](#selectors)). At least one.      |
-| `-o`, `--output <p>`    | Write the result to a new bag instead of rewriting `<input>` in place.                                |
-| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place. |
+| Flag                    | Description                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                     |
+| `-t`, `--topics <t>...` | **Required.** One or more topic selectors to remove (see [Topic selectors](#topic-selectors)). At least one. |
+| `-o`, `--output <p>`    | Write the result to a new bag instead of rewriting `<input>` in place.                                       |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.        |
 
 ### Selectors
 
-Each `<topic>` is either a literal topic name or a glob whose only wildcard is
-`*`:
-
-- `*` matches any run of characters, including `/` and the empty string.
-- Every other character matches literally, so a selector without `*` is an
-  exact topic-name match.
-
-Examples:
-
-| Selector         | Matches                                                      |
-| ---------------- | ------------------------------------------------------------ |
-| `/sensing/lidar` | exactly the topic `/sensing/lidar`                           |
-| `/sensing/*`     | every topic under `/sensing/` (e.g. `/sensing/camera/image`) |
-| `*/image_raw`    | any topic ending in `/image_raw`                             |
-| `*`              | every topic in the bag                                       |
-
-Because `*` spans `/`, `/sensing/*` removes the entire `/sensing` subtree.
+Each `<topic>` is a topic selector — see [Topic selectors](#topic-selectors)
+above for the glob rules. Because `*` spans `/`, `/sensing/*` removes the
+entire `/sensing` subtree.
 
 ### Selector resolution
 
 - Selectors are resolved against the bag's topic list before anything is
-  written. A selector that matches no topic stops the run with a clear error
-  and leaves the input untouched — this catches typo'd names instead of
-  silently rewriting a bag with nothing removed.
+  written. A selector that matches no topic — including a literal that names
+  no topic in the bag — stops the run with a clear error and leaves the
+  input untouched; this catches typo'd names instead of silently rewriting a
+  bag with nothing removed.
 - When the selectors together match every topic, the run still succeeds and
   produces a bag with no topics, after logging a warning.
 
@@ -146,25 +184,27 @@ filename patterns before bagwiz sees them.
 
 ### Options
 
-| Flag                    | Description                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                              |
-| `-t`, `--topics <t>...` | **Required.** One or more topic selectors to keep (see [Selectors](#selectors)). At least one.        |
-| `-o`, `--output <p>`    | Write the result to a new bag instead of rewriting `<input>` in place.                                |
-| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place. |
+| Flag                    | Description                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                   |
+| `-t`, `--topics <t>...` | **Required.** One or more topic selectors to keep (see [Topic selectors](#topic-selectors)). At least one. |
+| `-o`, `--output <p>`    | Write the result to a new bag instead of rewriting `<input>` in place.                                     |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.      |
 
 ### Selectors
 
-Identical to `drop` — see [Selectors](#selectors) above. A selector matches the
-topics to **keep**; everything else is dropped. For example, `/sensing/*` keeps
-the entire `/sensing` subtree and drops all other topics.
+Identical to `drop` — see [Topic selectors](#topic-selectors) above. A
+selector matches the topics to **keep**; everything else is dropped. For
+example, `/sensing/*` keeps the entire `/sensing` subtree and drops all
+other topics.
 
 ### Selector resolution
 
 - Selectors are resolved against the bag's topic list before anything is
-  written. A selector that matches no topic stops the run with a clear error
-  and leaves the input untouched — this catches typo'd names instead of
-  silently producing a near-empty bag.
+  written. A selector that matches no topic — including a literal that names
+  no topic in the bag — stops the run with a clear error and leaves the
+  input untouched; this catches typo'd names instead of silently producing a
+  near-empty bag.
 - When the selectors together match every topic, the run still succeeds and
   keeps every topic (nothing is removed), after logging a warning.
 

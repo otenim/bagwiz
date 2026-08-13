@@ -128,6 +128,12 @@ invocation. Click through for full usage, options, and examples:
 `bagwiz <subcommand> --help` is always available and reflects the same
 options documented in the per-command pages.
 
+Many topic-valued flags — `topic drop -t`, `pcd concat --pcd`, `map slam
+--color`, and others — accept a `'*'` glob in addition to a literal topic
+name; some flags only accept a literal. See
+[Topic selectors](docs/commands/topic.md#topic-selectors) for the shared
+rules and each command's page for which flags accept a glob.
+
 ## Environment variables
 
 bagwiz reads a handful of **optional** environment variables to override

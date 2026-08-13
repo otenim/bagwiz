@@ -8,6 +8,9 @@
 
 #include "bagwiz/commands/topic_drop.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 
@@ -142,14 +145,17 @@ TEST_F(TopicDropTest, DropExactTopicToOutput)
   EXPECT_EQ(in.at("/sensing/lidar"), 1);
 }
 
-TEST_F(TopicDropTest, DropWildcardDropsMatchingSubtree)
+TEST_F(TopicDropTest, DropMultipleTopicsInSubtree)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so this is the already-expanded form of the '/sensing/*' glob; glob
+  // expansion itself is covered by bagwiz_topic_option_test.
   bagwiz::commands::TopicDropArgs args;
   args.input_path = in_path;
-  args.topics = {"/sensing/*"};
+  args.topics = {"/sensing/camera", "/sensing/lidar"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_drop(args), 0);
@@ -166,9 +172,11 @@ TEST_F(TopicDropTest, DropMultipleSelectors)
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so '*/objects' arrives here already resolved to '/perception/objects'.
   bagwiz::commands::TopicDropArgs args;
   args.input_path = in_path;
-  args.topics = {"/sensing/camera", "*/objects"};
+  args.topics = {"/sensing/camera", "/perception/objects"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_drop(args), 0);
@@ -197,7 +205,15 @@ TEST_F(TopicDropTest, DropInPlaceRewritesInput)
   EXPECT_EQ(result.at("/perception/objects"), 1);
 }
 
-TEST_F(TopicDropTest, UnmatchedSelectorFailsWithoutWriting)
+// Through the real CLI a typo'd literal can never reach run_topic_drop():
+// `-t/--topics` sets TopicSlotSpec::require_present, so the expansion pass
+// rejects it first (see bagwiz_topic_option_test, RequirePresentRejectsAn
+// AbsentLiteral and RequirePresentPreventsTopicKeepFromDestroyingTheBagIn
+// Place). run_topic_drop() is also called directly from tests, bypassing
+// that pass entirely, so it asserts the same precondition itself as a
+// backstop (see the comment above the loop in topic_drop.cpp) — this proves
+// that backstop actually fires rather than silently dropping nothing.
+TEST_F(TopicDropTest, LiteralNotInBagFailsPrecondition)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
@@ -238,9 +254,11 @@ TEST_F(TopicDropTest, DropAllTopicsProducesEmptyBag)
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so this is the already-expanded, lexicographically sorted form of '*'.
   bagwiz::commands::TopicDropArgs args;
   args.input_path = in_path;
-  args.topics = {"*"};
+  args.topics = {"/perception/objects", "/sensing/camera", "/sensing/lidar"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_drop(args), 0);
@@ -325,6 +343,33 @@ TEST_F(TopicDropTest, PassthroughMatchesPipelineAndPreservesCompression)
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "ref" / "metadata.yaml").compression_format, "none");
   EXPECT_EQ(
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml").compression_format, "zstd");
+}
+
+// Exercises the real TopicCommand::configure_drop() — reached through the
+// process-wide command registry that topic.cpp's BAGWIZ_REGISTER_COMMAND
+// registrar populates — rather than a hand-mirrored copy of its wiring.
+// Deleting `.require_present = true` from topic.cpp's `drop` -t/--topics
+// declaration fails this test directly; it does not rest on a manual CLI run
+// staying correct.
+TEST(TopicDropCliWiring, TopicsFlagRequiresPresence)
+{
+  bagwiz::commands::Command * topic_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "topic") {
+      topic_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(topic_cmd, nullptr);
+
+  CLI::App app{"topic"};
+  topic_cmd->configure(app);
+
+  auto * drop_sub = app.get_subcommand_no_throw("drop");
+  ASSERT_NE(drop_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*drop_sub);
+  ASSERT_EQ(slots.size(), 1U);  // just -t/--topics
+  EXPECT_TRUE(slots[0].spec.require_present);
 }
 
 }  // namespace

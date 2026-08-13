@@ -10,13 +10,13 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
 #include <vector>
 
 namespace
 {
 
-using bagwiz::core::resolve_topic_patterns;
 using bagwiz::core::topic_glob_match;
 
 TEST(TopicGlobMatch, ExactMatchWithoutWildcard)
@@ -78,67 +78,118 @@ TEST(TopicGlobMatch, EmptyPatternOnlyMatchesEmpty)
   EXPECT_FALSE(topic_glob_match("", "/foo"));
 }
 
-TEST(ResolveTopicPatterns, SinglePatternMatchesSubset)
-{
-  const std::vector<std::string> patterns{"/sensing/*"};
-  const std::vector<std::string> topics{"/sensing/camera", "/sensing/lidar", "/perception/objects"};
+}  // namespace
 
-  const auto result = resolve_topic_patterns(patterns, topics);
+using bagwiz::core::resolve_topic_selectors;
+using bagwiz::core::TopicEntry;
+
+namespace
+{
+std::vector<TopicEntry> sample_topics()
+{
+  return {
+    {"/sensing/lidar/right/points", "sensor_msgs/msg/PointCloud2"},
+    {"/sensing/lidar/left/points", "sensor_msgs/msg/PointCloud2"},
+    {"/sensing/camera/image_raw", "sensor_msgs/msg/Image"},
+    {"/tf", "tf2_msgs/msg/TFMessage"},
+  };
+}
+
+constexpr std::array<std::string_view, 1> kCloudType{{"sensor_msgs/msg/PointCloud2"}};
+}  // namespace
+
+TEST(ResolveTopicSelectors, LiteralPassesThroughUnchecked)
+{
+  // A literal is never matched, filtered, or validated here: the command's own
+  // presence and type checks own that error, and their wording must not change.
+  const std::vector<std::string> selectors{"/not/in/the/bag", "/tf"};
+  const auto topics = sample_topics();
+
+  const auto result = resolve_topic_selectors(selectors, topics, kCloudType);
 
   EXPECT_TRUE(result.unmatched.empty());
-  EXPECT_EQ(result.matched.size(), 2U);
-  EXPECT_EQ(result.matched.count("/sensing/camera"), 1U);
-  EXPECT_EQ(result.matched.count("/sensing/lidar"), 1U);
-  EXPECT_EQ(result.matched.count("/perception/objects"), 0U);
+  EXPECT_EQ(result.matched, (std::vector<std::string>{"/not/in/the/bag", "/tf"}));
 }
 
-TEST(ResolveTopicPatterns, OverlappingPatternsDeduplicate)
+TEST(ResolveTopicSelectors, GlobIsFilteredByAllowedTypes)
 {
-  const std::vector<std::string> patterns{"/sensing/*", "*camera*"};
-  const std::vector<std::string> topics{"/sensing/camera", "/sensing/lidar"};
+  const std::vector<std::string> selectors{"*"};
+  const auto topics = sample_topics();
 
-  const auto result = resolve_topic_patterns(patterns, topics);
+  const auto result = resolve_topic_selectors(selectors, topics, kCloudType);
 
-  // /sensing/camera is matched by both patterns but appears once.
-  EXPECT_TRUE(result.unmatched.empty());
-  EXPECT_EQ(result.matched.size(), 2U);
+  EXPECT_EQ(
+    result.matched,
+    (std::vector<std::string>{"/sensing/lidar/left/points", "/sensing/lidar/right/points"}));
 }
 
-TEST(ResolveTopicPatterns, UnmatchedPatternsReported)
+TEST(ResolveTopicSelectors, EmptyAllowedTypesMatchesEveryType)
 {
-  const std::vector<std::string> patterns{"/foo", "/does/not/exist", "/bar*"};
-  const std::vector<std::string> topics{"/foo", "/baz"};
+  const std::vector<std::string> selectors{"*"};
+  const auto topics = sample_topics();
 
-  const auto result = resolve_topic_patterns(patterns, topics);
+  const auto result = resolve_topic_selectors(selectors, topics, {});
 
-  EXPECT_EQ(result.matched.size(), 1U);
-  EXPECT_EQ(result.matched.count("/foo"), 1U);
-  ASSERT_EQ(result.unmatched.size(), 2U);
-  // Preserved in input order.
-  EXPECT_EQ(result.unmatched[0], "/does/not/exist");
-  EXPECT_EQ(result.unmatched[1], "/bar*");
+  EXPECT_EQ(result.matched.size(), 4U);
 }
 
-TEST(ResolveTopicPatterns, LoneStarMatchesAllTopics)
+TEST(ResolveTopicSelectors, MatchesWithinOneSelectorAreSortedLexicographically)
 {
-  const std::vector<std::string> patterns{"*"};
-  const std::vector<std::string> topics{"/a", "/b", "/c"};
+  // The bag lists right before left; the result must not depend on that.
+  const std::vector<std::string> selectors{"/sensing/lidar/*"};
+  const auto topics = sample_topics();
 
-  const auto result = resolve_topic_patterns(patterns, topics);
+  const auto result = resolve_topic_selectors(selectors, topics, kCloudType);
 
-  EXPECT_TRUE(result.unmatched.empty());
-  EXPECT_EQ(result.matched.size(), 3U);
+  EXPECT_EQ(
+    result.matched,
+    (std::vector<std::string>{"/sensing/lidar/left/points", "/sensing/lidar/right/points"}));
 }
 
-TEST(ResolveTopicPatterns, NoTopicsLeavesEveryPatternUnmatched)
+TEST(ResolveTopicSelectors, SelectorsKeepArgumentOrder)
 {
-  const std::vector<std::string> patterns{"*", "/foo"};
-  const std::vector<std::string> topics{};
+  const std::vector<std::string> selectors{"/sensing/lidar/right/*", "/sensing/lidar/left/*"};
+  const auto topics = sample_topics();
 
-  const auto result = resolve_topic_patterns(patterns, topics);
+  const auto result = resolve_topic_selectors(selectors, topics, kCloudType);
+
+  EXPECT_EQ(
+    result.matched,
+    (std::vector<std::string>{"/sensing/lidar/right/points", "/sensing/lidar/left/points"}));
+}
+
+TEST(ResolveTopicSelectors, DeduplicatesAcrossLiteralAndGlob)
+{
+  const std::vector<std::string> selectors{"/sensing/lidar/left/points", "/sensing/lidar/*"};
+  const auto topics = sample_topics();
+
+  const auto result = resolve_topic_selectors(selectors, topics, kCloudType);
+
+  EXPECT_EQ(
+    result.matched,
+    (std::vector<std::string>{"/sensing/lidar/left/points", "/sensing/lidar/right/points"}));
+}
+
+TEST(ResolveTopicSelectors, GlobMatchingNothingIsReportedUnmatched)
+{
+  const std::vector<std::string> selectors{"/nope/*"};
+  const auto topics = sample_topics();
+
+  const auto result = resolve_topic_selectors(selectors, topics, kCloudType);
 
   EXPECT_TRUE(result.matched.empty());
-  EXPECT_EQ(result.unmatched.size(), 2U);
+  EXPECT_EQ(result.unmatched, (std::vector<std::string>{"/nope/*"}));
 }
 
-}  // namespace
+TEST(ResolveTopicSelectors, GlobMatchingOnlyWrongTypesIsUnmatched)
+{
+  // '*' does match /sensing/camera/image_raw by name, but the type filter
+  // removes it, so the selector reports as matching nothing.
+  const std::vector<std::string> selectors{"/sensing/camera/*"};
+  const auto topics = sample_topics();
+
+  const auto result = resolve_topic_selectors(selectors, topics, kCloudType);
+
+  EXPECT_TRUE(result.matched.empty());
+  EXPECT_EQ(result.unmatched, (std::vector<std::string>{"/sensing/camera/*"}));
+}

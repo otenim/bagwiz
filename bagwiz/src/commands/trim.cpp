@@ -10,16 +10,15 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/bag/bag_copy.hpp"
 #include "bagwiz/core/bag/bag_passthrough.hpp"
 #include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/duration_parse.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/base/str_utils.hpp"
-#include "bagwiz/core/base/topic_match.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
-#include "bagwiz/io/topics.hpp"
 #include "trim_stamp.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <algorithm>
@@ -30,6 +29,7 @@
 #include <exception>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -157,7 +157,7 @@ std::int64_t message_clock_ns(
 // ReadFilter::payload_topics).
 std::vector<std::string> clock_scan_payload_topics(
   bool use_header_stamp, const std::unordered_set<std::string> & headered,
-  const std::unordered_set<std::string> & scanned)
+  std::span<const std::string> scanned)
 {
   std::vector<std::string> payload_topics;
   if (use_header_stamp) {
@@ -180,9 +180,9 @@ std::vector<std::string> clock_scan_payload_topics(
 io::BagReader::TimeExtent compute_clock_extent(
   io::BagReader & reader, const std::unordered_set<std::string> & headered)
 {
-  std::unordered_set<std::string> all_topics;
+  std::vector<std::string> all_topics;
   for (const auto & t : reader.topics()) {
-    all_topics.insert(t.name);
+    all_topics.push_back(t.name);
   }
   io::ReadFilter filter;
   filter.payload_topics = clock_scan_payload_topics(true, headered, all_topics);
@@ -212,9 +212,9 @@ io::BagReader::TimeExtent compute_clock_extent(
 std::vector<std::int64_t> collect_sorted_clocks(
   io::BagReader & reader, bool use_header_stamp, const std::unordered_set<std::string> & headered)
 {
-  std::unordered_set<std::string> all_topics;
+  std::vector<std::string> all_topics;
   for (const auto & t : reader.topics()) {
-    all_topics.insert(t.name);
+    all_topics.push_back(t.name);
   }
   io::ReadFilter filter;
   filter.payload_topics = clock_scan_payload_topics(use_header_stamp, headered, all_topics);
@@ -229,33 +229,23 @@ std::vector<std::int64_t> collect_sorted_clocks(
   return clocks;
 }
 
-// Resolve --align into an absolute window: expand the selectors against the
-// bag's topic list, then scan the selected topics' clock values and take
-// their common time span — from the latest first message to the earliest
-// last message. Both boundary messages are inside the window, so the
-// exclusive upper bound is last + 1. Payloads are materialized only where the
-// clock needs them (header stamps); pure receive-time scans skip them
-// entirely (see ReadFilter::payload_topics). `reader` must be fresh
-// (set_filter precedes iteration). Logs and returns false on any failure.
+// Resolve --align into an absolute window: scan the selected topics' clock
+// values and take their common time span — from the latest first message to
+// the earliest last message. Both boundary messages are inside the window, so
+// the exclusive upper bound is last + 1. Selectors were expanded before
+// run() (see commands/topic_option.hpp), so args.align is already the literal
+// list of topics to scan. Payloads are materialized only where the clock
+// needs them (header stamps); pure receive-time scans skip them entirely (see
+// ReadFilter::payload_topics). `reader` must be fresh (set_filter precedes
+// iteration). Logs and returns false on any failure.
 bool resolve_align_window(
   const TrimArgs & args, io::BagReader & reader, bool use_header_stamp,
   const std::unordered_set<std::string> & headered, std::int64_t & abs_start_ns,
   std::optional<std::int64_t> & abs_end_ns)
 {
-  const auto topic_names = io::snapshot_topic_names(reader);
-  const auto resolution = core::resolve_topic_patterns(args.align, topic_names);
-  if (!resolution.unmatched.empty()) {
-    for (const auto & pattern : resolution.unmatched) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "trim: --align selector '%s' matched no topic in %s", pattern.c_str(),
-        args.input_path.c_str());
-    }
-    return false;
-  }
-
   io::ReadFilter filter;
-  filter.topics.assign(resolution.matched.begin(), resolution.matched.end());
-  filter.payload_topics = clock_scan_payload_topics(use_header_stamp, headered, resolution.matched);
+  filter.topics = args.align;
+  filter.payload_topics = clock_scan_payload_topics(use_header_stamp, headered, args.align);
   reader.set_filter(filter);
 
   // First/last clock value per selected topic. Iteration order is not
@@ -273,7 +263,7 @@ bool resolve_align_window(
 
   std::int64_t start = std::numeric_limits<std::int64_t>::min();
   std::int64_t last = std::numeric_limits<std::int64_t>::max();
-  for (const auto & name : resolution.matched) {
+  for (const auto & name : args.align) {
     const auto it = spans.find(name);
     if (it == spans.end()) {
       BAGWIZ_LOG_ERROR(kLogger, "trim: --align topic '%s' has no messages.", name.c_str());
@@ -285,7 +275,7 @@ bool resolve_align_window(
   if (start > last) {
     BAGWIZ_LOG_ERROR(
       kLogger, "trim: the %zu --align topic(s) do not overlap in time; the window is empty.",
-      resolution.matched.size());
+      args.align.size());
     return false;
   }
 
@@ -297,8 +287,7 @@ bool resolve_align_window(
   }
   BAGWIZ_LOG_INFO(
     kLogger, "trim: aligned to %zu topic(s); window %s .. %s (both bounds inclusive).",
-    resolution.matched.size(), core::format_timestamp(start).c_str(),
-    core::format_timestamp(last).c_str());
+    args.align.size(), core::format_timestamp(start).c_str(), core::format_timestamp(last).c_str());
   return true;
 }
 
@@ -686,6 +675,7 @@ public:
     app.add_option("-i,--input", args_.input_path, "Input ROS 2 rosbag (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
+    set_topic_input(app, args_.input_path);
     auto * start_opt = app.add_option(
       "--start", args_.start,
       "Window start: an offset from the bag start (e.g. 5s, 500ms) or a message count "
@@ -701,10 +691,11 @@ public:
       "--both", args_.both,
       "Trim this much from both the bag start and the bag end: a time offset (5s) or a "
       "message count (50msg). Unit required.");
-    auto * align_opt = app.add_option(
-      "--align", args_.align,
+    auto * align_opt = add_topic_option(
+      app, "--align", args_.align,
       "Trim to the common time span of these topics (latest first message to earliest last "
-      "message, both included). Literal names or '*' globs.");
+      "message, both included). Literal names or '*' globs.",
+      TopicSlotSpec{.require_present = true});
     app
       .add_option(
         "--stamp", args_.stamp,

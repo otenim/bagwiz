@@ -8,8 +8,12 @@
 
 #include "bagwiz/commands/topic_keep.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
+#include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <gtest/gtest.h>
 
@@ -144,14 +148,17 @@ TEST_F(TopicKeepTest, KeepExactTopicToOutput)
   EXPECT_EQ(in.at("/sensing/camera"), 2);
 }
 
-TEST_F(TopicKeepTest, KeepWildcardKeepsMatchingSubtree)
+TEST_F(TopicKeepTest, KeepMultipleTopicsInSubtree)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so this is the already-expanded form of the '/sensing/*' glob; glob
+  // expansion itself is covered by bagwiz_topic_option_test.
   bagwiz::commands::TopicKeepArgs args;
   args.input_path = in_path;
-  args.topics = {"/sensing/*"};
+  args.topics = {"/sensing/camera", "/sensing/lidar"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_keep(args), 0);
@@ -168,9 +175,11 @@ TEST_F(TopicKeepTest, KeepMultipleSelectors)
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so '*/objects' arrives here already resolved to '/perception/objects'.
   bagwiz::commands::TopicKeepArgs args;
   args.input_path = in_path;
-  args.topics = {"/sensing/camera", "*/objects"};
+  args.topics = {"/sensing/camera", "/perception/objects"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_keep(args), 0);
@@ -199,7 +208,15 @@ TEST_F(TopicKeepTest, KeepInPlaceRewritesInput)
   EXPECT_EQ(result.size(), 1U);  // camera and objects dropped
 }
 
-TEST_F(TopicKeepTest, UnmatchedSelectorFailsWithoutWriting)
+// Through the real CLI a typo'd literal can never reach run_topic_keep():
+// `-t/--topics` sets TopicSlotSpec::require_present, so the expansion pass
+// rejects it first (see bagwiz_topic_option_test,
+// RequirePresentPreventsTopicKeepFromDestroyingTheBagInPlace). run_topic_keep
+// is also called directly from tests, bypassing that pass entirely, so it
+// asserts the same precondition itself as a backstop (see the comment above
+// the loop in topic_keep.cpp) — this proves that backstop actually fires,
+// rather than silently emptying the bag the way it once did.
+TEST_F(TopicKeepTest, LiteralNotInBagFailsPrecondition)
 {
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
@@ -240,9 +257,11 @@ TEST_F(TopicKeepTest, KeepAllTopicsRetainsEverything)
   const auto in_path = build_input(tmp_dir_);
   const auto out_path = tmp_dir_ / "out";
 
+  // Selectors are expanded before run() now (see commands/topic_option.hpp),
+  // so this is the already-expanded, lexicographically sorted form of '*'.
   bagwiz::commands::TopicKeepArgs args;
   args.input_path = in_path;
-  args.topics = {"*"};
+  args.topics = {"/perception/objects", "/sensing/camera", "/sensing/lidar"};
   args.output_path = out_path;
 
   ASSERT_EQ(bagwiz::commands::run_topic_keep(args), 0);
@@ -331,6 +350,71 @@ TEST_F(TopicKeepTest, PassthroughMatchesPipelineAndPreservesCompression)
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "ref" / "metadata.yaml").compression_format, "none");
   EXPECT_EQ(
     bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml").compression_format, "zstd");
+}
+
+// Exercises the real TopicCommand::configure_keep() — reached through the
+// process-wide command registry that topic.cpp's BAGWIZ_REGISTER_COMMAND
+// registrar populates — rather than a hand-mirrored copy of its wiring.
+// Deleting `.require_present = true` from topic.cpp's `keep` -t/--topics
+// declaration fails this test directly; it does not rest on a manual CLI run
+// staying correct.
+TEST(TopicKeepCliWiring, TopicsFlagRequiresPresence)
+{
+  bagwiz::commands::Command * topic_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "topic") {
+      topic_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(topic_cmd, nullptr);
+
+  CLI::App app{"topic"};
+  topic_cmd->configure(app);
+
+  auto * keep_sub = app.get_subcommand_no_throw("keep");
+  ASSERT_NE(keep_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*keep_sub);
+  ASSERT_EQ(slots.size(), 1U);  // just -t/--topics
+  EXPECT_TRUE(slots[0].spec.require_present);
+}
+
+// Task 8: `topic rename` --src/--dst are both literal-only. --dst additionally
+// carries a reject_reason (it names the topic to CREATE, so there is nothing
+// for a glob to match against). Same registry-driven idiom as
+// TopicKeepCliWiring above; TopicCommand::configure() wires drop/keep/rename
+// together so this test lives alongside the others that already pay
+// topic.cpp's link cost.
+TEST(TopicRenameCliWiring, SrcAndDstAreLiteralOnly)
+{
+  bagwiz::commands::Command * topic_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "topic") {
+      topic_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(topic_cmd, nullptr);
+
+  CLI::App app{"topic"};
+  topic_cmd->configure(app);
+
+  auto * rename_sub = app.get_subcommand_no_throw("rename");
+  ASSERT_NE(rename_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*rename_sub);
+  ASSERT_EQ(slots.size(), 2U);  // --src, --dst
+
+  const auto * src_slot = bagwiz::test::slot_for(slots, "src");
+  ASSERT_NE(src_slot, nullptr);
+  EXPECT_EQ(src_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_TRUE(src_slot->spec.reject_reason.empty());
+  EXPECT_TRUE(src_slot->option->get_required());
+
+  const auto * dst_slot = bagwiz::test::slot_for(slots, "dst");
+  ASSERT_NE(dst_slot, nullptr);
+  EXPECT_EQ(dst_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_EQ(dst_slot->spec.reject_reason, "it names the topic to create");
+  EXPECT_TRUE(dst_slot->option->get_required());
 }
 
 }  // namespace

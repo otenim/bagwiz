@@ -74,6 +74,8 @@ namespace bagwiz::commands
 namespace
 {
 constexpr const char * kLogger = "bagwiz.cmd.map";
+// Mirror topic_types.hpp's kPointCloud2Type / kImuType / kNavSatFixType (map
+// slam --pcd / --imu / --gnss's allowed_types). Keep both in sync by hand.
 constexpr const char * kPointCloud2Type = "sensor_msgs/msg/PointCloud2";
 constexpr const char * kImuType = "sensor_msgs/msg/Imu";
 constexpr const char * kNavSatFixType = "sensor_msgs/msg/NavSatFix";

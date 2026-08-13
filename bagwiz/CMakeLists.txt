@@ -186,7 +186,9 @@ add_executable(bagwiz
   src/commands/tf_static_update.cpp
   src/commands/topic.cpp
   src/commands/topic_drop.cpp
+  src/commands/topic_expand.cpp
   src/commands/topic_keep.cpp
+  src/commands/topic_option.cpp
   src/commands/topic_rename.cpp
   src/commands/stamp.cpp
   src/commands/stamp_sync.cpp
@@ -315,6 +317,40 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_help_formatter_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_help_formatter_test ${bagwiz_test_libs} CLI11::CLI11)
 
+  # topic_option_test.cpp covers registration/store only (add_topic_option(),
+  # set_topic_input(), the StoreGuard) and needs no bag, so it links
+  # topic_option.cpp alone. The expansion-pass tests (which do build real MCAP
+  # fixtures and need topic_expand.cpp too) used to live in this same file;
+  # they were split out, once past this project's 800-line file guideline,
+  # into the two targets below. All three share
+  # test/commands/topic_expand_test_util.hpp for its bag-building helpers, but
+  # that header needs no target of its own.
+  ament_add_gtest(bagwiz_topic_option_test
+    test/commands/topic_option_test.cpp
+    src/commands/topic_option.cpp)
+  target_include_directories(bagwiz_topic_option_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_topic_option_test ${bagwiz_test_libs} CLI11::CLI11)
+
+  # Independent-slot expansion behavior: glob/literal/require_present/reject/
+  # dedupe and the declaration-bug guards. See topic_expand_test.cpp's header
+  # comment for the split rationale.
+  ament_add_gtest(bagwiz_topic_expand_test
+    test/commands/topic_expand_test.cpp
+    src/commands/topic_option.cpp
+    src/commands/topic_expand.cpp)
+  target_include_directories(bagwiz_topic_expand_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_topic_expand_test ${bagwiz_test_libs} CLI11::CLI11)
+
+  # Cross-slot expansion behavior: pair_value and scope, including the
+  # optional-target overload's interaction with both.
+  ament_add_gtest(bagwiz_topic_expand_pair_scope_test
+    test/commands/topic_expand_pair_scope_test.cpp
+    src/commands/topic_option.cpp
+    src/commands/topic_expand.cpp)
+  target_include_directories(
+    bagwiz_topic_expand_pair_scope_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_topic_expand_pair_scope_test ${bagwiz_test_libs} CLI11::CLI11)
+
   ament_add_gtest(bagwiz_parse_error_test
     test/commands/parse_error_test.cpp
     src/commands/parse_error.cpp)
@@ -365,12 +401,29 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_tf_static_dump_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_tf_static_dump_test ${bagwiz_test_libs} fmt::fmt yaml-cpp)
 
+  # pcd.cpp carries the PcdCommand registrar + CLI11 wiring for both `pcd
+  # concat` and `pcd undistort` together, so proving pcd.cpp's own
+  # configure_concat() routes --pcd/--stamp-offset through add_topic_option()
+  # (rather than a hand-mirrored copy of it) pulls in the whole sibling set:
+  # pcd_undistort.cpp + pcd_undistort_common.cpp because PcdCommand::run()'s
+  # vtable references run_pcd_undistort regardless of which subcommand a
+  # given test exercises, topic_option.cpp for add_topic_option()/
+  # topic_slots_of(), registry.cpp for Registry::instance(), and CLI11 +
+  # geometry_msgs/rmw for pcd_undistort.cpp's own type dependencies
+  # (topic_drop_test/pcd_undistort_command_test idiom).
   ament_add_gtest(bagwiz_pcd_concat_command_test
     test/commands/pcd_concat_test.cpp
+    src/commands/pcd.cpp
     src/commands/pcd_concat.cpp
-    src/commands/pcd_concat_common.cpp)
+    src/commands/pcd_concat_common.cpp
+    src/commands/pcd_undistort.cpp
+    src/commands/pcd_undistort_common.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
   target_include_directories(bagwiz_pcd_concat_command_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(bagwiz_pcd_concat_command_test ${bagwiz_test_libs} fmt::fmt)
+  target_link_libraries(
+    bagwiz_pcd_concat_command_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
+    ${geometry_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
 
   # pcd_concat_common.hpp lives in src/commands (CLI-internal, not installed),
   # so this test adds src/commands to its include path (cam_info_common idiom).
@@ -411,11 +464,25 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_smoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_smoke_test ${bagwiz_test_libs})
 
+  # topic.cpp carries the TopicCommand registrar + CLI11 wiring for `topic
+  # drop`/`topic keep`/`topic rename` together, so proving topic.cpp's own
+  # configure_drop() sets TopicSlotSpec::require_present (rather than a
+  # hand-mirrored copy of it) pulls in the whole sibling set: topic_keep.cpp
+  # and topic_rename.cpp because TopicCommand::run()'s vtable entry
+  # references run_topic_keep/run_topic_rename regardless of which
+  # subcommand a given test exercises, topic_option.cpp for
+  # add_topic_option()/set_topic_input(), and registry.cpp for
+  # Registry::instance() (completion_test/trim_test idiom).
   ament_add_gtest(bagwiz_topic_drop_test
     test/commands/topic_drop_test.cpp
-    src/commands/topic_drop.cpp)
+    src/commands/topic.cpp
+    src/commands/topic_drop.cpp
+    src/commands/topic_keep.cpp
+    src/commands/topic_rename.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
   target_include_directories(bagwiz_topic_drop_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(bagwiz_topic_drop_test ${bagwiz_test_libs} fmt::fmt)
+  target_link_libraries(bagwiz_topic_drop_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
 
   # traj_common.hpp lives in src/commands (CLI-internal, not installed), so
   # this test adds src/commands to its include path (pcd_concat_common idiom).
@@ -426,11 +493,20 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_traj_common_test ${bagwiz_test_libs} fmt::fmt)
 
+  # Same shape as bagwiz_topic_drop_test above, mirrored for `topic keep`:
+  # topic.cpp pulls in topic_drop.cpp and topic_rename.cpp too (TopicCommand's
+  # vtable references run_topic_drop/run_topic_rename regardless of which
+  # subcommand this test exercises), plus topic_option.cpp and registry.cpp.
   ament_add_gtest(bagwiz_topic_keep_test
     test/commands/topic_keep_test.cpp
-    src/commands/topic_keep.cpp)
+    src/commands/topic.cpp
+    src/commands/topic_drop.cpp
+    src/commands/topic_keep.cpp
+    src/commands/topic_rename.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
   target_include_directories(bagwiz_topic_keep_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(bagwiz_topic_keep_test ${bagwiz_test_libs} fmt::fmt)
+  target_link_libraries(bagwiz_topic_keep_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
 
   ament_add_gtest(bagwiz_topic_rename_test
     test/commands/topic_rename_test.cpp
@@ -442,11 +518,14 @@ if(BUILD_TESTING)
   # registrar + CLI11 wiring, so the test also compiles registry.cpp and
   # links CLI11 (completion_test idiom). trim_stamp.hpp is CLI-internal, so
   # the test adds src/commands to its include path (traj_common idiom).
+  # TrimCommand::configure() declares --align through add_topic_option()
+  # (topic_option.hpp), so the test also compiles topic_option.cpp.
   ament_add_gtest(bagwiz_trim_test
     test/commands/trim_test.cpp
     src/commands/trim.cpp
     src/commands/trim_stamp.cpp
-    src/commands/registry.cpp)
+    src/commands/registry.cpp
+    src/commands/topic_option.cpp)
   target_include_directories(bagwiz_trim_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_trim_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
@@ -499,13 +578,21 @@ if(BUILD_TESTING)
     bagwiz_cam_info_common_test ${bagwiz_test_libs} fmt::fmt
     ${sensor_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
 
+  # Also compiles generate.cpp (GenerateCommand's CLI11 wiring) plus
+  # topic_option.cpp + registry.cpp so a test can drive the real
+  # configure_video() through Registry::instance() (walk_test.cpp idiom) —
+  # generate.cpp is the production call site for
+  # add_topic_option(std::optional<std::string>&) (--cam-info).
   ament_add_gtest(bagwiz_generate_video_test
     test/commands/generate_video_test.cpp
+    src/commands/generate.cpp
     src/commands/generate_video.cpp
-    src/commands/generate_video_common.cpp)
+    src/commands/generate_video_common.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
   target_include_directories(bagwiz_generate_video_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(
-    bagwiz_generate_video_test ${bagwiz_test_libs} fmt::fmt
+    bagwiz_generate_video_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV ${OpenCV_LIBS})
 
   # generate_video_common.hpp lives in src/commands (CLI-internal, not
@@ -561,6 +648,8 @@ if(BUILD_TESTING)
 
   # walk.cpp carries a BAGWIZ_REGISTER_COMMAND registrar, so the test also
   # compiles registry.cpp (completion_test idiom).
+  # walk.cpp declares its -t/--topic and --cam-info through add_topic_option()
+  # (topic_option.hpp), so this test also compiles topic_option.cpp.
   ament_add_gtest(bagwiz_walk_test
     test/commands/walk_test.cpp
     src/commands/walk.cpp
@@ -571,6 +660,7 @@ if(BUILD_TESTING)
     src/commands/walk_overlay_scan.cpp
     src/commands/walk_preview.cpp
     src/commands/walk_save.cpp
+    src/commands/topic_option.cpp
     src/commands/registry.cpp)
   target_include_directories(bagwiz_walk_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
