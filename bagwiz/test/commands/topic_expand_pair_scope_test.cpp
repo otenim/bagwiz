@@ -67,7 +67,7 @@ TEST_F(ExpandTopicSelectorsTest, PairValueGlobsOnlyTheLeftHalf)
 
 TEST_F(ExpandTopicSelectorsTest, PairValuesKeepTheirOwnSuffixAndLiteralsPassThrough)
 {
-  // Two --stamp-offset occurrences, each a literal (unglobbed) left half with
+  // Two --stamp-offset occurrences, each a glob-free literal left half with
   // a different right half: proves values from different selectors never
   // cross-contaminate suffixes, and that a literal inside a pair-value slot
   // passes through untouched (unvalidated against the scope), same as a
