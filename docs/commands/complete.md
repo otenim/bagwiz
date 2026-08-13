@@ -130,7 +130,12 @@ source ~/.config/fish/completions/bagwiz.fish
 
 ## Command and flag completion
 
-- Top-level commands and known nested subcommands are completed statically.
+- Top-level commands and known nested subcommands are completed from the same
+  command tree the binary registers at startup, so completion only ever offers
+  commands this binary actually contains. In particular, `map` (and its
+  `slam` / `viewer` subcommands) appears only in a build configured with
+  `-DBAGWIZ_WITH_SLAM=ON` — see [`map`](map.md); a core build offers no `map`
+  completions at all, matching that the binary has no such command.
 - Typing `-` and pressing TAB lists the option flags available at the current
   position. Every command and subcommand responds, including ones that take
   only flags — in that case the listing falls back to the
@@ -138,7 +143,8 @@ source ~/.config/fish/completions/bagwiz.fish
   `-<TAB>` also surfaces `--version`. The covered positions are:
   - `bagwiz -<TAB>` → `--help`, `--version`, `-h`
   - `bagwiz <cmd> -<TAB>` for every command (`cam-info`, `complete`, `convert`,
-    `generate`, `ls`, `map`, `pcd`, `tf`, `topic`, `traj`, `trim`, `walk`);
+    `generate`, `ls`, `map`, `pcd`, `tf`, `topic`, `traj`, `trim`, `walk`;
+    `map` only in a `BAGWIZ_WITH_SLAM` build);
     `walk -<TAB>` also surfaces `--cam-info`, `ls -<TAB>` surfaces `-l`/`--long`,
     and `trim -<TAB>` surfaces `--start`, `--end`, `--duration`, `--both`,
     `--align`, `--stamp`, `--output`/`-o`, `--overwrite`/`-w`
@@ -240,7 +246,7 @@ name only — it offers plain topic names either way, typed as-is.
     reader, so dynamic TF topics are deliberately omitted. The flag also accepts
     a brand-new topic name, which simply has no candidate to offer
   - `bagwiz trim -i <input> --align <topic>...` — every topic in the bag,
-    offered at the first value of the run only
+    offered at every value of the variadic run
 - Commands that take a `<topic>` flag value complete it by opening
   `<input>` as a ROS 2 rosbag and listing topics with names that start with
   the current prefix. The currently-covered positions are:
