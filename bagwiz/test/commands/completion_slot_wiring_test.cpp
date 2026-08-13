@@ -30,9 +30,9 @@
 
 #include <gtest/gtest.h>
 
-#include <cstddef>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace
 {
@@ -56,13 +56,20 @@ Command * command_named(const std::string & name)
 }
 
 // Asserts the two fields try_topic_completion() reads: `mode`, and
-// `allowed_types` when `allowed_types_size` is non-zero (an empty span means
-// the slot declares none, so only presence and mode are checked).
-void expect_slot(const TopicSlot * slot, TopicSelectorMode mode, std::size_t allowed_types_size)
+// `allowed_types`. `expected_types` defaults to an empty span for a slot
+// that declares none. Compares `.data()` (which pointer, not just how many
+// entries) against the named constant from topic_types.hpp the caller
+// passes, so a slot accidentally wired to a different constant of the same
+// size — e.g. kImuType swapped for kNavSatFixType, both size 1 — fails this
+// check even though a size-only comparison would not catch it.
+void expect_slot(
+  const TopicSlot * slot, TopicSelectorMode mode,
+  std::span<const std::string_view> expected_types = {})
 {
   ASSERT_NE(slot, nullptr);
   EXPECT_EQ(slot->spec.mode, mode);
-  EXPECT_EQ(slot->spec.allowed_types.size(), allowed_types_size);
+  EXPECT_EQ(slot->spec.allowed_types.data(), expected_types.data());
+  EXPECT_EQ(slot->spec.allowed_types.size(), expected_types.size());
 }
 
 }  // namespace
@@ -75,8 +82,9 @@ TEST(CompletionSlotWiring, Walk)
   cmd->configure(app);
   const auto slots = topic_slots_of(app);
 
-  expect_slot(slot_for(slots, "topic"), TopicSelectorMode::kLiteral, 0U);
-  expect_slot(slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, 1U);
+  expect_slot(slot_for(slots, "topic"), TopicSelectorMode::kLiteral);
+  expect_slot(
+    slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, bagwiz::commands::kCameraInfoType);
 }
 
 TEST(CompletionSlotWiring, TrajDumpAndJoin)
@@ -90,14 +98,14 @@ TEST(CompletionSlotWiring, TrajDumpAndJoin)
   ASSERT_NE(dump, nullptr);
   expect_slot(
     slot_for(topic_slots_of(*dump), "topic"), TopicSelectorMode::kLiteral,
-    bagwiz::commands::kTrajDumpSupportedTypes.size());
+    bagwiz::commands::kTrajDumpSupportedTypes);
 
   // `join`'s -t/--topic names the topic the trajectory is embedded under —
   // a new name, not a selection from the bag — so it declares no
   // allowed_types; only its mode is asserted.
   auto * join = app.get_subcommand_no_throw("join");
   ASSERT_NE(join, nullptr);
-  expect_slot(slot_for(topic_slots_of(*join), "topic"), TopicSelectorMode::kLiteral, 0U);
+  expect_slot(slot_for(topic_slots_of(*join), "topic"), TopicSelectorMode::kLiteral);
 }
 
 TEST(CompletionSlotWiring, TfTreeAndStatic)
@@ -111,7 +119,7 @@ TEST(CompletionSlotWiring, TfTreeAndStatic)
   ASSERT_NE(tree, nullptr);
   expect_slot(
     slot_for(topic_slots_of(*tree), "topics"), TopicSelectorMode::kGlob,
-    bagwiz::commands::kTfMessageTypes.size());
+    bagwiz::commands::kTfMessageTypes);
 
   auto * group = app.get_subcommand_no_throw("static");
   ASSERT_NE(group, nullptr);
@@ -123,11 +131,11 @@ TEST(CompletionSlotWiring, TfTreeAndStatic)
   // registry-driven — see completion.cpp's complete_tf_static_update().
   auto * join = group->get_subcommand_no_throw("join");
   ASSERT_NE(join, nullptr);
-  expect_slot(slot_for(topic_slots_of(*join), "topic"), TopicSelectorMode::kLiteral, 0U);
+  expect_slot(slot_for(topic_slots_of(*join), "topic"), TopicSelectorMode::kLiteral);
 
   auto * update = group->get_subcommand_no_throw("update");
   ASSERT_NE(update, nullptr);
-  expect_slot(slot_for(topic_slots_of(*update), "topic"), TopicSelectorMode::kLiteral, 0U);
+  expect_slot(slot_for(topic_slots_of(*update), "topic"), TopicSelectorMode::kLiteral);
 }
 
 TEST(CompletionSlotWiring, TopicDropKeepRename)
@@ -139,17 +147,17 @@ TEST(CompletionSlotWiring, TopicDropKeepRename)
 
   auto * drop = app.get_subcommand_no_throw("drop");
   ASSERT_NE(drop, nullptr);
-  expect_slot(slot_for(topic_slots_of(*drop), "topics"), TopicSelectorMode::kGlob, 0U);
+  expect_slot(slot_for(topic_slots_of(*drop), "topics"), TopicSelectorMode::kGlob);
 
   auto * keep = app.get_subcommand_no_throw("keep");
   ASSERT_NE(keep, nullptr);
-  expect_slot(slot_for(topic_slots_of(*keep), "topics"), TopicSelectorMode::kGlob, 0U);
+  expect_slot(slot_for(topic_slots_of(*keep), "topics"), TopicSelectorMode::kGlob);
 
   auto * rename = app.get_subcommand_no_throw("rename");
   ASSERT_NE(rename, nullptr);
   const auto rename_slots = topic_slots_of(*rename);
-  expect_slot(slot_for(rename_slots, "src"), TopicSelectorMode::kLiteral, 0U);
-  expect_slot(slot_for(rename_slots, "dst"), TopicSelectorMode::kLiteral, 0U);
+  expect_slot(slot_for(rename_slots, "src"), TopicSelectorMode::kLiteral);
+  expect_slot(slot_for(rename_slots, "dst"), TopicSelectorMode::kLiteral);
 }
 
 TEST(CompletionSlotWiring, GenerateVideo)
@@ -163,13 +171,10 @@ TEST(CompletionSlotWiring, GenerateVideo)
   ASSERT_NE(video, nullptr);
   const auto slots = topic_slots_of(*video);
   expect_slot(
-    slot_for(slots, "topic"), TopicSelectorMode::kLiteral,
-    bagwiz::commands::kImageTopicTypes.size());
+    slot_for(slots, "topic"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
   expect_slot(
-    slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral,
-    bagwiz::commands::kCameraInfoType.size());
-  expect_slot(
-    slot_for(slots, "pcd"), TopicSelectorMode::kGlob, bagwiz::commands::kPointCloud2Type.size());
+    slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, bagwiz::commands::kCameraInfoType);
+  expect_slot(slot_for(slots, "pcd"), TopicSelectorMode::kGlob, bagwiz::commands::kPointCloud2Type);
 }
 
 TEST(CompletionSlotWiring, CamInfoReplaceRecomputePDump)
@@ -179,7 +184,7 @@ TEST(CompletionSlotWiring, CamInfoReplaceRecomputePDump)
   CLI::App app{"cam-info"};
   cmd->configure(app);
 
-  const auto cam_info_types = bagwiz::commands::kCameraInfoType.size();
+  const auto & cam_info_types = bagwiz::commands::kCameraInfoType;
   auto * replace = app.get_subcommand_no_throw("replace");
   ASSERT_NE(replace, nullptr);
   expect_slot(
@@ -203,28 +208,28 @@ TEST(CompletionSlotWiring, PcdConcatAndUndistort)
   CLI::App app{"pcd"};
   cmd->configure(app);
 
-  const auto pcd_types = bagwiz::commands::kPointCloud2Type.size();
+  const auto & pcd_types = bagwiz::commands::kPointCloud2Type;
   auto * concat = app.get_subcommand_no_throw("concat");
   ASSERT_NE(concat, nullptr);
   const auto concat_slots = topic_slots_of(*concat);
   // -t/--topic names the new concatenated topic to create — a new name, not
   // a selection — so it declares no allowed_types.
-  expect_slot(slot_for(concat_slots, "topic"), TopicSelectorMode::kLiteral, 0U);
+  expect_slot(slot_for(concat_slots, "topic"), TopicSelectorMode::kLiteral);
   expect_slot(slot_for(concat_slots, "pcd"), TopicSelectorMode::kGlob, pcd_types);
   // --stamp-offset is scoped to --pcd (see pcd.cpp's `.scope = pcd_opt`)
   // rather than carrying its own allowed_types; its completion stays
   // command-specific in completion.cpp for exactly that reason.
-  expect_slot(slot_for(concat_slots, "stamp-offset"), TopicSelectorMode::kGlob, 0U);
+  expect_slot(slot_for(concat_slots, "stamp-offset"), TopicSelectorMode::kGlob);
 
   auto * undistort = app.get_subcommand_no_throw("undistort");
   ASSERT_NE(undistort, nullptr);
   const auto undistort_slots = topic_slots_of(*undistort);
   expect_slot(
     slot_for(undistort_slots, "pose"), TopicSelectorMode::kLiteral,
-    bagwiz::commands::kUndistortPoseTopicTypes.size());
+    bagwiz::commands::kUndistortPoseTopicTypes);
   expect_slot(
     slot_for(undistort_slots, "twist"), TopicSelectorMode::kLiteral,
-    bagwiz::commands::kUndistortTwistTopicTypes.size());
+    bagwiz::commands::kUndistortTwistTopicTypes);
   expect_slot(slot_for(undistort_slots, "pcd"), TopicSelectorMode::kGlob, pcd_types);
 }
 
@@ -234,7 +239,7 @@ TEST(CompletionSlotWiring, Trim)
   ASSERT_NE(cmd, nullptr);
   CLI::App app{"trim"};
   cmd->configure(app);
-  expect_slot(slot_for(topic_slots_of(app), "align"), TopicSelectorMode::kGlob, 0U);
+  expect_slot(slot_for(topic_slots_of(app), "align"), TopicSelectorMode::kGlob);
 }
 
 #ifdef BAGWIZ_WITH_SLAM
@@ -252,18 +257,16 @@ TEST(CompletionSlotWiring, MapSlam)
   ASSERT_NE(slam, nullptr);
   const auto slots = topic_slots_of(*slam);
   expect_slot(
-    slot_for(slots, "pcd"), TopicSelectorMode::kLiteral, bagwiz::commands::kPointCloud2Type.size());
+    slot_for(slots, "pcd"), TopicSelectorMode::kLiteral, bagwiz::commands::kPointCloud2Type);
+  expect_slot(slot_for(slots, "imu"), TopicSelectorMode::kLiteral, bagwiz::commands::kImuType);
   expect_slot(
-    slot_for(slots, "imu"), TopicSelectorMode::kLiteral, bagwiz::commands::kImuType.size());
+    slot_for(slots, "gnss"), TopicSelectorMode::kLiteral, bagwiz::commands::kNavSatFixType);
   expect_slot(
-    slot_for(slots, "gnss"), TopicSelectorMode::kLiteral, bagwiz::commands::kNavSatFixType.size());
-  expect_slot(
-    slot_for(slots, "color"), TopicSelectorMode::kGlob, bagwiz::commands::kImageTopicTypes.size());
+    slot_for(slots, "color"), TopicSelectorMode::kGlob, bagwiz::commands::kImageTopicTypes);
   // --cam-info's <image_topic> half is one of --color's topics, always
   // image-typed; allowed_types makes that explicit for completion, even
   // though expansion never reads it (kLiteral without require_present).
   expect_slot(
-    slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral,
-    bagwiz::commands::kImageTopicTypes.size());
+    slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
 }
 #endif  // BAGWIZ_WITH_SLAM

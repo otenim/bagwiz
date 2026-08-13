@@ -461,10 +461,12 @@ std::filesystem::path make_file_mode_zstd(const std::filesystem::path & dir)
   return zstd_path;
 }
 
-// Populates `app` the same way main() does (every registered command added
+// Builds the same command tree main() does (every registered command added
 // as a subcommand and configured), so completion has real topic slots to
-// read. Takes `app` by reference rather than returning one: CLI::App has no
-// copy or move constructor (App(const App&) = delete leaves neither
+// read; presentation-only wiring main() also does — set_version_flag(),
+// formatter(), failure_message() — is omitted, since nothing under test
+// reads it. Takes `app` by reference rather than returning one: CLI::App has
+// no copy or move constructor (App(const App&) = delete leaves neither
 // implicitly declared), so it cannot be built and handed back by value.
 void build_app(CLI::App & app)
 {

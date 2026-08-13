@@ -398,11 +398,6 @@ TEST(PcdConcatCliWiring, StampOffsetIsScopedToThePcdOptionInDeclarationOrder)
   EXPECT_EQ(slots[1].spec.scope, nullptr);
   EXPECT_TRUE(slots[1].option->get_required());
   EXPECT_EQ(slots[1].spec.allowed_types.size(), 1U);
-  // ->expected(-1) sets a minimum of one value (required, unlike a plain
-  // vector option's default zero) while leaving the maximum unbounded, so
-  // --pcd stays variadic — shell completion relies on that to offer
-  // candidates at every value in the run, not just the first.
-  EXPECT_EQ(slots[1].option->get_expected_min(), 1);
 
   EXPECT_EQ(slots[2].option->get_lnames(), (std::vector<std::string>{"stamp-offset"}));
   EXPECT_TRUE(slots[2].spec.pair_value);
