@@ -2,7 +2,7 @@
 
 bagwiz reads a small set of **optional** environment variables to override its
 defaults. None are required for normal use — every one has a sensible default,
-and leaving them all unset gives the standard behavior. They fall into five
+and leaving them all unset gives the standard behavior. They fall into six
 groups:
 
 - [Runtime behavior](#runtime-behavior) — knobs read by the `bagwiz` binary
@@ -12,6 +12,16 @@ groups:
 - [Launcher and install](#launcher-and-install) — the `bagwiz` wrapper,
   installer, and dependency-build scripts (not the binary)
 - [Shell completion install paths](#shell-completion-install-paths)
+- [Development and benchmarking](#development-and-benchmarking) — contributor
+  tooling, not part of an installed bagwiz
+
+Every variable bagwiz itself defines carries a `BAGWIZ_` prefix, so anything in
+your environment under that prefix belongs to this project. The unprefixed
+variables listed below (`NO_COLOR`, `RCUTILS_COLORIZED_OUTPUT`, `HOME`,
+`XDG_*`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH`) are names published by other
+ecosystems that bagwiz honors rather than defines; they keep their conventional
+spelling deliberately. See AGENTS.md, "Documentation, Comment & Help
+Consistency", for the naming rule itself.
 
 Diagnostic log lines and progress bars go to **stderr**; command data goes to
 **stdout**, so `bagwiz … | tool` stays clean regardless of these settings.
@@ -106,3 +116,22 @@ scripts. These are standard OS variables; you rarely need to set them.
 | `HOME`            | Base for the default completion install location and for expanding a leading `~` in paths.        | `bagwiz/src/commands/completion.cpp` |
 | `XDG_DATA_HOME`   | Overrides the base data directory (default `~/.local/share`) for the bash completion destination. | `bagwiz/src/commands/completion.cpp` |
 | `XDG_CONFIG_HOME` | Overrides the base config directory (default `~/.config`) for the fish completion destination.    | `bagwiz/src/commands/completion.cpp` |
+
+## Development and benchmarking
+
+Read by contributor tooling — the rewrite benchmark, the rosbag2 compatibility
+check, and one gtest — not by an installed bagwiz. Listed here so the inventory
+stays complete; you do not need any of these to use the CLI.
+
+The `BAGWIZ_BENCH_*` group carries a `BENCH_` infix so it stays visually
+separate from the runtime knobs above: none of it reaches the `bagwiz` binary.
+
+| Variable              | Accepted values (default)                                                | Effect                                                                                                                                    | Source                                         |
+| --------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `BAGWIZ_BENCH_BAG`    | a bag path — **required** unless passed as the first argument            | Input bag for the rewrite benchmark: a single file or a rosbag2 directory. A multi-GB bag is needed for meaningful read/write numbers.    | `scripts/bench-rewrite.sh`                     |
+| `BAGWIZ_BENCH_ENV`    | a built pixi environment name (default `default`)                        | Which build the benchmark runs, i.e. `install/<env>/bagwiz/bin/bagwiz`.                                                                   | `scripts/bench-rewrite.sh`                     |
+| `BAGWIZ_BENCH_RUNS`   | a positive integer (default `3`)                                         | Warm timed runs per scenario; the median is reported.                                                                                     | `scripts/bench-rewrite.sh`                     |
+| `BAGWIZ_BENCH_OUTDIR` | a directory (default `/tmp/bagwiz-bench`)                                | Scratch directory for the benchmark's rewrite outputs. Created if absent; the outputs are deleted as the run finishes.                    | `scripts/bench-rewrite.sh`                     |
+| `BAGWIZ_BENCH_TOPIC`  | a topic name (default `/tf_static`)                                      | The small latched topic the `topic drop` / `topic keep` scenarios operate on. It must exist in the bag; bagwiz errors out clearly if not. | `scripts/bench-rewrite.sh`                     |
+| `BAGWIZ_BIN`          | a path to a `bagwiz` binary (default `./build/<pixi-env>/bagwiz/bagwiz`) | Which binary the rosbag2 round-trip compatibility check exercises.                                                                        | `scripts/check-rosbag2-compat.sh`              |
+| `BAGWIZ_REAL_BAG`     | a bag path (unset)                                                       | Enables the `generate video` test that runs against a real rosbag. Unset, that test reports itself skipped rather than failing.           | `bagwiz/test/commands/generate_video_test.cpp` |

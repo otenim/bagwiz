@@ -11,26 +11,35 @@
 # Usage:
 #   scripts/bench-rewrite.sh [BAG_PATH]
 #
-# Environment overrides:
-#   BAG    input bag — required; single-file or rosbag2 directory; pass as $1 or
-#          set BAG (a multi-GB bag gives meaningful read/write numbers)
-#   ENV    pixi environment / build to use (default: default)
-#   RUNS   warm timed runs per scenario for the median (default: 3)
-#   OUTDIR scratch dir for rewrite outputs (default: /tmp/bagwiz-bench)
-#   TOPIC  small latched topic used by the drop/keep cases (default: /tf_static)
+# Environment overrides (every knob this script reads carries the BAGWIZ_ prefix,
+# per AGENTS.md "Documentation, Comment & Help Consistency"; the BENCH_ infix
+# keeps them clear of the runtime knobs the bagwiz binary itself reads):
+#   BAGWIZ_BENCH_BAG    input bag — required; single-file or rosbag2 directory;
+#                       pass as $1 or set this (a multi-GB bag gives meaningful
+#                       read/write numbers)
+#   BAGWIZ_BENCH_ENV    pixi environment / build to use (default: default)
+#   BAGWIZ_BENCH_RUNS   warm timed runs per scenario for the median (default: 3)
+#   BAGWIZ_BENCH_OUTDIR scratch dir for rewrite outputs
+#                       (default: /tmp/bagwiz-bench)
+#   BAGWIZ_BENCH_TOPIC  small latched topic used by the drop/keep cases
+#                       (default: /tf_static)
 #
-# The drop/keep scenarios assume $TOPIC exists in the bag; bagwiz errors out
-# clearly if it does not.
+# The drop/keep scenarios assume BAGWIZ_BENCH_TOPIC exists in the bag; bagwiz
+# errors out clearly if it does not.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 1
 
-BAG="${1:-${BAG:?set BAG or pass an input bag path as the first argument}}"
-ENV="${ENV:-default}"
-RUNS="${RUNS:-3}"
-OUTDIR="${OUTDIR:-/tmp/bagwiz-bench}"
-TOPIC="${TOPIC:-/tf_static}"
+# Read each knob from its BAGWIZ_-prefixed environment variable into a short
+# script-local of the same meaning. Only the env-facing name carries the prefix:
+# the locals below are private to this file, so they cannot collide with — or be
+# influenced by — whatever the caller happens to have exported.
+BAG="${1:-${BAGWIZ_BENCH_BAG:?set BAGWIZ_BENCH_BAG or pass an input bag path as the first argument}}"
+ENV="${BAGWIZ_BENCH_ENV:-default}"
+RUNS="${BAGWIZ_BENCH_RUNS:-3}"
+OUTDIR="${BAGWIZ_BENCH_OUTDIR:-/tmp/bagwiz-bench}"
+TOPIC="${BAGWIZ_BENCH_TOPIC:-/tf_static}"
 BIN="install/$ENV/bagwiz/bin/bagwiz"
 TIMEV=/usr/bin/time
 
