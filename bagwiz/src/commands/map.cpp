@@ -113,6 +113,7 @@ private:
       "using the standard suffix rules. A malformed entry, an <image_topic> that is not a "
       "--color topic, and a duplicate <image_topic> are errors.",
       TopicSlotSpec{
+        .allowed_types = kImageTopicTypes,
         .mode = TopicSelectorMode::kLiteral,
         .pair_value = true,
         .reject_reason = "each camera needs its own CameraInfo topic, so both halves of "

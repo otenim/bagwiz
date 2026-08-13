@@ -15,11 +15,19 @@
 #include <string_view>
 #include <vector>
 
+namespace CLI
+{
+class App;
+}  // namespace CLI
+
 namespace bagwiz::commands
 {
 
 bool is_completion_request(int argc, char * const * argv);
-int run_completion_request(int argc, char * const * argv);
+// `app` is the fully configured command tree. Completion reads topic slot
+// declarations from it (see commands/topic_option.hpp) so it never re-declares
+// which flags take topics.
+int run_completion_request(int argc, char * const * argv, const CLI::App & app);
 
 std::vector<std::string> supported_shells();
 std::optional<std::string> completion_script_for(const std::string_view & shell);

@@ -297,19 +297,112 @@ if(BUILD_TESTING)
     bagwiz_slam::bagwiz_slam
   )
 
-  # completion.cpp carries a BAGWIZ_REGISTER_COMMAND registrar, so the test
-  # also compiles registry.cpp (which otherwise lives only in the `bagwiz`
-  # executable — the registrars must not sit in a library, or the linker
-  # strips them).
+  # Shell completion is driven by walking a fully configured CLI::App and
+  # reading the topic slots each command declared (see
+  # commands/topic_option.hpp) — it registers none of its own. So this test
+  # mirrors `add_executable(bagwiz ...)` above (everything except main.cpp,
+  # which defines its own main() and would collide with gtest's) rather than
+  # compiling completion.cpp in isolation: every command that might declare a
+  # topic slot has to actually register and build its option tree for
+  # completion to have anything to read. The BAGWIZ_REGISTER_COMMAND
+  # registrars must not sit in a library, or the linker strips them — hence
+  # compiling the sources directly here, the same way the executable does.
   ament_add_gtest(bagwiz_completion_test
     test/commands/completion_test.cpp
+    src/commands/registry.cpp
+    src/commands/help_formatter.cpp
+    src/commands/parse_error.cpp
+    src/commands/cam_info.cpp
+    src/commands/cam_info_common.cpp
+    src/commands/cam_info_dump.cpp
+    src/commands/cam_info_recompute_p.cpp
+    src/commands/cam_info_replace.cpp
     src/commands/completion.cpp
-    src/commands/registry.cpp)
+    src/commands/convert.cpp
+    src/commands/generate.cpp
+    src/commands/generate_video.cpp
+    src/commands/generate_video_common.cpp
+    src/commands/joke.cpp
+    src/commands/ls.cpp
+    src/commands/pcd.cpp
+    src/commands/pcd_concat.cpp
+    src/commands/pcd_concat_common.cpp
+    src/commands/pcd_undistort.cpp
+    src/commands/pcd_undistort_common.cpp
+    src/commands/walk.cpp
+    src/commands/walk_bag.cpp
+    src/commands/walk_cursor.cpp
+    src/commands/walk_frame.cpp
+    src/commands/walk_overlay.cpp
+    src/commands/walk_overlay_scan.cpp
+    src/commands/walk_preview.cpp
+    src/commands/walk_save.cpp
+    src/commands/traj.cpp
+    src/commands/traj_common.cpp
+    src/commands/tf.cpp
+    src/commands/tf_static_cp.cpp
+    src/commands/tf_static_drop.cpp
+    src/commands/tf_static_dump.cpp
+    src/commands/tf_static_inject.cpp
+    src/commands/tf_static_join.cpp
+    src/commands/tf_static_update.cpp
+    src/commands/topic.cpp
+    src/commands/topic_drop.cpp
+    src/commands/topic_expand.cpp
+    src/commands/topic_keep.cpp
+    src/commands/topic_option.cpp
+    src/commands/topic_rename.cpp
+    src/commands/stamp.cpp
+    src/commands/stamp_sync.cpp
+    src/commands/trim.cpp
+    src/commands/trim_stamp.cpp)
+  # ament_add_gtest_executable() already linked this target with the plain
+  # (non-keyword) signature internally, so every target_link_libraries call
+  # below must stay plain too — CMake rejects mixing the two signatures on
+  # one target.
+  set(bagwiz_completion_test_slam_libs)
+  if(BAGWIZ_WITH_SLAM)
+    target_sources(bagwiz_completion_test PRIVATE
+      src/commands/map.cpp
+      src/commands/map_slam.cpp
+      src/commands/map_slam_colorize.cpp
+      src/commands/map_slam_mapping.cpp
+      src/commands/map_slam_threads.cpp
+      src/commands/map_viewer.cpp)
+    list(APPEND bagwiz_completion_test_slam_libs
+      bagwiz_slam::bagwiz_slam_glim
+      glim::glim
+      gtsam_points::gtsam_points
+      gtsam)
+    target_compile_definitions(bagwiz_completion_test PRIVATE BAGWIZ_WITH_SLAM)
+    if(BAGWIZ_WITH_SLAM_CUDA)
+      list(APPEND bagwiz_completion_test_slam_libs CUDA::cudart)
+      target_compile_definitions(bagwiz_completion_test PRIVATE BAGWIZ_WITH_SLAM_CUDA)
+    endif()
+  endif()
+  if(BAGWIZ_WITH_MAP_VIEWER)
+    target_compile_definitions(bagwiz_completion_test PRIVATE BAGWIZ_WITH_MAP_VIEWER)
+  endif()
   target_include_directories(bagwiz_completion_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  # The test builds compressed MCAP fixtures itself, so it uses yaml-cpp and
-  # zstd directly in addition to the CLI libraries.
+  # Mirrors the `bagwiz` executable's own PRIVATE link set (sensor_msgs/rmw/tf2/
+  # geometry_msgs for cam_info_common.cpp's typed round-trip and tf.cpp/traj.cpp's
+  # TF and pose handling), the GLIM stack under BAGWIZ_WITH_SLAM, and the
+  # yaml-cpp/zstd extras this test's own fixture builder uses.
   target_link_libraries(
-    bagwiz_completion_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt yaml-cpp zstd::zstd)
+    bagwiz_completion_test
+    ${bagwiz_test_libs}
+    ${bagwiz_completion_test_slam_libs}
+    CLI11::CLI11
+    fmt::fmt
+    rang
+    ${OpenCV_LIBS}
+    ${sensor_msgs_TARGETS}
+    ${rmw_TARGETS}
+    ${rmw_implementation_TARGETS}
+    ${tf2_TARGETS}
+    ${geometry_msgs_TARGETS}
+    yaml-cpp
+    zstd::zstd)
 
   ament_add_gtest(bagwiz_help_formatter_test
     test/commands/help_formatter_test.cpp

@@ -54,9 +54,6 @@ int main(int argc, char ** argv) noexcept
   try {
     try {
       bagwiz::core::init_logging();
-      if (bagwiz::commands::is_completion_request(argc, argv)) {
-        return bagwiz::commands::run_completion_request(argc, argv);
-      }
     } catch (const std::exception & e) {
       BAGWIZ_LOG_FATAL(kMainLogger, "Unhandled exception during startup: %s", e.what());
       return 1;
@@ -93,6 +90,19 @@ int main(int argc, char ** argv) noexcept
       }
       cmd->configure(*sub);
       sub->callback([&selected, raw = cmd.get()]() { selected = raw; });
+    }
+
+    // Completion runs against the configured tree but never through CLI11's
+    // parser: `__complete` is not a registered subcommand, and this returns
+    // before CLI11_PARSE. Building the tree only adds options; it opens no
+    // files.
+    try {
+      if (bagwiz::commands::is_completion_request(argc, argv)) {
+        return bagwiz::commands::run_completion_request(argc, argv, app);
+      }
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_FATAL(kMainLogger, "Unhandled exception during completion: %s", e.what());
+      return 1;
     }
 
     try {
