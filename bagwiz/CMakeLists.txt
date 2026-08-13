@@ -309,6 +309,7 @@ if(BUILD_TESTING)
   # compiling the sources directly here, the same way the executable does.
   ament_add_gtest(bagwiz_completion_test
     test/commands/completion_test.cpp
+    test/commands/completion_slot_wiring_test.cpp
     src/commands/registry.cpp
     src/commands/help_formatter.cpp
     src/commands/parse_error.cpp
