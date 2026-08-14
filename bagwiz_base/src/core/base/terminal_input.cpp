@@ -130,7 +130,10 @@ KeyEvent classify_key(std::string_view bytes)
         return KeyEvent::kScrollHead;
       case 'T':
         return KeyEvent::kScrollTail;
-      case 's':
+      // Shift-S rather than a bare 's': the save prompt takes over the
+      // screen and asks for a path, so one mistyped letter should not
+      // trigger it.
+      case 'S':
         return KeyEvent::kSaveYaml;
       case 'a':
         return KeyEvent::kToggleArrayExpand;

@@ -159,7 +159,7 @@ core::tui::Frame build_yaml_frame(
   std::string legend =
     "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [<] -10s   [>] +10s   [↑ / k] "
     "up   [↓ / j] down   "
-    "[Home / H] head   [End / T] tail   [g] first   [G] last   [s] save as yaml   "
+    "[Home / H] head   [End / T] tail   [g] first   [G] last   [S] save as yaml   "
     "[a] expand arrays   ";
   if (preview_available) {
     legend += rainbow_text("[i] preview");

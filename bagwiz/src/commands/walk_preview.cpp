@@ -13,8 +13,9 @@
 #include "bagwiz/core/tui/image/terminal_image_renderer.hpp"
 #include "bagwiz/core/tui/renderer.hpp"
 #include "bagwiz/core/tui/width.hpp"
-#include "walk_frame.hpp"  // NOLINT(build/include_subdir) src-local shared header
-#include "walk_save.hpp"   // NOLINT(build/include_subdir) src-local shared header
+#include "walk_frame.hpp"           // NOLINT(build/include_subdir) src-local shared header
+#include "walk_preview_legend.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "walk_save.hpp"            // NOLINT(build/include_subdir) src-local shared header
 
 #include <fmt/core.h>
 
@@ -198,20 +199,11 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   // wrapped legend is pinned to the bottom and the image region above shrinks
   // to make room, mirroring how the YAML view derives its body height from
   // the wrapped footer.
-  // The pcd overlay adjustment keys (f/c/r/=/-/[/]) are only meaningful once
-  // a PointCloud2 topic is selected, so surface them in the legend under the
-  // same condition the info row uses to show pcd state. The toggle/select
-  // keys ([p]/[t]) stay visible unconditionally to guide the user to enable
-  // the overlay in the first place.
-  std::string legend_text =
-    "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [<] -10s   [>] +10s   [g] first "
-    "  [G] last   [s] save   "
-    "[u] rectify   [p] project pcd   [t] select pcd topics";
-  if (!pcd.topics.empty()) {
-    legend_text += "   [f] property   [c] scheme   [r] range   [= / -] size   [ [ / ] ] alpha";
-  }
-  legend_text += "   [q] back";
-  const std::vector<std::string> legend_lines = core::tui::wrap_to_width(legend_text, cols);
+  // The overlay adjustment keys are gated on the same condition the info row
+  // uses to show pcd state, so the legend and the state readout agree on when
+  // an overlay topic is in play.
+  const std::vector<std::string> legend_lines =
+    core::tui::wrap_to_width(build_preview_legend(!pcd.topics.empty()), cols);
   const int legend_top = std::max(1, rows - static_cast<int>(legend_lines.size()) + 1);
 
   // Image region: from the row just below the wrapped header down to the row
@@ -362,8 +354,8 @@ void ImagePreviewSession::run()
         needs_render = true;  // geometry changed: re-fit and re-render
         break;
       case core::KeyEvent::kSaveYaml:
-        // In the preview, [s] saves the displayed frame as a PNG (the YAML
-        // view's [s] still saves YAML). Always repaint so the save status is
+        // In the preview, [S] saves the displayed frame as a PNG (the YAML
+        // view's [S] still saves YAML). Always repaint so the save status is
         // shown and the prompt's screen clear is undone.
         save_image();
         needs_render = true;

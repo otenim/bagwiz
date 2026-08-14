@@ -62,7 +62,7 @@ enum class KeyEvent {
 //     '.' (step forward one second), ',' (step backward one second),
 //     '>' (step forward ~10 seconds), '<' (step backward ~10 seconds),
 //     'k' (scroll up), 'j' (scroll down), 'H' (scroll head), 'T' (scroll
-//     tail), 's' (save as yaml — walk), 'a' (toggle array expand — walk),
+//     tail), 'S' (save as yaml — walk), 'a' (toggle array expand — walk),
 //     'i' (toggle image preview — walk), 'u' (toggle rectify — walk),
 //     'q'/'Q' (quit), plus control
 //     chars (^C, ^D) and a lone ESC (0x1B) for quit
