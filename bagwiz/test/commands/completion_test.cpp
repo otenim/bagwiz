@@ -392,6 +392,31 @@ std::filesystem::path write_pointcloud2_fixture(const std::filesystem::path & pa
   return path;
 }
 
+// MCAP carrying two PointCloud2 topics under /lidar plus one non-PointCloud2
+// topic (/image). Used to verify that `pcd concat --stamp-offset` scopes its
+// <topic> candidates to the topics the typed --pcd values select.
+std::filesystem::path write_two_lidar_fixture(const std::filesystem::path & path)
+{
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "none";
+
+  constexpr std::array<std::byte, 4> kPayload{
+    std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
+  const auto bytes = std::span<const std::byte>(kPayload.data(), kPayload.size());
+
+  auto writer = bagwiz::io::open_write(path, options);
+  writer->declare_topic(make_topic("/lidar/left/points", "sensor_msgs/msg/PointCloud2"));
+  writer->declare_topic(make_topic("/lidar/right/points", "sensor_msgs/msg/PointCloud2"));
+  writer->declare_topic(make_topic("/image", "sensor_msgs/msg/Image"));
+  writer->write("/lidar/left/points", 1'000'000'000, bytes);
+  writer->write("/lidar/right/points", 2'000'000'000, bytes);
+  writer->write("/image", 3'000'000'000, bytes);
+  writer->close();
+  return path;
+}
+
 // Write an uncompressed sqlite3 directory bag declaring the given (name, type)
 // topics with one arbitrary-payload message each. Topic metadata alone drives
 // completion, so the payloads are placeholders.
@@ -1578,6 +1603,74 @@ TEST_F(CompletionTest, PcdConcatStampOffsetOffersNothingOnBashSplitValueHalf)
     run_completion(
       {"bagwiz", "__complete", "10", "bagwiz", "pcd", "concat", "-i", "~/fixture.mcap", "-o",
        "/out", "--stamp-offset", "/points", "="}),
+    "");
+}
+
+// The command resolves --stamp-offset's <topic> half against the resolved
+// --pcd list, not the whole bag (a literal --pcd value here), so the
+// candidates narrow to the selected topic alone.
+TEST_F(CompletionTest, PcdConcatStampOffsetScopedToLiteralPcd)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_two_lidar_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "8", "bagwiz", "pcd", "concat", "-i", "~/fixture.mcap", "--pcd",
+       "/lidar/left/points", "--stamp-offset"}),
+    "/lidar/left/points=\n");
+}
+
+// A glob --pcd value scopes the candidates to every topic it matches.
+TEST_F(CompletionTest, PcdConcatStampOffsetScopedToGlobPcd)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_two_lidar_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "8", "bagwiz", "pcd", "concat", "-i", "~/fixture.mcap", "--pcd",
+       "/lidar/*", "--stamp-offset"}),
+    "/lidar/left/points=\n/lidar/right/points=\n");
+}
+
+// Repeated --pcd flags accumulate: the scope is the union of all their values.
+TEST_F(CompletionTest, PcdConcatStampOffsetScopeAccumulatesRepeatedPcd)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_two_lidar_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "10", "bagwiz", "pcd", "concat", "-i", "~/fixture.mcap", "--pcd",
+       "/lidar/left/points", "--pcd", "/lidar/right/points", "--stamp-offset"}),
+    "/lidar/left/points=\n/lidar/right/points=\n");
+}
+
+// A typed prefix narrows the candidates within the --pcd scope.
+TEST_F(CompletionTest, PcdConcatStampOffsetScopeRespectsPrefix)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_two_lidar_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "8", "bagwiz", "pcd", "concat", "-i", "~/fixture.mcap", "--pcd",
+       "/lidar/*", "--stamp-offset", "/lidar/l"}),
+    "/lidar/left/points=\n");
+}
+
+// A --pcd selector that matches no bag topic leaves an empty scope, so there
+// is nothing valid to offer (the command rejects the selector itself).
+TEST_F(CompletionTest, PcdConcatStampOffsetEmptyScopeYieldsNoCandidates)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_two_lidar_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "8", "bagwiz", "pcd", "concat", "-i", "~/fixture.mcap", "--pcd",
+       "/sonar/*", "--stamp-offset"}),
     "");
 }
 

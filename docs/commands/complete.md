@@ -222,9 +222,12 @@ name only — it offers plain topic names either way, typed as-is.
     `sensor_msgs/msg/PointCloud2` topics, offered at every value of the variadic
     run
   - `bagwiz pcd concat -i <input> ... --stamp-offset <topic>=<val>...` — the
-    `<topic>` half is completed to the same `sensor_msgs/msg/PointCloud2`
-    topics (as `<topic>=`) at every value of the run; once the cursor moves
-    past `=`, the `<val>` duration has nothing to suggest
+    `<topic>` half is completed to PointCloud2 topics (as `<topic>=`) at every
+    value of the run; once the cursor moves past `=`, the `<val>` duration has
+    nothing to suggest. The candidates mirror the command's resolution scope:
+    once `--pcd` values are on the command line, only the topics those
+    selectors match are offered; before any `--pcd` value, all of the bag's
+    `sensor_msgs/msg/PointCloud2` topics
   - `bagwiz pcd undistort -i <input> ... --pcd <topic>...` —
     `sensor_msgs/msg/PointCloud2` topics, offered at every value of the variadic
     run

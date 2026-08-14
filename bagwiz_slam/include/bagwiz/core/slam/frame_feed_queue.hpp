@@ -30,7 +30,7 @@
 //
 // The close()/fail()/error() contract mirrors core::pipeline::BoundedMessageQueue;
 // a slam-local generic template is used here because that class is hardcoded to
-// OwnedMessage and bounds by payload bytes, neither of which fits a GLIM frame.
+// QueuedMessage and bounds by payload bytes, neither of which fits a GLIM frame.
 namespace bagwiz::core::slam
 {
 

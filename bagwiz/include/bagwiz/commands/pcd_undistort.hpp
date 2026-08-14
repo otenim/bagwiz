@@ -39,8 +39,8 @@ struct PcdUndistortArgs
   // "none". Empty => the storage default (zstd). mcap outputs only.
   std::optional<std::string> compression;
   // --compression-level; encoder effort for the chosen (or default) codec:
-  // "fastest", "fast", "default", "slow", or "slowest". Empty => "default".
-  // Rejected together with --compression none.
+  // "fastest", "fast", "default", "slow", or "slowest". Empty => "default" for
+  // zstd, "fastest" for lz4. Rejected together with --compression none.
   std::optional<std::string> compression_level;
 };
 

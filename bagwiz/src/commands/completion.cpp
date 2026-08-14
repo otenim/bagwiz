@@ -13,6 +13,7 @@
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/topic_match.hpp"
 #include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/tf/tf_topics.hpp"
 #include "bagwiz/core/tf/tf_value_extract.hpp"
@@ -537,6 +538,27 @@ std::optional<std::string_view> find_input_bag(const CompletionRequest & request
     return std::nullopt;
   }
   return bag_arg;
+}
+
+// Collect every value given to a variadic flag before the cursor: for each
+// occurrence of `flag`, the run of non-option words following it. Multiple
+// occurrences accumulate in command-line order. Words at or past the cursor
+// are not yet committed input, so they are never seen. The `--flag=value`
+// spelling is not recognized, matching the rest of this file.
+std::vector<std::string_view> collect_flag_values(
+  const CompletionRequest & request, const std::string_view & flag)
+{
+  std::vector<std::string_view> values;
+  const std::size_t end = std::min(request.cursor_word, request.words.size());
+  for (std::size_t i = kFirstCommandArgWord + 1; i < end; ++i) {
+    if (request.words[i] != flag) {
+      continue;
+    }
+    while (i + 1 < end && !request.words[i + 1].starts_with("-")) {
+      values.push_back(request.words[++i]);
+    }
+  }
+  return values;
 }
 
 // True when the cursor sits in a value slot owned by `flag`. Unlike a plain
@@ -1328,11 +1350,13 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 // (PointCloud2 topics), so try_topic_completion handles its values. Only
 // `--stamp-offset` stays bespoke below: it is scoped to `--pcd` rather than
 // carrying its own allowed_types, a relationship try_topic_completion does
-// not resolve, so its `<topic>` half is completed here from the same
-// PointCloud2 topics (as `<topic>=`) at every value in its run, until the
-// cursor moves past `=` onto the `<value>` half. `--frame`, `--tolerance`,
-// and `-o`/`--output` take free-form / numeric / path values, so they get no
-// value completion.
+// not resolve, so its `<topic>` half is completed here (as `<topic>=`) at
+// every value in its run, until the cursor moves past `=` onto the `<value>`
+// half. Its candidates mirror the command's resolution scope: once `--pcd`
+// values are on the line, only the PointCloud2 topics those selectors match
+// are offered; before any `--pcd` value, all of the bag's PointCloud2
+// topics. `--frame`, `--tolerance`, and `-o`/`--output` take free-form /
+// numeric / path values, so they get no value completion.
 //
 //   concat: `pcd`(0) `concat`(1) -i|--input <bag> -t|--topic <output_topic>
 //           --pcd <t...> [--frame <f>] [--tolerance <val>]
@@ -1422,12 +1446,34 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
         }
         const auto bag_arg = find_flag_value(request, kInputFlags);
         if (bag_arg && !bag_arg->empty() && !bag_arg->starts_with("-")) {
-          auto topics =
-            complete_topics(expand_current_user_home(*bag_arg), current, kPointCloud2Type);
-          for (auto & topic : topics) {
-            topic += '=';
+          auto topics = complete_topics(expand_current_user_home(*bag_arg), "", kPointCloud2Type);
+          // The command resolves --stamp-offset's <topic> half against the
+          // resolved --pcd list (TopicSlotSpec::scope in configure_concat),
+          // not the whole bag, so once --pcd values are on the line the
+          // candidates narrow to the topics those selectors match. With no
+          // --pcd value typed yet there is nothing to scope to, and the
+          // bag-wide PointCloud2 list stays as the fallback.
+          const auto selectors = collect_flag_values(request, "--pcd");
+          if (!selectors.empty()) {
+            std::vector<std::string> scoped;
+            for (const auto & topic : topics) {
+              const auto matches = [&topic](const std::string_view & selector) {
+                // A selector without '*' is an exact topic-name match.
+                return core::topic_glob_match(selector, topic);
+              };
+              if (std::any_of(selectors.begin(), selectors.end(), matches)) {
+                scoped.push_back(topic);
+              }
+            }
+            topics = std::move(scoped);
           }
-          return topics;
+          std::vector<std::string> result;
+          for (const auto & topic : topics) {
+            if (starts_with(topic, current)) {
+              result.push_back(topic + '=');
+            }
+          }
+          return result;  // stays sorted: complete_topics sorts, filtering keeps order
         }
       }
       break;  // the nearest option decides; a non-stamp-offset option ends the run
