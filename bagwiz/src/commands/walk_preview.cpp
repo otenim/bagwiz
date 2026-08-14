@@ -181,6 +181,10 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
       hl(pcd_property_name(pcd.property)), hl(range_text), hl(pcd_scheme_name(pcd.scheme)),
       hl(pcd.point_size), hl(fmt::format("{:.1f}", pcd.alpha)));
   }
+  const auto & edit = overlay_.edit_state();
+  if (edit.editing) {
+    info += fmt::format("   {}", edit_info_text(edit));
+  }
 
   // Header: the topic/type row and the info row, each wrapped to width the
   // same way the YAML view's header and the legend below are, so a narrow
@@ -203,7 +207,7 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   // uses to show pcd state, so the legend and the state readout agree on when
   // an overlay topic is in play.
   const std::vector<std::string> legend_lines =
-    core::tui::wrap_to_width(build_preview_legend(!pcd.topics.empty()), cols);
+    core::tui::wrap_to_width(build_preview_legend(!pcd.topics.empty(), edit.editing), cols);
   const int legend_top = std::max(1, rows - static_cast<int>(legend_lines.size()) + 1);
 
   // Image region: from the row just below the wrapped header down to the row
@@ -273,6 +277,46 @@ void ImagePreviewSession::save_image()
   save_bytes_with_prompt(
     pager_, "Save image path", cwd, default_base,
     std::span<const std::byte>(bytes.data(), bytes.size()), status_);
+}
+
+void ImagePreviewSession::save_edit_yaml()
+{
+  status_.clear();
+  const auto & input = overlay_.input_path();
+  const std::string yaml = edit_yaml(
+    overlay_.edit_state(), fmt::format("edited with bagwiz walk from {}", input.string()));
+  if (yaml.empty()) {
+    status_ = "(no extrinsic edits to export)";
+    return;
+  }
+
+  std::filesystem::path cwd;
+  try {
+    cwd = std::filesystem::current_path();
+  } catch (const std::exception & e) {
+    status_ = fmt::format("cannot resolve working directory: {}", e.what());
+    return;
+  }
+  // Name the file after the bag; a rosbag2 directory given with a trailing
+  // separator has an empty stem, so fall back through its parent.
+  std::string stem = input.stem().string();
+  if (stem.empty()) {
+    stem = input.parent_path().stem().string();
+  }
+  if (stem.empty()) {
+    stem = "bag";
+  }
+  const std::string default_base = fmt::format("{}_tf_static_edit.yaml", stem);
+
+  // Drop the on-screen graphic before switching to cooked-mode line input so
+  // the prompt is not drawn over a kitty placement; run() repaints the frame
+  // afterward.
+  core::tui::image::clear_image(std::cout, image_caps_.backend);
+  std::cout << "\x1B[2J";
+  std::cout.flush();
+
+  save_bytes_with_prompt(
+    pager_, "Save TF static YAML path", cwd, default_base, std::as_bytes(std::span{yaml}), status_);
 }
 
 void ImagePreviewSession::run()
@@ -430,6 +474,80 @@ void ImagePreviewSession::run()
         break;
       case core::KeyEvent::kPcdAlphaDown:
         pcd.alpha = std::max(pcd.alpha - 0.1f, 0.0f);
+        needs_render = true;
+        break;
+      case core::KeyEvent::kToggleEditExtrinsic: {
+        auto & edit = overlay_.edit_state();
+        if (edit.editing) {
+          edit.editing = false;
+          status_ = "(edit mode off; edits stay applied)";
+        } else if (!camera_info.has_value()) {
+          status_ =
+            camera_info_error.empty() ? "edit: no camera_info" : "edit: " + camera_info_error;
+        } else if (load_in_flight) {
+          status_ = "pcd overlay still loading ...";
+        } else if (overlay_.tf_buffer() == nullptr || !pcd.enabled) {
+          status_ = "edit: enable the pcd overlay first ([p])";
+        } else {
+          // Re-entering resumes the previous edge; the first entry derives
+          // the candidates and, when there are several, asks which edge to
+          // edit.
+          const bool had_candidates = !edit.edges.empty();
+          if (had_candidates || overlay_.refresh_edit_candidates(camera_info->frame_id)) {
+            if (!had_candidates && edit.edges.size() > 1) {
+              edit.editing = overlay_.prompt_for_edge(image_caps.backend);
+            } else {
+              edit.editing = true;
+              status_ = fmt::format("editing {}", edge_label(edit.edges[edit.active]));
+            }
+          }
+        }
+        needs_render = true;
+        break;
+      }
+      case core::KeyEvent::kSelectEditEdge: {
+        auto & edit = overlay_.edit_state();
+        if (!camera_info.has_value()) {
+          status_ =
+            camera_info_error.empty() ? "edit: no camera_info" : "edit: " + camera_info_error;
+        } else if (load_in_flight) {
+          status_ = "pcd overlay still loading ...";
+        } else if (overlay_.tf_buffer() == nullptr || !pcd.enabled) {
+          status_ = "edit: enable the pcd overlay first ([p])";
+        } else if (
+          overlay_.refresh_edit_candidates(camera_info->frame_id) &&
+          overlay_.prompt_for_edge(image_caps.backend)) {
+          edit.editing = true;
+        }
+        needs_render = true;
+        break;
+      }
+      case core::KeyEvent::kEditTransXUp:
+      case core::KeyEvent::kEditTransXDown:
+      case core::KeyEvent::kEditTransYUp:
+      case core::KeyEvent::kEditTransYDown:
+      case core::KeyEvent::kEditTransZUp:
+      case core::KeyEvent::kEditTransZDown:
+      case core::KeyEvent::kEditRollUp:
+      case core::KeyEvent::kEditRollDown:
+      case core::KeyEvent::kEditPitchUp:
+      case core::KeyEvent::kEditPitchDown:
+      case core::KeyEvent::kEditYawUp:
+      case core::KeyEvent::kEditYawDown:
+      case core::KeyEvent::kEditStepUp:
+      case core::KeyEvent::kEditStepDown:
+      case core::KeyEvent::kEditReset: {
+        // Outside the edit mode the nudge letters stay inert, so a stray
+        // press cannot silently move a calibration.
+        auto & edit = overlay_.edit_state();
+        if (edit.editing && apply_edit_key(edit, ev)) {
+          overlay_.apply_active_edit();
+          needs_render = true;
+        }
+        break;
+      }
+      case core::KeyEvent::kEditDumpYaml:
+        save_edit_yaml();
         needs_render = true;
         break;
       case core::KeyEvent::kQuit:

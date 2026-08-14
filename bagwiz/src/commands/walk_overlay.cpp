@@ -20,6 +20,7 @@
 #include <fmt/ostream.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <istream>
@@ -291,6 +292,12 @@ PcdOverlayController::InitState PcdOverlayController::poll_initialize()
   pcd_.computed_min = range.first;
   pcd_.computed_max = range.second;
   pcd_.enabled = true;
+  pcd_.last_cloud_frames.assign(pcd_.topics.size(), {});
+  pcd_.last_match_ns.reset();
+  // The swap re-created the TF buffer from the bag, dropping any live
+  // extrinsic edits; write the edited edges back so the overlay keeps
+  // projecting with them.
+  apply_all_edits();
 
   state_.store(InitState::kIdle, std::memory_order_release);
   status_ = "pcd overlay ready";
@@ -362,6 +369,13 @@ void PcdOverlayController::maybe_overlay(
       match.key == core::pointcloud::PointCloudMatchKey::kRecordTime) {
       effective_key = match.key;
     }
+    // Remember what the edit mode needs to derive its editable edges: the
+    // frame each topic's clouds live in and a TF time on the clock the
+    // overlay itself matched on.
+    if (i < pcd_.last_cloud_frames.size()) {
+      pcd_.last_cloud_frames[i] = cloud->frame_id;
+    }
+    pcd_.last_match_ns = match_ns;
     // The true capture-time residual, meaningful whichever clock matched:
     // how far the chosen cloud was actually taken from this frame. Undefined
     // when either side left its stamp unset. Across topics the largest
@@ -476,6 +490,120 @@ void PcdOverlayController::cycle_scheme()
     case core::pointcloud::ColorScheme::kRainbow:
       pcd_.scheme = core::pointcloud::ColorScheme::kJet;
       break;
+  }
+}
+
+bool PcdOverlayController::refresh_edit_candidates(const std::string & camera_frame)
+{
+  if (active_scan_ == nullptr) {
+    status_ = "edit: enable the pcd overlay first ([p])";
+    return false;
+  }
+  std::vector<std::string> cloud_frames;
+  for (const auto & frame : pcd_.last_cloud_frames) {
+    if (!frame.empty()) {
+      cloud_frames.push_back(frame);
+    }
+  }
+  if (cloud_frames.empty() || !pcd_.last_match_ns.has_value()) {
+    status_ = "edit: no cloud displayed yet";
+    return false;
+  }
+  const tf2::TimePoint time{std::chrono::nanoseconds(*pcd_.last_match_ns)};
+  auto fresh = collect_editable_edges(
+    active_scan_->tf_buffer, cloud_frames, camera_frame, time, active_scan_->static_transforms);
+  carry_over_edits(fresh, edit_.edges);
+  edit_.edges = std::move(fresh);
+  if (edit_.active >= edit_.edges.size()) {
+    edit_.active = 0;
+  }
+  if (edit_.edges.empty()) {
+    status_ = "edit: no static TF edge between the cloud and camera frames";
+    return false;
+  }
+  return true;
+}
+
+bool PcdOverlayController::prompt_for_edge(core::tui::image::ImageBackend backend)
+{
+  if (edit_.edges.empty()) {
+    return false;
+  }
+  std::size_t cursor = std::min(edit_.active, edit_.edges.size() - 1);
+  bool done = false;
+  bool cancelled = false;
+
+  while (!done) {
+    core::tui::image::clear_image(std::cout, backend);
+    std::cout << "\x1B[2J";
+    const auto term = core::tui::query_terminal_size();
+    core::tui::draw_line(
+      std::cout, 1,
+      "  Select the static TF edge to edit (Enter confirm, Esc/q cancel):", term.cols);
+    for (std::size_t i = 0; i < edit_.edges.size(); ++i) {
+      const std::string marker = (i == cursor) ? ">" : " ";
+      core::tui::draw_line(
+        std::cout, static_cast<int>(i) + 3,
+        fmt::format("  {} {}", marker, edge_label(edit_.edges[i])), term.cols);
+    }
+    std::cout.flush();
+
+    switch (core::read_key_event()) {
+      case core::KeyEvent::kScrollUp:
+        if (cursor > 0) {
+          --cursor;
+        }
+        break;
+      case core::KeyEvent::kScrollDown:
+        if (cursor + 1 < edit_.edges.size()) {
+          ++cursor;
+        }
+        break;
+      case core::KeyEvent::kFirst:
+        cursor = 0;
+        break;
+      case core::KeyEvent::kLast:
+        cursor = edit_.edges.size() - 1;
+        break;
+      case core::KeyEvent::kConfirm:
+        done = true;
+        break;
+      case core::KeyEvent::kQuit:
+        done = true;
+        cancelled = true;
+        break;
+      case core::KeyEvent::kResize:
+      default:
+        break;
+    }
+  }
+
+  if (cancelled) {
+    status_ = "(edge selection cancelled)";
+    return false;
+  }
+  edit_.active = cursor;
+  status_ = fmt::format("editing {}", edge_label(edit_.edges[edit_.active]));
+  return true;
+}
+
+void PcdOverlayController::apply_active_edit()
+{
+  if (active_scan_ == nullptr || edit_.active >= edit_.edges.size()) {
+    return;
+  }
+  apply_edge_to_buffer(edit_.edges[edit_.active], active_scan_->tf_buffer);
+}
+
+void PcdOverlayController::apply_all_edits()
+{
+  if (active_scan_ == nullptr) {
+    return;
+  }
+  for (const auto & edge : edit_.edges) {
+    if (is_edited(edge)) {
+      apply_edge_to_buffer(edge, active_scan_->tf_buffer);
+    }
   }
 }
 

@@ -126,6 +126,10 @@ private:
   // Save the frame currently shown in the preview as a PNG.
   void save_image();
 
+  // [D]: export the edited static TF edges as the YAML `bagwiz tf static
+  // update` applies to the bag (prompts for a path like the PNG save).
+  void save_edit_yaml();
+
   MessageCursor & cursor_;
   PcdOverlayController & overlay_;
   core::tui::ScrollablePager & pager_;

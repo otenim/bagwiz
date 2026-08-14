@@ -18,6 +18,7 @@
 #include "bagwiz/core/tui/image/terminal_image_caps.hpp"
 #include "bagwiz/core/tui/pager.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "walk_edit.hpp"          // NOLINT(build/include_subdir) src-local shared header
 #include "walk_overlay_scan.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <atomic>
@@ -77,6 +78,14 @@ struct PcdOverlayState
   core::pointcloud::PointCloudMatchKey last_match_key =
     core::pointcloud::PointCloudMatchKey::kRecordTime;
   std::optional<std::int64_t> last_residual_ns;
+  // Parallel to `topics`: the frame_id of the last cloud each topic fetched,
+  // empty until its first successful fetch. The extrinsic edit mode derives
+  // its editable edges from these frames.
+  std::vector<std::string> last_cloud_frames;
+  // TF-lookup time of the last successful cloud match. The edit mode
+  // resolves its chains at this time, so a dynamic link on the path is
+  // evaluated where the overlay evaluates it.
+  std::optional<std::int64_t> last_match_ns;
 };
 
 // Display names used by the preview info row.
@@ -174,12 +183,46 @@ public:
   // [r]: switch to a manually prompted range, or back to auto.
   void prompt_for_range(core::tui::ScrollablePager & pager, core::tui::image::ImageBackend backend);
 
+  // Extrinsic edit mode (see walk_edit.hpp). The state lives here because
+  // its edits are written into the overlay's TF buffer, whose lifecycle this
+  // controller owns.
+  [[nodiscard]] ExtrinsicEditState & edit_state() noexcept { return edit_; }
+  [[nodiscard]] const ExtrinsicEditState & edit_state() const noexcept { return edit_; }
+
+  // The TF buffer behind the active overlay, or nullptr before the first
+  // successful initialization.
+  [[nodiscard]] tf2::BufferCore * tf_buffer() noexcept
+  {
+    return active_scan_ ? &active_scan_->tf_buffer : nullptr;
+  }
+
+  // The bag the overlay (and so the edit mode) reads; the YAML export names
+  // it in the file's header comment and default filename.
+  [[nodiscard]] const std::filesystem::path & input_path() const noexcept { return input_path_; }
+
+  // [e]/[E]: re-derive the editable candidates from the currently displayed
+  // cloud frames and `camera_frame`, carrying edited values over
+  // (walk_edit's carry_over_edits). Returns false — with `status` set — when
+  // no cloud has been displayed yet or no static edge lies on the chains.
+  bool refresh_edit_candidates(const std::string & camera_frame);
+
+  // Interactive single-select list over the candidates. Returns true when a
+  // row was confirmed (stored in edit_state().active); Esc/q cancels.
+  bool prompt_for_edge(core::tui::image::ImageBackend backend);
+
+  // Write the active / every edited edge into the live TF buffer, so the
+  // next projection composes with the edited values. apply_all_edits() runs
+  // after an initialization swap re-created the buffer from the bag.
+  void apply_active_edit();
+  void apply_all_edits();
+
 private:
   std::filesystem::path input_path_;
   const io::BagReader & reader_;
   std::vector<std::string> pcd_topics_;
   std::string & status_;
   PcdOverlayState pcd_;
+  ExtrinsicEditState edit_;
   std::vector<core::pointcloud::PointCloudFetcher> pcd_fetchers_;
   // Parallel to pcd_fetchers_: the bag record time of the last cloud of each
   // fetcher already folded into pcd_.ranges, so repeated display of the same

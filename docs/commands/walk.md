@@ -116,6 +116,11 @@ frame — and the view redraws on resize. Press `q` to return to the YAML view.
   The overlay projects the nearest clouds onto the image using TF and colors
   each point by the selected property. See
   [Point-cloud overlay](#point-cloud-overlay) below for the controls.
+- With the overlay active, pressing `e` enters a **static-extrinsic edit
+  mode** that nudges a static TF edge on the cloud→camera chain while the
+  overlay re-projects live — a visual fixer for camera-lidar
+  miscalibrations. See
+  [Editing static extrinsics](#editing-static-extrinsics).
 - The overlay follows the current rectify state: with **rectify off** the
   points are projected onto the raw image using the camera's lens distortion
   (`plumb_bob`/`rational_polynomial`, or `equidistant` for fisheye lenses), and
@@ -196,13 +201,78 @@ selected topic (`n/a` when either side left its stamp unset). Values within
 roughly half a lidar period are as tight as the pairing can get; a `Δ` of
 several hundred milliseconds means the two sensors' stamps genuinely disagree.
 Once a topic is selected, the preview's key legend also lists these adjustment
-keys (`f`/`c`/`r`/`=`/`-`/`[`/`]`) so they are discoverable without leaving the
-TUI.
+keys (`f`/`c`/`r`/`=`/`-`/`[`/`]`) and the extrinsic-edit entry (`e`) so they
+are discoverable without leaving the TUI.
 
 The overlay is applied to both the on-screen preview and the image saved by `S`.
 If no TF data is available, no CameraInfo was resolved, or the selected topic has
 no messages near the current frame, the status line reports the failure and the
 image is shown without the overlay.
+
+## Editing static extrinsics
+
+With the point-cloud overlay active, pressing `e` enters an interactive
+static-extrinsic edit mode: nudge a static TF edge on the chain between the
+cloud and the camera while the overlay re-projects live, which turns walk
+into a visual fixer for miscalibrations such as a camera-lidar extrinsic. The
+mode edits a preview-only copy of the TF tree — **the bag is never
+modified**; the result is exported as a YAML that
+[`bagwiz tf static update`](tf.md#bagwiz-tf-static-update) applies.
+
+The editable candidates are the `(parent, child)` edges on the TF chains
+between each selected cloud topic's frame and the camera frame, resolved at
+the current frame's TF-lookup time, that a static TF topic (`*/tf_static`)
+actually carries — a chain link fed by dynamic TF is not editable, since it
+is not tf_static data. With more than one candidate the first `e` opens a
+picker (`↑`/`↓`/`k`/`j` move, `g`/`G` jump, `Enter` confirms, `Esc`/`q`
+cancels); `E` re-opens it at any time to switch edges, also re-deriving the
+candidates so a changed topic selection is picked up. Leaving the mode with
+`e` keeps the edits applied to the preview, and re-entering resumes the same
+edge. Changing the overlay's topic selection re-reads the bag's TF, and the
+edited values are re-applied to the fresh tree automatically.
+
+Edits are expressed in the six scalars of the static-transform-publisher
+schema — `x`, `y`, `z` in meters and `roll`, `pitch`, `yaw` in radians (tf2
+fixed-axis), the same parametrization
+[`tf static dump`](tf.md#bagwiz-tf-static-dump) writes. Each keypress moves
+one component by the active step preset; `m`/`M` switch between the three
+presets — `0.001 m / 0.0005 rad`, `0.01 m / 0.005 rad` (the default), and
+`0.1 m / 0.05 rad`. While the mode is on, the info row shows the active
+edge, all six current values (rotations in degrees), the delta from the bag
+value for every nudged component, and the step.
+
+| Key                       | Action                                                                     |
+| ------------------------- | -------------------------------------------------------------------------- |
+| `e`                       | Enter/leave the edit mode (edits stay applied to the preview).             |
+| `E`                       | Open the edge picker to choose or switch the edited static TF edge.        |
+| `x`/`X`, `y`/`Y`, `z`/`Z` | Nudge that translation component up/down one step.                         |
+| `l`/`L`                   | Nudge roll up/down (ro**ll** — `r` is taken by the range toggle).          |
+| `n`/`N`                   | Nudge pitch up/down (a **n**od is a pitch — `p` is taken by the overlay).  |
+| `w`/`W`                   | Nudge yaw up/down (ya**w** — `y` is taken by the y translation).           |
+| `m`/`M`                   | Coarser / finer step preset.                                               |
+| `0`                       | Reset the edited edge to the value recorded in the bag.                    |
+| `D`                       | Export every edited edge as static-TF YAML (prompts for a path, like `S`). |
+
+All other preview keys stay live while editing — navigate frames to check the
+fix elsewhere in the recording, toggle rectification with `u`, or adjust the
+overlay's point size and alpha.
+
+### Persisting the fix
+
+`D` writes the edited edges in the nested
+`parent -> child -> {x, y, z, roll, pitch, yaw}` YAML that
+[`tf static dump`](tf.md#bagwiz-tf-static-dump) produces. The path prompt
+follows the same rules as `S`; the default name is
+`<bag>_tf_static_edit.yaml`. Apply it to the bag afterwards:
+
+```bash
+bagwiz tf static update -i capture.mcap --yaml capture_tf_static_edit.yaml
+```
+
+Quitting walk with unexported edits is safe: every edited edge is printed to
+stdout after the TUI closes (the same rendering
+[`tf static calc`](tf.md#bagwiz-tf-static-calc) uses), together with the
+`tf static update` command line that applies it.
 
 ## Layout
 
@@ -288,6 +358,13 @@ not been read into the cache yet (they get pulled in on demand).
 | `r`                                     | Toggle auto/manual value range for the overlay.                                                                                                                                                                                 |
 | `=` / `+` / `-`                         | Increase / decrease overlay point size.                                                                                                                                                                                         |
 | `]` / `[`                               | Increase / decrease overlay alpha.                                                                                                                                                                                              |
+| `e`                                     | Enter/leave the static-extrinsic edit mode in the image preview (needs the overlay). See [Editing static extrinsics](#editing-static-extrinsics).                                                                               |
+| `E`                                     | Open the picker that chooses the edited static TF edge.                                                                                                                                                                         |
+| `x`/`X`, `y`/`Y`, `z`/`Z`               | Edit mode: nudge that translation component up/down one step.                                                                                                                                                                   |
+| `l`/`L`, `n`/`N`, `w`/`W`               | Edit mode: nudge roll / pitch / yaw up/down one step.                                                                                                                                                                           |
+| `m` / `M`                               | Edit mode: coarser / finer nudge step.                                                                                                                                                                                          |
+| `0`                                     | Edit mode: reset the edited edge to the bag's value.                                                                                                                                                                            |
+| `D`                                     | Export the edited static TF edges as YAML (prompts for a path).                                                                                                                                                                 |
 | `q` / `Q` / `Esc` / `Ctrl-C` / `Ctrl-D` | Quit (in the image preview, returns to the YAML view).                                                                                                                                                                          |
 
 When the body is taller than the visible window, a `lines X-Y of N`

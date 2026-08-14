@@ -13,7 +13,7 @@
 namespace bagwiz::commands
 {
 
-std::string build_preview_legend(bool pcd_topic_selected)
+std::string build_preview_legend(bool pcd_topic_selected, bool edit_active)
 {
   std::string legend =
     "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [<] -10s   [>] +10s   [g] first "
@@ -21,6 +21,15 @@ std::string build_preview_legend(bool pcd_topic_selected)
     "[u] rectify   [p] project pcd   [t] select pcd topics";
   if (pcd_topic_selected) {
     legend += "   [f] property   [c] scheme   [r] range   [= / -] size   [ [ / ] ] alpha";
+  }
+  if (edit_active) {
+    legend +=
+      "   [x/X y/Y z/Z] translate   [l/L n/N w/W] roll/pitch/yaw   [m/M] step   [0] reset"
+      "   [E] edge   [D] export yaml   [e] done";
+  } else if (pcd_topic_selected) {
+    // The edit mode needs an overlay to judge the alignment against, so its
+    // entry hint rides the same condition as the adjustment keys.
+    legend += "   [e] edit extrinsic";
   }
   legend += "   [q] back";
   return legend;

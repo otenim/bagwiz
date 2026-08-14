@@ -160,6 +160,51 @@ KeyEvent classify_key(std::string_view bytes)
         return KeyEvent::kPcdAlphaUp;
       case '[':
         return KeyEvent::kPcdAlphaDown;
+      // e/E mirror the p/t pcd pair: lowercase toggles the extrinsic edit
+      // mode, uppercase opens the picker choosing the static TF edge it
+      // nudges.
+      case 'e':
+        return KeyEvent::kToggleEditExtrinsic;
+      case 'E':
+        return KeyEvent::kSelectEditEdge;
+      // Nudges: lowercase steps the component up, uppercase down. The
+      // rotation letters come from inside the word (roLL, Nod, yaW) because
+      // r, p and y are already taken by other bindings.
+      case 'x':
+        return KeyEvent::kEditTransXUp;
+      case 'X':
+        return KeyEvent::kEditTransXDown;
+      case 'y':
+        return KeyEvent::kEditTransYUp;
+      case 'Y':
+        return KeyEvent::kEditTransYDown;
+      case 'z':
+        return KeyEvent::kEditTransZUp;
+      case 'Z':
+        return KeyEvent::kEditTransZDown;
+      case 'l':
+        return KeyEvent::kEditRollUp;
+      case 'L':
+        return KeyEvent::kEditRollDown;
+      case 'n':
+        return KeyEvent::kEditPitchUp;
+      case 'N':
+        return KeyEvent::kEditPitchDown;
+      case 'w':
+        return KeyEvent::kEditYawUp;
+      case 'W':
+        return KeyEvent::kEditYawDown;
+      case 'm':
+        return KeyEvent::kEditStepUp;
+      case 'M':
+        return KeyEvent::kEditStepDown;
+      case '0':
+        return KeyEvent::kEditReset;
+      // Shift-D rather than a bare 'd', for the same reason save is
+      // Shift-S: the export prompt takes over the screen, so one mistyped
+      // letter should not trigger it.
+      case 'D':
+        return KeyEvent::kEditDumpYaml;
       default:
         return KeyEvent::kUnknown;
     }
