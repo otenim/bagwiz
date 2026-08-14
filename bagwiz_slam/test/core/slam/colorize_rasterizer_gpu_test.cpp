@@ -225,7 +225,7 @@ TEST_F(ColorizeRasterizerGpuTest, DynamicOccluderRejectsFarPoint)
 }
 
 // GPU/CPU agreement through a REAL distortion model: only a non-empty d
-// exercises the forward distortion, the fixed-point undistortion (the FP32
+// exercises the forward distortion, the fixed-point distortion inversion (the FP32
 // port loosened its convergence epsilon from 1e-10 to 1e-6), and the 1 px
 // round-trip gate along a non-degenerate path. A 9x9 grid spanning the FOV
 // out to `max_normalized_xy` must survive both backends identically and land

@@ -16,6 +16,7 @@
 namespace
 {
 
+using bagwiz::core::image::camera_info_for_size;
 using bagwiz::core::image::CameraInfo;
 using bagwiz::core::image::scale_camera_info;
 
@@ -119,6 +120,63 @@ TEST(CameraInfoScale, IndependentScales)
   EXPECT_DOUBLE_EQ(scaled.k[8], 1.0);
   EXPECT_DOUBLE_EQ(scaled.p[10], 1.0);
   EXPECT_DOUBLE_EQ(scaled.p[11], -0.25);  // tz unchanged
+}
+
+// Matching resolution: the calibration already describes these pixels, so it
+// must come back untouched rather than round-tripped through a 1.0 scale.
+TEST(CameraInfoForSize, MatchingResolutionIsReturnedVerbatim)
+{
+  const auto info = make_test_camera_info();
+  const auto out = camera_info_for_size(info, info.width, info.height);
+
+  EXPECT_EQ(out.width, info.width);
+  EXPECT_EQ(out.height, info.height);
+  EXPECT_EQ(out.k, info.k);
+  EXPECT_EQ(out.p, info.p);
+  EXPECT_EQ(out.d, info.d);
+}
+
+// The case that misprojects point clouds when it is not handled: a calibration
+// recorded at 1920x1080 applied to a half-size image topic.
+TEST(CameraInfoForSize, DifferentResolutionRescalesIntrinsics)
+{
+  const auto info = make_test_camera_info();
+  const auto out = camera_info_for_size(info, 960, 540);
+
+  EXPECT_EQ(out.width, 960U);
+  EXPECT_EQ(out.height, 540U);
+  EXPECT_DOUBLE_EQ(out.k[0], 500.0);  // fx
+  EXPECT_DOUBLE_EQ(out.k[2], 480.0);  // cx
+  EXPECT_DOUBLE_EQ(out.k[4], 500.0);  // fy
+  EXPECT_DOUBLE_EQ(out.k[5], 270.0);  // cy
+  EXPECT_DOUBLE_EQ(out.p[0], 500.0);
+  EXPECT_DOUBLE_EQ(out.p[11], -0.25);  // tz still unscaled
+  EXPECT_EQ(out.d, info.d);            // distortion coefficients are unitless
+}
+
+// Anisotropic: x and y must scale independently, not by a single ratio.
+TEST(CameraInfoForSize, NonUniformResolutionScalesAxesIndependently)
+{
+  const auto info = make_test_camera_info();
+  const auto out = camera_info_for_size(info, 960, 270);
+
+  EXPECT_DOUBLE_EQ(out.k[0], 500.0);  // fx * (960/1920)
+  EXPECT_DOUBLE_EQ(out.k[4], 250.0);  // fy * (270/1080)
+  EXPECT_DOUBLE_EQ(out.k[2], 480.0);
+  EXPECT_DOUBLE_EQ(out.k[5], 135.0);
+}
+
+// A CameraInfo with no resolution of its own carries nothing to compare
+// against, so it must pass through rather than divide by zero.
+TEST(CameraInfoForSize, ZeroDimensionsPassThrough)
+{
+  auto info = make_test_camera_info();
+  info.width = 0;
+  info.height = 0;
+  const auto out = camera_info_for_size(info, 640, 480);
+
+  EXPECT_EQ(out.k, info.k);
+  EXPECT_EQ(out.width, 0U);
 }
 
 }  // namespace

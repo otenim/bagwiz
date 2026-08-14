@@ -172,6 +172,9 @@ ProjectionWorkResult run_projection_work(
 {
   try {
     ProjectionWorkResult combined;
+    // See the sync path: intrinsics must match the rendered frame's size.
+    const auto projection_camera_info =
+      core::image::camera_info_for_size(camera_info, image_width, image_height);
     for (std::size_t i = 0; i < pointcloud_topics.size(); ++i) {
       core::pointcloud::PointCloudFetcher fetcher(
         input, pointcloud_topics[i], entries_per_topic[i]);
@@ -182,8 +185,14 @@ ProjectionWorkResult run_projection_work(
       if (cloud == nullptr) {
         return {{}, std::move(error)};
       }
+      // The matched time doubles as the TF-lookup time, exactly as walk's
+      // overlay does it. The TF buffer is keyed by each transform's own
+      // header.stamp, so querying at the frame's time keeps a dynamic
+      // cloud->camera chain correct; passing nothing would resolve every frame
+      // against the last transform in the bag.
       const auto projected = core::pointcloud::project_cloud_for_frame(
-        *cloud, camera_info, tf_buffer, image_width, image_height, property, use_rectified);
+        *cloud, projection_camera_info, tf_buffer, image_width, image_height, property,
+        use_rectified, match.target_ns);
       if (!projected.ok()) {
         return {{}, std::move(projected.error)};
       }
@@ -273,15 +282,15 @@ VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args)
       core::camera_info::resolve_camera_info_topic(args.topic, reader->topics()).topic;
   }
 
-  const bool needs_camera_info = args.undistort || !args.pointcloud_topics.empty();
+  const bool needs_camera_info = args.rectify || !args.pointcloud_topics.empty();
   if (needs_camera_info && !out.camera_info_topic.has_value()) {
     BAGWIZ_LOG_ERROR(
       kLogger,
-      "A camera-info topic is required for --undistort or --pcd, but none could be derived from "
+      "A camera-info topic is required for --rectify or --pcd, but none could be derived from "
       "'%s'. Pass it explicitly with --cam-info.",
       args.topic.c_str());
     out.error =
-      "A camera-info topic is required for --undistort or --pcd, but none could be derived from "
+      "A camera-info topic is required for --rectify or --pcd, but none could be derived from "
       "'" +
       args.topic + "'. Pass it explicitly with --cam-info.";
     return out;
@@ -557,7 +566,7 @@ VideoFrameEncoder::VideoFrameEncoder(
   double overlay_max)
 : tmp_path_(tmp_path),
   fps_(fps),
-  rectify_(args.undistort || !args.pointcloud_topics.empty()),
+  rectify_(args.rectify || !args.pointcloud_topics.empty()),
   camera_info_(camera_info),
   overlay_min_(overlay_min),
   overlay_max_(overlay_max),
@@ -586,8 +595,7 @@ bool VideoFrameEncoder::encode(
     encoder_ = std::move(opened.encoder);
 
     if (rectify_) {
-      undistort_helper_ =
-        std::make_unique<core::image::UndistortHelper>(*camera_info_, enc_w_, enc_h_);
+      rectify_helper_ = std::make_unique<core::image::RectifyHelper>(*camera_info_, enc_w_, enc_h_);
     }
   } else if (frame.width != enc_w_ || frame.height != enc_h_ || frame.encoding != enc_encoding_) {
     BAGWIZ_LOG_ERROR(
@@ -597,8 +605,8 @@ bool VideoFrameEncoder::encode(
     return false;
   }
 
-  if (undistort_helper_ != nullptr) {
-    fdata = undistort_helper_->remap(fdata, fstep);
+  if (rectify_helper_ != nullptr) {
+    fdata = rectify_helper_->remap(fdata, fstep);
     fstep = enc_w_ * 3U;
   }
 
@@ -663,7 +671,7 @@ int run_encode_loop_sync(
         args.input_path, args.pointcloud_topics[i], std::move(scan.pcd_spans[i].entries));
     }
   }
-  const bool use_rectified = args.undistort || !args.pointcloud_topics.empty();
+  const bool use_rectified = args.rectify || !args.pointcloud_topics.empty();
 
   io::RawMessage raw;
   while (reader.next(raw)) {
@@ -678,6 +686,13 @@ int run_encode_loop_sync(
     std::vector<core::pointcloud::ProjectedPoint> projected_storage;
     const std::vector<core::pointcloud::ProjectedPoint> * projected_ptr = nullptr;
     if (!pcd_fetchers.empty()) {
+      // Project with intrinsics matched to the frame actually being rendered.
+      // A calibration recorded at a different resolution than the images would
+      // otherwise misplace every point by the resolution ratio; walk's overlay
+      // gets this from RectifyHelper::effective_camera_info, which applies
+      // the same rule.
+      const auto projection_camera_info =
+        core::image::camera_info_for_size(*camera_info, frame->width, frame->height);
       for (std::size_t i = 0; i < pcd_fetchers.size(); ++i) {
         std::string pcd_error;
         const auto match = core::pointcloud::choose_frame_match(
@@ -689,8 +704,8 @@ int run_encode_loop_sync(
         }
 
         const auto projected = core::pointcloud::project_cloud_for_frame(
-          *cloud, *camera_info, *tf_buffer, frame->width, frame->height, args.property,
-          use_rectified);
+          *cloud, projection_camera_info, *tf_buffer, frame->width, frame->height, args.property,
+          use_rectified, match.target_ns);
         if (!projected.ok()) {
           BAGWIZ_LOG_ERROR(
             kLogger, "frame %" PRIu64 ": %s", encoder.written(), projected.error.c_str());
@@ -721,7 +736,7 @@ int run_encode_loop_async(
   for (auto & pcd_span : scan.pcd_spans) {
     entries_per_topic.push_back(std::move(pcd_span.entries));
   }
-  const bool use_rectified = args.undistort || !args.pointcloud_topics.empty();
+  const bool use_rectified = args.rectify || !args.pointcloud_topics.empty();
 
   // Keep one frame of projection work running ahead so that fetch/parse/
   // project for frame N+1 overlaps with encoding frame N.

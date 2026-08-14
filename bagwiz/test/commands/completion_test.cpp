@@ -1956,7 +1956,7 @@ TEST(FlagCompletionTest, GenerateVideoDashListsVideoFlags)
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "generate", "video", "-"}),
     "--alpha\n--cam-info\n--field\n--help\n--input\n--max\n--min\n--output\n--overwrite\n--pcd\n--"
-    "point-size\n--resize\n--scheme\n--topic\n--undistort\n-h\n-i\n-o\n-t\n-w\n");
+    "point-size\n--rectify\n--resize\n--scheme\n--topic\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `--field <TAB>` offers the valid point-cloud field choices, sorted.

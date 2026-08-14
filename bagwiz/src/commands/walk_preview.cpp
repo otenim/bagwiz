@@ -60,26 +60,26 @@ ImagePreviewSession::ImagePreviewSession(
 {
 }
 
-core::image::UndistortHelper * ImagePreviewSession::ensure_undistort_helper(
+core::image::RectifyHelper * ImagePreviewSession::ensure_rectify_helper(
   std::uint32_t w, std::uint32_t h)
 {
   if (!camera_info_.has_value()) {
     return nullptr;
   }
-  if (!undistort_helper_ || undistort_helper_w_ != w || undistort_helper_h_ != h) {
-    undistort_helper_ = std::make_unique<core::image::UndistortHelper>(*camera_info_, w, h);
-    undistort_helper_w_ = w;
-    undistort_helper_h_ = h;
+  if (!rectify_helper_ || rectify_helper_w_ != w || rectify_helper_h_ != h) {
+    rectify_helper_ = std::make_unique<core::image::RectifyHelper>(*camera_info_, w, h);
+    rectify_helper_w_ = w;
+    rectify_helper_h_ = h;
   }
-  return undistort_helper_.get();
+  return rectify_helper_.get();
 }
 
-void ImagePreviewSession::maybe_undistort(core::image::PackedRaster * raster)
+void ImagePreviewSession::maybe_rectify(core::image::PackedRaster * raster)
 {
   if (raster == nullptr) {
     return;
   }
-  auto * helper = ensure_undistort_helper(raster->width, raster->height);
+  auto * helper = ensure_rectify_helper(raster->width, raster->height);
   if (helper == nullptr) {
     return;
   }
@@ -98,14 +98,14 @@ core::image::PackedRasterResult ImagePreviewSession::compose_frame(std::size_t i
     return pr;
   }
   pr.raster = *hit.raster;  // copy the pristine base before mutating overlays
-  if (undistort_enabled_) {
-    maybe_undistort(&*pr.raster);
+  if (rectify_enabled_) {
+    maybe_rectify(&*pr.raster);
   }
   if (overlay_.state().enabled) {
     overlay_.maybe_overlay(
-      &*pr.raster, cursor_.cache()[cursor_.index()].timestamp_ns, camera_info_,
-      [this](std::uint32_t w, std::uint32_t h) { return ensure_undistort_helper(w, h); },
-      undistort_enabled_);
+      &*pr.raster, msg.timestamp_ns, camera_info_,
+      [this](std::uint32_t w, std::uint32_t h) { return ensure_rectify_helper(w, h); },
+      rectify_enabled_);
   }
   return pr;
 }
@@ -159,14 +159,26 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   // width.cpp), so it does not perturb the wrap/truncate accounting below.
   auto hl = [](auto && value) { return fmt::format("\x1B[1;36m{}\x1B[0m", value); };
 
-  info += fmt::format("   undistort: {}", hl(undistort_enabled_ ? "on" : "off"));
+  info += fmt::format("   rectify: {}", hl(rectify_enabled_ ? "on" : "off"));
   if (!pcd.topics.empty()) {
     const std::string range_text =
       pcd.auto_range ? "auto" : fmt::format("{:.2f}-{:.2f}", pcd.manual_min, pcd.manual_max);
+    info += fmt::format("   pcd: {}", hl(pcd.enabled ? "on" : "off"));
+    // The frame-match readings come from the last maybe_overlay(), which runs
+    // inside the compose_frame() above — but only while the overlay is
+    // enabled. Showing them only then keeps them from going stale behind a
+    // switched-off overlay.
+    if (pcd.enabled) {
+      const std::string residual_text =
+        pcd.last_residual_ns.has_value()
+          ? fmt::format("{:+.1f}ms", static_cast<double>(*pcd.last_residual_ns) / 1e6)
+          : "n/a";
+      info += fmt::format("   match: {}   Δ: {}", hl(pcd_match_clock_name(pcd)), hl(residual_text));
+    }
     info += fmt::format(
-      "   pcd: {}   property: {}   range: {}   scheme: {}   size: {}   alpha: {}",
-      hl(pcd.enabled ? "on" : "off"), hl(pcd_property_name(pcd.property)), hl(range_text),
-      hl(pcd_scheme_name(pcd.scheme)), hl(pcd.point_size), hl(fmt::format("{:.1f}", pcd.alpha)));
+      "   property: {}   range: {}   scheme: {}   size: {}   alpha: {}",
+      hl(pcd_property_name(pcd.property)), hl(range_text), hl(pcd_scheme_name(pcd.scheme)),
+      hl(pcd.point_size), hl(fmt::format("{:.1f}", pcd.alpha)));
   }
 
   // Header: the topic/type row and the info row, each wrapped to width the
@@ -194,7 +206,7 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   std::string legend_text =
     "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [<] -10s   [>] +10s   [g] first "
     "  [G] last   [s] save   "
-    "[u] undistort   [p] project pcd   [t] select pcd topics";
+    "[u] rectify   [p] project pcd   [t] select pcd topics";
   if (!pcd.topics.empty()) {
     legend_text += "   [f] property   [c] scheme   [r] range   [= / -] size   [ [ / ] ] alpha";
   }
@@ -356,15 +368,15 @@ void ImagePreviewSession::run()
         save_image();
         needs_render = true;
         break;
-      case core::KeyEvent::kToggleUndistort:
-        // Toggling undistort also re-aims the pcd overlay: with undistort on
+      case core::KeyEvent::kToggleRectify:
+        // Toggling rectify also re-aims the pcd overlay: with rectify on
         // points project onto the rectified image, with it off they project
         // onto the raw image using the lens distortion (see maybe_overlay).
         if (!camera_info.has_value()) {
-          status_ = camera_info_error.empty() ? "undistort: no camera_info"
-                                              : "undistort: " + camera_info_error;
+          status_ =
+            camera_info_error.empty() ? "rectify: no camera_info" : "rectify: " + camera_info_error;
         } else {
-          undistort_enabled_ = !undistort_enabled_;
+          rectify_enabled_ = !rectify_enabled_;
         }
         needs_render = true;
         break;

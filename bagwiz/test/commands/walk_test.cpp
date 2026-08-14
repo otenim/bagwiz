@@ -17,6 +17,7 @@
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/commands/topic_types.hpp"
 #include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "walk_overlay.hpp"          // NOLINT(build/include_subdir) src-local shared header
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
@@ -160,6 +161,32 @@ TEST(WalkCommand, TopicOptionsAreLiteralOnly)
   EXPECT_EQ(cam_info_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
   ASSERT_EQ(cam_info_slot->spec.allowed_types.size(), 1U);
   EXPECT_EQ(cam_info_slot->spec.allowed_types[0], "sensor_msgs/msg/CameraInfo");
+}
+
+// The preview info row's frame-match reading. "header->record" exists to
+// separate "capture time was never available" from "a selected topic could
+// not honour it", which is the only one the user can act on.
+TEST(PcdMatchClockName, ReportsTheClockTheOverlayActuallyUsed)
+{
+  using bagwiz::commands::pcd_match_clock_name;
+  using bagwiz::core::pointcloud::PointCloudMatchKey;
+
+  bagwiz::commands::PcdOverlayState pcd;
+
+  pcd.last_match_key = PointCloudMatchKey::kHeaderStamp;
+  pcd.topic_header_stamps = {true};
+  EXPECT_EQ(pcd_match_clock_name(pcd), "header");
+
+  // Every topic could have honoured capture time, so the fallback came from
+  // the frame side (an image with no header.stamp of its own).
+  pcd.last_match_key = PointCloudMatchKey::kRecordTime;
+  pcd.topic_header_stamps = {true};
+  EXPECT_EQ(pcd_match_clock_name(pcd), "record");
+
+  // One incapable topic among several forces the whole frame down.
+  pcd.last_match_key = PointCloudMatchKey::kRecordTime;
+  pcd.topic_header_stamps = {true, false};
+  EXPECT_EQ(pcd_match_clock_name(pcd), "header->record");
 }
 
 }  // namespace

@@ -60,7 +60,7 @@ add_library(bagwiz_image
   src/core/image/raw_image.cpp
   src/core/image/sampling.cpp
   src/core/image/srgb.cpp
-  src/core/image/undistort.cpp
+  src/core/image/rectify.cpp
 )
 target_include_directories(bagwiz_image
   PUBLIC
@@ -68,7 +68,7 @@ target_include_directories(bagwiz_image
     $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(bagwiz_image PUBLIC bagwiz_io::bagwiz_io bagwiz_msg::bagwiz_msg)
-# yaml-cpp (camera_calibration_yaml.cpp) and OpenCV (undistort.cpp /
+# yaml-cpp (camera_calibration_yaml.cpp) and OpenCV (rectify.cpp /
 # projection_matrix.cpp) are implementation details behind pimpls; they leak
 # into the static archive's link interface only as plain `-l` items, which the
 # conda toolchain resolves without targets. libav is linked by absolute path
@@ -142,8 +142,8 @@ if(BUILD_TESTING)
     test/core/image/camera_calibration_yaml_test.cpp)
   target_link_libraries(bagwiz_camera_calibration_yaml_test bagwiz_image)
 
-  ament_add_gtest(bagwiz_image_undistort_test test/core/image/undistort_test.cpp)
-  target_link_libraries(bagwiz_image_undistort_test bagwiz_image ${OpenCV_LIBS})
+  ament_add_gtest(bagwiz_image_rectify_test test/core/image/rectify_test.cpp)
+  target_link_libraries(bagwiz_image_rectify_test bagwiz_image ${OpenCV_LIBS})
 
   ament_add_gtest(
     bagwiz_projection_matrix_test

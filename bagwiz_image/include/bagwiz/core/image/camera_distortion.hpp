@@ -17,7 +17,7 @@
 // 3D points onto a RAW (unrectified) camera image: the point-cloud overlay
 // projector and the SLAM map colorizer. Coefficient conventions follow OpenCV
 // (and therefore sensor_msgs/msg/CameraInfo). Distinct from
-// core/image/undistort.hpp, which remaps whole image rasters.
+// core/image/rectify.hpp, which remaps whole image rasters.
 namespace bagwiz::core::image
 {
 
@@ -46,7 +46,7 @@ struct NormalizedPoint
 // Invert distort_normalized with OpenCV's fixed-point iteration. In-domain
 // points converge in a handful of steps; folded/divergent points run to an
 // internal iteration cap.
-[[nodiscard]] NormalizedPoint undistort_normalized(
+[[nodiscard]] NormalizedPoint invert_distortion_normalized(
   double xd, double yd, DistortionModel model, const std::vector<double> & d);
 
 // True when the distorted image of the normalized ray (a, b) is a fold-back

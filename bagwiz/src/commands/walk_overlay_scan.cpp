@@ -12,8 +12,10 @@
 #include "bagwiz/core/tf/tf_topics.hpp"
 #include "bagwiz/core/tf/tf_value_extract.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "trim_stamp.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <algorithm>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <string>
@@ -42,6 +44,7 @@ void scan_overlay_inputs(
     pcd_slot.emplace(pcd_topics[i], i);
   }
   out.entries.assign(pcd_topics.size(), {});
+  out.header_stamps_present.assign(pcd_topics.size(), true);
 
   io::ReadFilter filter;
   for (const auto & t : reader->topics()) {
@@ -49,8 +52,6 @@ void scan_overlay_inputs(
       continue;
     }
     filter.topics.push_back(t.name);
-    // Only TF rows need their payload; point-cloud rows are timestamp-only,
-    // which lets the storage layer skip their (potentially huge) BLOBs.
     filter.payload_topics.push_back(t.name);
   }
   if (filter.payload_topics.empty()) {
@@ -59,6 +60,10 @@ void scan_overlay_inputs(
   }
   for (const auto & topic : pcd_topics) {
     filter.topics.push_back(topic);
+    // Cloud rows need their payload too, but only its leading bytes: the scan
+    // reads each cloud's header.stamp so frames can be paired with clouds on
+    // capture time (see choose_frame_match). The point data is never decoded.
+    filter.payload_topics.push_back(topic);
   }
   reader->set_filter(filter);
 
@@ -99,7 +104,18 @@ void scan_overlay_inputs(
       }
 
       if (const auto it = pcd_slot.find(raw.topic->name); it != pcd_slot.end()) {
-        out.entries[it->second].push_back({raw.timestamp_ns, raw.timestamp_ns});
+        // Same fallback rule the point-cloud fetcher applies (see
+        // core::pointcloud's scan_point_cloud_topic and trim's
+        // message_clock_ns): stamp_ns is the header.stamp when the source set
+        // one, else the record time so the entry still has a usable key.
+        // read_leading_header_stamp_ns yields 0 — not nullopt — for a stamp
+        // left at zero, so the `> 0` test is what actually detects a fallback.
+        const auto stamp = read_leading_header_stamp_ns(raw.payload);
+        const bool has_stamp = stamp.has_value() && *stamp > 0;
+        const std::int64_t stamp_ns = has_stamp ? *stamp : raw.timestamp_ns;
+        out.entries[it->second].push_back({stamp_ns, raw.timestamp_ns});
+        // std::vector<bool> hands out a proxy, so this cannot be a bool &.
+        out.header_stamps_present[it->second] = out.header_stamps_present[it->second] && has_stamp;
         continue;
       }
       const auto dec = decoders.find(raw.topic->name);

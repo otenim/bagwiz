@@ -97,7 +97,7 @@ ProjectionResult project_pointcloud(
 
   // When projecting onto the raw image (use_rectified=false) apply the camera's
   // lens distortion so points land where the distorted image actually shows them.
-  // The rectified path uses camera_info.p, which already assumes an undistorted
+  // The rectified path uses camera_info.p, which already assumes a rectified
   // image, so it stays a plain pinhole projection; with no distortion
   // coefficients the raw path also reduces to a plain pinhole.
   const bool apply_distortion = !use_rectified && !camera_info.d.empty();

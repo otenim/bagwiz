@@ -88,7 +88,7 @@ private:
       "Replace an existing <output>. Without it, an existing output path stops the run.");
     add_topic_option(
       *sub, "--cam-info", video_args_.camera_info_topic,
-      "CameraInfo topic for --undistort and --pcd. When omitted, it is derived from "
+      "CameraInfo topic for --rectify and --pcd. When omitted, it is derived from "
       "<img_topic> following the standard /camera_info suffix rules.",
       TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral})
       ->check([](const std::string & topic) {
@@ -98,7 +98,7 @@ private:
         return std::string{};
       });
     sub->add_flag(
-      "--undistort", video_args_.undistort,
+      "--rectify", video_args_.rectify,
       "Apply distortion correction to each frame using the resolved CameraInfo. "
       "Requires a camera-info topic; use --cam-info if auto-resolution fails.");
     sub

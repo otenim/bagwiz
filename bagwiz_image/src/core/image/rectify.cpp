@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/core/image/undistort.hpp"
+#include "bagwiz/core/image/rectify.hpp"
 
 #include "bagwiz/core/image/camera_info.hpp"
 
@@ -50,18 +50,12 @@ namespace
 
 }  // namespace
 
-class UndistortHelper::Impl
+class RectifyHelper::Impl
 {
 public:
   Impl(const CameraInfo & info, std::uint32_t width, std::uint32_t height)
-  : width_(width), height_(height), effective_info_(info)
+  : width_(width), height_(height), effective_info_(camera_info_for_size(info, width, height))
   {
-    if (info.width != 0 && info.height != 0 && (info.width != width || info.height != height)) {
-      const double scale_x = static_cast<double>(width) / static_cast<double>(info.width);
-      const double scale_y = static_cast<double>(height) / static_cast<double>(info.height);
-      effective_info_ = scale_camera_info(info, scale_x, scale_y);
-    }
-
     const cv::Mat k(3, 3, CV_64F, effective_info_.k.data());
     const cv::Mat p(3, 4, CV_64F, effective_info_.p.data());
 
@@ -109,23 +103,23 @@ private:
   CameraInfo effective_info_;
 };
 
-UndistortHelper::UndistortHelper(const CameraInfo & info, std::uint32_t width, std::uint32_t height)
+RectifyHelper::RectifyHelper(const CameraInfo & info, std::uint32_t width, std::uint32_t height)
 : impl_(std::make_unique<Impl>(info, width, height))
 {
 }
 
-UndistortHelper::~UndistortHelper() = default;
+RectifyHelper::~RectifyHelper() = default;
 
-UndistortHelper::UndistortHelper(UndistortHelper &&) noexcept = default;
-UndistortHelper & UndistortHelper::operator=(UndistortHelper &&) noexcept = default;
+RectifyHelper::RectifyHelper(RectifyHelper &&) noexcept = default;
+RectifyHelper & RectifyHelper::operator=(RectifyHelper &&) noexcept = default;
 
-std::span<const std::byte> UndistortHelper::remap(
+std::span<const std::byte> RectifyHelper::remap(
   std::span<const std::byte> src, std::uint32_t src_step)
 {
   return impl_->remap(src, src_step);
 }
 
-CameraInfo UndistortHelper::effective_camera_info() const
+CameraInfo RectifyHelper::effective_camera_info() const
 {
   return impl_->effective_camera_info();
 }

@@ -25,7 +25,7 @@ namespace bagwiz::core::pointcloud
 {
 
 // Transform a point cloud into the camera frame and project it onto the image.
-// `use_rectified` should be true when the target image has been undistorted, so
+// `use_rectified` should be true when the target image has been rectified, so
 // the projection aligns with the rectified image using camera_info.p.
 // If `timestamp_ns` is provided, the TF lookup uses that time; otherwise it uses
 // the latest available transform.

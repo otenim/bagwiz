@@ -697,7 +697,7 @@ TEST_F(GenerateVideoTest, AutoResolvesCameraInfoForImageRawCompressed)
   const auto out = tmp_dir_ / "out.avi";
 
   GenerateVideoArgs args{in, "/cam/image_raw/compressed", out, false};
-  args.undistort = true;
+  args.rectify = true;
   ASSERT_EQ(run_generate_video(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -713,7 +713,7 @@ TEST_F(GenerateVideoTest, AutoResolvesCameraInfoForImageRectColor)
   const auto out = tmp_dir_ / "out.avi";
 
   GenerateVideoArgs args{in, "/cam/image_rect_color", out, false};
-  args.undistort = true;
+  args.rectify = true;
   ASSERT_EQ(run_generate_video(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -729,7 +729,7 @@ TEST_F(GenerateVideoTest, AutoResolvesCameraInfoForImageRectColorCompressed)
   const auto out = tmp_dir_ / "out.avi";
 
   GenerateVideoArgs args{in, "/cam/image_rect_color/compressed", out, false};
-  args.undistort = true;
+  args.rectify = true;
   ASSERT_EQ(run_generate_video(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -737,19 +737,19 @@ TEST_F(GenerateVideoTest, AutoResolvesCameraInfoForImageRectColorCompressed)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(GenerateVideoTest, UndistortFailsWhenAutoResolutionCannotFindCameraInfo)
+TEST_F(GenerateVideoTest, RectifyFailsWhenAutoResolutionCannotFindCameraInfo)
 {
   constexpr int kFrames = 2;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");  // /cam/image, no /cam/camera_info
   const auto out = tmp_dir_ / "out.avi";
 
   GenerateVideoArgs args{in, kImageTopic, out, false};
-  args.undistort = true;
+  args.rectify = true;
   EXPECT_EQ(run_generate_video(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(GenerateVideoTest, ExplicitCameraInfoTopicWorksForUndistort)
+TEST_F(GenerateVideoTest, ExplicitCameraInfoTopicWorksForRectify)
 {
   constexpr int kFrames = 2;
   const auto in = tmp_dir_ / "input";
@@ -774,7 +774,7 @@ TEST_F(GenerateVideoTest, ExplicitCameraInfoTopicWorksForUndistort)
   const auto out = tmp_dir_ / "out.avi";
   GenerateVideoArgs args{in, kImageTopic, out, false};
   args.camera_info_topic = "/other/camera_info";
-  args.undistort = true;
+  args.rectify = true;
   ASSERT_EQ(run_generate_video(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -790,7 +790,7 @@ TEST_F(GenerateVideoTest, ExplicitCameraInfoTopicWithWrongTypeFails)
 
   GenerateVideoArgs args{in, kImageTopic, out, false};
   args.camera_info_topic = "/sensing/lidar";  // PointCloud2, not CameraInfo
-  args.undistort = true;
+  args.rectify = true;
   EXPECT_EQ(run_generate_video(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }

@@ -235,6 +235,42 @@ TEST_F(PointCloudFetcherTest, MatchesByHeaderStampNotRecordTime)
   EXPECT_FLOAT_EQ(first_point_x(*c), 30.0f);
 }
 
+// Regression: callers that must act once per distinct cloud (walk's overlay
+// folds each newly displayed cloud into its running colour range) cannot use
+// the returned pointer as an identity. `cached_cloud_` is an inline optional
+// move-assigned in place, so every cloud this fetcher returns lives at the
+// same address; walk compared those addresses and therefore accumulated only
+// the very first cloud of each topic. cached_record_ns() is the identity that
+// actually changes.
+TEST_F(PointCloudFetcherTest, CachedRecordNsIdentifiesTheCloudButThePointerDoesNot)
+{
+  const std::string topic = "/points";
+  const std::vector<CloudSpec> specs{
+    {1'000'000'000, 1'000'000'000, 10.0f},
+    {2'000'000'000, 2'000'000'000, 20.0f},
+  };
+  const auto bag = write_cloud_bag(tmp_dir_, topic, specs);
+  auto entries = build(bag, topic);
+  PointCloudFetcher fetcher(bag, topic, std::move(entries));
+
+  std::string error;
+  EXPECT_EQ(fetcher.cached_record_ns(), 0) << "no fetch has happened yet";
+
+  const auto * first = fetcher.fetch(1'000'000'000, PointCloudMatchKey::kRecordTime, error);
+  ASSERT_NE(first, nullptr) << error;
+  EXPECT_FLOAT_EQ(first_point_x(*first), 10.0f);
+  EXPECT_EQ(fetcher.cached_record_ns(), 1'000'000'000);
+
+  const auto * second = fetcher.fetch(2'000'000'000, PointCloudMatchKey::kRecordTime, error);
+  ASSERT_NE(second, nullptr) << error;
+  // A genuinely different message...
+  EXPECT_FLOAT_EQ(first_point_x(*second), 20.0f);
+  EXPECT_EQ(fetcher.cached_record_ns(), 2'000'000'000);
+  // ...delivered at the very same address. This is the trap the accessor exists
+  // to close, so pin it rather than leaving it as folklore.
+  EXPECT_EQ(first, second);
+}
+
 // The record-time key matches by bag record time regardless of header.stamp.
 // Same clouds as above (header stamps out of record order); fetching by record
 // time must select by record_ns, i.e. the opposite cloud from the stamp key.
