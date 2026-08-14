@@ -8,6 +8,8 @@
 
 #include "bagwiz/commands/completion.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
@@ -484,6 +486,25 @@ std::filesystem::path make_file_mode_zstd(const std::filesystem::path & dir)
   return zstd_path;
 }
 
+// Builds the same command tree main() does (every registered command added
+// as a subcommand and configured), so completion has real topic slots to
+// read; presentation-only wiring main() also does — set_version_flag(),
+// formatter(), failure_message() — is omitted, since nothing under test
+// reads it. Takes `app` by reference rather than returning one: CLI::App has
+// no copy or move constructor (App(const App&) = delete leaves neither
+// implicitly declared), so it cannot be built and handed back by value.
+void build_app(CLI::App & app)
+{
+  app.require_subcommand(1);
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    auto * sub = app.add_subcommand(std::string(cmd->name()), std::string(cmd->description()));
+    if (cmd->hidden()) {
+      sub->group("");
+    }
+    cmd->configure(*sub);
+  }
+}
+
 std::string run_completion(std::vector<std::string> args)
 {
   std::vector<char *> argv;
@@ -492,9 +513,11 @@ std::string run_completion(std::vector<std::string> args)
     argv.push_back(arg.data());
   }
 
+  CLI::App app{"bagwiz"};
+  build_app(app);
   testing::internal::CaptureStdout();
   const int rc =
-    bagwiz::commands::run_completion_request(static_cast<int>(argv.size()), argv.data());
+    bagwiz::commands::run_completion_request(static_cast<int>(argv.size()), argv.data(), app);
   std::string out = testing::internal::GetCapturedStdout();
   EXPECT_EQ(rc, 0);
   return out;
@@ -790,6 +813,20 @@ TEST(FlagCompletionTest, TrimStampValueCompletes)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "trim", "--stamp"}), "header\nrecv\n");
+}
+
+// --align is variadic, so a second value in the same run completes too — a
+// behavior improvement over the old bespoke handler, which only ever
+// completed the first value.
+TEST_F(CompletionTest, TrimAlignCompletesAtEveryValue)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_mcap_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "trim", "-i", "~/fixture.mcap", "--align", "/foo"}),
+    "/bar\n/foo\n");
 }
 
 // `walk` surfaces its own `--cam-info` flag plus the implicit help flags, sorted.
@@ -1345,6 +1382,12 @@ TEST(FlagCompletionTest, MapSlamDynamicMethodListsMethods)
     "dufomap\nerasor2\n");
 }
 
+// `map.cpp` is compiled only under BAGWIZ_WITH_SLAM, so in a core build "map"
+// is not a registered command and these six offer nothing — a fix, not a
+// regression: they used to (wrongly) offer completions for a command the
+// binary does not contain.
+#ifdef BAGWIZ_WITH_SLAM
+
 // `map slam <input> <pcd_topic>` completes the topic slot from the bag's
 // PointCloud2 topics, excluding other types.
 TEST_F(CompletionTest, MapSlamTopicCompletionListsOnlyPointCloud2)
@@ -1425,6 +1468,8 @@ TEST_F(CompletionTest, MapSlamCamInfoOffersNothingOnBashSplitValueHalf)
        "/cam/image_raw/compressed", "="}),
     "");
 }
+
+#endif  // BAGWIZ_WITH_SLAM
 
 // `pcd concat -` surfaces concat's flags plus the implicit help flags, sorted.
 // Guards the flag list against drift and proves the --stamp-offset value

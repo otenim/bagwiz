@@ -141,12 +141,21 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
 # ---------------------------------------------------------------------------
 # bagwiz: CLI executable. Installs to bin/ so users run it directly after
 # sourcing the ROS setup. Command implementations live in the executable
-# target so their static registrars pull into the final binary. The `map`
-# command group sources (map.cpp, map_slam.cpp, map_viewer.cpp) join the
-# executable in the BAGWIZ_WITH_SLAM block below.
+# target so their static registrars pull into the final binary.
+#
+# bagwiz_command_sources is everything except main.cpp, which defines its own
+# main() and would collide with gtest's. It is also used by
+# bagwiz_completion_test below (BUILD_TESTING block): shell completion reads
+# topic slots off a fully configured CLI::App (see
+# commands/topic_option.hpp), so that test has to build the same command
+# tree the executable does, or it would have no slots to read. Sharing this
+# list is what keeps the two from drifting apart — a command added to one
+# and forgotten in the other used to be possible; now it is one edit.
+# bagwiz_command_slam_sources is the `map` command group (map.cpp,
+# map_slam.cpp, map_viewer.cpp), gated on BAGWIZ_WITH_SLAM below and reused
+# the same way.
 # ---------------------------------------------------------------------------
-add_executable(bagwiz
-  src/main.cpp
+set(bagwiz_command_sources
   src/commands/registry.cpp
   src/commands/help_formatter.cpp
   src/commands/parse_error.cpp
@@ -195,6 +204,16 @@ add_executable(bagwiz
   src/commands/trim.cpp
   src/commands/trim_stamp.cpp
 )
+set(bagwiz_command_slam_sources
+  src/commands/map.cpp
+  src/commands/map_slam.cpp
+  src/commands/map_slam_colorize.cpp
+  src/commands/map_slam_mapping.cpp
+  src/commands/map_slam_threads.cpp
+  src/commands/map_viewer.cpp
+)
+
+add_executable(bagwiz src/main.cpp ${bagwiz_command_sources})
 target_include_directories(bagwiz PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # sensor_msgs is needed only by src/commands/cam_info_common.cpp (shared by
 # cam_info_replace.cpp and cam_info_recompute_p.cpp), which builds a typed
@@ -235,13 +254,7 @@ if(BAGWIZ_WITH_SLAM)
   find_package(gtsam_points CONFIG REQUIRED)
   find_package(GTSAM CONFIG REQUIRED)
 
-  target_sources(bagwiz PRIVATE
-    src/commands/map.cpp
-    src/commands/map_slam.cpp
-    src/commands/map_slam_colorize.cpp
-    src/commands/map_slam_mapping.cpp
-    src/commands/map_slam_threads.cpp
-    src/commands/map_viewer.cpp)
+  target_sources(bagwiz PRIVATE ${bagwiz_command_slam_sources})
   target_link_libraries(bagwiz PRIVATE
     bagwiz_slam::bagwiz_slam_glim
     glim::glim
@@ -297,19 +310,62 @@ if(BUILD_TESTING)
     bagwiz_slam::bagwiz_slam
   )
 
-  # completion.cpp carries a BAGWIZ_REGISTER_COMMAND registrar, so the test
-  # also compiles registry.cpp (which otherwise lives only in the `bagwiz`
-  # executable — the registrars must not sit in a library, or the linker
-  # strips them).
+  # Shell completion is driven by walking a fully configured CLI::App and
+  # reading the topic slots each command declared (see
+  # commands/topic_option.hpp) — it registers none of its own. So this test
+  # links bagwiz_command_sources, the same list `add_executable(bagwiz ...)`
+  # above uses (everything except main.cpp, which defines its own main() and
+  # would collide with gtest's), rather than compiling completion.cpp in
+  # isolation: every command that might declare a topic slot has to actually
+  # register and build its option tree for completion to have anything to
+  # read. The BAGWIZ_REGISTER_COMMAND registrars must not sit in a library,
+  # or the linker strips them — hence compiling the sources directly here,
+  # the same way the executable does.
   ament_add_gtest(bagwiz_completion_test
     test/commands/completion_test.cpp
-    src/commands/completion.cpp
-    src/commands/registry.cpp)
+    test/commands/completion_slot_wiring_test.cpp
+    ${bagwiz_command_sources})
+  # ament_add_gtest_executable() already linked this target with the plain
+  # (non-keyword) signature internally, so every target_link_libraries call
+  # below must stay plain too — CMake rejects mixing the two signatures on
+  # one target.
+  set(bagwiz_completion_test_slam_libs)
+  if(BAGWIZ_WITH_SLAM)
+    target_sources(bagwiz_completion_test PRIVATE ${bagwiz_command_slam_sources})
+    list(APPEND bagwiz_completion_test_slam_libs
+      bagwiz_slam::bagwiz_slam_glim
+      glim::glim
+      gtsam_points::gtsam_points
+      gtsam)
+    target_compile_definitions(bagwiz_completion_test PRIVATE BAGWIZ_WITH_SLAM)
+    if(BAGWIZ_WITH_SLAM_CUDA)
+      list(APPEND bagwiz_completion_test_slam_libs CUDA::cudart)
+      target_compile_definitions(bagwiz_completion_test PRIVATE BAGWIZ_WITH_SLAM_CUDA)
+    endif()
+  endif()
+  if(BAGWIZ_WITH_MAP_VIEWER)
+    target_compile_definitions(bagwiz_completion_test PRIVATE BAGWIZ_WITH_MAP_VIEWER)
+  endif()
   target_include_directories(bagwiz_completion_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  # The test builds compressed MCAP fixtures itself, so it uses yaml-cpp and
-  # zstd directly in addition to the CLI libraries.
+  # Mirrors the `bagwiz` executable's own PRIVATE link set (sensor_msgs/rmw/tf2/
+  # geometry_msgs for cam_info_common.cpp's typed round-trip and tf.cpp/traj.cpp's
+  # TF and pose handling), the GLIM stack under BAGWIZ_WITH_SLAM, and the
+  # yaml-cpp/zstd extras this test's own fixture builder uses.
   target_link_libraries(
-    bagwiz_completion_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt yaml-cpp zstd::zstd)
+    bagwiz_completion_test
+    ${bagwiz_test_libs}
+    ${bagwiz_completion_test_slam_libs}
+    CLI11::CLI11
+    fmt::fmt
+    rang
+    ${OpenCV_LIBS}
+    ${sensor_msgs_TARGETS}
+    ${rmw_TARGETS}
+    ${rmw_implementation_TARGETS}
+    ${tf2_TARGETS}
+    ${geometry_msgs_TARGETS}
+    yaml-cpp
+    zstd::zstd)
 
   ament_add_gtest(bagwiz_help_formatter_test
     test/commands/help_formatter_test.cpp

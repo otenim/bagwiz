@@ -397,6 +397,7 @@ TEST(PcdConcatCliWiring, StampOffsetIsScopedToThePcdOptionInDeclarationOrder)
   EXPECT_EQ(slots[1].option->get_lnames(), (std::vector<std::string>{"pcd"}));
   EXPECT_EQ(slots[1].spec.scope, nullptr);
   EXPECT_TRUE(slots[1].option->get_required());
+  EXPECT_EQ(slots[1].spec.allowed_types.size(), 1U);
 
   EXPECT_EQ(slots[2].option->get_lnames(), (std::vector<std::string>{"stamp-offset"}));
   EXPECT_TRUE(slots[2].spec.pair_value);
