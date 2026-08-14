@@ -71,7 +71,7 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //   Home / H      : jump body scroll to the head
 //   End / T       : jump body scroll to the tail
 //   g / G         : jump to first / last message (G forces a full scan)
-//   s             : save current message as yaml; inside the image preview,
+//   S             : save current message as yaml; inside the image preview,
 //                   save the displayed frame as a PNG (both prompt for a path)
 //   a             : toggle full-expansion of long primitive arrays
 //   i             : toggle in-terminal image preview (image topics on a

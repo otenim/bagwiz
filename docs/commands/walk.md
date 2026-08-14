@@ -60,13 +60,13 @@ When expanded, long arrays render as a YAML block sequence (one element
 per line under a `-` marker) so the output stays within the terminal
 width and remains valid YAML. Short arrays (≤ 32 elements) keep their
 inline `[a, b, c]` form either way. The toggle affects both on-screen
-rendering and the YAML written by `s`, so saving while expanded produces
+rendering and the YAML written by `S`, so saving while expanded produces
 a full-fidelity dump of every element. Press `a` again to return to the
 summarized view.
 
 ## Saving the current message
 
-Pressing `s` saves the **currently displayed** message body (the same
+Pressing `S` saves the **currently displayed** message body (the same
 YAML string shown in the pager, not including the header lines) to a
 file. The command prompts for an output path; press Enter with an empty
 line to write under the process current working directory using the name
@@ -102,12 +102,12 @@ frame — and the view redraws on resize. Press `q` to return to the YAML view.
   passthrough yet), so preview is reported as unavailable.
 - The image is scaled aspect-preserved to fit the body region with a fixed
   padding margin (it never fills edge-to-edge) and is centered. Decoded frames
-  are cached (LRU, 16 frames) and shared by the on-screen preview and the `s`
+  are cached (LRU, 16 frames) and shared by the on-screen preview and the `S`
   save, so revisiting a nearby frame reuses the decode; only the
   rectify/overlay compositing is redone per repaint. Frames beyond the cache
   are re-decoded on demand.
 - Pressing `u` toggles **rectification** (lens-distortion correction) when a CameraInfo topic was resolved or
-  explicitly provided. The rectified frame is rendered and saved by `s`. If no
+  explicitly provided. The rectified frame is rendered and saved by `S`. If no
   CameraInfo is available, `u` shows `rectify: no camera_info` in the status
   line and leaves the original image on screen.
 - Pressing `p` toggles a **PointCloud2 projection overlay** on the image
@@ -199,7 +199,7 @@ Once a topic is selected, the preview's key legend also lists these adjustment
 keys (`f`/`c`/`r`/`=`/`-`/`[`/`]`) so they are discoverable without leaving the
 TUI.
 
-The overlay is applied to both the on-screen preview and the image saved by `s`.
+The overlay is applied to both the on-screen preview and the image saved by `S`.
 If no TF data is available, no CameraInfo was resolved, or the selected topic has
 no messages near the current frame, the status line reports the failure and the
 image is shown without the overlay.
@@ -277,7 +277,7 @@ not been read into the cache yet (they get pulled in on demand).
 | `End` / `T`                             | Jump body scroll to the tail.                                                                                                                                                                                                   |
 | `g`                                     | Jump to the first message.                                                                                                                                                                                                      |
 | `G`                                     | Jump to the last message (forces a full-remaining scan).                                                                                                                                                                        |
-| `s`                                     | Save as yaml - writes the current message body (prompts for path). In the image preview, `s` saves the decoded image including any rectification or point-cloud overlay.                                                        |
+| `S`                                     | Save as yaml - writes the current message body (prompts for path). In the image preview, `S` saves the decoded image including any rectification or point-cloud overlay.                                                        |
 | `a`                                     | Toggle full expansion of long primitive arrays (default off).                                                                                                                                                                   |
 | `i`                                     | Toggle in-terminal image preview (image topics on a Kitty- or Sixel-capable terminal; hidden otherwise). See [Image preview](#image-preview).                                                                                   |
 | `u`                                     | Toggle rectification (lens-distortion correction) in the image preview (when CameraInfo is available). Also re-aims the point-cloud overlay: off projects onto the raw (distorted) image, on projects onto the rectified image. |

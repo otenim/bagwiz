@@ -147,7 +147,7 @@ TEST(WalkBuildYamlFrame, FooterLayoutAndLegend)
   EXPECT_EQ(frame.footer[1], "  [0 / 2]  /topic  pkg/msg/Type");
   EXPECT_TRUE(frame.footer[3].empty());  // empty status renders a blank row
   const std::string legend = frame.footer[2];
-  EXPECT_NE(legend.find("[s] save as yaml"), std::string::npos) << legend;
+  EXPECT_NE(legend.find("[S] save as yaml"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[a] expand arrays"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[q] quit"), std::string::npos) << legend;
   EXPECT_EQ(legend.find("[i] preview"), std::string::npos) << legend;

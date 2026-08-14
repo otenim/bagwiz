@@ -74,7 +74,10 @@ TEST(ClassifyKey, QuitBindings)
 
 TEST(ClassifyKey, SaveYamlBinding)
 {
-  EXPECT_EQ(classify_key("s"), KeyEvent::kSaveYaml);
+  // Shift-S, not a bare 's': the save prompt is disruptive enough that a
+  // single mistyped letter should not trigger it.
+  EXPECT_EQ(classify_key("S"), KeyEvent::kSaveYaml);
+  EXPECT_EQ(classify_key("s"), KeyEvent::kUnknown);
 }
 
 TEST(ClassifyKey, ToggleArrayExpandBinding)
