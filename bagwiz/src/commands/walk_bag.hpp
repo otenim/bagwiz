@@ -21,7 +21,7 @@
 
 // Bag-side orchestration of `bagwiz walk`: opening the bag and locating the
 // walked topic, listing the overlay-eligible PointCloud2 topics, and
-// resolving the CameraInfo used by the undistort/projection preview. Thin
+// resolving the CameraInfo used by the rectify/projection preview. Thin
 // wrappers over the Phase-3 shared helpers, split out of walk.cpp.
 // CLI-internal: this header lives with the command sources and is not
 // installed.
@@ -52,7 +52,7 @@ struct OpenedBag
 
 // Outcome of resolve_walk_camera_info(). `error` is empty on success; it
 // carries the resolution/validation/loading reason otherwise (walk surfaces
-// it when the user toggles undistort or the pcd projection).
+// it when the user toggles rectify or the pcd projection).
 struct WalkCameraInfo
 {
   std::optional<core::image::CameraInfo> info;

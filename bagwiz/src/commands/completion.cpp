@@ -1067,7 +1067,7 @@ std::vector<std::string> complete_stamp(const CompletionRequest & request)
 // choices for `--field` and `--scheme`.
 //
 //   video: `generate`(0) `video`(1) -i|--input <bag> -t|--topic <image_topic>
-//          -o|--output <path> [--cam-info <topic>] [--undistort] [--resize <s>]
+//          -o|--output <path> [--cam-info <topic>] [--rectify] [--resize <s>]
 //          [--pcd <topic>...] [--field <f>] [--min <v>] [--max <v>]
 //          [--scheme <s>] [--point-size <n>] [--alpha <a>] [-w|--overwrite]
 std::vector<std::string> complete_generate(const CompletionRequest & request)
@@ -1086,7 +1086,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
       return matching(
         with_help(
           {"--alpha", "--cam-info", "--field", "--input", "--max", "--min", "--output",
-           "--overwrite", "--pcd", "--point-size", "--resize", "--scheme", "--topic", "--undistort",
+           "--overwrite", "--pcd", "--point-size", "--rectify", "--resize", "--scheme", "--topic",
            "-i", "-o", "-t", "-w"}),
         current);
     }

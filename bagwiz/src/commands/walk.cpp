@@ -77,7 +77,7 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //   i             : toggle in-terminal image preview (image topics on a
 //                   Kitty/Sixel-capable terminal; absent otherwise)
 //   q / Q / Esc / Ctrl-C / Ctrl-D : quit
-// Inside the image preview the additional keys u (undistort), p (pcd overlay),
+// Inside the image preview the additional keys u (rectify), p (pcd overlay),
 // t (pcd topics), f/c/r (property/scheme/range), =,+/- (point size) and ]/[
 // (alpha) apply; see walk_preview.hpp / walk_overlay.hpp.
 // Messages are cached lazily so `prev` stays O(1) for anything already
@@ -105,7 +105,7 @@ public:
       ->required();
     add_topic_option(
       app, "--cam-info", camera_info_topic_,
-      "Explicit CameraInfo topic for the undistort preview and the point-cloud projection "
+      "Explicit CameraInfo topic for the rectify preview and the point-cloud projection "
       "overlay",
       TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral});
   }

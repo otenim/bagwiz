@@ -11,7 +11,7 @@
 
 #include "bagwiz/commands/generate_video.hpp"
 #include "bagwiz/core/image/camera_info.hpp"
-#include "bagwiz/core/image/undistort.hpp"
+#include "bagwiz/core/image/rectify.hpp"
 #include "bagwiz/core/pointcloud/fetcher.hpp"
 #include "bagwiz/core/pointcloud/projector.hpp"
 #include "bagwiz/core/video/frame_rate.hpp"
@@ -55,7 +55,7 @@ struct VideoInputValidation
 
 // The command's pre-flight checks: source topic presence + renderable type,
 // cam-info validation (explicit --cam-info) or derivation (from the image
-// topic name), the cam-info requirement of --undistort / --pcd, and every
+// topic name), the cam-info requirement of --rectify / --pcd, and every
 // point-cloud topic's presence + type. Logs the command's errors and returns
 // on the first failure.
 [[nodiscard]] VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args);
@@ -111,7 +111,7 @@ struct VideoInputScan
 // ---- pass-2 geometry ---------------------------------------------------------
 
 // The camera info (already scaled by --resize) and TF buffer the encode
-// loop needs for --undistort / --pcd, loaded up front so a failure aborts
+// loop needs for --rectify / --pcd, loaded up front so a failure aborts
 // before the encode. camera_info is set iff `camera_info_topic` was resolved;
 // the TF buffer iff point-cloud topics are present. Filled via an out
 // parameter because tf2::BufferCore is immobile (it owns a mutex), so this
@@ -218,13 +218,13 @@ private:
 
 // Encode half of the frame pipeline: owns the video encoder (opened lazily on
 // the first frame, which fixes the run's geometry and pixel encoding), the
-// undistort remap, and the point-cloud overlay state. All failures are logged
+// rectify remap, and the point-cloud overlay state. All failures are logged
 // and reported as false / a non-empty string, matching the monolith's
 // log-then-abort shape.
 class VideoFrameEncoder
 {
 public:
-  // `camera_info` must be non-null when --undistort or --pcd is in play (input
+  // `camera_info` must be non-null when --rectify or --pcd is in play (input
   // validation guarantees a cam-info topic then). `overlay_min` /
   // `overlay_max` are the pass-1 global property range.
   VideoFrameEncoder(
@@ -252,7 +252,7 @@ public:
 private:
   std::filesystem::path tmp_path_;
   core::video::FrameRate fps_;
-  bool rectify_;  // --undistort or --pcd: feed frames through the undistort remap
+  bool rectify_;  // --rectify or --pcd: feed frames through the rectify remap
   const core::image::CameraInfo * camera_info_;
   double overlay_min_;
   double overlay_max_;
@@ -261,7 +261,7 @@ private:
   float alpha_;
 
   std::unique_ptr<core::video::VideoEncoder> encoder_;
-  std::unique_ptr<core::image::UndistortHelper> undistort_helper_;
+  std::unique_ptr<core::image::RectifyHelper> rectify_helper_;
   std::uint32_t enc_w_ = 0;
   std::uint32_t enc_h_ = 0;
   // to_packed_raster yields canonical BGR24, so every frame's encoding is

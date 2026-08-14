@@ -11,7 +11,7 @@
 
 #include "bagwiz/core/image/camera_info.hpp"
 #include "bagwiz/core/image/packed_raster.hpp"
-#include "bagwiz/core/image/undistort.hpp"
+#include "bagwiz/core/image/rectify.hpp"
 #include "bagwiz/core/tui/image/terminal_image_caps.hpp"
 #include "bagwiz/core/tui/layout.hpp"
 #include "bagwiz/core/tui/pager.hpp"
@@ -32,7 +32,7 @@
 #include <utility>
 
 // In-terminal image preview of `bagwiz walk` (Kitty/Sixel): the decoded-frame
-// LRU cache, frame composition (base decode + undistort + pcd overlay), the
+// LRU cache, frame composition (base decode + rectify + pcd overlay), the
 // preview renderer, the PNG save, and the preview key loop. Moved out of
 // walk.cpp verbatim; the loop stays TTY-coupled by design. CLI-internal:
 // this header lives with the command sources and is not installed.
@@ -94,7 +94,7 @@ private:
 
 // Runs the image-preview sub-loop inside the pager's raw-mode + SIGWINCH
 // scope. Shares the walked topic's MessageCursor with the YAML view so both
-// navigate identically; the PCD overlay and the undistort state live here
+// navigate identically; the PCD overlay and the rectify state live here
 // and in the referenced PcdOverlayController.
 class ImagePreviewSession
 {
@@ -111,11 +111,11 @@ public:
   void run();
 
 private:
-  core::image::UndistortHelper * ensure_undistort_helper(std::uint32_t w, std::uint32_t h);
-  void maybe_undistort(core::image::PackedRaster * raster);
+  core::image::RectifyHelper * ensure_rectify_helper(std::uint32_t w, std::uint32_t h);
+  void maybe_rectify(core::image::PackedRaster * raster);
 
   // Produce the frame to display/save for `idx`: fetch the cached base raster
-  // (decoding on a miss), then apply the active undistort / PCD overlay on a
+  // (decoding on a miss), then apply the active rectify / PCD overlay on a
   // private copy so the cached frame stays pristine and reusable.
   core::image::PackedRasterResult compose_frame(std::size_t idx);
 
@@ -136,10 +136,10 @@ private:
   const std::optional<core::image::CameraInfo> & camera_info_;
   const std::string & camera_info_error_;
 
-  bool undistort_enabled_ = false;
-  std::unique_ptr<core::image::UndistortHelper> undistort_helper_;
-  std::uint32_t undistort_helper_w_ = 0;
-  std::uint32_t undistort_helper_h_ = 0;
+  bool rectify_enabled_ = false;
+  std::unique_ptr<core::image::RectifyHelper> rectify_helper_;
+  std::uint32_t rectify_helper_w_ = 0;
+  std::uint32_t rectify_helper_h_ = 0;
 
   // Decoded-frame cache shared by the preview repaint and the PNG save path,
   // so navigating back to a frame (or saving the one on screen) reuses the

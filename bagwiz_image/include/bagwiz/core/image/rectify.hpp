@@ -6,8 +6,8 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef BAGWIZ__CORE__IMAGE__UNDISTORT_HPP_
-#define BAGWIZ__CORE__IMAGE__UNDISTORT_HPP_
+#ifndef BAGWIZ__CORE__IMAGE__RECTIFY_HPP_
+#define BAGWIZ__CORE__IMAGE__RECTIFY_HPP_
 
 #include "bagwiz/core/image/camera_info.hpp"
 
@@ -19,30 +19,30 @@
 namespace bagwiz::core::image
 {
 
-// OpenCV-based undistortion helper. Initializes distortion/rectification maps
+// OpenCV-based rectification helper. Initializes distortion/rectification maps
 // from CameraInfo and the target image size, then remaps subsequent frames.
 // Implementation is hidden with a pimpl so OpenCV headers do not leak into
 // bagwiz_image's public interface.
-class UndistortHelper
+class RectifyHelper
 {
 public:
-  UndistortHelper(const CameraInfo & info, std::uint32_t width, std::uint32_t height);
-  ~UndistortHelper();
+  RectifyHelper(const CameraInfo & info, std::uint32_t width, std::uint32_t height);
+  ~RectifyHelper();
 
-  UndistortHelper(UndistortHelper &&) noexcept;
-  UndistortHelper & operator=(UndistortHelper &&) noexcept;
+  RectifyHelper(RectifyHelper &&) noexcept;
+  RectifyHelper & operator=(RectifyHelper &&) noexcept;
 
-  UndistortHelper(const UndistortHelper &) = delete;
-  UndistortHelper & operator=(const UndistortHelper &) = delete;
+  RectifyHelper(const RectifyHelper &) = delete;
+  RectifyHelper & operator=(const RectifyHelper &) = delete;
 
-  // Apply undistortion to a packed 8-bit BGR24 frame. `src_step` is the row
+  // Apply rectification to a packed 8-bit BGR24 frame. `src_step` is the row
   // stride in bytes. Returns a span over an internal packed BGR24 output buffer.
   [[nodiscard]] std::span<const std::byte> remap(
     std::span<const std::byte> src, std::uint32_t src_step);
 
-  // Return the CameraInfo actually used for undistortion. This is the input
+  // Return the CameraInfo actually used for rectification. This is the input
   // CameraInfo scaled to the target image size, which is what callers need when
-  // projecting other data (e.g. point clouds) onto the undistorted image.
+  // projecting other data (e.g. point clouds) onto the rectified image.
   [[nodiscard]] CameraInfo effective_camera_info() const;
 
 private:
@@ -52,4 +52,4 @@ private:
 
 }  // namespace bagwiz::core::image
 
-#endif  // BAGWIZ__CORE__IMAGE__UNDISTORT_HPP_
+#endif  // BAGWIZ__CORE__IMAGE__RECTIFY_HPP_

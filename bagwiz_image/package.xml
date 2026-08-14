@@ -3,7 +3,7 @@
 <package format="3">
   <name>bagwiz_image</name>
   <version>0.1.0</version>
-  <description>bagwiz image tools: raw/compressed image conversion, camera info, calibration, undistortion, and codecs.</description>
+  <description>bagwiz image tools: raw/compressed image conversion, camera info, calibration, rectification, and codecs.</description>
   <maintainer email="mineto.tsukada@tier4.jp">Mineto Tsukada</maintainer>
   <license>Apache-2.0</license>
 

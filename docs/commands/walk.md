@@ -21,11 +21,11 @@ bagwiz walk -i capture.mcap -t /sensing/imu/data
 
 ## Options
 
-| Flag                    | Description                                                                                                                                                                                                                                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`). Must exist.                                                                                                                                                                                                |
-| `-t`, `--topic <topic>` | **Required.** Topic name to inspect. Must exist in the bag. A literal topic name, not a glob.                                                                                                                                                                                                    |
-| `--cam-info <topic>`    | Long-form only. Explicit `sensor_msgs/msg/CameraInfo` topic for the preview's undistort toggle and the PointCloud2 projection overlay. A literal topic name, not a glob. When omitted, bagwiz auto-resolves it from `<topic>` using the rules documented for `bagwiz generate video --cam-info`. |
+| Flag                    | Description                                                                                                                                                                                                                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`). Must exist.                                                                                                                                                                                              |
+| `-t`, `--topic <topic>` | **Required.** Topic name to inspect. Must exist in the bag. A literal topic name, not a glob.                                                                                                                                                                                                  |
+| `--cam-info <topic>`    | Long-form only. Explicit `sensor_msgs/msg/CameraInfo` topic for the preview's rectify toggle and the PointCloud2 projection overlay. A literal topic name, not a glob. When omitted, bagwiz auto-resolves it from `<topic>` using the rules documented for `bagwiz generate video --cam-info`. |
 
 An explicit empty value (`--cam-info ""`) is a real value, not "omitted": it
 skips auto-resolution and is then rejected as not naming a CameraInfo topic,
@@ -104,11 +104,11 @@ frame — and the view redraws on resize. Press `q` to return to the YAML view.
   padding margin (it never fills edge-to-edge) and is centered. Decoded frames
   are cached (LRU, 16 frames) and shared by the on-screen preview and the `s`
   save, so revisiting a nearby frame reuses the decode; only the
-  undistort/overlay compositing is redone per repaint. Frames beyond the cache
+  rectify/overlay compositing is redone per repaint. Frames beyond the cache
   are re-decoded on demand.
-- Pressing `u` toggles **undistortion** when a CameraInfo topic was resolved or
-  explicitly provided. The undistorted frame is rendered and saved by `s`. If no
-  CameraInfo is available, `u` shows `undistort: no camera_info` in the status
+- Pressing `u` toggles **rectification** (lens-distortion correction) when a CameraInfo topic was resolved or
+  explicitly provided. The rectified frame is rendered and saved by `s`. If no
+  CameraInfo is available, `u` shows `rectify: no camera_info` in the status
   line and leaves the original image on screen.
 - Pressing `p` toggles a **PointCloud2 projection overlay** on the image
   preview. The first time it is enabled, bagwiz shows a checkbox list of the
@@ -116,10 +116,10 @@ frame — and the view redraws on resize. Press `q` to return to the YAML view.
   The overlay projects the nearest clouds onto the image using TF and colors
   each point by the selected property. See
   [Point-cloud overlay](#point-cloud-overlay) below for the controls.
-- The overlay follows the current undistort state: with **undistort off** the
+- The overlay follows the current rectify state: with **rectify off** the
   points are projected onto the raw image using the camera's lens distortion
   (`plumb_bob`/`rational_polynomial`, or `equidistant` for fisheye lenses), and
-  with **undistort on** they are projected onto the rectified image. Pressing `u`
+  with **rectify on** they are projected onto the rectified image. Pressing `u`
   re-aims the overlay accordingly.
 - Pressing `i` on a non-image topic shows `(not an image topic)`; pressing it on
   an image topic in an unsupported terminal shows
@@ -145,35 +145,56 @@ empty selection from `t` turns the overlay off instead of rescanning. The
 selected topics are remembered for the rest of the walk session.
 
 After the selection is confirmed, bagwiz initializes the overlay in the
-background: a single pass over the bag decodes the TF topics and collects the
-selected topics' cloud timestamps (cloud payloads are not read). While that
+background: a single pass over the bag decodes the TF topics and reads each
+selected cloud's leading `header.stamp` (only that stamp — the point data is
+never decoded). While that
 pass runs, the preview stays fully usable and the status line shows
 `loading pcd overlay ... N%`; the overlay switches on automatically when the
 pass finishes. A topic with no messages fails the initialization and is
 reported on the status line.
 
-Clouds are matched to frames by bag record time (the scan does not read cloud
-payloads, so header stamps are unknown at match time) and transformed with TF
-evaluated at that time. In automatic range mode the min/max of the active
+Each frame is paired with the point cloud whose `header.stamp` (sensor capture
+time) is nearest the image's own `header.stamp`, rather than the bag record time
+— so overlays stay aligned even when recording latency differs between the
+camera and lidar, and match what `bagwiz generate video --pcd` renders for the
+same frame. If either the camera frame or the point-cloud topic leaves
+`header.stamp` unset, that pairing falls back to matching by bag record time on
+both sides, so the two are always compared on the same clock rather than mixing
+capture time with record time. A topic falls back as a whole: one message
+without a stamp makes its timestamp axis a mix of two clocks, which cannot be
+searched meaningfully. TF is evaluated at whichever time was matched on, which
+keeps the transform lookup on the same clock the TF messages themselves are
+stamped with.
+
+In automatic range mode the min/max of the active
 property is computed from the clouds actually displayed so far — parsing
 every cloud in the bag up front would make initialization expensive — so the
 colors can shift during the first frames and then stabilize; `r` pins a
 manual range at any time.
 
-| Key             | Action                                                                                                                      |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `p`             | Toggle the point-cloud overlay on/off. Points project onto the raw or rectified image to match the current undistort state. |
-| `t`             | Open the PointCloud2 topic picker again to change the selected topics.                                                      |
-| `f`             | Cycle the visualized property: `distance` → `intensity` (when the topic has intensity) → `x` → `y` → `z` → `distance`.      |
-| `c`             | Cycle the color scheme: `jet` → `viridis` → `turbo` → `plasma` → `inferno` → `magma` → `rainbow` → `jet`.                   |
-| `r`             | Toggle between automatic min/max range and a manual range prompt.                                                           |
-| `=` / `+` / `-` | Increase / decrease point size.                                                                                             |
-| `]` / `[`       | Increase / decrease overlay alpha (transparency).                                                                           |
+| Key             | Action                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `p`             | Toggle the point-cloud overlay on/off. Points project onto the raw or rectified image to match the current rectify state. |
+| `t`             | Open the PointCloud2 topic picker again to change the selected topics.                                                    |
+| `f`             | Cycle the visualized property: `distance` → `intensity` (when the topic has intensity) → `x` → `y` → `z` → `distance`.    |
+| `c`             | Cycle the color scheme: `jet` → `viridis` → `turbo` → `plasma` → `inferno` → `magma` → `rainbow` → `jet`.                 |
+| `r`             | Toggle between automatic min/max range and a manual range prompt.                                                         |
+| `=` / `+` / `-` | Increase / decrease point size.                                                                                           |
+| `]` / `[`       | Increase / decrease overlay alpha (transparency).                                                                         |
 
-Defaults on first enable are: property `distance`, scheme `jet`, range `auto`,
+Defaults on first enable are: property `distance`, scheme `viridis`, range `auto`,
 point size `2`, alpha `1.0`. The info row at the top of the preview (directly
 under the topic name) shows the current property, scheme, range mode, point
-size, and alpha, alongside the undistort state and any transient status message.
+size, and alpha, alongside the rectify state and any transient status message.
+While the overlay is on it also reports how the current frame was paired:
+`match: header` for capture time, `match: record` when no capture time was
+available on either side, and `match: header->record` when a selected topic
+could not supply stamps and forced the whole frame down to record time. Next to
+it, `Δ` is the signed gap between the displayed cloud's capture time and the
+frame's — the residual misalignment, in milliseconds, of the worst-aligned
+selected topic (`n/a` when either side left its stamp unset). Values within
+roughly half a lidar period are as tight as the pairing can get; a `Δ` of
+several hundred milliseconds means the two sensors' stamps genuinely disagree.
 Once a topic is selected, the preview's key legend also lists these adjustment
 keys (`f`/`c`/`r`/`=`/`-`/`[`/`]`) so they are discoverable without leaving the
 TUI.
@@ -242,32 +263,32 @@ not been read into the cache yet (they get pulled in on demand).
 
 ## Keys
 
-| Key                                     | Action                                                                                                                                                                                            |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `→` / `Space`                           | Next message (wraps from last back to first).                                                                                                                                                     |
-| `←` / `b`                               | Previous message.                                                                                                                                                                                 |
-| `.`                                     | Jump forward to the next message at least one second after the current one.                                                                                                                       |
-| `,`                                     | Jump backward to the previous message at least one second before the current one.                                                                                                                 |
-| `>`                                     | Jump forward to the next message at least ten seconds after the current one.                                                                                                                      |
-| `<`                                     | Jump backward to the previous message at least ten seconds before the current one.                                                                                                                |
-| `↑` / `k`                               | Scroll body up one line.                                                                                                                                                                          |
-| `↓` / `j`                               | Scroll body down one line.                                                                                                                                                                        |
-| `Home` / `H`                            | Jump body scroll to the head.                                                                                                                                                                     |
-| `End` / `T`                             | Jump body scroll to the tail.                                                                                                                                                                     |
-| `g`                                     | Jump to the first message.                                                                                                                                                                        |
-| `G`                                     | Jump to the last message (forces a full-remaining scan).                                                                                                                                          |
-| `s`                                     | Save as yaml - writes the current message body (prompts for path). In the image preview, `s` saves the decoded image including any undistortion or point-cloud overlay.                           |
-| `a`                                     | Toggle full expansion of long primitive arrays (default off).                                                                                                                                     |
-| `i`                                     | Toggle in-terminal image preview (image topics on a Kitty- or Sixel-capable terminal; hidden otherwise). See [Image preview](#image-preview).                                                     |
-| `u`                                     | Toggle undistortion in the image preview (when CameraInfo is available). Also re-aims the point-cloud overlay: off projects onto the raw (distorted) image, on projects onto the rectified image. |
-| `p`                                     | Toggle PointCloud2 projection overlay in the image preview. See [Point-cloud overlay](#point-cloud-overlay).                                                                                      |
-| `t`                                     | Open the PointCloud2 topic picker to select or change the overlay topics.                                                                                                                         |
-| `f`                                     | Cycle the point-cloud overlay property.                                                                                                                                                           |
-| `c`                                     | Cycle the point-cloud overlay color scheme.                                                                                                                                                       |
-| `r`                                     | Toggle auto/manual value range for the overlay.                                                                                                                                                   |
-| `=` / `+` / `-`                         | Increase / decrease overlay point size.                                                                                                                                                           |
-| `]` / `[`                               | Increase / decrease overlay alpha.                                                                                                                                                                |
-| `q` / `Q` / `Esc` / `Ctrl-C` / `Ctrl-D` | Quit (in the image preview, returns to the YAML view).                                                                                                                                            |
+| Key                                     | Action                                                                                                                                                                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `→` / `Space`                           | Next message (wraps from last back to first).                                                                                                                                                                                   |
+| `←` / `b`                               | Previous message.                                                                                                                                                                                                               |
+| `.`                                     | Jump forward to the next message at least one second after the current one.                                                                                                                                                     |
+| `,`                                     | Jump backward to the previous message at least one second before the current one.                                                                                                                                               |
+| `>`                                     | Jump forward to the next message at least ten seconds after the current one.                                                                                                                                                    |
+| `<`                                     | Jump backward to the previous message at least ten seconds before the current one.                                                                                                                                              |
+| `↑` / `k`                               | Scroll body up one line.                                                                                                                                                                                                        |
+| `↓` / `j`                               | Scroll body down one line.                                                                                                                                                                                                      |
+| `Home` / `H`                            | Jump body scroll to the head.                                                                                                                                                                                                   |
+| `End` / `T`                             | Jump body scroll to the tail.                                                                                                                                                                                                   |
+| `g`                                     | Jump to the first message.                                                                                                                                                                                                      |
+| `G`                                     | Jump to the last message (forces a full-remaining scan).                                                                                                                                                                        |
+| `s`                                     | Save as yaml - writes the current message body (prompts for path). In the image preview, `s` saves the decoded image including any rectification or point-cloud overlay.                                                        |
+| `a`                                     | Toggle full expansion of long primitive arrays (default off).                                                                                                                                                                   |
+| `i`                                     | Toggle in-terminal image preview (image topics on a Kitty- or Sixel-capable terminal; hidden otherwise). See [Image preview](#image-preview).                                                                                   |
+| `u`                                     | Toggle rectification (lens-distortion correction) in the image preview (when CameraInfo is available). Also re-aims the point-cloud overlay: off projects onto the raw (distorted) image, on projects onto the rectified image. |
+| `p`                                     | Toggle PointCloud2 projection overlay in the image preview. See [Point-cloud overlay](#point-cloud-overlay).                                                                                                                    |
+| `t`                                     | Open the PointCloud2 topic picker to select or change the overlay topics.                                                                                                                                                       |
+| `f`                                     | Cycle the point-cloud overlay property.                                                                                                                                                                                         |
+| `c`                                     | Cycle the point-cloud overlay color scheme.                                                                                                                                                                                     |
+| `r`                                     | Toggle auto/manual value range for the overlay.                                                                                                                                                                                 |
+| `=` / `+` / `-`                         | Increase / decrease overlay point size.                                                                                                                                                                                         |
+| `]` / `[`                               | Increase / decrease overlay alpha.                                                                                                                                                                                              |
+| `q` / `Q` / `Esc` / `Ctrl-C` / `Ctrl-D` | Quit (in the image preview, returns to the YAML view).                                                                                                                                                                          |
 
 When the body is taller than the visible window, a `lines X-Y of N`
 indicator is shown above the key legend. Wrapping past the last message

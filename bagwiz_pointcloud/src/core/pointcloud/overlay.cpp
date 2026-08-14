@@ -41,9 +41,15 @@ std::string overlay_projected_points(
   // out already holds a copy of src, so we can draw directly into its buffer.
   cv::Mat canvas(height_i, width_i, CV_8UC3, const_cast<std::byte *>(out.bgr.data()), step);
 
+  // Painter's algorithm: draw farthest first so nearer points overwrite them.
+  // Points are opaque squares, so whichever is drawn last owns a contested
+  // pixel; sorting near-first would let a background point paint over the
+  // foreground one in front of it. Distant points cluster densely (toward the
+  // horizon and at the edges of a scan), so the wrong order is not a corner
+  // case — it inverts occlusion across a large part of a typical frame.
   std::vector<ProjectedPoint> projected_sorted(projected.begin(), projected.end());
   std::sort(projected_sorted.begin(), projected_sorted.end(), [](const auto & a, const auto & b) {
-    return a.depth < b.depth;
+    return a.depth > b.depth;
   });
 
   // Draw each point as a filled square whose side is point_size pixels, so the

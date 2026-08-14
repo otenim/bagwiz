@@ -35,19 +35,24 @@ namespace bagwiz::commands
 struct OverlayScanResult
 {
   tf2::BufferCore tf_buffer;
-  // Parallel to the `pcd_topics` argument: record-time index entries of each
-  // selected topic, in bag (record-time) order. stamp_ns mirrors record_ns:
-  // timestamps are collected without reading message payloads, so header
-  // stamps are unknown at scan time and matching happens on record time.
+  // Parallel to the `pcd_topics` argument: index entries of each selected
+  // topic, in bag (record-time) order. stamp_ns is the cloud's own
+  // header.stamp, read from the leading bytes of its payload, falling back to
+  // record_ns when the source left the stamp unset.
   std::vector<std::vector<core::pointcloud::PointCloudIndexEntry>> entries;
+  // Parallel to `entries`: true when *every* message of that topic carried a
+  // header.stamp, so its stamp_ns axis is a pure capture-time clock (see
+  // core::pointcloud::PointCloudIndex::header_stamps_present). False means the
+  // axis mixes two clocks and the topic must be matched by record time.
+  std::vector<bool> header_stamps_present;
   std::string error;
 };
 
 // Scan `input` once, decoding every TFMessage topic into `out.tf_buffer` and
-// collecting the record timestamps of each topic in `pcd_topics` into
-// `out.entries`. Point-cloud payloads are never materialized
-// (ReadFilter::payload_topics), so this pass costs one messages-table walk
-// regardless of cloud sizes.
+// collecting the timestamps of each topic in `pcd_topics` into `out.entries`.
+// Only the leading std_msgs/Header stamp of each cloud is parsed — the point
+// data is never decoded — so the pass costs one messages-table walk plus the
+// payload read of the selected cloud topics.
 //
 // `cancel` is polled per message; when set, the scan aborts early.
 // `progress` (may be empty) is invoked with a 0..1 fraction derived from the

@@ -172,7 +172,7 @@ package performs when it writes a monocular calibration, so it reconstructs a
 `projection_matrix` that is missing, was hand-edited to something wrong, or has
 gone stale after `k` changed.
 
-Note `p` is **not** `[k | 0]`: undistortion re-maps pixels, so the undistorted
+Note `p` is **not** `[k | 0]`: rectification re-maps pixels, so the rectified
 image needs its own focal length and principal point. `alpha` chooses how.
 
 ### Usage
@@ -308,7 +308,7 @@ been written, leaving a partial output bag.
 
 ### Choosing `alpha`
 
-`alpha` trades black borders against cropping in the undistorted image:
+`alpha` trades black borders against cropping in the rectified image:
 
 | `alpha` | Meaning                                                                                                            |
 | ------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -326,7 +326,7 @@ own OpenCV. So recomputing a `p` that an older `camera_calibration` wrote
 can give marginally different output on different distros.
 
 This is benign: the recomputed `p` is consistent with the OpenCV that this binary
-will later feed it to (`generate video --undistort`, the point-cloud overlay).
+will later feed it to (`generate video --rectify`, the point-cloud overlay).
 The run reports how far `p` moved so a small change is legible as version drift
 rather than a correction:
 
@@ -345,16 +345,16 @@ the run stops with an error. In YAML mode and in place nothing is written; with
 `-o`, messages streamed before the first offending CameraInfo may already have
 been written, leaving a partial output bag:
 
-| Condition                              | Why                                                                                                                                                                                                                        |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `r` is a genuine non-identity rotation | The camera is stereo-rectified: its `p` comes from `cv::stereoRectify` against the paired camera. Recomputing would break rectification. An all-zero (unset) `r` is treated as identity, matching the undistortion helper. |
-| `p[3]` or `p[7]` is non-zero           | `p` carries a stereo baseline (`p[3] = -fx · baseline`); `[newK \| 0]` would zero it and lose the extrinsic.                                                                                                               |
-| `distortion_model` is unsupported      | Only `plumb_bob`, `rational_polynomial`, and an empty / `none` model can be recomputed — see [Supported `distortion_model` values](#supported-distortion_model-values).                                                    |
-| `width` or `height` is 0               | No image size means no valid new camera matrix.                                                                                                                                                                            |
-| `k` is degenerate or non-finite        | `fx`/`fy` must be positive and every entry finite.                                                                                                                                                                         |
+| Condition                              | Why                                                                                                                                                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `r` is a genuine non-identity rotation | The camera is stereo-rectified: its `p` comes from `cv::stereoRectify` against the paired camera. Recomputing would break rectification. An all-zero (unset) `r` is treated as identity, matching the rectification helper. |
+| `p[3]` or `p[7]` is non-zero           | `p` carries a stereo baseline (`p[3] = -fx · baseline`); `[newK \| 0]` would zero it and lose the extrinsic.                                                                                                                |
+| `distortion_model` is unsupported      | Only `plumb_bob`, `rational_polynomial`, and an empty / `none` model can be recomputed — see [Supported `distortion_model` values](#supported-distortion_model-values).                                                     |
+| `width` or `height` is 0               | No image size means no valid new camera matrix.                                                                                                                                                                             |
+| `k` is degenerate or non-finite        | `fx`/`fy` must be positive and every entry finite.                                                                                                                                                                          |
 
-When the model is Brown–Conrady but `d` is empty or all-zero there is nothing to
-undistort, so the result is exactly `[k | 0]`.
+When the model is Brown–Conrady but `d` is empty or all-zero there is no distortion to
+correct, so the result is exactly `[k | 0]`.
 
 ### In-place vs `-o`
 

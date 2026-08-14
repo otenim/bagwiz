@@ -137,7 +137,7 @@ KeyEvent classify_key(std::string_view bytes)
       case 'i':
         return KeyEvent::kTogglePreview;
       case 'u':
-        return KeyEvent::kToggleUndistort;
+        return KeyEvent::kToggleRectify;
       case 'p':
         return KeyEvent::kToggleProjectPcd;
       case 't':

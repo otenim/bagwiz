@@ -357,16 +357,16 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPlainImageTopicOk)
   EXPECT_FALSE(v.camera_info_topic.has_value());
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsUndistortWithoutCamInfoFails)
+TEST_F(GenerateVideoCommonTest, ValidateInputsRectifyWithoutCamInfoFails)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
   bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
-  args.undistort = true;
+  args.rectify = true;
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(
     v.error,
-    "A camera-info topic is required for --undistort or --pcd, but none could be derived from "
+    "A camera-info topic is required for --rectify or --pcd, but none could be derived from "
     "'/cam/image'. Pass it explicitly with --cam-info.");
 }
 

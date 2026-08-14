@@ -48,8 +48,10 @@ struct GenerateVideoArgs
   // Explicit camera-info topic. When absent, run_generate_video tries to
   // derive it from the image topic name.
   std::optional<std::string> camera_info_topic;
-  // Apply OpenCV undistortion using the resolved camera info.
-  bool undistort = false;
+  // Rectify each frame (OpenCV lens-distortion remap) using the resolved
+  // camera info. "rectify" is the image-side term throughout bagwiz; the
+  // point-cloud motion correction keeps the name `pcd undistort`.
+  bool rectify = false;
   // Scale output dimensions by this factor while preserving aspect ratio.
   float resize_scale = 1.0f;
 

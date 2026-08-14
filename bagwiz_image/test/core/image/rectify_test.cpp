@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/core/image/undistort.hpp"
+#include "bagwiz/core/image/rectify.hpp"
 
 #include "bagwiz/core/image/camera_info.hpp"
 
@@ -21,7 +21,7 @@ namespace
 {
 
 using bagwiz::core::image::CameraInfo;
-using bagwiz::core::image::UndistortHelper;
+using bagwiz::core::image::RectifyHelper;
 
 CameraInfo identity_camera_info(std::uint32_t w, std::uint32_t h)
 {
@@ -85,12 +85,12 @@ std::vector<std::byte> gradient_bgr(std::uint32_t w, std::uint32_t h)
   return out;
 }
 
-TEST(UndistortHelper, ZeroDistortionPreservesCenterColor)
+TEST(RectifyHelper, ZeroDistortionPreservesCenterColor)
 {
   constexpr std::uint32_t kW = 16;
   constexpr std::uint32_t kH = 16;
   const auto info = identity_camera_info(kW, kH);
-  UndistortHelper helper(info, kW, kH);
+  RectifyHelper helper(info, kW, kH);
   const auto input = solid_bgr(kW, kH, 100, 150, 200);
   const auto output = helper.remap(input, kW * 3);
   ASSERT_EQ(output.size(), input.size());
@@ -100,12 +100,12 @@ TEST(UndistortHelper, ZeroDistortionPreservesCenterColor)
   EXPECT_EQ(output[center + 2], input[center + 2]);
 }
 
-TEST(UndistortHelper, ZeroRectificationMatrixFallsBackToIdentity)
+TEST(RectifyHelper, ZeroRectificationMatrixFallsBackToIdentity)
 {
   constexpr std::uint32_t kW = 16;
   constexpr std::uint32_t kH = 16;
   const auto info = zero_rotation_camera_info(kW, kH);
-  UndistortHelper helper(info, kW, kH);
+  RectifyHelper helper(info, kW, kH);
   const auto input = solid_bgr(kW, kH, 100, 150, 200);
   const auto output = helper.remap(input, kW * 3);
   ASSERT_EQ(output.size(), input.size());
@@ -118,12 +118,12 @@ TEST(UndistortHelper, ZeroRectificationMatrixFallsBackToIdentity)
   EXPECT_EQ(output[center + 2], input[center + 2]);
 }
 
-TEST(UndistortHelper, NonZeroDistortionChangesPixels)
+TEST(RectifyHelper, NonZeroDistortionChangesPixels)
 {
   constexpr std::uint32_t kW = 16;
   constexpr std::uint32_t kH = 16;
   const auto info = distorted_camera_info(kW, kH);
-  UndistortHelper helper(info, kW, kH);
+  RectifyHelper helper(info, kW, kH);
   const auto input = gradient_bgr(kW, kH);
   const auto output = helper.remap(input, kW * 3);
   ASSERT_EQ(output.size(), input.size());
@@ -142,27 +142,27 @@ TEST(UndistortHelper, NonZeroDistortionChangesPixels)
   EXPECT_TRUE(interior_changed);
 }
 
-TEST(UndistortHelper, ScalesToDifferentSize)
+TEST(RectifyHelper, ScalesToDifferentSize)
 {
   constexpr std::uint32_t kSrcW = 16;
   constexpr std::uint32_t kSrcH = 16;
   constexpr std::uint32_t kDstW = 8;
   constexpr std::uint32_t kDstH = 8;
   const auto info = identity_camera_info(kSrcW, kSrcH);
-  UndistortHelper helper(info, kDstW, kDstH);
+  RectifyHelper helper(info, kDstW, kDstH);
   const auto input = solid_bgr(kSrcW, kSrcH, 50, 100, 150);
   const auto output = helper.remap(input, kSrcW * 3);
   EXPECT_EQ(output.size(), static_cast<std::size_t>(kDstW) * kDstH * 3);
 }
 
-TEST(UndistortHelper, EffectiveCameraInfoMatchesScaledSize)
+TEST(RectifyHelper, EffectiveCameraInfoMatchesScaledSize)
 {
   constexpr std::uint32_t kSrcW = 16;
   constexpr std::uint32_t kSrcH = 16;
   constexpr std::uint32_t kDstW = 8;
   constexpr std::uint32_t kDstH = 8;
   const auto info = identity_camera_info(kSrcW, kSrcH);
-  UndistortHelper helper(info, kDstW, kDstH);
+  RectifyHelper helper(info, kDstW, kDstH);
   const auto effective = helper.effective_camera_info();
   EXPECT_EQ(effective.width, kDstW);
   EXPECT_EQ(effective.height, kDstH);

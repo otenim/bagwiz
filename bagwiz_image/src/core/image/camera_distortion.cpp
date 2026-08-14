@@ -20,15 +20,15 @@ namespace bagwiz::core::image
 namespace
 {
 
-// Cap on fixed-point iterations for the inverse (undistortion) used by the
+// Cap on fixed-point iterations for the inverse (distortion removal) used by the
 // round-trip validity check below. The loops exit early on convergence, so this
 // is only reached by slow/divergent (folded) points; OpenCV uses ~5.
-constexpr int kUndistortIterations = 20;
+constexpr int kInvertDistortionIterations = 20;
 
 // Fixed-point iteration stops once successive iterates change by less than this
 // (normalized image units, i.e. far below a pixel): in-domain points converge in
 // a handful of steps, while folded/divergent points run to the cap above.
-constexpr double kUndistortEpsilon = 1e-10;
+constexpr double kInvertDistortionEpsilon = 1e-10;
 
 // A distorted point is treated as a fold-back artifact (and dropped) when its
 // forward-then-inverse round trip misses the original ray by more than this many
@@ -87,7 +87,7 @@ NormalizedPoint distort_equidistant(double a, double b, const std::vector<double
 // Invert distort_plumb_bob with OpenCV's fixed-point iteration: start from the
 // distorted point and repeatedly strip off the radial/tangential terms. The
 // coefficient order matches distort_plumb_bob.
-NormalizedPoint undistort_plumb_bob(double xd, double yd, const std::vector<double> & d)
+NormalizedPoint invert_distortion_plumb_bob(double xd, double yd, const std::vector<double> & d)
 {
   const auto coeff = [&](std::size_t i) { return i < d.size() ? d[i] : 0.0; };
   const double k1 = coeff(0);
@@ -100,7 +100,7 @@ NormalizedPoint undistort_plumb_bob(double xd, double yd, const std::vector<doub
   const double k6 = coeff(7);
   double x = xd;
   double y = yd;
-  for (int i = 0; i < kUndistortIterations; ++i) {
+  for (int i = 0; i < kInvertDistortionIterations; ++i) {
     const double r2 = x * x + y * y;
     const double r4 = r2 * r2;
     const double r6 = r4 * r2;
@@ -109,8 +109,8 @@ NormalizedPoint undistort_plumb_bob(double xd, double yd, const std::vector<doub
     const double dy = p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y;
     const double x_next = (xd - dx) * icd;
     const double y_next = (yd - dy) * icd;
-    const bool converged =
-      std::abs(x_next - x) < kUndistortEpsilon && std::abs(y_next - y) < kUndistortEpsilon;
+    const bool converged = std::abs(x_next - x) < kInvertDistortionEpsilon &&
+                           std::abs(y_next - y) < kInvertDistortionEpsilon;
     x = x_next;
     y = y_next;
     if (converged) {
@@ -122,7 +122,7 @@ NormalizedPoint undistort_plumb_bob(double xd, double yd, const std::vector<doub
 
 // Invert distort_equidistant: recover the incidence angle theta from the
 // distorted radius theta_d, then scale back to the ideal normalized point.
-NormalizedPoint undistort_equidistant(double xd, double yd, const std::vector<double> & d)
+NormalizedPoint invert_distortion_equidistant(double xd, double yd, const std::vector<double> & d)
 {
   const double theta_d = std::sqrt(xd * xd + yd * yd);
   if (theta_d < 1e-9) {
@@ -134,13 +134,13 @@ NormalizedPoint undistort_equidistant(double xd, double yd, const std::vector<do
   const double k3 = coeff(2);
   const double k4 = coeff(3);
   double theta = theta_d;
-  for (int i = 0; i < kUndistortIterations; ++i) {
+  for (int i = 0; i < kInvertDistortionIterations; ++i) {
     const double t2 = theta * theta;
     const double t4 = t2 * t2;
     const double t6 = t4 * t2;
     const double t8 = t4 * t4;
     const double theta_next = theta_d / (1.0 + k1 * t2 + k2 * t4 + k3 * t6 + k4 * t8);
-    const bool converged = std::abs(theta_next - theta) < kUndistortEpsilon;
+    const bool converged = std::abs(theta_next - theta) < kInvertDistortionEpsilon;
     theta = theta_next;
     if (converged) {
       break;
@@ -156,7 +156,7 @@ bool is_foldback(
   double a, double b, const NormalizedPoint & distorted, DistortionModel model,
   const std::vector<double> & d, double fx, double fy)
 {
-  const auto recovered = undistort_normalized(distorted.x, distorted.y, model, d);
+  const auto recovered = invert_distortion_normalized(distorted.x, distorted.y, model, d);
   if (!std::isfinite(recovered.x) || !std::isfinite(recovered.y)) {
     return true;
   }
@@ -198,14 +198,14 @@ NormalizedPoint distort_normalized(
   return {a, b};
 }
 
-NormalizedPoint undistort_normalized(
+NormalizedPoint invert_distortion_normalized(
   double xd, double yd, DistortionModel model, const std::vector<double> & d)
 {
   switch (model) {
     case DistortionModel::kEquidistant:
-      return undistort_equidistant(xd, yd, d);
+      return invert_distortion_equidistant(xd, yd, d);
     case DistortionModel::kPlumbBob:
-      return undistort_plumb_bob(xd, yd, d);
+      return invert_distortion_plumb_bob(xd, yd, d);
     case DistortionModel::kNone:
       break;
   }

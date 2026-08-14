@@ -87,9 +87,9 @@ TEST(ClassifyKey, TogglePreviewBinding)
   EXPECT_EQ(classify_key("i"), KeyEvent::kTogglePreview);
 }
 
-TEST(ClassifyKey, ToggleUndistortBinding)
+TEST(ClassifyKey, ToggleRectifyBinding)
 {
-  EXPECT_EQ(classify_key("u"), KeyEvent::kToggleUndistort);
+  EXPECT_EQ(classify_key("u"), KeyEvent::kToggleRectify);
 }
 
 TEST(ClassifyKey, ProjectPcdBindings)

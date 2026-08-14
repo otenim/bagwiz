@@ -40,7 +40,7 @@ struct ProjectionResult
 // Project a point cloud onto an image.
 // When `use_rectified` is true, the projection uses `camera_info.p` (the rectified projection
 // matrix) instead of `camera_info.k`. This should be used when the target image has been
-// undistorted so the projected points align with the rectified image.
+// rectified so the projected points align with the rectified image.
 [[nodiscard]] ProjectionResult project_pointcloud(
   const PointCloud2 & cloud, const image::CameraInfo & camera_info,
   const std::array<double, 16> & transform, std::uint32_t image_width, std::uint32_t image_height,

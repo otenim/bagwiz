@@ -20,9 +20,11 @@
 #include <fmt/ostream.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <istream>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -54,6 +56,20 @@ std::string_view pcd_property_name(core::pointcloud::PointCloudProperty prop)
       return "intensity";
   }
   return "?";
+}
+
+std::string_view pcd_match_clock_name(const PcdOverlayState & pcd)
+{
+  if (pcd.last_match_key == core::pointcloud::PointCloudMatchKey::kHeaderStamp) {
+    return "header";
+  }
+  // Record time was used. Distinguish "capture time was never on the table"
+  // from "a selected topic could not honour it", because only the latter is
+  // something the user can act on (by dropping that topic from the selection).
+  const bool any_topic_lacks_stamps =
+    std::find(pcd.topic_header_stamps.begin(), pcd.topic_header_stamps.end(), false) !=
+    pcd.topic_header_stamps.end();
+  return any_topic_lacks_stamps ? "header->record" : "record";
 }
 
 std::string_view pcd_scheme_name(core::pointcloud::ColorScheme s)
@@ -264,10 +280,11 @@ PcdOverlayController::InitState PcdOverlayController::poll_initialize()
       input_path_, pcd_topics_selected_[i], std::move(scan_result_->entries[i]));
   }
   pcd_fetchers_ = std::move(fetchers);
-  ranged_clouds_.assign(pcd_fetchers_.size(), nullptr);
+  ranged_record_ns_.assign(pcd_fetchers_.size(), std::nullopt);
   active_scan_ = std::move(scan_result_);
 
   pcd_.topics = pcd_topics_selected_;
+  pcd_.topic_header_stamps = active_scan_->header_stamps_present;
   pcd_.has_intensity = false;
   pcd_.ranges = core::pointcloud::PropertyRanges{};
   const auto range = pcd_.ranges.resolve(pcd_.property);
@@ -283,13 +300,20 @@ PcdOverlayController::InitState PcdOverlayController::poll_initialize()
 void PcdOverlayController::maybe_overlay(
   core::image::PackedRaster * raster, std::int64_t record_stamp_ns,
   const std::optional<core::image::CameraInfo> & camera_info,
-  const EnsureUndistortHelper & ensure_helper, bool undistort_enabled)
+  const EnsureRectifyHelper & ensure_helper, bool rectify_enabled)
 {
   if (
     raster == nullptr || !pcd_.enabled || pcd_.topics.empty() || pcd_fetchers_.empty() ||
     active_scan_ == nullptr) {
     return;
   }
+  // Past this point the overlay is live, so the info row will read the
+  // frame-match values below. Clear them up front: every remaining early
+  // return means nothing was matched this frame, and reporting a previous
+  // frame's clock or residual next to a projection error would be a lie.
+  pcd_.last_match_key = core::pointcloud::PointCloudMatchKey::kRecordTime;
+  pcd_.last_residual_ns.reset();
+
   if (!camera_info.has_value()) {
     status_ = "pcd projection requires camera_info";
     return;
@@ -305,14 +329,25 @@ void PcdOverlayController::maybe_overlay(
 
   std::vector<core::pointcloud::ProjectedPoint> all_points;
   std::string last_error;
+  // What this frame actually matched on, recomputed from scratch so the info
+  // row can never show a value carried over from an earlier frame or topic
+  // selection. A single topic falling back to record time downgrades the whole
+  // frame's reading, because that is what the user is seeing on screen.
+  std::optional<core::pointcloud::PointCloudMatchKey> effective_key;
+  std::optional<std::int64_t> worst_residual_ns;
+  const auto magnitude = [](std::int64_t v) { return v < 0 ? -v : v; };
+
   for (std::size_t i = 0; i < pcd_fetchers_.size(); ++i) {
-    // Pair the frame with the point cloud nearest in bag record time (see
-    // core::pointcloud::choose_frame_match for the clock rule): cloud header
-    // stamps are unknown because the initialization scan never reads cloud
-    // payloads, so record time is the one clock both sides share. The chosen
-    // target is also the TF-lookup time.
+    // Pair the frame with the point cloud nearest in the clock both sides
+    // share (see core::pointcloud::choose_frame_match): capture time when the
+    // frame carries a header.stamp and every message of this topic does too,
+    // else bag record time. The chosen target is also the TF-lookup time, and
+    // the TF buffer is keyed by each transform's own header.stamp, so
+    // capture-time matching keeps that lookup on the right clock as well.
+    const bool topic_has_stamps =
+      i < pcd_.topic_header_stamps.size() && pcd_.topic_header_stamps[i];
     const auto match =
-      core::pointcloud::choose_frame_match(img.header_stamp_ns, record_stamp_ns, false);
+      core::pointcloud::choose_frame_match(img.header_stamp_ns, record_stamp_ns, topic_has_stamps);
     const std::int64_t match_ns = match.target_ns;
 
     std::string error;
@@ -322,13 +357,30 @@ void PcdOverlayController::maybe_overlay(
       continue;
     }
 
+    if (
+      !effective_key.has_value() ||
+      match.key == core::pointcloud::PointCloudMatchKey::kRecordTime) {
+      effective_key = match.key;
+    }
+    // The true capture-time residual, meaningful whichever clock matched:
+    // how far the chosen cloud was actually taken from this frame. Undefined
+    // when either side left its stamp unset. Across topics the largest
+    // magnitude wins, since that is the worst misalignment on screen.
+    if (img.header_stamp_ns > 0 && cloud->timestamp_ns > 0) {
+      const std::int64_t residual = cloud->timestamp_ns - img.header_stamp_ns;
+      if (!worst_residual_ns.has_value() || magnitude(residual) > magnitude(*worst_residual_ns)) {
+        worst_residual_ns = residual;
+      }
+    }
+
     // Fold newly displayed clouds into the running colour ranges (once per
     // cloud; the fetcher's cache address identifies it), then refresh the
     // active property's auto range. This replaces the up-front full-bag
     // min/max parse the overlay used to run at initialization.
-    if (ranged_clouds_[i] != cloud) {
+    const std::int64_t cloud_record_ns = pcd_fetchers_[i].cached_record_ns();
+    if (ranged_record_ns_[i] != cloud_record_ns) {
       if (core::pointcloud::accumulate_property_ranges(*cloud, pcd_.ranges, error)) {
-        ranged_clouds_[i] = cloud;
+        ranged_record_ns_[i] = cloud_record_ns;
         pcd_.has_intensity = pcd_.ranges.has_intensity;
         const auto range = pcd_.ranges.resolve(pcd_.property);
         pcd_.computed_min = range.first;
@@ -340,13 +392,18 @@ void PcdOverlayController::maybe_overlay(
 
     const auto projected = core::pointcloud::project_cloud_for_frame(
       *cloud, effective_ci, active_scan_->tf_buffer, img.width, img.height, pcd_.property,
-      /*use_rectified=*/undistort_enabled, match_ns);
+      /*use_rectified=*/rectify_enabled, match_ns);
     if (!projected.ok()) {
       last_error = std::move(projected.error);
       continue;
     }
     all_points.insert(all_points.end(), projected.points.begin(), projected.points.end());
   }
+
+  // No fetch succeeded -> nothing was matched on any clock; report the safe
+  // reading rather than leaving the previous frame's.
+  pcd_.last_match_key = effective_key.value_or(core::pointcloud::PointCloudMatchKey::kRecordTime);
+  pcd_.last_residual_ns = worst_residual_ns;
 
   if (all_points.empty()) {
     if (!last_error.empty()) {

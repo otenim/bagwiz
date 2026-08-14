@@ -160,6 +160,51 @@ TEST(PointCloudOverlay, PointSizeEqualsSquareSideInPixels)
   }
 }
 
+// Regression: when two points land on the same pixel, the NEARER one must be
+// visible. The buggy implementation sorted by ascending depth and drew in that
+// order, so the farther point was painted last and won the pixel — occlusion
+// came out inverted wherever projections overlap, which for a lidar scan is
+// most of the horizon. The expected colors are taken from single-point renders
+// rather than hard-coded, so the test pins the ordering, not the color map.
+TEST(PointCloudOverlay, NearerPointOccludesFartherOneOnTheSamePixel)
+{
+  const PackedRaster src = solid_raster(16, 16, 0, 0, 0);
+  // Same pixel, different depths, and values at opposite ends of the range so
+  // the two render to clearly different colors.
+  const ProjectedPoint near_point{8, 8, /*depth=*/1.0F, /*value=*/0.0F};
+  const ProjectedPoint far_point{8, 8, /*depth=*/50.0F, /*value=*/1.0F};
+
+  auto render = [&](const std::vector<ProjectedPoint> & points) {
+    PackedRaster out;
+    const std::string err =
+      overlay_projected_points(src, points, 0.0, 1.0, ColorScheme::kJet, 3, 1.0F, out);
+    EXPECT_TRUE(err.empty()) << err;
+    return out;
+  };
+
+  const PackedRaster near_only = render({near_point});
+  const PackedRaster far_only = render({far_point});
+
+  // Sanity: the two points really do render differently, or the assertions
+  // below would pass no matter which one won.
+  const bool colors_differ = channel_at(near_only, 8, 8, 0) != channel_at(far_only, 8, 8, 0) ||
+                             channel_at(near_only, 8, 8, 1) != channel_at(far_only, 8, 8, 1) ||
+                             channel_at(near_only, 8, 8, 2) != channel_at(far_only, 8, 8, 2);
+  ASSERT_TRUE(colors_differ);
+
+  // Both orders of the input must yield the near point's color: the draw order
+  // has to come from depth, not from the caller's vector order.
+  for (const auto & points :
+       {std::vector<ProjectedPoint>{near_point, far_point},
+        std::vector<ProjectedPoint>{far_point, near_point}}) {
+    const PackedRaster both = render(points);
+    for (int c = 0; c < 3; ++c) {
+      EXPECT_EQ(channel_at(both, 8, 8, c), channel_at(near_only, 8, 8, c))
+        << "channel " << c << ": the farther point won the pixel";
+    }
+  }
+}
+
 // Sanity: the opaque fast path (alpha == 1) also leaves the background intact.
 TEST(PointCloudOverlay, OpaqueAlphaLeavesBackgroundPixelsUntouched)
 {

@@ -185,9 +185,9 @@ __device__ void device_distort_normalized(
 // dances around the fixed point by a few ulp). 1e-6 on normalized coordinates
 // is under a thousandth of a pixel at any real focal length, and the 1 px
 // round-trip gate downstream is the accuracy contract that matters.
-constexpr float kUndistortEpsilon = 1e-6F;
+constexpr float kInvertDistortionEpsilon = 1e-6F;
 
-__device__ void device_undistort_plumb_bob(
+__device__ void device_invert_distortion_plumb_bob(
   float xd, float yd, const GpuColorizeView & view, float & out_x, float & out_y)
 {
   const float k1 = device_dist_coeff(view, 0);
@@ -210,7 +210,7 @@ __device__ void device_undistort_plumb_bob(
     const float x_next = (xd - dx) * icd;
     const float y_next = (yd - dy) * icd;
     const bool converged =
-      fabsf(x_next - x) < kUndistortEpsilon && fabsf(y_next - y) < kUndistortEpsilon;
+      fabsf(x_next - x) < kInvertDistortionEpsilon && fabsf(y_next - y) < kInvertDistortionEpsilon;
     x = x_next;
     y = y_next;
     if (converged) {
@@ -221,7 +221,7 @@ __device__ void device_undistort_plumb_bob(
   out_y = y;
 }
 
-__device__ void device_undistort_equidistant(
+__device__ void device_invert_distortion_equidistant(
   float xd, float yd, const GpuColorizeView & view, float & out_x, float & out_y)
 {
   const float theta_d = sqrtf(xd * xd + yd * yd);
@@ -241,7 +241,7 @@ __device__ void device_undistort_equidistant(
     const float t6 = t4 * t2;
     const float t8 = t4 * t4;
     const float theta_next = theta_d / (1.0F + k1 * t2 + k2 * t4 + k3 * t6 + k4 * t8);
-    const bool converged = fabsf(theta_next - theta) < kUndistortEpsilon;
+    const bool converged = fabsf(theta_next - theta) < kInvertDistortionEpsilon;
     theta = theta_next;
     if (converged) {
       break;
@@ -252,15 +252,15 @@ __device__ void device_undistort_equidistant(
   out_y = yd * scale;
 }
 
-__device__ void device_undistort_normalized(
+__device__ void device_invert_distortion_normalized(
   float xd, float yd, const GpuColorizeView & view, float & out_x, float & out_y)
 {
   switch (view.distortion_model) {
     case GpuDistortionModel::kEquidistant:
-      device_undistort_equidistant(xd, yd, view, out_x, out_y);
+      device_invert_distortion_equidistant(xd, yd, view, out_x, out_y);
       return;
     case GpuDistortionModel::kPlumbBob:
-      device_undistort_plumb_bob(xd, yd, view, out_x, out_y);
+      device_invert_distortion_plumb_bob(xd, yd, view, out_x, out_y);
       return;
     case GpuDistortionModel::kNone:
     default:
@@ -275,7 +275,7 @@ __device__ bool device_distortion_round_trip_fails(
   float a, float b, float distorted_x, float distorted_y, const GpuColorizeView & view)
 {
   float rx, ry;
-  device_undistort_normalized(distorted_x, distorted_y, view, rx, ry);
+  device_invert_distortion_normalized(distorted_x, distorted_y, view, rx, ry);
   if (!isfinite(rx) || !isfinite(ry)) {
     return true;
   }

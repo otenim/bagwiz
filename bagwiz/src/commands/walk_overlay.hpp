@@ -11,7 +11,7 @@
 
 #include "bagwiz/core/image/camera_info.hpp"
 #include "bagwiz/core/image/packed_raster.hpp"
-#include "bagwiz/core/image/undistort.hpp"
+#include "bagwiz/core/image/rectify.hpp"
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/fetcher.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
@@ -43,13 +43,15 @@ namespace bagwiz::commands
 {
 
 // Overlay key-handling state. The default view is distance coloured with the
-// jet scheme, 2px points at full opacity over an auto-computed range.
+// viridis scheme, 2px points at full opacity over an auto-computed range —
+// the same defaults `generate video --pcd` renders with, so the preview and
+// the encoded video agree without touching any key.
 struct PcdOverlayState
 {
   bool enabled = false;
   std::vector<std::string> topics;
   core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
-  core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kJet;
+  core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kViridis;
   std::uint32_t point_size = 2;
   float alpha = 1.0f;
   bool auto_range = true;
@@ -63,20 +65,36 @@ struct PcdOverlayState
   // cloud in the bag; the running variant converges after the first frames
   // and keeps [f] property switches free of bag re-reads.
   core::pointcloud::PropertyRanges ranges;
+  // Parallel to `topics`: whether that topic's stamps form a pure capture-time
+  // axis (OverlayScanResult::header_stamps_present). A false entry pins that
+  // topic to record-time matching.
+  std::vector<bool> topic_header_stamps;
+  // What the last maybe_overlay() actually matched on, and how far the chosen
+  // cloud's capture time landed from the frame's. Both are only ever read
+  // while `enabled` — the preview shows them only then — so they cannot go
+  // stale behind a disabled overlay. `last_residual_ns` is nullopt when either
+  // side left its header.stamp unset, which makes the residual undefined.
+  core::pointcloud::PointCloudMatchKey last_match_key =
+    core::pointcloud::PointCloudMatchKey::kRecordTime;
+  std::optional<std::int64_t> last_residual_ns;
 };
 
 // Display names used by the preview info row.
 [[nodiscard]] std::string_view pcd_property_name(core::pointcloud::PointCloudProperty prop);
 [[nodiscard]] std::string_view pcd_scheme_name(core::pointcloud::ColorScheme scheme);
+// The clock the overlay paired frames and clouds on: "header" when capture
+// time was used, "record" when it was never available, and "header->record"
+// when a selected topic could not honour capture time and forced the fallback.
+[[nodiscard]] std::string_view pcd_match_clock_name(const PcdOverlayState & pcd);
 
 class PcdOverlayController
 {
 public:
-  // Lazily creates (and caches) the UndistortHelper for a frame size; walk's
-  // preview session owns the helper because undistortion is applied to the
+  // Lazily creates (and caches) the RectifyHelper for a frame size; walk's
+  // preview session owns the helper because rectification is applied to the
   // displayed frame independently of the overlay.
-  using EnsureUndistortHelper =
-    std::function<core::image::UndistortHelper *(std::uint32_t, std::uint32_t)>;
+  using EnsureRectifyHelper =
+    std::function<core::image::RectifyHelper *(std::uint32_t, std::uint32_t)>;
 
   // Progress of a start_initialize() worker.
   enum class InitState { kIdle, kRunning, kSucceeded, kFailed };
@@ -139,13 +157,15 @@ public:
 
   // Project the fetched point clouds onto `raster` when the overlay is
   // enabled and initialized. `record_stamp_ns` is the walked message's bag
-  // record time (the frame-match clock; clouds are matched by bag record
-  // time). `undistort_enabled` selects projection onto the rectified vs raw
-  // image.
+  // record time; together with the raster's own header.stamp it gives
+  // choose_frame_match both clocks, and the per-topic capture-time capability
+  // decides which one pairs the frame with each cloud. `rectify_enabled`
+  // selects projection onto the rectified vs raw image. Updates the state's
+  // `last_match_key` / `last_residual_ns` readings for the preview info row.
   void maybe_overlay(
     core::image::PackedRaster * raster, std::int64_t record_stamp_ns,
     const std::optional<core::image::CameraInfo> & camera_info,
-    const EnsureUndistortHelper & ensure_helper, bool undistort_enabled);
+    const EnsureRectifyHelper & ensure_helper, bool rectify_enabled);
 
   // [f]: distance -> intensity (when present) -> x -> y -> z -> distance.
   void cycle_property();
@@ -161,11 +181,13 @@ private:
   std::string & status_;
   PcdOverlayState pcd_;
   std::vector<core::pointcloud::PointCloudFetcher> pcd_fetchers_;
-  // Parallel to pcd_fetchers_: the last cloud of each fetcher already folded
-  // into pcd_.ranges (identified by its cache address, which is stable until
-  // the fetcher's next load), so repeated display of the same cloud does not
-  // re-accumulate.
-  std::vector<const core::pointcloud::PointCloud2 *> ranged_clouds_;
+  // Parallel to pcd_fetchers_: the bag record time of the last cloud of each
+  // fetcher already folded into pcd_.ranges, so repeated display of the same
+  // cloud does not re-accumulate. Record time, not the cloud pointer: the
+  // fetcher's cache is an inline optional move-assigned in place, so every
+  // cloud it returns has the same address (see
+  // PointCloudFetcher::cached_record_ns). nullopt until the first fold.
+  std::vector<std::optional<std::int64_t>> ranged_record_ns_;
 
   // Initialization worker state. Results are heap-allocated because
   // tf2::BufferCore is immovable: the worker writes scan_result_ while

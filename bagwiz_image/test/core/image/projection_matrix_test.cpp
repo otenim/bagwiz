@@ -119,7 +119,7 @@ TEST(ProjectionMatrixTest, AlphaOneZoomsOutFurtherThanAlphaZero)
   ASSERT_TRUE(tight.ok()) << tight.error;
   ASSERT_TRUE(wide.ok()) << wide.error;
 
-  // alpha=1 keeps every source pixel, so the undistorted view must shrink to
+  // alpha=1 keeps every source pixel, so the rectified view must shrink to
   // fit: a strictly smaller focal length than the alpha=0 crop.
   EXPECT_LT((*wide.p)[0], (*tight.p)[0]);
   EXPECT_LT((*wide.p)[5], (*tight.p)[5]);
@@ -172,7 +172,7 @@ TEST(ProjectionMatrixTest, AllZeroDistortionYieldsKWithZeroColumn)
 TEST(ProjectionMatrixTest, TreatsUnsetRectificationAsIdentity)
 {
   auto unset = golden_input();
-  unset.r = {};  // all-zero: publishers that never set r, as UndistortHelper allows
+  unset.r = {};  // all-zero: publishers that never set r, as RectifyHelper allows
 
   const auto from_unset = compute_projection_matrix(unset, 0.0);
   const auto from_identity = compute_projection_matrix(golden_input(), 0.0);
@@ -278,9 +278,9 @@ TEST(ProjectionMatrixTest, RejectsUnsupportedModelEvenWithEmptyCoefficients)
   EXPECT_FALSE(result.ok());
 }
 
-// An empty model or "none" declares an already-undistorted camera, so p is
+// An empty model or "none" declares a distortion-free camera, so p is
 // [k|0] rather than an error -- these are supported, not unknown.
-TEST(ProjectionMatrixTest, TreatsNoDistortionModelAsUndistorted)
+TEST(ProjectionMatrixTest, TreatsNoDistortionModelAsDistortionFree)
 {
   for (const char * model : {"", "none"}) {
     auto in = golden_input();

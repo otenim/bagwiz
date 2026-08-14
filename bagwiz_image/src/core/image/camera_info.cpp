@@ -46,7 +46,7 @@ namespace bagwiz::core::image
 //     bool do_rectify
 //
 // Only header, height, width, distortion_model, d, k, r, and p are needed for
-// undistortion; the rest are read and discarded so the parser stays positioned
+// rectification; the rest are read and discarded so the parser stays positioned
 // correctly.
 CameraInfoResult extract_camera_info(std::span<const std::byte> payload)
 {
@@ -152,6 +152,16 @@ CameraInfo scale_camera_info(const CameraInfo & info, double scale_x, double sca
   scaled.p[6] *= scale_y;
   scaled.p[7] *= scale_y;
   return scaled;
+}
+
+CameraInfo camera_info_for_size(const CameraInfo & info, std::uint32_t width, std::uint32_t height)
+{
+  if (info.width == 0 || info.height == 0 || (info.width == width && info.height == height)) {
+    return info;
+  }
+  return scale_camera_info(
+    info, static_cast<double>(width) / static_cast<double>(info.width),
+    static_cast<double>(height) / static_cast<double>(info.height));
 }
 
 }  // namespace bagwiz::core::image

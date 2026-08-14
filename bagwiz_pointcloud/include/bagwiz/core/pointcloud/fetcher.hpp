@@ -145,6 +145,14 @@ public:
   [[nodiscard]] const PointCloud2 * fetch(
     std::int64_t target_ns, PointCloudMatchKey key, std::string & error);
 
+  // Bag record time of the cloud the last successful fetch() returned, which
+  // identifies that message uniquely within the topic. Callers that must act
+  // once per distinct cloud need this: the returned pointer is NOT an identity,
+  // because the cache is an inline optional that is move-assigned in place, so
+  // its address is the same for every cloud this fetcher ever returns. Zero
+  // before the first successful fetch.
+  [[nodiscard]] std::int64_t cached_record_ns() const noexcept { return cached_record_ns_; }
+
 private:
   [[nodiscard]] static std::size_t find_nearest_index(
     const std::vector<PointCloudIndexEntry> & entries, std::int64_t target_ns,

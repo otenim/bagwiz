@@ -39,7 +39,7 @@ constexpr double kIdentityTol = 1e-9;
 
 // Models that declare "this camera has no lens distortion". ROS leaves
 // distortion_model empty for an already-rectified stream, and "none" appears in
-// the wild; either way there is nothing to undistort, so p is [k | 0].
+// the wild; either way there is no distortion to correct, so p is [k | 0].
 [[nodiscard]] bool declares_no_distortion(const std::string & model)
 {
   return model.empty() || model == "none";
@@ -51,9 +51,9 @@ constexpr double kIdentityTol = 1e-9;
 }
 
 // True when r is a genuine rotation rather than identity. An all-zero r means
-// the publisher never set it; UndistortHelper::is_usable_rotation() already
+// the publisher never set it; RectifyHelper::is_usable_rotation() already
 // treats that as identity, so this does too rather than refusing bags that
-// undistort fine today.
+// rectify fine today.
 [[nodiscard]] bool is_non_identity_rotation(const std::array<double, 9> & r)
 {
   const bool all_zero = std::all_of(r.begin(), r.end(), [](double v) { return v == 0.0; });
@@ -69,7 +69,7 @@ constexpr double kIdentityTol = 1e-9;
   return false;
 }
 
-// [k | 0]: the projection matrix of a camera with nothing to undistort.
+// [k | 0]: the projection matrix of a camera with no distortion to correct.
 [[nodiscard]] std::array<double, 12> k_with_zero_column(const std::array<double, 9> & k)
 {
   return {k[0], k[1], k[2], 0.0, k[3], k[4], k[5], 0.0, k[6], k[7], k[8], 0.0};
@@ -146,7 +146,7 @@ ProjectionMatrixResult compute_projection_matrix(
   }
 
   // An explicit "no distortion" declaration: p is [k | 0] whatever d holds,
-  // since the camera reports nothing to undistort.
+  // since the camera reports no distortion to correct.
   if (declares_no_distortion(input.distortion_model)) {
     result.p = k_with_zero_column(input.k);
     return result;
@@ -155,11 +155,11 @@ ProjectionMatrixResult compute_projection_matrix(
   if (!is_brown_conrady(input.distortion_model)) {
     result.error = "distortion_model '" + input.distortion_model +
                    "' is not supported; p can only be recomputed for 'plumb_bob' or "
-                   "'rational_polynomial' (an empty model or 'none' is treated as undistorted)";
+                   "'rational_polynomial' (an empty model or 'none' is treated as distortion-free)";
     return result;
   }
 
-  // Nothing to undistort: the optimal new camera matrix is k itself. Short-circuit
+  // No distortion to correct: the optimal new camera matrix is k itself. Short-circuit
   // rather than call OpenCV, which rejects an empty distCoeffs.
   const bool has_distortion =
     !input.d.empty() &&

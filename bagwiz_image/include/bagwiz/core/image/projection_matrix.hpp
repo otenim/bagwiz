@@ -62,7 +62,7 @@ struct ProjectionMatrixResult
 // result shifts slightly across OpenCV versions (4.5.4 -> 4.13.0 moves
 // fx/fy/cx/cy by up to 0.77px on a 1920x1280 plumb_bob calibration), and bagwiz
 // builds against each ROS distro's own OpenCV. The recomputed p is consistent
-// with the OpenCV this binary links -- which is the one UndistortHelper then
+// with the OpenCV this binary links -- which is the one RectifyHelper then
 // feeds it to -- not with whatever version produced the original file.
 //
 // Supported `distortion_model` values -- p can only be recomputed for the
@@ -77,14 +77,14 @@ struct ProjectionMatrixResult
 // unsupported model is refused even when its coefficients are all zero.
 //
 // When the model is Brown-Conrady but `d` is empty or all-zero there is nothing
-// to undistort, so the result is exactly [k | 0] and OpenCV is not consulted (it
+// to correct, so the result is exactly [k | 0] and OpenCV is not consulted (it
 // rejects an empty distCoeffs).
 //
 // Refused, because recomputing p from k alone would be wrong rather than merely
 // imprecise:
 //   - a genuine non-identity `r`: the camera is stereo-rectified, so p belongs
 //     to cv::stereoRectify and this formula would break rectification. An
-//     all-zero (unset) r is treated as identity, matching UndistortHelper.
+//     all-zero (unset) r is treated as identity, matching RectifyHelper.
 //   - a non-zero p[3]/p[7]: p carries a stereo baseline (p[3] = -fx*baseline),
 //     which [newK | 0] would silently zero out.
 //   - a fisheye/equidistant `distortion_model`: needs

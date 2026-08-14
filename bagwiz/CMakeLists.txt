@@ -716,6 +716,7 @@ if(BUILD_TESTING)
     src/commands/walk_overlay_scan.cpp
     src/commands/walk_preview.cpp
     src/commands/walk_save.cpp
+    src/commands/trim_stamp.cpp
     src/commands/topic_option.cpp
     src/commands/registry.cpp)
   target_include_directories(bagwiz_walk_test
@@ -725,7 +726,8 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_walk_overlay_scan_test
     test/commands/walk_overlay_scan_test.cpp
-    src/commands/walk_overlay_scan.cpp)
+    src/commands/walk_overlay_scan.cpp
+    src/commands/trim_stamp.cpp)
   target_include_directories(bagwiz_walk_overlay_scan_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(

@@ -36,7 +36,7 @@ enum class KeyEvent {
   kSaveYaml,           // save current message body as YAML (walk command)
   kToggleArrayExpand,  // toggle full-expansion of long primitive arrays (walk command)
   kTogglePreview,      // toggle in-terminal image preview (walk command)
-  kToggleUndistort,    // toggle undistort in image preview (walk command)
+  kToggleRectify,      // toggle rectify in image preview (walk command)
   kToggleProjectPcd,   // toggle point-cloud projection overlay in image preview (walk command)
   kSelectPcdTopic,     // choose a PointCloud2 topic for the projection overlay
   kCyclePcdProperty,   // cycle point-cloud visualization property (walk command)
@@ -63,7 +63,7 @@ enum class KeyEvent {
 //     '>' (step forward ~10 seconds), '<' (step backward ~10 seconds),
 //     'k' (scroll up), 'j' (scroll down), 'H' (scroll head), 'T' (scroll
 //     tail), 's' (save as yaml — walk), 'a' (toggle array expand — walk),
-//     'i' (toggle image preview — walk), 'u' (toggle undistort — walk),
+//     'i' (toggle image preview — walk), 'u' (toggle rectify — walk),
 //     'q'/'Q' (quit), plus control
 //     chars (^C, ^D) and a lone ESC (0x1B) for quit
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"
