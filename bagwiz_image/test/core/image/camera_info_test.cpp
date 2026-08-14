@@ -136,8 +136,8 @@ TEST(CameraInfoForSize, MatchingResolutionIsReturnedVerbatim)
   EXPECT_EQ(out.d, info.d);
 }
 
-// The case that misprojects point clouds when it is not handled: a calibration
-// recorded at 1920x1080 applied to a half-size image topic.
+// The case that misplaces projected point clouds when it is not handled: a
+// calibration recorded at 1920x1080 applied to a half-size image topic.
 TEST(CameraInfoForSize, DifferentResolutionRescalesIntrinsics)
 {
   const auto info = make_test_camera_info();
