@@ -119,7 +119,7 @@ frame — and the view redraws on resize. Press `q` to return to the YAML view.
 - With the overlay active, pressing `e` enters a **static-extrinsic edit
   mode** that nudges a static TF edge on the cloud→camera chain while the
   overlay re-projects live — a visual fixer for camera-lidar
-  miscalibrations. See
+  miscalibration. See
   [Editing static extrinsics](#editing-static-extrinsics).
 - The overlay follows the current rectify state: with **rectify off** the
   points are projected onto the raw image using the camera's lens distortion
@@ -214,7 +214,7 @@ image is shown without the overlay.
 With the point-cloud overlay active, pressing `e` enters an interactive
 static-extrinsic edit mode: nudge a static TF edge on the chain between the
 cloud and the camera while the overlay re-projects live, which turns walk
-into a visual fixer for miscalibrations such as a camera-lidar extrinsic. The
+into a visual fixer for the miscalibration of a camera-lidar extrinsic. The
 mode edits a preview-only copy of the TF tree — **the bag is never
 modified**; the result is exported as a YAML that
 [`bagwiz tf static update`](tf.md#bagwiz-tf-static-update) applies.
