@@ -30,7 +30,7 @@ std::string build_preview_legend(
   if (edit_active) {
     legend +=
       "   [x/X y/Y z/Z] translate   [l/L n/N w/W] roll/pitch/yaw   [m/M] step   [0] reset"
-      "   [E] edge   [D] export yaml   [e] done";
+      "   [E] edge   [D] export yaml   [A] apply to bag   [e] done";
   } else if (pcd_topic_selected) {
     // The edit mode needs an overlay to judge the alignment against, so its
     // entry hint rides the same condition as the adjustment keys.

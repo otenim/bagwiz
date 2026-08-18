@@ -81,8 +81,10 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 // t (pcd topics), f/c/r (property/scheme/range), =,+/- (point size) and ]/[
 // (alpha) apply; see walk_preview.hpp / walk_overlay.hpp. With the overlay
 // active, e/E enter the static-extrinsic edit mode (nudge keys x/X y/Y z/Z,
-// l/L n/N w/W, step m/M, reset 0, YAML export D — see walk_edit.hpp); any
-// edits are also summarised on stdout when walk exits. Once a pcd topic is
+// l/L n/N w/W, step m/M, reset 0, YAML export D, and A to overwrite the
+// input bag's static TF in place after a typed confirmation — see
+// walk_edit.hpp); any uncommitted edits are also summarised on stdout when
+// walk exits. Once a pcd topic is
 // selected, P pins the displayed frame as an extra preview tile, so one nudge
 // can be judged against several scenes at once (see walk_pins.hpp).
 // Messages are cached lazily so `prev` stays O(1) for anything already

@@ -36,10 +36,12 @@ using bagwiz::commands::apply_edge_to_buffer;
 using bagwiz::commands::apply_edit_key;
 using bagwiz::commands::carry_over_edits;
 using bagwiz::commands::collect_editable_edges;
+using bagwiz::commands::commit_edits;
 using bagwiz::commands::edit_step_preset;
 using bagwiz::commands::edit_yaml;
 using bagwiz::commands::EditableEdge;
 using bagwiz::commands::edited_transform;
+using bagwiz::commands::edited_transforms;
 using bagwiz::commands::EditPose;
 using bagwiz::commands::ExtrinsicEditState;
 using bagwiz::commands::is_edited;
@@ -327,6 +329,62 @@ TEST(WalkEditCarryOver, KeepsEditedValuesAndAppendsOrphans)
   // ... and the edited edge with no fresh counterpart was appended.
   EXPECT_EQ(fresh[2].original.child_frame_id, "gone");
   EXPECT_DOUBLE_EQ(fresh[2].edited.yaw, 0.5);
+}
+
+TEST(WalkEditApply, EditedTransformsCollectsOnlyEditedEdges)
+{
+  ExtrinsicEditState state;
+  state.edges.push_back(make_editable("/tf_static", make_edge("base_link", "lidar", 1.0)));
+  state.edges.push_back(make_editable("/sensing/tf_static", make_edge("odom", "camera", 2.0)));
+  state.active = 0;
+  ASSERT_TRUE(apply_edit_key(state, KeyEvent::kEditTransXUp));  // lidar x: 1.0 -> 1.01
+
+  const auto transforms = edited_transforms(state);
+  ASSERT_EQ(transforms.size(), 1U);
+  EXPECT_EQ(transforms[0].header.frame_id, "base_link");
+  EXPECT_EQ(transforms[0].child_frame_id, "lidar");
+  EXPECT_NEAR(transforms[0].transform.translation.x, 1.01, kPointMeters);
+
+  // Nothing edited -> nothing to apply.
+  EXPECT_TRUE(edited_transforms(ExtrinsicEditState{}).empty());
+}
+
+TEST(WalkEditApply, CommitMakesEditedEdgesTheNewOriginal)
+{
+  ExtrinsicEditState state = one_edge_state(1.0);
+  ASSERT_TRUE(apply_edit_key(state, KeyEvent::kEditTransXUp));  // 1.0 -> 1.01
+  ASSERT_TRUE(is_edited(state.edges[0]));
+
+  commit_edits(state);
+
+  // The bag now carries the edited value, so the edge must read as clean:
+  // no delta in the info row, nothing for [D] to export, nothing in the
+  // exit summary — and [0] must reset to the NEW bag value, not the old one.
+  EXPECT_FALSE(is_edited(state.edges[0]));
+  EXPECT_NEAR(state.edges[0].original.transform.translation.x, 1.01, kPointMeters);
+  EXPECT_TRUE(edited_transforms(state).empty());
+  EXPECT_TRUE(edit_summary(state).empty());
+
+  ASSERT_TRUE(apply_edit_key(state, KeyEvent::kEditTransXUp));  // 1.01 -> 1.02
+  ASSERT_TRUE(apply_edit_key(state, KeyEvent::kEditReset));
+  EXPECT_NEAR(state.edges[0].edited.x, 1.01, kPointMeters);
+}
+
+TEST(WalkEditApply, CommitPreservesEdgeIdentity)
+{
+  // The committed original must keep the frame ids and header stamp: they
+  // are what a later re-collection matches candidates against.
+  ExtrinsicEditState state;
+  state.edges.push_back(
+    make_editable("/tf_static", make_edge("base_link", "lidar", 1.0, 7'000'000'000LL)));
+  state.active = 0;
+  ASSERT_TRUE(apply_edit_key(state, KeyEvent::kEditYawUp));
+
+  commit_edits(state);
+  const auto & original = state.edges[0].original;
+  EXPECT_EQ(original.header.frame_id, "base_link");
+  EXPECT_EQ(original.child_frame_id, "lidar");
+  EXPECT_EQ(original.header.stamp.sec, 7);
 }
 
 TEST(WalkEditFormat, EdgeLabelShowsEdgeTopicAndEditedMarker)

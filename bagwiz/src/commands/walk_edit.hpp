@@ -139,6 +139,22 @@ void apply_edge_to_buffer(const EditableEdge & edge, tf2::BufferCore & buffer);
 void carry_over_edits(
   std::vector<EditableEdge> & fresh, const std::vector<EditableEdge> & previous);
 
+// Every edited edge as the TransformStamped `bagwiz tf static update`
+// upserts (edited_transform of each), in edge order. Empty when nothing is
+// edited — the apply path has nothing to write then. Feeding the update
+// the transforms directly (rather than round-tripping through the YAML
+// below) keeps the applied values bit-exact with what the preview shows.
+[[nodiscard]] std::vector<geometry_msgs::msg::TransformStamped> edited_transforms(
+  const ExtrinsicEditState & state);
+
+// Rebase every edited edge onto its own edited value: original becomes
+// edited_transform(edge), so the edge reads as clean (is_edited false, no
+// info-row delta, nothing to export or summarise) and [0] resets to this
+// value from now on. For the moment the edits have been written into the
+// input bag — they ARE the bag values then, and leaving them marked edited
+// would re-report (and re-apply) them forever.
+void commit_edits(ExtrinsicEditState & state);
+
 // Render every edited edge as the static-TF-tree YAML `bagwiz tf static
 // update --yaml` consumes (see core::emit_static_tf_tree_yaml).
 // `source_label` lands in the header comment. Returns an empty string when

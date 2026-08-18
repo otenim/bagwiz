@@ -178,6 +178,14 @@ private:
   // update` applies to the bag (prompts for a path like the PNG save).
   void save_edit_yaml();
 
+  // [A]: overwrite the input bag's static TF in place with the edited edges
+  // (`bagwiz tf static update` run in-process, so the atomic tmp+swap and
+  // forest validation are the same). Prompts for an explicit "yes" first —
+  // this is the one walk action that modifies the bag. On success the edits
+  // are committed (commit_edits), so they read as the bag values they now
+  // are.
+  void apply_edits_to_bag();
+
   MessageCursor & cursor_;
   PcdOverlayController & overlay_;
   core::tui::ScrollablePager & pager_;

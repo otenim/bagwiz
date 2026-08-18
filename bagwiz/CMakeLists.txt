@@ -739,9 +739,14 @@ if(BUILD_TESTING)
   # compiles registry.cpp (completion_test idiom).
   # walk.cpp declares its -t/--topic and --cam-info through add_topic_option()
   # (topic_option.hpp), so this test also compiles topic_option.cpp.
+  # walk_preview.cpp applies extrinsic edits through run_tf_static_update
+  # ([A] in the preview), so the walk test also compiles the update command
+  # and the inject pass it writes through.
   ament_add_gtest(bagwiz_walk_test
     test/commands/walk_test.cpp
     src/commands/walk.cpp
+    src/commands/tf_static_update.cpp
+    src/commands/tf_static_inject.cpp
     src/commands/walk_bag.cpp
     src/commands/walk_cursor.cpp
     src/commands/walk_edit.cpp

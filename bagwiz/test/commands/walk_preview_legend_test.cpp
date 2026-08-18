@@ -121,6 +121,7 @@ TEST(WalkPreviewLegend, EditModeListsTheNudgeKeys)
   EXPECT_NE(legend.find("[0] reset"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[E] edge"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[D] export yaml"), std::string::npos) << legend;
+  EXPECT_NE(legend.find("[A] apply to bag"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[e] done"), std::string::npos) << legend;
   // The mode-entry hint makes no sense while the mode is already on.
   EXPECT_EQ(legend.find("[e] edit extrinsic"), std::string::npos) << legend;

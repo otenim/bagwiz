@@ -220,9 +220,11 @@ With the point-cloud overlay active, pressing `e` enters an interactive
 static-extrinsic edit mode: nudge a static TF edge on the chain between the
 cloud and the camera while the overlay re-projects live, which turns walk
 into a visual fixer for the miscalibration of a camera-lidar extrinsic. The
-mode edits a preview-only copy of the TF tree — **the bag is never
-modified**; the result is exported as a YAML that
-[`bagwiz tf static update`](tf.md#bagwiz-tf-static-update) applies.
+mode edits a preview-only copy of the TF tree — **nothing touches the bag
+until you explicitly apply**. The result can be exported as a YAML that
+[`bagwiz tf static update`](tf.md#bagwiz-tf-static-update) applies (`D`),
+or written straight into the input bag's static TF from inside the TUI
+(`A`, confirmation-guarded).
 
 The editable candidates are the `(parent, child)` edges on the TF chains
 between each selected cloud topic's frame and the camera frame, resolved at
@@ -246,18 +248,19 @@ presets — `0.001 m / 0.0005 rad`, `0.01 m / 0.005 rad` (the default), and
 edge, all six current values (rotations in degrees), the delta from the bag
 value for every nudged component, and the step.
 
-| Key                       | Action                                                                     |
-| ------------------------- | -------------------------------------------------------------------------- |
-| `e`                       | Enter/leave the edit mode (edits stay applied to the preview).             |
-| `E`                       | Open the edge picker to choose or switch the edited static TF edge.        |
-| `x`/`X`, `y`/`Y`, `z`/`Z` | Nudge that translation component up/down one step.                         |
-| `l`/`L`                   | Nudge roll up/down (ro**ll** — `r` is taken by the range toggle).          |
-| `n`/`N`                   | Nudge pitch up/down (a **n**od is a pitch — `p` is taken by the overlay).  |
-| `w`/`W`                   | Nudge yaw up/down (ya**w** — `y` is taken by the y translation).           |
-| `m`/`M`                   | Coarser / finer step preset.                                               |
-| `0`                       | Reset the edited edge to the value recorded in the bag.                    |
-| `P`                       | Pin/unpin the displayed frame as an extra scene tile.                      |
-| `D`                       | Export every edited edge as static-TF YAML (prompts for a path, like `S`). |
+| Key                       | Action                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `e`                       | Enter/leave the edit mode (edits stay applied to the preview).                                         |
+| `E`                       | Open the edge picker to choose or switch the edited static TF edge.                                    |
+| `x`/`X`, `y`/`Y`, `z`/`Z` | Nudge that translation component up/down one step.                                                     |
+| `l`/`L`                   | Nudge roll up/down (ro**ll** — `r` is taken by the range toggle).                                      |
+| `n`/`N`                   | Nudge pitch up/down (a **n**od is a pitch — `p` is taken by the overlay).                              |
+| `w`/`W`                   | Nudge yaw up/down (ya**w** — `y` is taken by the y translation).                                       |
+| `m`/`M`                   | Coarser / finer step preset.                                                                           |
+| `0`                       | Reset the edited edge to the value recorded in the bag.                                                |
+| `P`                       | Pin/unpin the displayed frame as an extra scene tile.                                                  |
+| `D`                       | Export every edited edge as static-TF YAML (prompts for a path, like `S`).                             |
+| `A`                       | Overwrite the input bag's static TF in place with the edited edges (asks for an explicit `yes` first). |
 
 All other preview keys stay live while editing — navigate frames to check the
 fix elsewhere in the recording, toggle rectification with `u`, or adjust the
@@ -308,11 +311,28 @@ and the caption row says `pinned scenes hidden: terminal too small for a grid`.
 
 ### Persisting the fix
 
-`D` writes the edited edges in the nested
-`parent -> child -> {x, y, z, roll, pitch, yaw}` YAML that
-[`tf static dump`](tf.md#bagwiz-tf-static-dump) produces. The path prompt
-follows the same rules as `S`; the default name is
-`<bag>_tf_static_edit.yaml`. Apply it to the bag afterwards:
+There are two ways to keep the fix, and they can be combined.
+
+**`A` applies it to the input bag directly.** After an explicit confirmation
+(type `yes`; anything else cancels), the bag's static TF is overwritten in
+place by the same machinery as
+[`bagwiz tf static update`](tf.md#bagwiz-tf-static-update): the merged tree
+is validated as a forest first, each touched static topic is rewritten in its
+original layout, and the swap is atomic — a full rewritten copy replaces the
+input only after the pass succeeded, so a failure leaves the bag untouched.
+The rewrite streams every message through, which can take a while for a large
+bag; the update's own progress and summary lines are shown during the
+confirmation screen. This is the only walk action that modifies the bag.
+After a successful apply the edits are _committed_: the info-row deltas read
+zero, `D` and the exit summary have nothing left to report, and `0` now
+resets to the value the bag actually carries.
+
+**`D` exports the fix as a YAML** in the nested
+`parent -> child -> {x, y, z, roll, pitch, yaw}` schema that
+[`tf static dump`](tf.md#bagwiz-tf-static-dump) produces — for applying to a
+_different_ bag, keeping the original untouched, or reviewing before
+committing. The path prompt follows the same rules as `S`; the default name
+is `<bag>_tf_static_edit.yaml`. Apply it afterwards:
 
 ```bash
 bagwiz tf static update -i capture.mcap --yaml capture_tf_static_edit.yaml
@@ -414,6 +434,7 @@ not been read into the cache yet (they get pulled in on demand).
 | `m` / `M`                               | Edit mode: coarser / finer nudge step.                                                                                                                                                                                          |
 | `0`                                     | Edit mode: reset the edited edge to the bag's value.                                                                                                                                                                            |
 | `D`                                     | Export the edited static TF edges as YAML (prompts for a path).                                                                                                                                                                 |
+| `A`                                     | Overwrite the input bag's static TF in place with the edited edges, after an explicit `yes` confirmation. See [Persisting the fix](#persisting-the-fix).                                                                        |
 | `P`                                     | Pin/unpin the displayed frame as an extra image-preview tile (needs a selected pcd topic), so several scenes are re-projected together. See [Comparing several scenes at once](#comparing-several-scenes-at-once).              |
 | `q` / `Q` / `Esc` / `Ctrl-C` / `Ctrl-D` | Quit (in the image preview, returns to the YAML view).                                                                                                                                                                          |
 

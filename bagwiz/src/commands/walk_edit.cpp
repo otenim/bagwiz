@@ -242,6 +242,27 @@ void carry_over_edits(std::vector<EditableEdge> & fresh, const std::vector<Edita
   }
 }
 
+std::vector<geometry_msgs::msg::TransformStamped> edited_transforms(
+  const ExtrinsicEditState & state)
+{
+  std::vector<geometry_msgs::msg::TransformStamped> transforms;
+  for (const auto & edge : state.edges) {
+    if (is_edited(edge)) {
+      transforms.push_back(edited_transform(edge));
+    }
+  }
+  return transforms;
+}
+
+void commit_edits(ExtrinsicEditState & state)
+{
+  for (auto & edge : state.edges) {
+    if (is_edited(edge)) {
+      edge.original = edited_transform(edge);
+    }
+  }
+}
+
 std::string edit_yaml(const ExtrinsicEditState & state, std::string_view source_label)
 {
   std::vector<geometry_msgs::msg::TransformStamped> edited;

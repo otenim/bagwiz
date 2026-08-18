@@ -8,6 +8,7 @@
 
 #include "walk_preview.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
+#include "bagwiz/commands/tf_static_update.hpp"
 #include "bagwiz/core/base/terminal_input.hpp"
 #include "bagwiz/core/image/image_encoder.hpp"
 #include "bagwiz/core/tui/image/terminal_image_renderer.hpp"
@@ -548,6 +549,72 @@ void ImagePreviewSession::save_edit_yaml()
     pager_, "Save TF static YAML path", cwd, default_base, std::as_bytes(std::span{yaml}), status_);
 }
 
+void ImagePreviewSession::apply_edits_to_bag()
+{
+  status_.clear();
+  auto & edit = overlay_.edit_state();
+  const auto transforms = edited_transforms(edit);
+  if (transforms.empty()) {
+    status_ = "(no extrinsic edits to apply)";
+    return;
+  }
+  const auto & input = overlay_.input_path();
+
+  // Drop the on-screen graphic before switching to cooked-mode line input so
+  // the prompt is not drawn over a kitty placement; run() repaints the frame
+  // afterward.
+  core::tui::image::clear_image(std::cout, image_caps_.backend);
+  std::cout << "\x1B[2J";
+  std::cout.flush();
+
+  bool applied = false;
+  bool cancelled = false;
+  pager_.with_line_input([&](std::istream & in, std::ostream & out) {
+    // Show exactly what will be written, in the same rendering the exit
+    // summary uses, so the confirmation is informed.
+    out << edit_summary(edit);
+    out << fmt::format(
+      "\nOverwrite the static TF of {} IN PLACE with the {} edited edge(s) above?\n"
+      "The bag is rewritten atomically (a full copy, then a swap) — this can take a\n"
+      "while for a large bag and cannot be undone. [D] exports a YAML instead.\n"
+      "Type \"yes\" to overwrite, anything else cancels: ",
+      input.string(), transforms.size());
+    out.flush();
+    std::string line;
+    if (!std::getline(in, line) || line != "yes") {
+      cancelled = true;
+      return;
+    }
+
+    // Run the update while still in cooked mode: its log lines (progress,
+    // the added/updated summary, any warnings) then print sequentially
+    // instead of scribbling over the repainted preview.
+    const int rc = run_tf_static_update(
+      input, transforms, "/tf_static", /*output_path=*/std::nullopt, /*overwrite=*/false);
+    applied = rc == 0;
+    out << (applied ? "\nDone." : "\nFailed; the bag is unchanged.")
+        << " Press Enter to return to the preview.";
+    out.flush();
+    std::string pause;
+    std::getline(in, pause);
+  });
+
+  if (cancelled) {
+    status_ = "(apply cancelled; bag unchanged)";
+    return;
+  }
+  if (!applied) {
+    status_ = "apply failed; bag unchanged";
+    return;
+  }
+  // The edited values ARE the bag values now: rebase the edges onto them so
+  // deltas read zero, [D] and the exit summary have nothing left to report,
+  // and [0] resets to the value the bag actually carries. The projection is
+  // untouched — the TF buffer already holds these values.
+  commit_edits(edit);
+  status_ = fmt::format("updated {} ({} edge(s) applied)", input.string(), transforms.size());
+}
+
 void ImagePreviewSession::run()
 {
   auto & pcd = overlay_.state();
@@ -777,6 +844,19 @@ void ImagePreviewSession::run()
       }
       case core::KeyEvent::kEditDumpYaml:
         save_edit_yaml();
+        needs_render = true;
+        break;
+      case core::KeyEvent::kEditApplyToBag:
+        // Blocked while a scan worker is reading the bag: the scan opened the
+        // bag before the swap, so letting it finish afterwards would install
+        // a TF buffer built from the OLD content while the committed edits no
+        // longer re-apply on top — the overlay would silently revert on
+        // screen while the bag on disk carries the fix.
+        if (load_in_flight) {
+          status_ = "pcd overlay still loading ...";
+        } else {
+          apply_edits_to_bag();
+        }
         needs_render = true;
         break;
       case core::KeyEvent::kPinScene:
