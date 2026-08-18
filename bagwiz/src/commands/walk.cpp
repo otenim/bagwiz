@@ -79,7 +79,14 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //   q / Q / Esc / Ctrl-C / Ctrl-D : quit
 // Inside the image preview the additional keys u (rectify), p (pcd overlay),
 // t (pcd topics), f/c/r (property/scheme/range), =,+/- (point size) and ]/[
-// (alpha) apply; see walk_preview.hpp / walk_overlay.hpp.
+// (alpha) apply; see walk_preview.hpp / walk_overlay.hpp. With the overlay
+// active, e/E enter the static-extrinsic edit mode (nudge keys x/X y/Y z/Z,
+// l/L n/N w/W, step m/M, reset 0, YAML export D, and A to overwrite the
+// input bag's static TF in place after a typed confirmation — see
+// walk_edit.hpp); any uncommitted edits are also summarised on stdout when
+// walk exits. Once a pcd topic is
+// selected, P pins the displayed frame as an extra preview tile, so one nudge
+// can be judged against several scenes at once (see walk_pins.hpp).
 // Messages are cached lazily so `prev` stays O(1) for anything already
 // seen and `G` is the only key that always triggers a full-remaining scan
 // (the forward time steps `.` / `>` read ahead only as far as the target
@@ -299,7 +306,18 @@ public:
       }
     };
 
-    return pager.run(build_frame, on_nav, on_app_key);
+    const int exit_code = pager.run(build_frame, on_nav, on_app_key);
+
+    // Surface any extrinsic edits after the pager restored the terminal: the
+    // values would otherwise die with the session when the YAML was never
+    // exported ([D] in the preview writes it).
+    const std::string edits = edit_summary(overlay.edit_state());
+    if (!edits.empty()) {
+      std::cout << "\nEdited static TF edges (preview only — the bag is unchanged):\n\n"
+                << edits << "\nApply: export the YAML with [D] in the image preview, then run\n"
+                << "  bagwiz tf static update -i " << input_path_.string() << " --yaml <file>\n";
+    }
+    return exit_code;
   }
 
 private:

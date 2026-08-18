@@ -24,7 +24,12 @@ namespace bagwiz::commands
 // once a PointCloud2 topic is selected, so they appear only when
 // `pcd_topic_selected`; the toggle/select keys ([p]/[t]) stay visible
 // unconditionally to guide the user to enable the overlay in the first place.
-[[nodiscard]] std::string build_preview_legend(bool pcd_topic_selected);
+// `edit_active` swaps the extrinsic-edit entry hint ([e] edit extrinsic,
+// shown with a selected topic) for the edit mode's own nudge keys.
+// `current_frame_pinned` flips the scene-pin hint between [P] pin scene and
+// [P] unpin scene, since [P] is its own undo on the frame being shown.
+[[nodiscard]] std::string build_preview_legend(
+  bool pcd_topic_selected, bool edit_active, bool current_frame_pinned);
 
 }  // namespace bagwiz::commands
 

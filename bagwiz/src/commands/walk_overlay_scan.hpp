@@ -10,6 +10,7 @@
 #define COMMANDS__WALK_OVERLAY_SCAN_HPP_
 
 #include "bagwiz/core/pointcloud/fetcher.hpp"
+#include "bagwiz/core/tf/tf_static_collect.hpp"
 
 #include <tf2/buffer_core.hpp>
 
@@ -45,6 +46,12 @@ struct OverlayScanResult
   // core::pointcloud::PointCloudIndex::header_stamps_present). False means the
   // axis mixes two clocks and the topic must be matched by record time.
   std::vector<bool> header_stamps_present;
+  // The static TF topics' raw transforms, whole-topic and collapsed per
+  // child_frame_id (last value wins, first-seen order) exactly like
+  // core::collect_static_tf(kWholeTopic). The extrinsic edit mode needs the
+  // original edge values and the topic each edge lives on, which the resolved
+  // tf_buffer above does not hand back. Topics appear in first-message order.
+  std::vector<core::StaticTopicTransforms> static_transforms;
   std::string error;
 };
 

@@ -37,11 +37,11 @@ TEST(ClassifyKey, PrevBindings)
 
 TEST(ClassifyKey, PreviouslyRetiredKeysAreUnknown)
 {
-  // These used to map to next/prev; they were dropped when the key set
+  // 'h' used to map to prev; it was dropped when the navigation key set
   // was narrowed to arrows + space + b. Pin the current contract so a
-  // future re-binding is an intentional edit.
-  EXPECT_EQ(classify_key("l"), KeyEvent::kUnknown);
-  EXPECT_EQ(classify_key("n"), KeyEvent::kUnknown);
+  // future re-binding is an intentional edit. ('l' and 'n' were retired
+  // from navigation the same way and have since been deliberately
+  // re-bound to the extrinsic-edit nudges — see ExtrinsicEditRotation.)
   EXPECT_EQ(classify_key("h"), KeyEvent::kUnknown);
 }
 
@@ -109,6 +109,66 @@ TEST(ClassifyKey, ProjectPcdBindings)
   EXPECT_EQ(classify_key("["), KeyEvent::kPcdAlphaDown);
 }
 
+TEST(ClassifyKey, ExtrinsicEditModeBindings)
+{
+  // e/E mirror the p/t pcd pair: lowercase toggles the mode, uppercase
+  // opens the picker that chooses what the mode acts on.
+  EXPECT_EQ(classify_key("e"), KeyEvent::kToggleEditExtrinsic);
+  EXPECT_EQ(classify_key("E"), KeyEvent::kSelectEditEdge);
+}
+
+TEST(ClassifyKey, ExtrinsicEditTranslation)
+{
+  // Lowercase nudges the component up by one step, uppercase down.
+  EXPECT_EQ(classify_key("x"), KeyEvent::kEditTransXUp);
+  EXPECT_EQ(classify_key("X"), KeyEvent::kEditTransXDown);
+  EXPECT_EQ(classify_key("y"), KeyEvent::kEditTransYUp);
+  EXPECT_EQ(classify_key("Y"), KeyEvent::kEditTransYDown);
+  EXPECT_EQ(classify_key("z"), KeyEvent::kEditTransZUp);
+  EXPECT_EQ(classify_key("Z"), KeyEvent::kEditTransZDown);
+}
+
+TEST(ClassifyKey, ExtrinsicEditRotation)
+{
+  // roLL / Nod (nose up-down) / yaW: r, p and Y are already taken, so the
+  // mnemonic letter comes from inside the word instead.
+  EXPECT_EQ(classify_key("l"), KeyEvent::kEditRollUp);
+  EXPECT_EQ(classify_key("L"), KeyEvent::kEditRollDown);
+  EXPECT_EQ(classify_key("n"), KeyEvent::kEditPitchUp);
+  EXPECT_EQ(classify_key("N"), KeyEvent::kEditPitchDown);
+  EXPECT_EQ(classify_key("w"), KeyEvent::kEditYawUp);
+  EXPECT_EQ(classify_key("W"), KeyEvent::kEditYawDown);
+}
+
+TEST(ClassifyKey, ExtrinsicEditStepResetDump)
+{
+  EXPECT_EQ(classify_key("m"), KeyEvent::kEditStepUp);
+  EXPECT_EQ(classify_key("M"), KeyEvent::kEditStepDown);
+  EXPECT_EQ(classify_key("0"), KeyEvent::kEditReset);
+  // Shift-D like Shift-S: the export prompt takes over the screen, so a
+  // single mistyped letter should not trigger it.
+  EXPECT_EQ(classify_key("D"), KeyEvent::kEditDumpYaml);
+  EXPECT_EQ(classify_key("d"), KeyEvent::kUnknown);
+}
+
+TEST(ClassifyKey, ApplyEditsToBagBinding)
+{
+  // Shift-A, following the Shift-S / Shift-D convention: applying rewrites
+  // the input bag in place, so one mistyped letter must not trigger it (a
+  // confirmation prompt guards it as well). Lowercase 'a' stays the YAML
+  // view's array-expand toggle.
+  EXPECT_EQ(classify_key("A"), KeyEvent::kEditApplyToBag);
+  EXPECT_EQ(classify_key("a"), KeyEvent::kToggleArrayExpand);
+}
+
+TEST(ClassifyKey, PinSceneBinding)
+{
+  // Shift-P, not a bare 'p': lowercase p toggles the pcd overlay, and the two
+  // live side by side in the same preview.
+  EXPECT_EQ(classify_key("P"), KeyEvent::kPinScene);
+  EXPECT_EQ(classify_key("p"), KeyEvent::kToggleProjectPcd);
+}
+
 TEST(ClassifyKey, ScrollBindings)
 {
   EXPECT_EQ(classify_key("k"), KeyEvent::kScrollUp);
@@ -123,7 +183,7 @@ TEST(ClassifyKey, ScrollBindings)
 
 TEST(ClassifyKey, UnknownSequences)
 {
-  EXPECT_EQ(classify_key("x"), KeyEvent::kUnknown);
+  EXPECT_EQ(classify_key("o"), KeyEvent::kUnknown);
   EXPECT_EQ(classify_key("\t"), KeyEvent::kUnknown);
   // CSI with an unmapped final character.
   EXPECT_EQ(classify_key(std::string_view("\x1B[E", 3)), KeyEvent::kUnknown);

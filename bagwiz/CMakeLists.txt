@@ -179,10 +179,13 @@ set(bagwiz_command_sources
   src/commands/walk.cpp
   src/commands/walk_bag.cpp
   src/commands/walk_cursor.cpp
+  src/commands/walk_edit.cpp
   src/commands/walk_frame.cpp
   src/commands/walk_overlay.cpp
   src/commands/walk_overlay_scan.cpp
+  src/commands/walk_pins.cpp
   src/commands/walk_preview.cpp
+  src/commands/walk_preview_cache.cpp
   src/commands/walk_preview_legend.cpp
   src/commands/walk_save.cpp
   src/commands/traj.cpp
@@ -705,6 +708,26 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_walk_preview_legend_test ${bagwiz_test_libs} fmt::fmt)
 
+  # The pin registry and the tile geometry are pure, so this test needs no
+  # bag, no TF and no terminal — only bagwiz_tui for the fit_image() the
+  # layout scoring reuses.
+  ament_add_gtest(bagwiz_walk_pins_test
+    test/commands/walk_pins_test.cpp
+    src/commands/walk_pins.cpp)
+  target_include_directories(bagwiz_walk_pins_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_walk_pins_test ${bagwiz_test_libs} fmt::fmt)
+
+  # The tile render cache is pure key comparison and storage; it reads the
+  # overlay state struct through walk_overlay.hpp but calls nothing on the
+  # controller, so only headers (and tf2, via walk_edit.hpp) are needed.
+  ament_add_gtest(bagwiz_walk_preview_cache_test
+    test/commands/walk_preview_cache_test.cpp
+    src/commands/walk_preview_cache.cpp)
+  target_include_directories(bagwiz_walk_preview_cache_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_walk_preview_cache_test ${bagwiz_test_libs} fmt::fmt ${tf2_TARGETS})
+
   ament_add_gtest(bagwiz_walk_save_test
     test/commands/walk_save_test.cpp
     src/commands/walk_save.cpp)
@@ -716,15 +739,23 @@ if(BUILD_TESTING)
   # compiles registry.cpp (completion_test idiom).
   # walk.cpp declares its -t/--topic and --cam-info through add_topic_option()
   # (topic_option.hpp), so this test also compiles topic_option.cpp.
+  # walk_preview.cpp applies extrinsic edits through run_tf_static_update
+  # ([A] in the preview), so the walk test also compiles the update command
+  # and the inject pass it writes through.
   ament_add_gtest(bagwiz_walk_test
     test/commands/walk_test.cpp
     src/commands/walk.cpp
+    src/commands/tf_static_update.cpp
+    src/commands/tf_static_inject.cpp
     src/commands/walk_bag.cpp
     src/commands/walk_cursor.cpp
+    src/commands/walk_edit.cpp
     src/commands/walk_frame.cpp
     src/commands/walk_overlay.cpp
     src/commands/walk_overlay_scan.cpp
+    src/commands/walk_pins.cpp
     src/commands/walk_preview.cpp
+    src/commands/walk_preview_cache.cpp
     src/commands/walk_preview_legend.cpp
     src/commands/walk_save.cpp
     src/commands/trim_stamp.cpp
@@ -743,6 +774,13 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(
     bagwiz_walk_overlay_scan_test ${bagwiz_test_libs} fmt::fmt ${tf2_TARGETS})
+
+  ament_add_gtest(bagwiz_walk_edit_test
+    test/commands/walk_edit_test.cpp
+    src/commands/walk_edit.cpp)
+  target_include_directories(bagwiz_walk_edit_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_walk_edit_test ${bagwiz_test_libs} fmt::fmt ${tf2_TARGETS})
 
   # The map_slam_* headers live in src/commands (CLI-internal, not installed),
   # so these tests add src/commands to their include path (pcd_concat_common

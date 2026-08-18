@@ -9,9 +9,12 @@
 #ifndef BAGWIZ__COMMANDS__TF_STATIC_UPDATE_HPP_
 #define BAGWIZ__COMMANDS__TF_STATIC_UPDATE_HPP_
 
+#include <geometry_msgs/msg/transform_stamped.hpp>
+
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace bagwiz::commands
 {
@@ -47,6 +50,16 @@ int run_tf_static_update(
   const std::filesystem::path & input_path, const std::filesystem::path & yaml_path,
   const std::string & topic, const std::optional<std::filesystem::path> & output_path,
   bool overwrite);
+
+// Overload taking the edges directly instead of a YAML file, with identical
+// upsert/validation/write-back semantics — the YAML overload parses the file
+// and delegates here. For in-process callers that already hold the
+// transforms (walk's extrinsic edit mode applies its edits through this), so
+// nothing round-trips through the YAML emitter's limited precision.
+int run_tf_static_update(
+  const std::filesystem::path & input_path,
+  const std::vector<geometry_msgs::msg::TransformStamped> & transforms, const std::string & topic,
+  const std::optional<std::filesystem::path> & output_path, bool overwrite);
 
 }  // namespace bagwiz::commands
 

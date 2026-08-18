@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -130,6 +131,27 @@ void scan_overlay_inputs(
       const bool is_static = core::is_static_tf_topic(*raw.topic);
       for (const auto & t : core::extract_tf_message(*decoded.value)) {
         out.tf_buffer.setTransform(t, "bagwiz", is_static);
+        if (!is_static) {
+          continue;
+        }
+        // Keep the raw static transforms per topic, collapsed per
+        // child_frame_id with the newest value winning (including a
+        // re-parent), mirroring core::collect_static_tf(kWholeTopic).
+        auto topic_it = std::find_if(
+          out.static_transforms.begin(), out.static_transforms.end(),
+          [&](const auto & st) { return st.name == raw.topic->name; });
+        if (topic_it == out.static_transforms.end()) {
+          out.static_transforms.push_back({raw.topic->name, {}});
+          topic_it = std::prev(out.static_transforms.end());
+        }
+        auto edge_it = std::find_if(
+          topic_it->transforms.begin(), topic_it->transforms.end(),
+          [&](const auto & existing) { return existing.child_frame_id == t.child_frame_id; });
+        if (edge_it == topic_it->transforms.end()) {
+          topic_it->transforms.push_back(t);
+        } else {
+          *edge_it = t;
+        }
       }
     }
   } catch (const std::exception & e) {
