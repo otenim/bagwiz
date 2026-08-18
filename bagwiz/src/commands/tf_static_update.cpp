@@ -48,6 +48,29 @@ int run_tf_static_update(
   const std::string & topic, const std::optional<std::filesystem::path> & output_path,
   bool overwrite)
 {
+  const auto parsed = core::parse_static_tf_tree_yaml(yaml_path);
+  if (!parsed.ok()) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "Could not load static TF from '%s': %s", yaml_path.c_str(), parsed.error.c_str());
+    return 1;
+  }
+  // Same note as `tf static join`: a deeper nesting level is a grouping heading,
+  // not a chain link, so name the keys that parented nothing.
+  if (!parsed.grouping_frames.empty()) {
+    BAGWIZ_LOG_WARN(
+      kLogger,
+      "'%s': %s named a grouping level, not a parent frame, so no transform was created for it. "
+      "Only the level directly above a transform is its parent.",
+      yaml_path.c_str(), core::join_csv(parsed.grouping_frames).c_str());
+  }
+  return run_tf_static_update(input_path, *parsed.transforms, topic, output_path, overwrite);
+}
+
+int run_tf_static_update(
+  const std::filesystem::path & input_path,
+  const std::vector<geometry_msgs::msg::TransformStamped> & transforms, const std::string & topic,
+  const std::optional<std::filesystem::path> & output_path, bool overwrite)
+{
   // Same guard as `tf static join`: CLI11 accepts an explicit empty string for
   // an option with a default, which would declare an unnameable topic.
   if (topic.empty()) {
@@ -73,25 +96,9 @@ int run_tf_static_update(
     return 1;
   }
 
-  const auto parsed = core::parse_static_tf_tree_yaml(yaml_path);
-  if (!parsed.ok()) {
-    BAGWIZ_LOG_ERROR(
-      kLogger, "Could not load static TF from '%s': %s", yaml_path.c_str(), parsed.error.c_str());
-    return 1;
-  }
-  // Same note as `tf static join`: a deeper nesting level is a grouping heading,
-  // not a chain link, so name the keys that parented nothing.
-  if (!parsed.grouping_frames.empty()) {
-    BAGWIZ_LOG_WARN(
-      kLogger,
-      "'%s': %s named a grouping level, not a parent frame, so no transform was created for it. "
-      "Only the level directly above a transform is its parent.",
-      yaml_path.c_str(), core::join_csv(parsed.grouping_frames).c_str());
-  }
-
   UpdateCounts counts;
   std::unordered_set<std::string> touched;
-  for (const auto & edge : *parsed.transforms) {
+  for (const auto & edge : transforms) {
     bool found = false;
     for (auto & st : topics) {
       for (auto & t : st.transforms) {
