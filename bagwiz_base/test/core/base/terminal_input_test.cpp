@@ -151,6 +151,14 @@ TEST(ClassifyKey, ExtrinsicEditStepResetDump)
   EXPECT_EQ(classify_key("d"), KeyEvent::kUnknown);
 }
 
+TEST(ClassifyKey, PinSceneBinding)
+{
+  // Shift-P, not a bare 'p': lowercase p toggles the pcd overlay, and the two
+  // live side by side in the same preview.
+  EXPECT_EQ(classify_key("P"), KeyEvent::kPinScene);
+  EXPECT_EQ(classify_key("p"), KeyEvent::kToggleProjectPcd);
+}
+
 TEST(ClassifyKey, ScrollBindings)
 {
   EXPECT_EQ(classify_key("k"), KeyEvent::kScrollUp);

@@ -64,6 +64,7 @@ enum class KeyEvent {
   kEditStepDown,         // decrease the edit nudge step size
   kEditReset,            // reset the edited edge to its original bag value
   kEditDumpYaml,         // export the edited edges as static-TF YAML (prompts)
+  kPinScene,             // pin/unpin the displayed frame as a preview scene tile
   kConfirm,              // confirm the current prompt/selection
   kQuit,                 // exit the interactive loop
   kResize,               // terminal was resized (synthesised by read_key_event
@@ -82,10 +83,15 @@ enum class KeyEvent {
 //     'k' (scroll up), 'j' (scroll down), 'H' (scroll head), 'T' (scroll
 //     tail), 'S' (save as yaml — walk), 'a' (toggle array expand — walk),
 //     'i' (toggle image preview — walk), 'u' (toggle rectify — walk),
+//     the point-cloud overlay keys 'p' (toggle overlay), 't' (topic
+//     picker), 'f'/'c'/'r' (property / scheme / range), '='/'+' and '-'
+//     (point size), ']'/'[' (alpha) — all walk,
 //     'e'/'E' (extrinsic edit mode toggle / edge picker — walk), the edit
 //     nudges 'x'/'X', 'y'/'Y', 'z'/'Z' (translation up/down), 'l'/'L'
 //     (roll), 'n'/'N' (pitch), 'w'/'W' (yaw), 'm'/'M' (step size), '0'
 //     (reset edge), 'D' (dump edited edges as YAML — walk),
+//     'P' (pin/unpin the displayed frame as a preview scene — walk),
+//     Enter/Return (confirm the current prompt or selection),
 //     'q'/'Q' (quit), plus control
 //     chars (^C, ^D) and a lone ESC (0x1B) for quit
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"

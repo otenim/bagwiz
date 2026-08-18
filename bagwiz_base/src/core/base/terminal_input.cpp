@@ -205,6 +205,11 @@ KeyEvent classify_key(std::string_view bytes)
       // letter should not trigger it.
       case 'D':
         return KeyEvent::kEditDumpYaml;
+      // Shift-P rather than a bare 'p', which toggles the pcd overlay: the
+      // two are used side by side in the same preview, so they cannot share
+      // a letter case.
+      case 'P':
+        return KeyEvent::kPinScene;
       default:
         return KeyEvent::kUnknown;
     }
