@@ -468,8 +468,7 @@ OverlayFrameReadings PcdOverlayController::maybe_overlay(
     return readings;
   }
 
-  const double vmin = pcd_.auto_range ? pcd_.computed_min : pcd_.manual_min;
-  const double vmax = pcd_.auto_range ? pcd_.computed_max : pcd_.manual_max;
+  const auto [vmin, vmax] = pcd_display_range(pcd_);
   const auto err = core::pointcloud::overlay_projected_points(
     img, all_points, vmin, vmax, pcd_.scheme, pcd_.point_size, pcd_.alpha, *raster);
   if (!err.empty()) {
@@ -643,6 +642,9 @@ void PcdOverlayController::apply_active_edit()
     return;
   }
   apply_edge_to_buffer(edit_.edges[edit_.active], active_scan_->tf_buffer);
+  // The buffer every tile projects through just changed; invalidate the
+  // preview's cached tile renders.
+  ++composition_generation_;
 }
 
 void PcdOverlayController::apply_all_edits()
@@ -655,6 +657,10 @@ void PcdOverlayController::apply_all_edits()
       apply_edge_to_buffer(edge, active_scan_->tf_buffer);
     }
   }
+  // Bumped even when no edge was edited: this runs right after an
+  // initialization swap replaced the buffer and the fetchers, which is a
+  // composition change all by itself.
+  ++composition_generation_;
 }
 
 void PcdOverlayController::prompt_for_range(

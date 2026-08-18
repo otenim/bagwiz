@@ -15,13 +15,15 @@
 #include "bagwiz/core/tui/image/terminal_image_caps.hpp"
 #include "bagwiz/core/tui/layout.hpp"
 #include "bagwiz/core/tui/pager.hpp"
-#include "walk_cursor.hpp"   // NOLINT(build/include_subdir) src-local shared header
-#include "walk_overlay.hpp"  // NOLINT(build/include_subdir) src-local shared header
-#include "walk_pins.hpp"     // NOLINT(build/include_subdir) src-local shared header
+#include "walk_cursor.hpp"         // NOLINT(build/include_subdir) src-local shared header
+#include "walk_overlay.hpp"        // NOLINT(build/include_subdir) src-local shared header
+#include "walk_pins.hpp"           // NOLINT(build/include_subdir) src-local shared header
+#include "walk_preview_cache.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <list>
 #include <memory>
 #include <optional>
@@ -41,39 +43,43 @@
 namespace bagwiz::commands
 {
 
-// Bounded LRU cache of decoded preview frames keyed by message index. The base
-// raster for an index is a pure function of its immutable payload, so entries
-// never need invalidation. Interactive navigation revisits nearby frames, so
-// evicting the least-recently-used frame keeps the working set hot far better
-// than evicting by insertion order (FIFO) would. All operations are O(1).
-class DecodedFrameCache
+// Bounded LRU cache of per-frame rasters keyed by message index, fed by a
+// caller-supplied producer on a miss. Both users' rasters are pure functions
+// of the frame's immutable payload — the base decode, and the rectified
+// remap (CameraInfo never changes mid-session) — so entries never need
+// invalidation. Interactive navigation revisits nearby frames, so evicting
+// the least-recently-used frame keeps the working set hot far better than
+// evicting by insertion order (FIFO) would. All operations are O(1).
+class PreviewFrameCache
 {
 public:
-  explicit DecodedFrameCache(std::size_t capacity) : capacity_(std::max<std::size_t>(1, capacity))
+  explicit PreviewFrameCache(std::size_t capacity) : capacity_(std::max<std::size_t>(1, capacity))
   {
   }
 
   // Result of a lookup: `raster` points at the cached frame (valid until the
-  // next get() call) or is null when the frame failed to decode, in which case
-  // `error` carries the reason. Decode failures are not cached.
+  // next get() call) or is null when the producer failed, in which case
+  // `error` carries the reason. Failures are not cached.
   struct Lookup
   {
     const core::image::PackedRaster * raster = nullptr;
     std::string error;
   };
 
-  Lookup get(std::size_t index, std::string_view type, std::span<const std::byte> payload)
+  using Producer = std::function<core::image::PackedRasterResult()>;
+
+  Lookup get(std::size_t index, const Producer & produce)
   {
     if (const auto it = map_.find(index); it != map_.end()) {
       // Move the hit to the front so it is evicted last.
       order_.splice(order_.begin(), order_, it->second);
       return Lookup{&it->second->raster, {}};
     }
-    auto decoded = core::image::to_packed_raster(type, payload);
-    if (!decoded.ok()) {
-      return Lookup{nullptr, std::move(decoded.error)};
+    auto produced = produce();
+    if (!produced.ok()) {
+      return Lookup{nullptr, std::move(produced.error)};
     }
-    order_.push_front(Entry{index, std::move(*decoded.raster)});
+    order_.push_front(Entry{index, std::move(*produced.raster)});
     map_[index] = order_.begin();
     if (map_.size() > capacity_) {
       map_.erase(order_.back().index);
@@ -116,7 +122,6 @@ public:
 
 private:
   core::image::RectifyHelper * ensure_rectify_helper(std::uint32_t w, std::uint32_t h);
-  void maybe_rectify(core::image::PackedRaster * raster);
 
   // One composed tile: the frame to display or save, plus what the overlay
   // matched for it (the tile's caption reports its own cloud pairing).
@@ -139,13 +144,23 @@ private:
   // overlay slot i+1, so a tile keeps its cached cloud across repaints.
   [[nodiscard]] std::vector<TileCaption> tile_captions() const;
 
-  // Draw one composed frame into `region`. Returns "" on success, or the
-  // decode/render failure — reported by the caller, because a tile cannot
-  // draw text over its own row without erasing its neighbour's (draw_line
-  // clears the whole terminal row).
-  [[nodiscard]] std::string draw_tile_image(
-    std::ostream & out, const core::image::PackedRasterResult & pr,
-    core::tui::image::CellRegion region);
+  // Encode one composed frame into the escape bytes that draw it in
+  // `region` (cursor moves included). Returns the bytes, or an empty string
+  // with `error` set on a decode/render failure — reported by the caller,
+  // because a tile cannot draw text over its own row without erasing its
+  // neighbour's (draw_line clears the whole terminal row).
+  [[nodiscard]] std::string encode_tile(
+    const core::image::PackedRasterResult & pr, core::tui::image::CellRegion region,
+    std::string & error);
+
+  // Write one tile: replay its cached escape bytes when `key` still matches
+  // what is stored for `slot`, else compose (unless `composed` already is),
+  // encode, emit, and cache the result. `composed` lets the live tile reuse
+  // the composition the info row already needed. Fills the readings for the
+  // caption and `error` when the tile could not be drawn.
+  void emit_tile(
+    std::ostream & out, std::size_t slot, std::size_t msg_index, const ComposedFrame * composed,
+    core::tui::image::CellRegion region, OverlayFrameReadings & readings, std::string & error);
 
   // [P]: pin or unpin the displayed frame, reporting the outcome on the
   // status row.
@@ -182,11 +197,22 @@ private:
   // so navigating back to a frame (or saving the one on screen) reuses the
   // decode instead of paying for it again. Its capacity comfortably exceeds
   // the tile count, so a pinned grid never evicts a frame it still shows.
-  DecodedFrameCache decoded_frames_;
+  PreviewFrameCache decoded_frames_;
+  // Rectified counterpart: the lens-undistortion remap is the most expensive
+  // per-pixel step of a composition, and its result per frame never changes
+  // (CameraInfo is fixed for the session), so a nudge that must repaint
+  // every tile still pays it only once per frame.
+  PreviewFrameCache rectified_frames_;
 
   // Scenes pinned next to the cursor's own frame, in pin order. Survives
   // leaving and re-entering the preview, like the rectify state above.
   std::vector<ScenePin> pins_;
+
+  // Rendered-tile cache: the escape bytes each tile last transmitted, keyed
+  // by everything that could change them (see walk_preview_cache.hpp). With
+  // it, plain navigation re-encodes only the live tile and replays the
+  // pinned ones, so pins no longer multiply the cost of a keypress.
+  TileRenderCache tile_cache_;
 };
 
 }  // namespace bagwiz::commands

@@ -276,9 +276,12 @@ Up to **three scenes** can be pinned, for four tiles in total (the pinned ones
 plus the frame the cursor is on, labelled `live`). Pressing `P` again on a
 pinned frame unpins it; pressing it at the cap reports `pin limit reached (3
 scenes)` and changes nothing. The cap is deliberate: each extra tile holds one
-point cloud per selected topic resident and adds one re-projection per
-keypress. Pins survive leaving the preview with `q` and coming back, and are
-kept when the overlay's topic selection changes.
+point cloud per selected topic resident and adds one re-projection whenever
+the projection itself changes — a nudge, an overlay adjustment, or a rectify
+toggle. Plain navigation costs the same however many scenes are pinned: only
+the live tile is re-rendered, and the pinned tiles are replayed from a cache
+of their last rendering. Pins survive leaving the preview with `q` and coming
+back, and are kept when the overlay's topic selection changes.
 
 Each tile carries a caption with the message index, the signed time offset from
 the live frame, its `live` / `pin N` label, and its own `Δ` — the capture-time

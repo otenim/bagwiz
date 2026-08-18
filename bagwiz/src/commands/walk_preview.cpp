@@ -26,6 +26,7 @@
 #include <iostream>
 #include <memory>
 #include <span>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -41,6 +42,11 @@ namespace
 // recently viewed rasters; the cap bounds memory (each raster is
 // width * height * 3 bytes, so a handful of HD frames is a few tens of MB).
 constexpr std::size_t kPreviewCacheCapacity = 16;
+
+// Upper bound on rectified frames kept alongside. Smaller than the decode
+// cache: the hot set is the pinned tiles plus the live frame, and each entry
+// is another full-size raster.
+constexpr std::size_t kRectifiedCacheCapacity = 8;
 
 }  // namespace
 
@@ -58,7 +64,8 @@ ImagePreviewSession::ImagePreviewSession(
   image_caps_(image_caps),
   camera_info_(camera_info),
   camera_info_error_(camera_info_error),
-  decoded_frames_(kPreviewCacheCapacity)
+  decoded_frames_(kPreviewCacheCapacity),
+  rectified_frames_(kRectifiedCacheCapacity)
 {
 }
 
@@ -76,35 +83,48 @@ core::image::RectifyHelper * ImagePreviewSession::ensure_rectify_helper(
   return rectify_helper_.get();
 }
 
-void ImagePreviewSession::maybe_rectify(core::image::PackedRaster * raster)
-{
-  if (raster == nullptr) {
-    return;
-  }
-  auto * helper = ensure_rectify_helper(raster->width, raster->height);
-  if (helper == nullptr) {
-    return;
-  }
-  const auto remapped = helper->remap(raster->bgr, raster->width * 3);
-  raster->bgr.assign(remapped.begin(), remapped.end());
-  raster->encoding = "bgr8";
-}
-
 ImagePreviewSession::ComposedFrame ImagePreviewSession::compose_frame(
   std::size_t idx, std::size_t slot)
 {
   ComposedFrame composed;
   auto & pr = composed.frame;
   const auto & msg = cursor_.cache()[idx];
-  auto hit = decoded_frames_.get(idx, type_name_, msg.payload);
-  if (hit.raster == nullptr) {
-    pr.error = std::move(hit.error);
+  auto base = decoded_frames_.get(
+    idx, [&] { return core::image::to_packed_raster(type_name_, msg.payload); });
+  if (base.raster == nullptr) {
+    pr.error = std::move(base.error);
     return composed;
   }
-  pr.raster = *hit.raster;  // copy the pristine base before mutating overlays
+
+  // The frame the overlay is drawn on: the base decode, or its cached
+  // rectified remap. Rectification per frame is deterministic (CameraInfo is
+  // fixed), so the remap — the most expensive per-pixel step here — runs
+  // once per frame however many repaints show it.
+  const core::image::PackedRaster * source = base.raster;
   if (rectify_enabled_) {
-    maybe_rectify(&*pr.raster);
+    if (auto * helper = ensure_rectify_helper(source->width, source->height); helper != nullptr) {
+      auto rectified = rectified_frames_.get(idx, [&] {
+        // Only the scalars are copied from the source; its pixel buffer is
+        // read in place by the remap, and the remapped bytes land directly in
+        // the new raster instead of overwriting a pointless copy.
+        core::image::PackedRasterResult produced;
+        core::image::PackedRaster rect;
+        rect.width = source->width;
+        rect.height = source->height;
+        rect.encoding = "bgr8";
+        rect.header_stamp_ns = source->header_stamp_ns;
+        const auto remapped = helper->remap(source->bgr, source->width * 3);
+        rect.bgr.assign(remapped.begin(), remapped.end());
+        produced.raster = std::move(rect);
+        return produced;
+      });
+      if (rectified.raster != nullptr) {
+        source = rectified.raster;
+      }
+    }
   }
+
+  pr.raster = *source;  // copy the pristine frame before mutating overlays
   if (overlay_.state().enabled) {
     composed.readings = overlay_.maybe_overlay(
       slot, &*pr.raster, msg.timestamp_ns, camera_info_,
@@ -142,18 +162,59 @@ std::vector<TileCaption> ImagePreviewSession::tile_captions() const
   return tiles;
 }
 
-std::string ImagePreviewSession::draw_tile_image(
-  std::ostream & out, const core::image::PackedRasterResult & pr,
-  core::tui::image::CellRegion region)
+std::string ImagePreviewSession::encode_tile(
+  const core::image::PackedRasterResult & pr, core::tui::image::CellRegion region,
+  std::string & error)
 {
+  error.clear();
   if (!pr.ok()) {
-    return fmt::format("cannot decode this message: {}", pr.error);
+    error = fmt::format("cannot decode this message: {}", pr.error);
+    return {};
   }
-  const std::string err = core::tui::image::render_image(out, *pr.raster, region, image_caps_);
+  std::ostringstream buffer;
+  const std::string err = core::tui::image::render_image(buffer, *pr.raster, region, image_caps_);
   if (!err.empty()) {
-    return fmt::format("preview unavailable: {}", err);
+    error = fmt::format("preview unavailable: {}", err);
+    return {};
   }
-  return "";
+  return std::move(buffer).str();
+}
+
+void ImagePreviewSession::emit_tile(
+  std::ostream & out, std::size_t slot, std::size_t msg_index, const ComposedFrame * composed,
+  core::tui::image::CellRegion region, OverlayFrameReadings & readings, std::string & error)
+{
+  const TileRenderKey key = tile_render_key(
+    overlay_.state(), rectify_enabled_, overlay_.composition_generation(), msg_index, region,
+    image_caps_);
+  if (const auto * hit = tile_cache_.find(slot, key); hit != nullptr) {
+    // Byte-identical to what a recomposition would transmit, so replay it:
+    // this is what keeps pinned tiles free on plain navigation.
+    out << hit->payload;
+    readings = hit->readings;
+    error.clear();
+    return;
+  }
+
+  ComposedFrame local;
+  if (composed == nullptr) {
+    local = compose_frame(msg_index, slot);
+    composed = &local;
+  }
+  readings = composed->readings;
+  std::string payload = encode_tile(composed->frame, region, error);
+  if (!error.empty()) {
+    return;  // failures are not cached; the next repaint retries
+  }
+  out << payload;
+  // The composition itself can move the key: a pinned tile's first cloud can
+  // stretch the auto range mid-compose, and the pixels above were painted
+  // with the stretched bounds. Store under the post-compose key so the entry
+  // replays next repaint instead of guaranteeing itself a miss.
+  const TileRenderKey stored_key = tile_render_key(
+    overlay_.state(), rectify_enabled_, overlay_.composition_generation(), msg_index, region,
+    image_caps_);
+  tile_cache_.store(slot, TileRenderEntry{stored_key, std::move(payload), composed->readings});
 }
 
 void ImagePreviewSession::toggle_pin()
@@ -180,8 +241,10 @@ void ImagePreviewSession::toggle_pin()
   }
   // Unpinning shifts the pins above it down one slot, so their tiles reload
   // their clouds once; the slots the grid no longer shows are released here
-  // rather than holding a cloud each resident for the rest of the session.
+  // rather than holding a cloud (and a rendered payload) each for the rest
+  // of the session.
   overlay_.retain_slots(pins_.size() + 1);
+  tile_cache_.trim(pins_.size() + 1);
 }
 
 void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
@@ -309,12 +372,21 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   region.rows = region_rows;
   region.cols = cols;
 
-  if (pins_.empty()) {
-    // Nothing pinned: one image centred in the whole region, exactly the view
-    // the preview had before scene pinning existed.
-    if (const std::string err = draw_tile_image(out, pr, region); !err.empty()) {
+  // The live frame alone, centred in the whole region: the only view when
+  // nothing is pinned, and the fallback when no tile grid fits.
+  const auto emit_live_full_region = [&] {
+    OverlayFrameReadings readings;
+    std::string err;
+    emit_tile(out, kLiveOverlaySlot, index, &live, region, readings, err);
+    if (!err.empty()) {
       core::tui::draw_line(out, region_row, fmt::format("  {}", err), cols);
     }
+  };
+
+  if (pins_.empty()) {
+    // Nothing pinned: exactly the view the preview had before scene pinning
+    // existed.
+    emit_live_full_region();
   } else {
     // The grid shape is chosen against the live frame's aspect; a frame that
     // failed to decode carries none, so fall back to a 16:9 tile.
@@ -331,9 +403,7 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
     if (tiles.empty()) {
       // Not even one tile fits: draw the live frame across the whole region so
       // the renderer's own "too small" reason reaches the screen.
-      if (const std::string err = draw_tile_image(out, pr, region); !err.empty()) {
-        core::tui::draw_line(out, region_row, fmt::format("  {}", err), cols);
-      }
+      emit_live_full_region();
     }
 
     // Caption rows are composed whole before being drawn: draw_line() erases
@@ -354,19 +424,20 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
         caption_text.clear();
       }
 
-      // Compose before captioning: the caption reports what this tile itself
+      // Emit before captioning: the caption reports what this tile itself
       // paired with, which is the per-scene reading the grid exists to compare,
-      // and carries the failure when the tile could not be drawn at all.
+      // and carries the failure when the tile could not be drawn at all. A
+      // pinned tile whose render key is unchanged replays its cached bytes
+      // (and cached readings) without recomposing.
       TileCaption meta = tiles_meta[i];
+      OverlayFrameReadings readings;
       std::string error;
       if (i == 0) {
-        meta.residual_ns = live.readings.residual_ns;
-        error = draw_tile_image(out, pr, tiles[i].image);
+        emit_tile(out, kLiveOverlaySlot, index, &live, tiles[i].image, readings, error);
       } else {
-        const auto composed = compose_frame(meta.pin.index, meta.pin_number);
-        meta.residual_ns = composed.readings.residual_ns;
-        error = draw_tile_image(out, composed.frame, tiles[i].image);
+        emit_tile(out, meta.pin_number, meta.pin.index, nullptr, tiles[i].image, readings, error);
       }
+      meta.residual_ns = readings.residual_ns;
 
       std::string text = (i == 0 && !notice.empty()) ? notice : tile_caption(meta, live_stamp);
       if (!error.empty()) {

@@ -185,6 +185,7 @@ set(bagwiz_command_sources
   src/commands/walk_overlay_scan.cpp
   src/commands/walk_pins.cpp
   src/commands/walk_preview.cpp
+  src/commands/walk_preview_cache.cpp
   src/commands/walk_preview_legend.cpp
   src/commands/walk_save.cpp
   src/commands/traj.cpp
@@ -717,6 +718,16 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_walk_pins_test ${bagwiz_test_libs} fmt::fmt)
 
+  # The tile render cache is pure key comparison and storage; it reads the
+  # overlay state struct through walk_overlay.hpp but calls nothing on the
+  # controller, so only headers (and tf2, via walk_edit.hpp) are needed.
+  ament_add_gtest(bagwiz_walk_preview_cache_test
+    test/commands/walk_preview_cache_test.cpp
+    src/commands/walk_preview_cache.cpp)
+  target_include_directories(bagwiz_walk_preview_cache_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_walk_preview_cache_test ${bagwiz_test_libs} fmt::fmt ${tf2_TARGETS})
+
   ament_add_gtest(bagwiz_walk_save_test
     test/commands/walk_save_test.cpp
     src/commands/walk_save.cpp)
@@ -739,6 +750,7 @@ if(BUILD_TESTING)
     src/commands/walk_overlay_scan.cpp
     src/commands/walk_pins.cpp
     src/commands/walk_preview.cpp
+    src/commands/walk_preview_cache.cpp
     src/commands/walk_preview_legend.cpp
     src/commands/walk_save.cpp
     src/commands/trim_stamp.cpp

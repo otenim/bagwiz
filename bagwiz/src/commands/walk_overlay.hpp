@@ -100,6 +100,20 @@ struct PcdOverlayState
 // time was used, "record" when it was never available, and "header->record"
 // when a selected topic could not honour capture time and forced the fallback.
 [[nodiscard]] std::string_view pcd_match_clock_name(const PcdOverlayState & pcd);
+// The {min, max} bounds the overlay actually colours points with: the manual
+// bounds in manual mode, else the running auto extent. The single definition
+// of this rule — the projection paints with it and the preview's tile render
+// cache keys on it, and the two must never drift apart or the cache would
+// replay stale-coloured tiles. Inline so the cache's standalone test target
+// needs no link against the controller's sources.
+[[nodiscard]] inline std::pair<double, double> pcd_display_range(const PcdOverlayState & pcd)
+{
+  if (pcd.auto_range) {
+    return {pcd.computed_min, pcd.computed_max};
+  }
+  return {pcd.manual_min, pcd.manual_max};
+}
+
 // The tile whose readings drive the info row, the Δ readout and the
 // edit-candidate derivation: the one showing the cursor's own frame. Pinned
 // scenes occupy slots 1..kMaxScenePins.
@@ -250,6 +264,16 @@ public:
   // scene shrinks the tile grid.
   void retain_slots(std::size_t slot_count);
 
+  // Monotonic counter over the composition inputs that are not plain values:
+  // the TF buffer behind the projection (extrinsic edits write into it) and
+  // the scan behind the fetchers (a topic re-selection swaps it). The
+  // preview's tile render cache keys on this, so a nudge repaints every tile
+  // while plain navigation replays the pinned ones (see walk_preview_cache).
+  [[nodiscard]] std::uint64_t composition_generation() const noexcept
+  {
+    return composition_generation_;
+  }
+
 private:
   std::filesystem::path input_path_;
   const io::BagReader & reader_;
@@ -274,6 +298,8 @@ private:
   // Grown on demand, indexed by slot; index 0 is the live tile. Cleared on an
   // initialization swap, since the fetchers belong to the previous scan.
   std::vector<OverlaySlot> slots_;
+  // See composition_generation().
+  std::uint64_t composition_generation_ = 0;
   // Cloud index of the active scan, kept so a slot's fetchers can be built the
   // first time that tile is composed. The topic name travels with its entries
   // rather than being read back from pcd_topics_selected_, which a *started*
