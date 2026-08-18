@@ -139,8 +139,9 @@ void apply_edge_to_buffer(const EditableEdge & edge, tf2::BufferCore & buffer);
 void carry_over_edits(
   std::vector<EditableEdge> & fresh, const std::vector<EditableEdge> & previous);
 
-// Every edited edge as the TransformStamped `bagwiz tf static update`
-// upserts (edited_transform of each), in edge order. Empty when nothing is
+// Every edited edge as the TransformStamped values `bagwiz tf static
+// update` applies as upsert operations (edited_transform of each), in edge
+// order. Empty when nothing is
 // edited — the apply path has nothing to write then. Feeding the update
 // the transforms directly (rather than round-tripping through the YAML
 // below) keeps the applied values bit-exact with what the preview shows.
