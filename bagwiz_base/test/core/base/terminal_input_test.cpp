@@ -151,6 +151,16 @@ TEST(ClassifyKey, ExtrinsicEditStepResetDump)
   EXPECT_EQ(classify_key("d"), KeyEvent::kUnknown);
 }
 
+TEST(ClassifyKey, ApplyEditsToBagBinding)
+{
+  // Shift-A, following the Shift-S / Shift-D convention: applying rewrites
+  // the input bag in place, so one mistyped letter must not trigger it (a
+  // confirmation prompt guards it as well). Lowercase 'a' stays the YAML
+  // view's array-expand toggle.
+  EXPECT_EQ(classify_key("A"), KeyEvent::kEditApplyToBag);
+  EXPECT_EQ(classify_key("a"), KeyEvent::kToggleArrayExpand);
+}
+
 TEST(ClassifyKey, PinSceneBinding)
 {
   // Shift-P, not a bare 'p': lowercase p toggles the pcd overlay, and the two

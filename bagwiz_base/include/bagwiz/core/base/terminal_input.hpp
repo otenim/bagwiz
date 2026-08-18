@@ -64,6 +64,7 @@ enum class KeyEvent {
   kEditStepDown,         // decrease the edit nudge step size
   kEditReset,            // reset the edited edge to its original bag value
   kEditDumpYaml,         // export the edited edges as static-TF YAML (prompts)
+  kEditApplyToBag,       // overwrite the input bag's static TF with the edits (prompts)
   kPinScene,             // pin/unpin the displayed frame as a preview scene tile
   kConfirm,              // confirm the current prompt/selection
   kQuit,                 // exit the interactive loop
@@ -90,6 +91,7 @@ enum class KeyEvent {
 //     nudges 'x'/'X', 'y'/'Y', 'z'/'Z' (translation up/down), 'l'/'L'
 //     (roll), 'n'/'N' (pitch), 'w'/'W' (yaw), 'm'/'M' (step size), '0'
 //     (reset edge), 'D' (dump edited edges as YAML — walk),
+//     'A' (apply the edited edges to the input bag's static TF — walk),
 //     'P' (pin/unpin the displayed frame as a preview scene — walk),
 //     Enter/Return (confirm the current prompt or selection),
 //     'q'/'Q' (quit), plus control
