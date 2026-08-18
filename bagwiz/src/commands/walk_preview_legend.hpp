@@ -26,7 +26,10 @@ namespace bagwiz::commands
 // unconditionally to guide the user to enable the overlay in the first place.
 // `edit_active` swaps the extrinsic-edit entry hint ([e] edit extrinsic,
 // shown with a selected topic) for the edit mode's own nudge keys.
-[[nodiscard]] std::string build_preview_legend(bool pcd_topic_selected, bool edit_active);
+// `current_frame_pinned` flips the scene-pin hint between [P] pin scene and
+// [P] unpin scene, since [P] is its own undo on the frame being shown.
+[[nodiscard]] std::string build_preview_legend(
+  bool pcd_topic_selected, bool edit_active, bool current_frame_pinned);
 
 }  // namespace bagwiz::commands
 

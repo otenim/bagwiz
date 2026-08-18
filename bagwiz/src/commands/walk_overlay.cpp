@@ -274,14 +274,15 @@ PcdOverlayController::InitState PcdOverlayController::poll_initialize()
     return s;
   }
 
-  std::vector<core::pointcloud::PointCloudFetcher> fetchers;
-  fetchers.reserve(scan_result_->entries.size());
+  // Keep the cloud index rather than handing it straight to one fetcher set:
+  // every displayed tile builds its own fetchers from it (see ensure_slot).
+  pcd_index_.clear();
+  pcd_index_.reserve(scan_result_->entries.size());
   for (std::size_t i = 0; i < scan_result_->entries.size(); ++i) {
-    fetchers.emplace_back(
-      input_path_, pcd_topics_selected_[i], std::move(scan_result_->entries[i]));
+    pcd_index_.push_back(
+      OverlayTopicIndex{pcd_topics_selected_[i], std::move(scan_result_->entries[i])});
   }
-  pcd_fetchers_ = std::move(fetchers);
-  ranged_record_ns_.assign(pcd_fetchers_.size(), std::nullopt);
+  slots_.clear();
   active_scan_ = std::move(scan_result_);
 
   pcd_.topics = pcd_topics_selected_;
@@ -304,33 +305,67 @@ PcdOverlayController::InitState PcdOverlayController::poll_initialize()
   return s;
 }
 
-void PcdOverlayController::maybe_overlay(
-  core::image::PackedRaster * raster, std::int64_t record_stamp_ns,
+PcdOverlayController::OverlaySlot * PcdOverlayController::ensure_slot(std::size_t slot)
+{
+  if (pcd_index_.empty() || slot >= kMaxOverlaySlots) {
+    return nullptr;
+  }
+  if (slot >= slots_.size()) {
+    slots_.resize(slot + 1);
+  }
+  OverlaySlot & s = slots_[slot];
+  if (s.fetchers.size() != pcd_index_.size()) {
+    // First composition of this tile since the last load: give it its own
+    // fetchers over the same cloud index. The entries are copied (a few bytes
+    // per message) so each tile can cache a different cloud of the topic.
+    s.fetchers.clear();
+    s.fetchers.reserve(pcd_index_.size());
+    for (const auto & topic_index : pcd_index_) {
+      s.fetchers.emplace_back(input_path_, topic_index.topic, topic_index.entries);
+    }
+    s.ranged_record_ns.assign(s.fetchers.size(), std::nullopt);
+  }
+  return &s;
+}
+
+OverlayFrameReadings PcdOverlayController::maybe_overlay(
+  std::size_t slot, core::image::PackedRaster * raster, std::int64_t record_stamp_ns,
   const std::optional<core::image::CameraInfo> & camera_info,
   const EnsureRectifyHelper & ensure_helper, bool rectify_enabled)
 {
-  if (
-    raster == nullptr || !pcd_.enabled || pcd_.topics.empty() || pcd_fetchers_.empty() ||
-    active_scan_ == nullptr) {
-    return;
+  OverlayFrameReadings readings;
+  // Only the live tile owns the state's readings: the info row and
+  // refresh_edit_candidates() must describe the cursor's frame, not whichever
+  // pinned tile was composed last.
+  const bool is_live = slot == kLiveOverlaySlot;
+  if (raster == nullptr || !pcd_.enabled || pcd_.topics.empty() || active_scan_ == nullptr) {
+    return readings;
   }
-  // Past this point the overlay is live, so the info row will read the
-  // frame-match values below. Clear them up front: every remaining early
-  // return means nothing was matched this frame, and reporting a previous
-  // frame's clock or residual next to a projection error would be a lie.
-  pcd_.last_match_key = core::pointcloud::PointCloudMatchKey::kRecordTime;
-  pcd_.last_residual_ns.reset();
+  auto * fetch_slot = ensure_slot(slot);
+  if (fetch_slot == nullptr || fetch_slot->fetchers.empty()) {
+    return readings;
+  }
+  auto & fetchers = fetch_slot->fetchers;
+  auto & ranged_record_ns = fetch_slot->ranged_record_ns;
+  if (is_live) {
+    // Past this point the overlay is live, so the info row will read the
+    // frame-match values below. Clear them up front: every remaining early
+    // return means nothing was matched this frame, and reporting a previous
+    // frame's clock or residual next to a projection error would be a lie.
+    pcd_.last_match_key = core::pointcloud::PointCloudMatchKey::kRecordTime;
+    pcd_.last_residual_ns.reset();
+  }
 
   if (!camera_info.has_value()) {
     status_ = "pcd projection requires camera_info";
-    return;
+    return readings;
   }
 
   const auto & img = *raster;
   const auto * helper = ensure_helper(img.width, img.height);
   if (helper == nullptr) {
     status_ = "pcd projection requires camera_info";
-    return;
+    return readings;
   }
   const auto effective_ci = helper->effective_camera_info();
 
@@ -344,7 +379,7 @@ void PcdOverlayController::maybe_overlay(
   std::optional<std::int64_t> worst_residual_ns;
   const auto magnitude = [](std::int64_t v) { return v < 0 ? -v : v; };
 
-  for (std::size_t i = 0; i < pcd_fetchers_.size(); ++i) {
+  for (std::size_t i = 0; i < fetchers.size(); ++i) {
     // Pair the frame with the point cloud nearest in the clock both sides
     // share (see core::pointcloud::choose_frame_match): capture time when the
     // frame carries a header.stamp and every message of this topic does too,
@@ -358,7 +393,7 @@ void PcdOverlayController::maybe_overlay(
     const std::int64_t match_ns = match.target_ns;
 
     std::string error;
-    const auto * cloud = pcd_fetchers_[i].fetch(match_ns, match.key, error);
+    const auto * cloud = fetchers[i].fetch(match_ns, match.key, error);
     if (cloud == nullptr) {
       last_error = std::move(error);
       continue;
@@ -371,11 +406,14 @@ void PcdOverlayController::maybe_overlay(
     }
     // Remember what the edit mode needs to derive its editable edges: the
     // frame each topic's clouds live in and a TF time on the clock the
-    // overlay itself matched on.
-    if (i < pcd_.last_cloud_frames.size()) {
-      pcd_.last_cloud_frames[i] = cloud->frame_id;
+    // overlay itself matched on. From the live tile only — the edit chains
+    // are resolved at the cursor frame's lookup time.
+    if (is_live) {
+      if (i < pcd_.last_cloud_frames.size()) {
+        pcd_.last_cloud_frames[i] = cloud->frame_id;
+      }
+      pcd_.last_match_ns = match_ns;
     }
-    pcd_.last_match_ns = match_ns;
     // The true capture-time residual, meaningful whichever clock matched:
     // how far the chosen cloud was actually taken from this frame. Undefined
     // when either side left its stamp unset. Across topics the largest
@@ -388,13 +426,14 @@ void PcdOverlayController::maybe_overlay(
     }
 
     // Fold newly displayed clouds into the running colour ranges (once per
-    // cloud; the fetcher's cache address identifies it), then refresh the
-    // active property's auto range. This replaces the up-front full-bag
-    // min/max parse the overlay used to run at initialization.
-    const std::int64_t cloud_record_ns = pcd_fetchers_[i].cached_record_ns();
-    if (ranged_record_ns_[i] != cloud_record_ns) {
+    // cloud per tile), then refresh the active property's auto range. This
+    // replaces the up-front full-bag min/max parse the overlay used to run at
+    // initialization. Pinned tiles fold in too, so the auto range spans every
+    // scene on screen and the tiles stay comparable to each other.
+    const std::int64_t cloud_record_ns = fetchers[i].cached_record_ns();
+    if (ranged_record_ns[i] != cloud_record_ns) {
       if (core::pointcloud::accumulate_property_ranges(*cloud, pcd_.ranges, error)) {
-        ranged_record_ns_[i] = cloud_record_ns;
+        ranged_record_ns[i] = cloud_record_ns;
         pcd_.has_intensity = pcd_.ranges.has_intensity;
         const auto range = pcd_.ranges.resolve(pcd_.property);
         pcd_.computed_min = range.first;
@@ -416,14 +455,17 @@ void PcdOverlayController::maybe_overlay(
 
   // No fetch succeeded -> nothing was matched on any clock; report the safe
   // reading rather than leaving the previous frame's.
-  pcd_.last_match_key = effective_key.value_or(core::pointcloud::PointCloudMatchKey::kRecordTime);
-  pcd_.last_residual_ns = worst_residual_ns;
+  readings.residual_ns = worst_residual_ns;
+  if (is_live) {
+    pcd_.last_match_key = effective_key.value_or(core::pointcloud::PointCloudMatchKey::kRecordTime);
+    pcd_.last_residual_ns = readings.residual_ns;
+  }
 
   if (all_points.empty()) {
     if (!last_error.empty()) {
       status_ = std::move(last_error);
     }
-    return;
+    return readings;
   }
 
   const double vmin = pcd_.auto_range ? pcd_.computed_min : pcd_.manual_min;
@@ -433,6 +475,7 @@ void PcdOverlayController::maybe_overlay(
   if (!err.empty()) {
     status_ = err;
   }
+  return readings;
 }
 
 void PcdOverlayController::cycle_property()
@@ -585,6 +628,13 @@ bool PcdOverlayController::prompt_for_edge(core::tui::image::ImageBackend backen
   edit_.active = cursor;
   status_ = fmt::format("editing {}", edge_label(edit_.edges[edit_.active]));
   return true;
+}
+
+void PcdOverlayController::retain_slots(std::size_t slot_count)
+{
+  if (slot_count < slots_.size()) {
+    slots_.resize(slot_count);
+  }
 }
 
 void PcdOverlayController::apply_active_edit()

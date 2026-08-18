@@ -121,6 +121,9 @@ frame — and the view redraws on resize. Press `q` to return to the YAML view.
   overlay re-projects live — a visual fixer for camera-lidar
   miscalibration. See
   [Editing static extrinsics](#editing-static-extrinsics).
+- Pressing `P` **pins** the displayed frame as an extra tile, so up to four
+  scenes are shown as a grid and every nudge re-projects all of them at once.
+  See [Comparing several scenes at once](#comparing-several-scenes-at-once).
 - The overlay follows the current rectify state: with **rectify off** the
   points are projected onto the raw image using the camera's lens distortion
   (`plumb_bob`/`rational_polynomial`, or `equidistant` for fisheye lenses), and
@@ -177,20 +180,22 @@ every cloud in the bag up front would make initialization expensive — so the
 colors can shift during the first frames and then stabilize; `r` pins a
 manual range at any time.
 
-| Key             | Action                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `p`             | Toggle the point-cloud overlay on/off. Points project onto the raw or rectified image to match the current rectify state. |
-| `t`             | Open the PointCloud2 topic picker again to change the selected topics.                                                    |
-| `f`             | Cycle the visualized property: `distance` → `intensity` (when the topic has intensity) → `x` → `y` → `z` → `distance`.    |
-| `c`             | Cycle the color scheme: `jet` → `viridis` → `turbo` → `plasma` → `inferno` → `magma` → `rainbow` → `jet`.                 |
-| `r`             | Toggle between automatic min/max range and a manual range prompt.                                                         |
-| `=` / `+` / `-` | Increase / decrease point size.                                                                                           |
-| `]` / `[`       | Increase / decrease overlay alpha (transparency).                                                                         |
+| Key             | Action                                                                                                                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `p`             | Toggle the point-cloud overlay on/off. Points project onto the raw or rectified image to match the current rectify state.                                                                        |
+| `t`             | Open the PointCloud2 topic picker again to change the selected topics.                                                                                                                           |
+| `f`             | Cycle the visualized property: `distance` → `intensity` (when the topic has intensity) → `x` → `y` → `z` → `distance`.                                                                           |
+| `c`             | Cycle the color scheme: `jet` → `viridis` → `turbo` → `plasma` → `inferno` → `magma` → `rainbow` → `jet`.                                                                                        |
+| `r`             | Toggle between automatic min/max range and a manual range prompt.                                                                                                                                |
+| `=` / `+` / `-` | Increase / decrease point size.                                                                                                                                                                  |
+| `]` / `[`       | Increase / decrease overlay alpha (transparency).                                                                                                                                                |
+| `P`             | Pin/unpin the displayed frame as an extra scene tile, so one projection can be judged against several scenes at once. See [Comparing several scenes at once](#comparing-several-scenes-at-once). |
 
 Defaults on first enable are: property `distance`, scheme `viridis`, range `auto`,
 point size `2`, alpha `1.0`. The info row at the top of the preview (directly
 under the topic name) shows the current property, scheme, range mode, point
-size, and alpha, alongside the rectify state and any transient status message.
+size, and alpha, alongside the rectify state, the pin count when scenes are
+pinned, and any transient status message.
 While the overlay is on it also reports how the current frame was paired:
 `match: header` for capture time, `match: record` when no capture time was
 available on either side, and `match: header->record` when a selected topic
@@ -201,8 +206,8 @@ selected topic (`n/a` when either side left its stamp unset). Values within
 roughly half a lidar period are as tight as the pairing can get; a `Δ` of
 several hundred milliseconds means the two sensors' stamps genuinely disagree.
 Once a topic is selected, the preview's key legend also lists these adjustment
-keys (`f`/`c`/`r`/`=`/`-`/`[`/`]`) and the extrinsic-edit entry (`e`) so they
-are discoverable without leaving the TUI.
+keys (`f`/`c`/`r`/`=`/`-`/`[`/`]`), the scene-pin key (`P`) and the
+extrinsic-edit entry (`e`) so they are discoverable without leaving the TUI.
 
 The overlay is applied to both the on-screen preview and the image saved by `S`.
 If no TF data is available, no CameraInfo was resolved, or the selected topic has
@@ -251,11 +256,52 @@ value for every nudged component, and the step.
 | `w`/`W`                   | Nudge yaw up/down (ya**w** — `y` is taken by the y translation).           |
 | `m`/`M`                   | Coarser / finer step preset.                                               |
 | `0`                       | Reset the edited edge to the value recorded in the bag.                    |
+| `P`                       | Pin/unpin the displayed frame as an extra scene tile.                      |
 | `D`                       | Export every edited edge as static-TF YAML (prompts for a path, like `S`). |
 
 All other preview keys stay live while editing — navigate frames to check the
 fix elsewhere in the recording, toggle rectification with `u`, or adjust the
 overlay's point size and alpha.
+
+### Comparing several scenes at once
+
+An extrinsic that looks right on the frame in front of you can still be wrong
+elsewhere in the recording: a small yaw error is invisible against a distant
+flat road and obvious against a nearby pole. Pressing `P` **pins** the
+displayed frame, and the preview then shows the pinned scenes next to the
+cursor's own frame as a grid of tiles. Every nudge re-projects all of them, so
+one keypress tells you whether the fix holds everywhere instead of only here.
+
+Up to **three scenes** can be pinned, for four tiles in total (the pinned ones
+plus the frame the cursor is on, labelled `live`). Pressing `P` again on a
+pinned frame unpins it; pressing it at the cap reports `pin limit reached (3
+scenes)` and changes nothing. The cap is deliberate: each extra tile holds one
+point cloud per selected topic resident and adds one re-projection per
+keypress. Pins survive leaving the preview with `q` and coming back, and are
+kept when the overlay's topic selection changes.
+
+Each tile carries a caption with the message index, the signed time offset from
+the live frame, its `live` / `pin N` label, and its own `Δ` — the capture-time
+gap between that tile's cloud and its frame, so a tile whose pairing is loose
+is visible as such rather than being mistaken for a calibration error. While any
+scene is pinned the info row shows `pins: n/3` and drops its own `Δ` field,
+since every tile now reports one. The grid shape follows the terminal, chosen
+to show the most image per tile: two scenes sit side by side on a wide terminal
+and stack on a tall narrow one, and on a typical wide terminal three and four
+scenes both land on a 2x2 layout, so adding the fourth does not move the tiles
+already on screen. Pinning the frame the cursor is on does not draw it
+twice — the one tile is labelled `live · pin N`.
+
+Everything else keeps working per tile: navigation moves only the live tile,
+and rectification, property, scheme, range, point size and alpha apply to all
+of them, so the tiles stay comparable. `S` still saves the **live** tile at
+full resolution — a pinned grid changes what is on screen, not what is
+written. Pinning and unpinning report `pinned #<index> (n/3)` and
+`unpinned #<index> (n/3)` on the status row. `P` needs a PointCloud2 topic
+selected (the same condition as the overlay adjustment keys); without one it
+reports `pin: select a pcd topic first ([t])`. On a terminal too small to give
+every tile a legible box the grid is skipped, the live frame is drawn alone,
+and the caption row says `pinned scenes hidden: terminal too small for a grid`.
 
 ### Persisting the fix
 
@@ -365,6 +411,7 @@ not been read into the cache yet (they get pulled in on demand).
 | `m` / `M`                               | Edit mode: coarser / finer nudge step.                                                                                                                                                                                          |
 | `0`                                     | Edit mode: reset the edited edge to the bag's value.                                                                                                                                                                            |
 | `D`                                     | Export the edited static TF edges as YAML (prompts for a path).                                                                                                                                                                 |
+| `P`                                     | Pin/unpin the displayed frame as an extra image-preview tile (needs a selected pcd topic), so several scenes are re-projected together. See [Comparing several scenes at once](#comparing-several-scenes-at-once).              |
 | `q` / `Q` / `Esc` / `Ctrl-C` / `Ctrl-D` | Quit (in the image preview, returns to the YAML view).                                                                                                                                                                          |
 
 When the body is taller than the visible window, a `lines X-Y of N`

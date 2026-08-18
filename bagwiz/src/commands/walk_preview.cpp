@@ -20,6 +20,7 @@
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -89,26 +90,98 @@ void ImagePreviewSession::maybe_rectify(core::image::PackedRaster * raster)
   raster->encoding = "bgr8";
 }
 
-core::image::PackedRasterResult ImagePreviewSession::compose_frame(std::size_t idx)
+ImagePreviewSession::ComposedFrame ImagePreviewSession::compose_frame(
+  std::size_t idx, std::size_t slot)
 {
-  core::image::PackedRasterResult pr;
+  ComposedFrame composed;
+  auto & pr = composed.frame;
   const auto & msg = cursor_.cache()[idx];
   auto hit = decoded_frames_.get(idx, type_name_, msg.payload);
   if (hit.raster == nullptr) {
     pr.error = std::move(hit.error);
-    return pr;
+    return composed;
   }
   pr.raster = *hit.raster;  // copy the pristine base before mutating overlays
   if (rectify_enabled_) {
     maybe_rectify(&*pr.raster);
   }
   if (overlay_.state().enabled) {
-    overlay_.maybe_overlay(
-      &*pr.raster, msg.timestamp_ns, camera_info_,
+    composed.readings = overlay_.maybe_overlay(
+      slot, &*pr.raster, msg.timestamp_ns, camera_info_,
       [this](std::uint32_t w, std::uint32_t h) { return ensure_rectify_helper(w, h); },
       rectify_enabled_);
   }
-  return pr;
+  return composed;
+}
+
+std::vector<TileCaption> ImagePreviewSession::tile_captions() const
+{
+  const std::size_t index = cursor_.index();
+  const auto & cache = cursor_.cache();
+
+  std::vector<TileCaption> tiles;
+  tiles.reserve(pins_.size() + 1);
+
+  TileCaption live;
+  live.pin = ScenePin{index, cache[index].timestamp_ns};
+  live.live = true;
+  // A pin on the frame the cursor is showing labels this one tile as both,
+  // rather than drawing the same frame twice.
+  live.pin_number = pin_number_of(pins_, index).value_or(0);
+  tiles.push_back(live);
+
+  for (std::size_t i = 0; i < pins_.size(); ++i) {
+    if (pins_[i].index == index) {
+      continue;  // already on screen as the live tile
+    }
+    TileCaption tile;
+    tile.pin = pins_[i];
+    tile.pin_number = i + 1;
+    tiles.push_back(tile);
+  }
+  return tiles;
+}
+
+std::string ImagePreviewSession::draw_tile_image(
+  std::ostream & out, const core::image::PackedRasterResult & pr,
+  core::tui::image::CellRegion region)
+{
+  if (!pr.ok()) {
+    return fmt::format("cannot decode this message: {}", pr.error);
+  }
+  const std::string err = core::tui::image::render_image(out, *pr.raster, region, image_caps_);
+  if (!err.empty()) {
+    return fmt::format("preview unavailable: {}", err);
+  }
+  return "";
+}
+
+void ImagePreviewSession::toggle_pin()
+{
+  status_.clear();
+  if (overlay_.state().topics.empty()) {
+    // Pinning exists to judge one projection against several scenes, so it
+    // waits for an overlay topic the same way the adjustment keys do.
+    status_ = "pin: select a pcd topic first ([t])";
+    return;
+  }
+  const std::size_t index = cursor_.index();
+  const ScenePin pin{index, cursor_.cache()[index].timestamp_ns};
+  switch (toggle_scene_pin(pins_, pin)) {
+    case PinOutcome::kPinned:
+      status_ = fmt::format("pinned #{} ({}/{})", index, pins_.size(), kMaxScenePins);
+      break;
+    case PinOutcome::kUnpinned:
+      status_ = fmt::format("unpinned #{} ({}/{})", index, pins_.size(), kMaxScenePins);
+      break;
+    case PinOutcome::kFull:
+      status_ = fmt::format("pin limit reached ({} scenes)", kMaxScenePins);
+      return;  // nothing changed, so the slots still match the pins
+  }
+  // Unpinning shifts the pins above it down one slot, so their tiles reload
+  // their clouds once; the slots the grid no longer shows are released here
+  // rather than holding a cloud each resident for the rest of the session.
+  overlay_.retain_slots(pins_.size() + 1);
 }
 
 void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
@@ -139,7 +212,12 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
 
   const char * total_suffix = exhausted ? "" : "+";
   const std::size_t last_loaded_index = cache.size() - 1;
-  auto pr = compose_frame(index);
+  // The tiles this repaint shows, and the cursor's own frame among them. The
+  // live tile is composed first because the info row and the grid layout are
+  // both derived from it.
+  const auto tiles_meta = tile_captions();
+  const auto live = compose_frame(index, kLiveOverlaySlot);
+  const auto & pr = live.frame;
 
   std::string info;
   if (pr.ok()) {
@@ -170,16 +248,25 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
     // enabled. Showing them only then keeps them from going stale behind a
     // switched-off overlay.
     if (pcd.enabled) {
-      const std::string residual_text =
-        pcd.last_residual_ns.has_value()
-          ? fmt::format("{:+.1f}ms", static_cast<double>(*pcd.last_residual_ns) / 1e6)
-          : "n/a";
-      info += fmt::format("   match: {}   Δ: {}", hl(pcd_match_clock_name(pcd)), hl(residual_text));
+      info += fmt::format("   match: {}", hl(pcd_match_clock_name(pcd)));
+      // With a scene grid on screen every tile's caption carries its own Δ,
+      // which is the comparison that matters; repeating the live tile's here
+      // would only be noise.
+      if (pins_.empty()) {
+        const std::string residual_text =
+          pcd.last_residual_ns.has_value()
+            ? fmt::format("{:+.1f}ms", static_cast<double>(*pcd.last_residual_ns) / 1e6)
+            : "n/a";
+        info += fmt::format("   Δ: {}", hl(residual_text));
+      }
     }
     info += fmt::format(
       "   property: {}   range: {}   scheme: {}   size: {}   alpha: {}",
       hl(pcd_property_name(pcd.property)), hl(range_text), hl(pcd_scheme_name(pcd.scheme)),
       hl(pcd.point_size), hl(fmt::format("{:.1f}", pcd.alpha)));
+  }
+  if (!pins_.empty()) {
+    info += fmt::format("   pins: {}", hl(fmt::format("{}/{}", pins_.size(), kMaxScenePins)));
   }
   const auto & edit = overlay_.edit_state();
   if (edit.editing) {
@@ -206,27 +293,95 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   // The overlay adjustment keys are gated on the same condition the info row
   // uses to show pcd state, so the legend and the state readout agree on when
   // an overlay topic is in play.
-  const std::vector<std::string> legend_lines =
-    core::tui::wrap_to_width(build_preview_legend(!pcd.topics.empty(), edit.editing), cols);
+  const std::vector<std::string> legend_lines = core::tui::wrap_to_width(
+    build_preview_legend(
+      !pcd.topics.empty(), edit.editing, pin_number_of(pins_, index).has_value()),
+    cols);
   const int legend_top = std::max(1, rows - static_cast<int>(legend_lines.size()) + 1);
 
   // Image region: from the row just below the wrapped header down to the row
   // above the first legend line.
   const int region_row = 1 + static_cast<int>(header_lines.size());
   const int region_rows = std::max(1, legend_top - region_row);
-  if (pr.ok()) {
-    core::tui::image::CellRegion region;
-    region.row = region_row;
-    region.col = 1;
-    region.rows = region_rows;
-    region.cols = cols;
-    const std::string err = core::tui::image::render_image(out, *pr.raster, region, image_caps);
-    if (!err.empty()) {
-      core::tui::draw_line(out, region_row, fmt::format("  preview unavailable: {}", err), cols);
+  core::tui::image::CellRegion region;
+  region.row = region_row;
+  region.col = 1;
+  region.rows = region_rows;
+  region.cols = cols;
+
+  if (pins_.empty()) {
+    // Nothing pinned: one image centred in the whole region, exactly the view
+    // the preview had before scene pinning existed.
+    if (const std::string err = draw_tile_image(out, pr, region); !err.empty()) {
+      core::tui::draw_line(out, region_row, fmt::format("  {}", err), cols);
     }
   } else {
-    core::tui::draw_line(
-      out, region_row, fmt::format("  cannot decode this message: {}", pr.error), cols);
+    // The grid shape is chosen against the live frame's aspect; a frame that
+    // failed to decode carries none, so fall back to a 16:9 tile.
+    const std::uint32_t fit_w = pr.ok() ? pr.raster->width : 1920U;
+    const std::uint32_t fit_h = pr.ok() ? pr.raster->height : 1080U;
+    auto tiles = tile_regions(region, tiles_meta.size(), fit_w, fit_h, image_caps.cell);
+    std::string notice;
+    if (tiles.empty()) {
+      // No grid fits this terminal. Show the live frame alone and say so,
+      // rather than a mosaic too small to judge an alignment in.
+      notice = "  pinned scenes hidden: terminal too small for a grid";
+      tiles = tile_regions(region, 1, fit_w, fit_h, image_caps.cell);
+    }
+    if (tiles.empty()) {
+      // Not even one tile fits: draw the live frame across the whole region so
+      // the renderer's own "too small" reason reaches the screen.
+      if (const std::string err = draw_tile_image(out, pr, region); !err.empty()) {
+        core::tui::draw_line(out, region_row, fmt::format("  {}", err), cols);
+      }
+    }
+
+    // Caption rows are composed whole before being drawn: draw_line() erases
+    // the row it writes, so two tiles sharing a row have to be padded into one
+    // string first.
+    const std::int64_t live_stamp = cache[index].timestamp_ns;
+    std::string caption_text;
+    int caption_row = 0;
+    const auto flush_captions = [&]() {
+      if (caption_row > 0) {
+        core::tui::draw_line(out, caption_row, caption_text, cols);
+      }
+    };
+    for (std::size_t i = 0; i < tiles.size(); ++i) {
+      if (tiles[i].caption_row != caption_row) {
+        flush_captions();
+        caption_row = tiles[i].caption_row;
+        caption_text.clear();
+      }
+
+      // Compose before captioning: the caption reports what this tile itself
+      // paired with, which is the per-scene reading the grid exists to compare,
+      // and carries the failure when the tile could not be drawn at all.
+      TileCaption meta = tiles_meta[i];
+      std::string error;
+      if (i == 0) {
+        meta.residual_ns = live.readings.residual_ns;
+        error = draw_tile_image(out, pr, tiles[i].image);
+      } else {
+        const auto composed = compose_frame(meta.pin.index, meta.pin_number);
+        meta.residual_ns = composed.readings.residual_ns;
+        error = draw_tile_image(out, composed.frame, tiles[i].image);
+      }
+
+      std::string text = (i == 0 && !notice.empty()) ? notice : tile_caption(meta, live_stamp);
+      if (!error.empty()) {
+        text += fmt::format("  {}", error);
+      }
+      const int pad = tiles[i].col - 1 - core::tui::display_width(caption_text);
+      if (pad > 0) {
+        caption_text.append(static_cast<std::size_t>(pad), ' ');
+      }
+      // Reset after every segment: truncation drops a CSI sequence whole, so a
+      // caption cut short of its own reset would tint the next tile's.
+      caption_text += core::tui::truncate_to_width(text, tiles[i].cols);
+      caption_text += "\x1B[0m";
+    }
+    flush_captions();
   }
 
   for (std::size_t i = 0; i < legend_lines.size(); ++i) {
@@ -246,7 +401,10 @@ void ImagePreviewSession::save_image()
   const auto & image_caps = image_caps_;
 
   status_.clear();
-  auto pr = compose_frame(index);
+  // The live tile, at full resolution: a pinned grid changes what is on
+  // screen, not what [S] writes.
+  const auto composed = compose_frame(index, kLiveOverlaySlot);
+  const auto & pr = composed.frame;
   if (!pr.ok()) {
     status_ = fmt::format("cannot save: {}", pr.error);
     return;
@@ -548,6 +706,10 @@ void ImagePreviewSession::run()
       }
       case core::KeyEvent::kEditDumpYaml:
         save_edit_yaml();
+        needs_render = true;
+        break;
+      case core::KeyEvent::kPinScene:
+        toggle_pin();
         needs_render = true;
         break;
       case core::KeyEvent::kQuit:

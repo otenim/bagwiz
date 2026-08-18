@@ -13,7 +13,8 @@
 namespace bagwiz::commands
 {
 
-std::string build_preview_legend(bool pcd_topic_selected, bool edit_active)
+std::string build_preview_legend(
+  bool pcd_topic_selected, bool edit_active, bool current_frame_pinned)
 {
   std::string legend =
     "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [<] -10s   [>] +10s   [g] first "
@@ -21,6 +22,10 @@ std::string build_preview_legend(bool pcd_topic_selected, bool edit_active)
     "[u] rectify   [p] project pcd   [t] select pcd topics";
   if (pcd_topic_selected) {
     legend += "   [f] property   [c] scheme   [r] range   [= / -] size   [ [ / ] ] alpha";
+    // Pinning judges one projection against several scenes, so it needs an
+    // overlay topic just like the adjustment keys above. The hint names the
+    // direction [P] will take on the frame currently shown.
+    legend += current_frame_pinned ? "   [P] unpin scene" : "   [P] pin scene";
   }
   if (edit_active) {
     legend +=

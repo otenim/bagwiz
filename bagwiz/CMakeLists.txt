@@ -183,6 +183,7 @@ set(bagwiz_command_sources
   src/commands/walk_frame.cpp
   src/commands/walk_overlay.cpp
   src/commands/walk_overlay_scan.cpp
+  src/commands/walk_pins.cpp
   src/commands/walk_preview.cpp
   src/commands/walk_preview_legend.cpp
   src/commands/walk_save.cpp
@@ -706,6 +707,16 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_walk_preview_legend_test ${bagwiz_test_libs} fmt::fmt)
 
+  # The pin registry and the tile geometry are pure, so this test needs no
+  # bag, no TF and no terminal — only bagwiz_tui for the fit_image() the
+  # layout scoring reuses.
+  ament_add_gtest(bagwiz_walk_pins_test
+    test/commands/walk_pins_test.cpp
+    src/commands/walk_pins.cpp)
+  target_include_directories(bagwiz_walk_pins_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_walk_pins_test ${bagwiz_test_libs} fmt::fmt)
+
   ament_add_gtest(bagwiz_walk_save_test
     test/commands/walk_save_test.cpp
     src/commands/walk_save.cpp)
@@ -726,6 +737,7 @@ if(BUILD_TESTING)
     src/commands/walk_frame.cpp
     src/commands/walk_overlay.cpp
     src/commands/walk_overlay_scan.cpp
+    src/commands/walk_pins.cpp
     src/commands/walk_preview.cpp
     src/commands/walk_preview_legend.cpp
     src/commands/walk_save.cpp

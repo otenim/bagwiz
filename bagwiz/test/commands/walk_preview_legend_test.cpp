@@ -19,7 +19,7 @@ using bagwiz::commands::build_preview_legend;
 
 TEST(WalkPreviewLegend, AdvertisesTheSaveKeyAsShiftS)
 {
-  const std::string legend = build_preview_legend(false, false);
+  const std::string legend = build_preview_legend(false, false, false);
   // The binding lives in classify_key(); this pins the on-screen hint to it,
   // so a legend that still advertises the retired bare `s` fails here.
   EXPECT_NE(legend.find("[S] save"), std::string::npos) << legend;
@@ -28,7 +28,7 @@ TEST(WalkPreviewLegend, AdvertisesTheSaveKeyAsShiftS)
 
 TEST(WalkPreviewLegend, ListsNavigationAndToggleKeysUnconditionally)
 {
-  const std::string legend = build_preview_legend(false, false);
+  const std::string legend = build_preview_legend(false, false, false);
   EXPECT_NE(legend.find("[g] first"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[G] last"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[u] rectify"), std::string::npos) << legend;
@@ -41,14 +41,14 @@ TEST(WalkPreviewLegend, ListsNavigationAndToggleKeysUnconditionally)
 
 TEST(WalkPreviewLegend, PcdAdjustmentKeysAppearOnlyWithASelectedTopic)
 {
-  const std::string without_topic = build_preview_legend(false, false);
+  const std::string without_topic = build_preview_legend(false, false, false);
   EXPECT_EQ(without_topic.find("[f] property"), std::string::npos) << without_topic;
   EXPECT_EQ(without_topic.find("[c] scheme"), std::string::npos) << without_topic;
   EXPECT_EQ(without_topic.find("[r] range"), std::string::npos) << without_topic;
   EXPECT_EQ(without_topic.find("size"), std::string::npos) << without_topic;
   EXPECT_EQ(without_topic.find("alpha"), std::string::npos) << without_topic;
 
-  const std::string with_topic = build_preview_legend(true, false);
+  const std::string with_topic = build_preview_legend(true, false, false);
   EXPECT_NE(with_topic.find("[f] property"), std::string::npos) << with_topic;
   EXPECT_NE(with_topic.find("[c] scheme"), std::string::npos) << with_topic;
   EXPECT_NE(with_topic.find("[r] range"), std::string::npos) << with_topic;
@@ -62,8 +62,11 @@ TEST(WalkPreviewLegend, QuitHintStaysLastInBothStates)
   // trailing hint whatever combination of keys is present.
   for (const bool pcd_topic_selected : {false, true}) {
     for (const bool edit_active : {false, true}) {
-      const std::string legend = build_preview_legend(pcd_topic_selected, edit_active);
-      EXPECT_TRUE(legend.ends_with("[q] back")) << legend;
+      for (const bool current_frame_pinned : {false, true}) {
+        const std::string legend =
+          build_preview_legend(pcd_topic_selected, edit_active, current_frame_pinned);
+        EXPECT_TRUE(legend.ends_with("[q] back")) << legend;
+      }
     }
   }
 }
@@ -72,16 +75,46 @@ TEST(WalkPreviewLegend, AdvertisesEditEntryOnlyWithASelectedTopic)
 {
   // The edit mode needs an overlay to judge the alignment against, so its
   // entry hint rides the same condition as the pcd adjustment keys.
-  const std::string without_topic = build_preview_legend(false, false);
+  const std::string without_topic = build_preview_legend(false, false, false);
   EXPECT_EQ(without_topic.find("[e] edit extrinsic"), std::string::npos) << without_topic;
 
-  const std::string with_topic = build_preview_legend(true, false);
+  const std::string with_topic = build_preview_legend(true, false, false);
   EXPECT_NE(with_topic.find("[e] edit extrinsic"), std::string::npos) << with_topic;
+}
+
+TEST(WalkPreviewLegend, PinEntryAppearsOnlyWithASelectedTopic)
+{
+  // Pinning exists to compare one projection across scenes, so its hint rides
+  // the same condition as the pcd adjustment keys.
+  const std::string without_topic = build_preview_legend(false, false, false);
+  EXPECT_EQ(without_topic.find("[P]"), std::string::npos) << without_topic;
+
+  const std::string with_topic = build_preview_legend(true, false, false);
+  EXPECT_NE(with_topic.find("[P] pin scene"), std::string::npos) << with_topic;
+}
+
+TEST(WalkPreviewLegend, PinEntryTracksTheCurrentFrameSPinState)
+{
+  // [P] is its own undo, so the hint has to say which way it will go.
+  const std::string unpinned = build_preview_legend(true, false, false);
+  EXPECT_NE(unpinned.find("[P] pin scene"), std::string::npos) << unpinned;
+  EXPECT_EQ(unpinned.find("[P] unpin scene"), std::string::npos) << unpinned;
+
+  const std::string pinned = build_preview_legend(true, false, true);
+  EXPECT_NE(pinned.find("[P] unpin scene"), std::string::npos) << pinned;
+}
+
+TEST(WalkPreviewLegend, PinEntryStaysVisibleInsideTheEditMode)
+{
+  // Pinning scenes is most useful precisely while nudging an extrinsic, so
+  // the edit mode's own key list must not push the hint off the legend.
+  const std::string legend = build_preview_legend(true, true, false);
+  EXPECT_NE(legend.find("[P] pin scene"), std::string::npos) << legend;
 }
 
 TEST(WalkPreviewLegend, EditModeListsTheNudgeKeys)
 {
-  const std::string legend = build_preview_legend(true, true);
+  const std::string legend = build_preview_legend(true, true, false);
   EXPECT_NE(legend.find("[x/X y/Y z/Z] translate"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[l/L n/N w/W] roll/pitch/yaw"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[m/M] step"), std::string::npos) << legend;
