@@ -169,7 +169,13 @@ private:
   // Paint one preview frame: a two-line caption, the decoded image centred in
   // the region between caption and key hint, and the key hint on the last row.
   // With scenes pinned the image region is split into a tile grid instead.
+  // While the '?' overlay is open this paints the key reference instead.
   void render(std::ostream & out, core::tui::Size term);
+
+  // The '?' overlay: the preview's key reference as scrollable text, with
+  // its own close hint pinned to the last row. No images are drawn, so the
+  // overlay works the same on every backend.
+  void render_help(std::ostream & out, core::tui::Size term);
 
   // Save the frame currently shown in the preview as a PNG.
   void save_image();
@@ -197,6 +203,11 @@ private:
   const std::string & camera_info_error_;
 
   bool rectify_enabled_ = false;
+  // '?' overlay state: while shown, scroll keys move the reference and any
+  // key other than scroll/resize/quit closes it (see run()). Reset when the
+  // preview session ends so re-entering starts on the image.
+  bool show_help_ = false;
+  std::size_t help_scroll_ = 0;
   std::unique_ptr<core::image::RectifyHelper> rectify_helper_;
   std::uint32_t rectify_helper_w_ = 0;
   std::uint32_t rectify_helper_h_ = 0;
