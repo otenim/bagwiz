@@ -331,8 +331,9 @@ and their overlays and pickers) — and to any TUI added later.
   every command, view, and mode — a key must never do one thing in
   one TUI surface and something else in another. The established
   global bindings are: `?` opens the key reference, Esc backs out
-  one level (close the overlay, leave the mode, leave the view, quit
-  at the top), `q` and Ctrl-C / Ctrl-D quit the current view, and
+  one level (close the overlay, leave the mode, leave the view;
+  absorbed at the top so it cannot end the session), `q` and
+  Ctrl-C / Ctrl-D quit the current view, and
   `j`/`k` scroll. Never rebind one of these locally. When a view
   needs a new action, assign an unused key in `classify_key()`
   (`bagwiz_base/src/core/base/terminal_input.cpp`) — the single

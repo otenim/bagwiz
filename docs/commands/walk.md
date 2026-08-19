@@ -447,7 +447,7 @@ preview's extrinsic edit mode the footer swaps to the nudge keys.
 | `A`                             | Overwrite the input bag's static TF in place with the edited edges, after an explicit `yes` confirmation. See [Persisting the fix](#persisting-the-fix).                                                                        |
 | `P`                             | Pin/unpin the displayed frame as an extra image-preview tile (needs a selected pcd topic), so several scenes are re-projected together. See [Comparing several scenes at once](#comparing-several-scenes-at-once).              |
 | `?`                             | Open the key-help overlay (YAML view and image preview). While it is open, `Esc` closes it, `j`/`k` scroll it, and every other key — `q` included — is ignored.                                                                 |
-| `Esc`                           | Back out one level: close the help overlay, leave the edit mode, leave the preview, and quit walk from the YAML view.                                                                                                           |
+| `Esc`                           | Back out one level: close the help overlay, leave the edit mode, leave the preview. Absorbed at the YAML view — quitting walk is `q`.                                                                                           |
 | `q` / `Q` / `Ctrl-C` / `Ctrl-D` | Quit (in the image preview, returns to the YAML view). Inert while the help overlay is open — close it with `Esc` first.                                                                                                        |
 
 When the body is taller than the visible window, a `lines X-Y of N`

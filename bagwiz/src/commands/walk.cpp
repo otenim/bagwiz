@@ -73,7 +73,7 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //   i             : toggle in-terminal image preview (image topics on a
 //                   Kitty/Sixel-capable terminal; absent otherwise)
 //   Esc           : back out one level — close the help, leave the edit
-//                   mode, leave the preview, quit at the YAML view
+//                   mode, leave the preview; absorbed at the YAML view
 //   q / Q / Ctrl-C / Ctrl-D : quit the current view (walk itself from the
 //                   YAML view); swallowed while the '?' help is open
 // Inside the image preview u/p/t (rectify, pcd overlay, topic picker), the
@@ -233,8 +233,9 @@ public:
         }
       }
       if (nav == core::tui::NavKey::kBack) {
-        // Nothing to close at the top level: Esc leaves walk itself.
-        return core::tui::AppKeyResult::kQuit;
+        // Nothing to back out of at the top level: absorb Esc so a reflexive
+        // press cannot end the session (quitting is q / Ctrl-C / Ctrl-D).
+        return core::tui::AppKeyResult::kHandled;
       }
       switch (nav) {
         case core::tui::NavKey::kNext:

@@ -68,7 +68,7 @@ enum class KeyEvent {
   kPinScene,             // pin/unpin the displayed frame as a preview scene tile
   kHelp,                 // show the key-help overlay (walk command)
   kBack,                 // back out one level (lone ESC): close the help,
-                         // leave the edit mode / preview, quit at the top
+                         // leave the edit mode / preview; inert at the top
   kConfirm,              // confirm the current prompt/selection
   kQuit,                 // quit the current view ('q'/'Q', ^C/^D); the '?'
                          // help overlays swallow it (close with ESC first)

@@ -98,7 +98,7 @@ KeyEvent classify_key(std::string_view bytes)
     const unsigned char c = static_cast<unsigned char>(bytes[0]);
     switch (c) {
       // A lone ESC backs out one level; the views decide what that means
-      // (close the help, leave the edit mode or the preview, quit at the
+      // (close the help, leave the edit mode or the preview; inert at the
       // top). 'q' quits the current view outright.
       case 0x1B:  // lone ESC
         return KeyEvent::kBack;

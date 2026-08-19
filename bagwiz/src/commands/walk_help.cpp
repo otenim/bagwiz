@@ -88,7 +88,7 @@ std::vector<std::string> yaml_help_lines()
     "Other",
     "  S              save the message as YAML",
     "  Esc            close this help",
-    "  q              quit walk (Esc and Ctrl-C / Ctrl-D work too)",
+    "  q              quit walk (Ctrl-C / Ctrl-D work too)",
   };
 }
 
