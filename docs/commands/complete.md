@@ -186,7 +186,7 @@ source ~/.config/fish/completions/bagwiz.fish
     below).
     `calib` is a command group; `calib <TAB>` completes its subcommand
     (`cam-lidar`) and `calib -<TAB>` lists just the help flags; `calib cam-lidar
-    -<TAB>` surfaces its full flag set (see [`calib cam-lidar`](calib.md)) — its
+-<TAB>` surfaces its full flag set (see [`calib cam-lidar`](calib.md)) — its
     `--topic`/`-t` completes the bag's image topics, `--cam-info` its
     CameraInfo topics, and `--parent`/`--child`/`--traj-frame` complete static
     frame ids — see the sections below.
