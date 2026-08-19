@@ -215,6 +215,8 @@ KeyEvent classify_key(std::string_view bytes)
       // a letter case.
       case 'P':
         return KeyEvent::kPinScene;
+      case '?':
+        return KeyEvent::kHelp;
       default:
         return KeyEvent::kUnknown;
     }

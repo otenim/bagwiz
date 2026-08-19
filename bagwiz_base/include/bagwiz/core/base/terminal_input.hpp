@@ -66,6 +66,7 @@ enum class KeyEvent {
   kEditDumpYaml,         // export the edited edges as static-TF YAML (prompts)
   kEditApplyToBag,       // overwrite the input bag's static TF with the edits (prompts)
   kPinScene,             // pin/unpin the displayed frame as a preview scene tile
+  kHelp,                 // show the key-help overlay (walk command)
   kConfirm,              // confirm the current prompt/selection
   kQuit,                 // exit the interactive loop
   kResize,               // terminal was resized (synthesised by read_key_event
@@ -93,6 +94,7 @@ enum class KeyEvent {
 //     (reset edge), 'D' (dump edited edges as YAML — walk),
 //     'A' (apply the edited edges to the input bag's static TF — walk),
 //     'P' (pin/unpin the displayed frame as a preview scene — walk),
+//     '?' (show the key-help overlay — walk),
 //     Enter/Return (confirm the current prompt or selection),
 //     'q'/'Q' (quit), plus control
 //     chars (^C, ^D) and a lone ESC (0x1B) for quit
