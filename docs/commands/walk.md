@@ -393,7 +393,7 @@ hint, the key legend, and a status row:
 
 ```text
   [<index> / <last>[+]]  <topic>  <type>    lines <X>-<Y> of <M>
-  [Space/b] next/prev   [j/k] scroll   [S] save   [i] preview   [?] keys   [q] quit
+  [S] save   [i] preview   [?] keys   [q] quit
   <status hint or blank>
 ```
 

@@ -36,13 +36,14 @@ std::string flatten(const std::vector<std::string> & lines)
 TEST(WalkHelpFooters, YamlFooterCarriesOnlyTheWorkingSet)
 {
   const std::string footer = yaml_footer_legend(true);
-  EXPECT_NE(footer.find("[Space/b] next/prev"), std::string::npos) << footer;
-  EXPECT_NE(footer.find("[j/k] scroll"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[S] save"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[?] keys"), std::string::npos) << footer;
   EXPECT_TRUE(footer.ends_with("[q] quit")) << footer;
   // The reference material moved behind [?]: the time steps, the scroll
-  // jumps and the array toggle must no longer ride the footer.
+  // jumps and the array toggle must no longer ride the footer — and the
+  // intuitive Space/b and j/k need no label at all.
+  EXPECT_EQ(footer.find("next/prev"), std::string::npos) << footer;
+  EXPECT_EQ(footer.find("scroll"), std::string::npos) << footer;
   EXPECT_EQ(footer.find("10s"), std::string::npos) << footer;
   EXPECT_EQ(footer.find("Home"), std::string::npos) << footer;
   EXPECT_EQ(footer.find("expand"), std::string::npos) << footer;
@@ -67,6 +68,9 @@ TEST(WalkHelpFooters, YamlFooterAdvertisesPreviewOnlyWhenAvailable)
 TEST(WalkHelpFooters, PreviewFooterGatesOverlayEntriesOnASelectedTopic)
 {
   const std::string base = preview_footer_legend(false, false);
+  // Space/b navigation is unlabeled here too — the working set starts at
+  // the view toggles.
+  EXPECT_EQ(base.find("next/prev"), std::string::npos) << base;
   EXPECT_NE(base.find("[u] rectify"), std::string::npos) << base;
   EXPECT_NE(base.find("[p] pcd"), std::string::npos) << base;
   EXPECT_NE(base.find("[?] keys"), std::string::npos) << base;

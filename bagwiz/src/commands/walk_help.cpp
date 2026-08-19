@@ -16,7 +16,9 @@ namespace bagwiz::commands
 
 std::string yaml_footer_legend(bool preview_available)
 {
-  std::string legend = "  [Space/b] next/prev   [j/k] scroll   [S] save   ";
+  // Space/b and j/k are unlabeled: paging and scrolling are intuitive
+  // enough, and the '?' reference still lists them.
+  std::string legend = "  [S] save   ";
   if (preview_available) {
     legend += "[i] preview   ";
   }
@@ -32,7 +34,7 @@ std::string preview_footer_legend(bool pcd_topic_selected, bool edit_active)
     return "  [x/y/z] move   [l/n/w] rotate   [m] step   [0] reset   [A] apply   [D] yaml"
            "   [e] done   [?] keys";
   }
-  std::string legend = "  [Space/b] next/prev   [u] rectify   [p] pcd   ";
+  std::string legend = "  [u] rectify   [p] pcd   ";
   if (pcd_topic_selected) {
     // The edit mode and the scene pins judge a projection against the image,
     // so their entry hints wait for an overlay topic like the keys do.
