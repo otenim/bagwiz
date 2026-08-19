@@ -42,6 +42,7 @@ add_library(bagwiz_pointcloud
   src/core/calib/se3.cpp
   src/core/calib/nelder_mead.cpp
   src/core/calib/depth_cull.cpp
+  src/core/calib/nid_cost.cpp
   src/core/pointcloud/cloud_concat.cpp
   src/core/pointcloud/cloud_transform.cpp
   src/core/pointcloud/color_mapper.cpp
@@ -180,6 +181,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_calib_depth_cull_test test/core/calib/depth_cull_test.cpp)
   target_link_libraries(bagwiz_calib_depth_cull_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_nid_cost_test test/core/calib/nid_cost_test.cpp)
+  target_link_libraries(bagwiz_calib_nid_cost_test bagwiz_pointcloud)
 endif()
 
 ament_package()
