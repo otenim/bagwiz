@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <numeric>
 #include <utility>
 #include <vector>
 

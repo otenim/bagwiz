@@ -645,9 +645,10 @@ private:
   }
 
   // `static` is a command group, not a leaf: its actions live under
-  // `static calc` (resolve a transform), `static cp` (copy static TF between
-  // bags), `static drop` (remove frames and their subtrees from the static
-  // tree), `static dump` (write the static tree as YAML), `static join`
+  // `static calc` (resolve a transform), `static calibrate` (refine one edge
+  // against the bag's map and images, writing YAML), `static cp` (copy static
+  // TF between bags), `static drop` (remove frames and their subtrees from the
+  // static tree), `static dump` (write the static tree as YAML), `static join`
   // (read that YAML back into a bag), and `static update` (edge-granular
   // add/update of the static tree from YAML). Modeling it as a group
   // (require_subcommand(1)) keeps room for further static-tree queries and keeps

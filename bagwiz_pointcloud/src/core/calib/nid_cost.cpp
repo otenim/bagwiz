@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <vector>
 
 namespace bagwiz::core::calib
