@@ -6,8 +6,8 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef BAGWIZ__CORE__SLAM__POINT_CLOUD_IO_HPP_
-#define BAGWIZ__CORE__SLAM__POINT_CLOUD_IO_HPP_
+#ifndef BAGWIZ__CORE__POINTCLOUD__POINT_CLOUD_IO_HPP_
+#define BAGWIZ__CORE__POINTCLOUD__POINT_CLOUD_IO_HPP_
 
 #include <array>
 #include <cstdint>
@@ -17,10 +17,11 @@
 #include <string>
 #include <vector>
 
-// GLIM-free point-cloud I/O used by the `map` commands. Kept free of GLIM /
-// Eigen / gtsam_points types so the reader/writer (and their tests) build in
-// every configuration, not only when BAGWIZ_WITH_SLAM is on.
-namespace bagwiz::core::slam
+// GLIM-free point-cloud I/O used by the `map` commands and `tf static
+// calibrate`. Kept free of GLIM / Eigen / gtsam_points types so the
+// reader/writer (and their tests) build in every configuration, not only when
+// BAGWIZ_WITH_SLAM is on.
+namespace bagwiz::core::pointcloud
 {
 
 // In-memory point cloud read from a binary PCD v0.7 file. `intensities` is
@@ -65,6 +66,6 @@ void write_pcd(
 // or malformed headers.
 PcdReadResult read_pcd(std::istream & is);
 
-}  // namespace bagwiz::core::slam
+}  // namespace bagwiz::core::pointcloud
 
-#endif  // BAGWIZ__CORE__SLAM__POINT_CLOUD_IO_HPP_
+#endif  // BAGWIZ__CORE__POINTCLOUD__POINT_CLOUD_IO_HPP_

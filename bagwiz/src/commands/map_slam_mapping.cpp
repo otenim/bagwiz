@@ -11,7 +11,7 @@
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/pointcloud/kdtree.hpp"
 #include "bagwiz/core/pointcloud/outlier_removal.hpp"
-#include "bagwiz/core/slam/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
 #include "bagwiz/core/slam/progress_bar.hpp"
 #include "map_slam_threads.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
@@ -229,7 +229,7 @@ bool write_map_outputs(
     return false;
   }
 
-  core::slam::write_pcd(map_out, points, intensities, colors);
+  core::pointcloud::write_pcd(map_out, points, intensities, colors);
   // Flush and close before the good() check and before --viewer serves the file.
   // An open ofstream keeps the final partial (<8 KiB) block in its user-space
   // buffer, so until the stream is destroyed the on-disk file is short of its

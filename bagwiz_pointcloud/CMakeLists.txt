@@ -39,6 +39,11 @@ find_package(tf2 REQUIRED)
 find_package(OpenCV REQUIRED)
 
 add_library(bagwiz_pointcloud
+  src/core/calib/se3.cpp
+  src/core/calib/nelder_mead.cpp
+  src/core/calib/depth_cull.cpp
+  src/core/calib/nid_cost.cpp
+  src/core/calib/extrinsic_refine.cpp
   src/core/pointcloud/cloud_concat.cpp
   src/core/pointcloud/cloud_transform.cpp
   src/core/pointcloud/color_mapper.cpp
@@ -50,6 +55,7 @@ add_library(bagwiz_pointcloud
   src/core/pointcloud/normals.cpp
   src/core/pointcloud/outlier_removal.cpp
   src/core/pointcloud/overlay.cpp
+  src/core/pointcloud/point_cloud_io.cpp
   src/core/pointcloud/point_time.cpp
   src/core/pointcloud/pointcloud2.cpp
   src/core/pointcloud/projector.cpp
@@ -164,6 +170,24 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_pointcloud_outlier_removal_test test/core/pointcloud/outlier_removal_test.cpp)
   target_link_libraries(bagwiz_pointcloud_outlier_removal_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_pointcloud_point_cloud_io_test test/core/pointcloud/point_cloud_io_test.cpp)
+  target_link_libraries(bagwiz_pointcloud_point_cloud_io_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_se3_test test/core/calib/se3_test.cpp)
+  target_link_libraries(bagwiz_calib_se3_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_nelder_mead_test test/core/calib/nelder_mead_test.cpp)
+  target_link_libraries(bagwiz_calib_nelder_mead_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_depth_cull_test test/core/calib/depth_cull_test.cpp)
+  target_link_libraries(bagwiz_calib_depth_cull_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_nid_cost_test test/core/calib/nid_cost_test.cpp)
+  target_link_libraries(bagwiz_calib_nid_cost_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_extrinsic_refine_test test/core/calib/extrinsic_refine_test.cpp)
+  target_link_libraries(bagwiz_calib_extrinsic_refine_test bagwiz_pointcloud)
 endif()
 
 ament_package()
