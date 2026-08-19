@@ -54,11 +54,18 @@ struct ScrollHintResolution
 // Build one pager frame for the YAML view at `scroll`: the two information
 // header rows (timestamp, size), the decoded message body, and the pinned
 // footer (index row with scroll hint, key legend, status row). The legend
-// gains a rainbow "[i] preview" hint when `preview_available`.
+// gains an "[i] preview" hint when `preview_available`.
 [[nodiscard]] core::tui::Frame build_yaml_frame(
   std::size_t scroll, core::tui::Size term, const MessageCursor & cursor,
   const core::decoder::Decoder & decoder, bool expand_arrays, const std::string & topic_name,
   const std::string & type_name, const std::string & status, bool preview_available);
+
+// Build the frame the '?' overlay shows in the YAML view: `lines` (the key
+// reference) as the scrollable body under a one-line title. The pager
+// slices the body by its own scroll offset, so no scroll parameter is
+// needed here.
+[[nodiscard]] core::tui::Frame build_help_frame(
+  core::tui::Size term, const std::vector<std::string> & lines);
 
 }  // namespace bagwiz::commands
 

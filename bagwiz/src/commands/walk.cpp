@@ -22,6 +22,7 @@
 #include "walk_bag.hpp"      // NOLINT(build/include_subdir) src-local shared header
 #include "walk_cursor.hpp"   // NOLINT(build/include_subdir) src-local shared header
 #include "walk_frame.hpp"    // NOLINT(build/include_subdir) src-local shared header
+#include "walk_help.hpp"     // NOLINT(build/include_subdir) src-local shared header
 #include "walk_overlay.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "walk_preview.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "walk_save.hpp"     // NOLINT(build/include_subdir) src-local shared header
@@ -59,17 +60,12 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 // hint, key legend, status row) are pinned in place,
 // and only the body region scrolls.
 //
-// Keys:
+// Keys (the footer shows the current working set; '?' opens the full
+// reference overlay in both the YAML view and the image preview):
 //   right / Space : next message (wraps from last back to first)
 //   left / b      : previous message
-//   .             : jump forward ~1 second in time
-//   ,             : jump backward ~1 second in time
-//   >             : jump forward ~10 seconds in time
-//   <             : jump backward ~10 seconds in time
-//   up / k        : scroll body up one line
-//   down / j      : scroll body down one line
-//   Home / H      : jump body scroll to the head
-//   End / T       : jump body scroll to the tail
+//   , . < >       : jump ~1 second backward/forward (~10 seconds for < >)
+//   up/k down/j   : scroll the body; Home/H and End/T jump to head/tail
 //   g / G         : jump to first / last message (G forces a full scan)
 //   S             : save current message as yaml; inside the image preview,
 //                   save the displayed frame as a PNG (both prompt for a path)
@@ -77,16 +73,11 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //   i             : toggle in-terminal image preview (image topics on a
 //                   Kitty/Sixel-capable terminal; absent otherwise)
 //   q / Q / Esc / Ctrl-C / Ctrl-D : quit
-// Inside the image preview the additional keys u (rectify), p (pcd overlay),
-// t (pcd topics), f/c/r (property/scheme/range), =,+/- (point size) and ]/[
-// (alpha) apply; see walk_preview.hpp / walk_overlay.hpp. With the overlay
-// active, e/E enter the static-extrinsic edit mode (nudge keys x/X y/Y z/Z,
-// l/L n/N w/W, step m/M, reset 0, YAML export D, and A to overwrite the
-// input bag's static TF in place after a typed confirmation — see
-// walk_edit.hpp); any uncommitted edits are also summarised on stdout when
-// walk exits. Once a pcd topic is
-// selected, P pins the displayed frame as an extra preview tile, so one nudge
-// can be judged against several scenes at once (see walk_pins.hpp).
+// Inside the image preview u/p/t (rectify, pcd overlay, topic picker), the
+// overlay adjusters f/c/r/=/-/]/[, P (scene pins, see walk_pins.hpp) and the
+// static-extrinsic edit mode (e, nudge keys, D/A export/apply — see
+// walk_edit.hpp / walk_overlay.hpp) apply; any uncommitted edits are also
+// summarised on stdout when walk exits.
 // Messages are cached lazily so `prev` stays O(1) for anything already
 // seen and `G` is the only key that always triggers a full-remaining scan
 // (the forward time steps `.` / `>` read ahead only as far as the target
@@ -192,6 +183,11 @@ public:
     const bool preview_available = is_image_topic && image_caps.can_render();
 
     bool expand_arrays = false;
+    // The '?' overlay replaces the frame with the key reference; the body
+    // scroll it hijacks is restored on close so the YAML view resumes where
+    // it was.
+    bool show_help = false;
+    std::size_t help_saved_scroll = 0;
 
     core::tui::PagerConfig pager_cfg;
     core::tui::ScrollablePager pager(pager_cfg);
@@ -202,13 +198,29 @@ public:
       camera_info_error);
 
     auto build_frame = [&](std::size_t scroll, core::tui::Size term) -> core::tui::Frame {
+      if (show_help) {
+        return build_help_frame(term, yaml_help_lines());
+      }
       return build_yaml_frame(
         scroll, term, cursor, decoder, expand_arrays, topic_name, type_name, status,
         preview_available);
     };
 
+    const auto close_help = [&] {
+      show_help = false;
+      pager.set_scroll_offset(help_saved_scroll);
+    };
+
     auto on_nav = [&](core::tui::NavKey nav) -> core::tui::AppKeyResult {
       status.clear();
+      if (show_help && nav != core::tui::NavKey::kResize) {
+        // The overlay is a reference card, not a mode: any navigation key
+        // closes it without acting, so a stray press cannot move the cursor
+        // behind the help. (Scroll keys stay inside the pager and scroll
+        // the reference itself.)
+        close_help();
+        return core::tui::AppKeyResult::kHandled;
+      }
       switch (nav) {
         case core::tui::NavKey::kNext:
           cursor.navigate(MsgNav::kNext);
@@ -258,6 +270,21 @@ public:
 
     auto on_app_key = [&](core::KeyEvent ev) -> core::tui::AppKeyResult {
       status.clear();
+      if (ev == core::KeyEvent::kHelp) {
+        if (show_help) {
+          close_help();
+        } else {
+          show_help = true;
+          help_saved_scroll = pager.scroll_offset();
+          pager.set_scroll_offset(0);
+        }
+        return core::tui::AppKeyResult::kHandled;
+      }
+      if (show_help) {
+        // Same swallow rule as the navigation keys above.
+        close_help();
+        return core::tui::AppKeyResult::kHandled;
+      }
       switch (ev) {
         case core::KeyEvent::kToggleArrayExpand:
           expand_arrays = !expand_arrays;

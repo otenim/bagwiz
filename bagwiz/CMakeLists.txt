@@ -687,7 +687,8 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_walk_frame_test
     test/commands/walk_frame_test.cpp
     src/commands/walk_frame.cpp
-    src/commands/walk_cursor.cpp)
+    src/commands/walk_cursor.cpp
+    src/commands/walk_help.cpp)
   target_include_directories(bagwiz_walk_frame_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_walk_frame_test ${bagwiz_test_libs} fmt::fmt)
@@ -695,7 +696,8 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_walk_scroll_hint_test
     test/commands/walk_scroll_hint_test.cpp
     src/commands/walk_frame.cpp
-    src/commands/walk_cursor.cpp)
+    src/commands/walk_cursor.cpp
+    src/commands/walk_help.cpp)
   target_include_directories(bagwiz_walk_scroll_hint_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_walk_scroll_hint_test ${bagwiz_test_libs} fmt::fmt)
@@ -761,6 +763,7 @@ if(BUILD_TESTING)
     src/commands/walk_cursor.cpp
     src/commands/walk_edit.cpp
     src/commands/walk_frame.cpp
+    src/commands/walk_help.cpp
     src/commands/walk_overlay.cpp
     src/commands/walk_overlay_scan.cpp
     src/commands/walk_pins.cpp
