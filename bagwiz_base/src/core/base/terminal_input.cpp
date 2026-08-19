@@ -99,11 +99,13 @@ KeyEvent classify_key(std::string_view bytes)
     switch (c) {
       // A lone ESC backs out one level; the views decide what that means
       // (close the help, leave the edit mode or the preview, quit at the
-      // top). 'q'/'Q' are retired so a stray letter cannot end the session.
+      // top). 'q' quits the current view outright.
       case 0x1B:  // lone ESC
         return KeyEvent::kBack;
       case 0x03:  // Ctrl-C
       case 0x04:  // Ctrl-D
+      case 'q':
+      case 'Q':
         return KeyEvent::kQuit;
       case ' ':
         return KeyEvent::kNext;
@@ -327,7 +329,12 @@ KeyEvent read_key_event()
     }
   }
   if (got < sizeof(follow) || follow[0] != '[') {
-    return KeyEvent::kQuit;  // lone ESC or unrecognized sequence
+    // Lone ESC (or an unrecognized follower): classify the ESC byte itself
+    // so its binding lives in classify_key like every other key's, instead
+    // of being duplicated here (which is how ESC once stayed kQuit while
+    // classify_key already said kBack).
+    const char esc = '\x1B';
+    return classify_key(std::string_view(&esc, 1));
   }
   const char seq[3] = {'\x1B', follow[0], follow[1]};
   return classify_key(std::string_view(seq, 3));

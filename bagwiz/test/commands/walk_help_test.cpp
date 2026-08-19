@@ -40,7 +40,7 @@ TEST(WalkHelpFooters, YamlFooterCarriesOnlyTheWorkingSet)
   EXPECT_NE(footer.find("[j/k] scroll"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[S] save"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[?] keys"), std::string::npos) << footer;
-  EXPECT_TRUE(footer.ends_with("[Esc] quit")) << footer;
+  EXPECT_TRUE(footer.ends_with("[q] quit")) << footer;
   // The reference material moved behind [?]: the time steps, the scroll
   // jumps and the array toggle must no longer ride the footer.
   EXPECT_EQ(footer.find("10s"), std::string::npos) << footer;
@@ -144,28 +144,35 @@ TEST(WalkHelpReference, HelpIsGroupedBySection)
   EXPECT_NE(preview_help.find("Edit extrinsic"), std::string::npos);
 }
 
-TEST(WalkHelpReference, HelpAdvertisesItsOwnCloseKey)
+TEST(WalkHelpReference, HelpAdvertisesEscAsItsOnlyCloseKey)
 {
-  EXPECT_NE(flatten(yaml_help_lines()).find("? / Esc"), std::string::npos);
-  EXPECT_NE(flatten(yaml_help_lines()).find("close this help"), std::string::npos);
-  EXPECT_NE(flatten(preview_help_lines()).find("? / Esc"), std::string::npos);
-  EXPECT_NE(flatten(preview_help_lines()).find("close this help"), std::string::npos);
+  // Esc alone closes the reference ('?' only opens it), so the card must
+  // say so and must not advertise '?' as a second close key.
+  for (const auto & help : {flatten(yaml_help_lines()), flatten(preview_help_lines())}) {
+    EXPECT_NE(help.find("Esc"), std::string::npos) << help;
+    EXPECT_NE(help.find("close this help"), std::string::npos) << help;
+    EXPECT_EQ(help.find("? / Esc"), std::string::npos) << help;
+  }
 }
 
-TEST(WalkHelpFooters, TheRetiredQuitKeyIsAdvertisedNowhere)
+TEST(WalkHelpFooters, BackIsEscInThePreviewFooters)
 {
-  // 'q' no longer classifies to anything, so a footer or reference still
-  // advertising it would send users to a dead key.
-  for (const bool preview : {false, true}) {
-    EXPECT_EQ(yaml_footer_legend(preview).find("[q]"), std::string::npos);
-  }
+  // q quits from the YAML view; going back a level is Esc, so the preview
+  // footers advertise [Esc] back and leave q to the '?' reference.
   for (const bool topic : {false, true}) {
     for (const bool edit : {false, true}) {
-      EXPECT_EQ(preview_footer_legend(topic, edit).find("[q]"), std::string::npos);
+      EXPECT_EQ(preview_footer_legend(topic, edit).find("[q]"), std::string::npos) << topic << edit;
     }
   }
-  EXPECT_EQ(flatten(yaml_help_lines()).find("  q "), std::string::npos);
-  EXPECT_EQ(flatten(preview_help_lines()).find("  q "), std::string::npos);
+}
+
+TEST(WalkHelpReference, HelpListsBothLeaveKeys)
+{
+  // Esc backs out one level and q quits/leaves the view; both are real
+  // bindings, so the reference lists both.
+  EXPECT_NE(flatten(yaml_help_lines()).find("  q "), std::string::npos);
+  EXPECT_NE(flatten(preview_help_lines()).find("  q "), std::string::npos);
+  EXPECT_NE(flatten(preview_help_lines()).find("  Esc "), std::string::npos);
 }
 
 }  // namespace

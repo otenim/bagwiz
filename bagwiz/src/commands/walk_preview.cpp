@@ -481,7 +481,7 @@ void ImagePreviewSession::render_help(std::ostream & out, core::tui::Size term)
   // The close hint is pinned to the bottom like the preview's own footer;
   // the reference scrolls in the region above it.
   const std::vector<std::string> footer =
-    core::tui::wrap_to_width("  [Esc/?] close   [j/k] scroll", cols);
+    core::tui::wrap_to_width("  [Esc] close   [j/k] scroll", cols);
   const int footer_top = std::max(1, rows - static_cast<int>(footer.size()) + 1);
   const int body_rows = std::max(1, footer_top - 1);
 
@@ -697,12 +697,11 @@ void ImagePreviewSession::run()
     }
 
     if (show_help_) {
-      // The overlay accepts only its own keys: Esc or '?' closes it, the
-      // scroll keys page it, resize repaints it, Ctrl-C/Ctrl-D still leave
-      // the preview, and every other key is swallowed so a stray press
-      // cannot act behind the reference.
+      // The overlay accepts only its own keys: Esc closes it ('?' only
+      // opens it), the scroll keys page it, resize repaints it, and every
+      // other key — q included — is swallowed so a reference lookup can
+      // neither act behind the card nor leave the preview.
       switch (ev) {
-        case core::KeyEvent::kHelp:
         case core::KeyEvent::kBack:
           show_help_ = false;
           needs_render = true;
@@ -727,9 +726,6 @@ void ImagePreviewSession::run()
           break;
         case core::KeyEvent::kResize:
           needs_render = true;
-          break;
-        case core::KeyEvent::kQuit:
-          running = false;
           break;
         default:
           break;  // swallowed behind the reference

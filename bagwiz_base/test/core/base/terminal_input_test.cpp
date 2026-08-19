@@ -65,12 +65,13 @@ TEST(ClassifyKey, StepForwardAndBackward10s)
 
 TEST(ClassifyKey, QuitBindings)
 {
+  // 'q'/'Q' quit the current view (walk itself from the YAML view); the
+  // '?' help overlays swallow kQuit so a reference lookup cannot end the
+  // session. A lone ESC is kBack, not quit (see BackBinding).
+  EXPECT_EQ(classify_key("q"), KeyEvent::kQuit);
+  EXPECT_EQ(classify_key("Q"), KeyEvent::kQuit);
   EXPECT_EQ(classify_key(std::string_view("\x03", 1)), KeyEvent::kQuit);  // Ctrl-C
   EXPECT_EQ(classify_key(std::string_view("\x04", 1)), KeyEvent::kQuit);  // Ctrl-D
-  // 'q'/'Q' are retired: Esc is the one back/leave key, so a stray letter
-  // can no longer fall through a mode change and end the whole walk.
-  EXPECT_EQ(classify_key("q"), KeyEvent::kUnknown);
-  EXPECT_EQ(classify_key("Q"), KeyEvent::kUnknown);
 }
 
 TEST(ClassifyKey, BackBinding)

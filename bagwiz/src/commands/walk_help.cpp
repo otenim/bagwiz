@@ -20,7 +20,7 @@ std::string yaml_footer_legend(bool preview_available)
   if (preview_available) {
     legend += "[i] preview   ";
   }
-  legend += "[?] keys   [Esc] quit";
+  legend += "[?] keys   [q] quit";
   return legend;
 }
 
@@ -59,8 +59,8 @@ std::vector<std::string> yaml_help_lines()
     "  i              open the image preview (image topics only)",
     "Other",
     "  S              save the message as YAML",
-    "  ? / Esc        close this help",
-    "  Esc            quit (from the YAML view; Ctrl-C / Ctrl-D too)",
+    "  Esc            close this help",
+    "  q              quit walk (Esc and Ctrl-C / Ctrl-D work too)",
   };
 }
 
@@ -92,8 +92,8 @@ std::vector<std::string> preview_help_lines()
     "  D              export the edits as static-TF YAML",
     "  A              apply the edits to the input bag (asks first)",
     "Other",
-    "  ? / Esc        close this help",
-    "  Esc            back (edit mode -> preview -> YAML view)",
+    "  Esc            close this help / back (edit mode -> preview)",
+    "  q              back to the YAML view",
   };
 }
 

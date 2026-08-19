@@ -74,7 +74,8 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //                   Kitty/Sixel-capable terminal; absent otherwise)
 //   Esc           : back out one level — close the help, leave the edit
 //                   mode, leave the preview, quit at the YAML view
-//   Ctrl-C / Ctrl-D : quit from anywhere ('q' is not a key)
+//   q / Q / Ctrl-C / Ctrl-D : quit the current view (walk itself from the
+//                   YAML view); swallowed while the '?' help is open
 // Inside the image preview u/p/t (rectify, pcd overlay, topic picker), the
 // overlay adjusters f/c/r/=/-/]/[, P (scene pins, see walk_pins.hpp) and the
 // static-extrinsic edit mode (e, nudge keys, D/A export/apply — see
@@ -218,14 +219,18 @@ public:
       if (show_help) {
         // The overlay accepts only its own keys: Esc closes it, resize
         // repaints it, the scroll keys (handled inside the pager) move it,
-        // and every other key is swallowed so a stray press cannot act
-        // behind the reference.
-        if (nav == core::tui::NavKey::kBack) {
-          close_help();
-          return core::tui::AppKeyResult::kHandled;
+        // and every other key — q included — is swallowed so a reference
+        // lookup can neither act behind the card nor end the session.
+        switch (nav) {
+          case core::tui::NavKey::kBack:
+            close_help();
+            return core::tui::AppKeyResult::kHandled;
+          case core::tui::NavKey::kResize:
+          case core::tui::NavKey::kQuit:  // kHandled keeps the pager alive
+            return core::tui::AppKeyResult::kHandled;
+          default:
+            return core::tui::AppKeyResult::kIgnored;
         }
-        return nav == core::tui::NavKey::kResize ? core::tui::AppKeyResult::kHandled
-                                                 : core::tui::AppKeyResult::kIgnored;
       }
       if (nav == core::tui::NavKey::kBack) {
         // Nothing to close at the top level: Esc leaves walk itself.
@@ -280,19 +285,15 @@ public:
 
     auto on_app_key = [&](core::KeyEvent ev) -> core::tui::AppKeyResult {
       status.clear();
-      if (ev == core::KeyEvent::kHelp) {
-        if (show_help) {
-          close_help();
-        } else {
-          show_help = true;
-          help_saved_scroll = pager.scroll_offset();
-          pager.set_scroll_offset(0);
-        }
+      if (ev == core::KeyEvent::kHelp && !show_help) {
+        show_help = true;
+        help_saved_scroll = pager.scroll_offset();
+        pager.set_scroll_offset(0);
         return core::tui::AppKeyResult::kHandled;
       }
       if (show_help) {
-        // Same swallow rule as the navigation keys above: only '?' and Esc
-        // leave the reference.
+        // Same swallow rule as the navigation keys above: Esc alone leaves
+        // the reference ('?' only opens it).
         return core::tui::AppKeyResult::kIgnored;
       }
       switch (ev) {

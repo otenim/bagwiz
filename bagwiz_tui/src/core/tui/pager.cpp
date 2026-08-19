@@ -234,6 +234,15 @@ int ScrollablePager::run(
     }
 
     if (nav == NavKey::kQuit) {
+      // Offered to the app first so an overlay (e.g. walk's '?' help) can
+      // swallow it; unhandled it exits the pager as before.
+      if (on_nav) {
+        const AppKeyResult r = on_nav(nav);
+        if (r == AppKeyResult::kHandled) {
+          needs_redraw_ = true;
+          continue;
+        }
+      }
       break;
     }
 
