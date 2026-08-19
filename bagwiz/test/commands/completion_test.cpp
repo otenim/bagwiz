@@ -924,19 +924,18 @@ TEST(FlagCompletionTest, CalibGroupDashListsHelpFlagsOnly)
 }
 
 // `calib cam-lidar -` surfaces every one of the subcommand's own flags
-// alongside the implicit help flags, sorted. None of its value slots (map,
-// trajectory, frames, or numeric parameters) carries bagwiz candidates, so value
-// completion is covered separately: `--parent`/`--child`/`--traj-frame` complete
-// static frame ids and `-t`/`--cam-info` complete typed topics (see
-// CalibCamLidar*Flag* CompletionTest cases).
+// alongside the implicit help flags, sorted. Its value completion is covered
+// separately: `--parent`/`--child` complete static frame ids, `--of`/`--ref`
+// complete frame ids, and `--pcd`/`--pose`/`--cam`/`--cam-info` complete typed
+// topics (see the CalibCamLidar* CompletionTest cases).
 TEST(FlagCompletionTest, CalibCamLidarDashListsCamLidarFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "calib", "cam-lidar", "-"}),
-    "--cam-info\n--child\n--fix\n--help\n--input\n--json\n--keyframe-dist\n--keyframe-rot\n"
-    "--map\n--max-depth\n--max-rot\n"
-    "--max-trans\n--min-depth\n--nid-bins\n--output\n--overwrite\n--parent\n--samples\n--topic\n"
-    "--traj\n--traj-frame\n-h\n-i\n-o\n-t\n-w\n");
+    "--cam\n--cam-info\n--child\n--fix\n--help\n--input\n--json\n--keyframe-dist\n--keyframe-rot\n"
+    "--max-depth\n--max-rot\n"
+    "--max-trans\n--min-depth\n--nid-bins\n--of\n--output\n--overwrite\n--parent\n--pcd\n--pose\n"
+    "--ref\n--samples\n-h\n-i\n-o\n-w\n");
 }
 
 // `calib cam-lidar --parent <TAB>` completes static frame ids: the edited edge
@@ -969,9 +968,10 @@ TEST_F(CompletionTest, CalibCamLidarChildFlagListsStaticFrameIds)
     "base_link\nmap\nodom\n");
 }
 
-// `--traj-frame <TAB>` completes the same static frame set: the trajectory
-// frame must resolve through the static tree to the camera's optical frame.
-TEST_F(CompletionTest, CalibCamLidarTrajFrameFlagListsStaticFrameIds)
+// `--of <TAB>` / `--ref <TAB>` complete from the bag's full frame-id set (the
+// trajectory frames, like `pcd undistort`'s pair), not the static-only subset
+// --parent/--child use.
+TEST_F(CompletionTest, CalibCamLidarOfFlagListsFrameIds)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -979,14 +979,25 @@ TEST_F(CompletionTest, CalibCamLidarTrajFrameFlagListsStaticFrameIds)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/mixed.mcap",
-       "--traj-frame"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/mixed.mcap", "--of"}),
     "base_link\nmap\nodom\n");
 }
 
-// `calib cam-lidar -t <TAB>` completes the bag's image topics only (raw and
+TEST_F(CompletionTest, CalibCamLidarRefFlagListsFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/mixed.mcap", "--ref"}),
+    "base_link\nmap\nodom\n");
+}
+
+// `calib cam-lidar --cam <TAB>` completes the bag's image topics only (raw and
 // compressed) via the declared topic slot, like `walk -t` and `map slam --color`.
-TEST_F(CompletionTest, CalibCamLidarTopicListsOnlyImageTopics)
+TEST_F(CompletionTest, CalibCamLidarCamListsOnlyImageTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -994,8 +1005,39 @@ TEST_F(CompletionTest, CalibCamLidarTopicListsOnlyImageTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/images.mcap", "-t"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/images.mcap",
+       "--cam"}),
     "/image\n/image/compressed\n");
+}
+
+// `calib cam-lidar --pcd <TAB>` completes PointCloud2 topics only.
+TEST_F(CompletionTest, CalibCamLidarPcdListsOnlyPointCloud2Topics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_pointcloud2_fixture(tmp_dir_ / "points.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/points.mcap",
+       "--pcd"}),
+    "/points\n");
+}
+
+// `calib cam-lidar --pose <TAB>` completes topics of the four pose types the
+// flag accepts (TFMessage / Odometry / PoseStamped / PoseWithCovarianceStamped)
+// — the same set `pcd undistort --pose` offers.
+TEST_F(CompletionTest, CalibCamLidarPoseListsOnlyPoseTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_traj_dump_mixed_fixture(tmp_dir_ / "poses.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/poses.mcap",
+       "--pose"}),
+    "/odom\n/pose\n/pwc\n/tf\n");
 }
 
 // `calib cam-lidar --cam-info <TAB>` completes CameraInfo topics only.

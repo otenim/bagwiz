@@ -187,9 +187,10 @@ source ~/.config/fish/completions/bagwiz.fish
     `calib` is a command group; `calib <TAB>` completes its subcommand
     (`cam-lidar`) and `calib -<TAB>` lists just the help flags; `calib cam-lidar
 -<TAB>` surfaces its full flag set (see [`calib cam-lidar`](calib.md)) — its
-    `--topic`/`-t` completes the bag's image topics, `--cam-info` its
-    CameraInfo topics, and `--parent`/`--child`/`--traj-frame` complete static
-    frame ids — see the sections below.
+    `--pcd` completes the bag's PointCloud2 topics, `--pose` its pose topics,
+    `--cam` its image topics, `--cam-info` its CameraInfo topics,
+    `--parent`/`--child` complete static frame ids, and `--of`/`--ref`
+    complete frame ids — see the sections below.
     `tf static` is itself a command group, so `tf static <TAB>` completes its
     actions (`calc`, `cp`, `drop`, `dump`, `join`, `update`) and `tf static -<TAB>` lists just the help flags.
     `cam-info`, `generate`, `map`, `pcd`, and `topic` are likewise
@@ -224,7 +225,13 @@ name only — it offers plain topic names either way, typed as-is.
     `<topic>=`) at every value of the run; once the cursor moves past `=`,
     the `<info_topic>` half has nothing to suggest
   - `bagwiz walk -i <input> -t <topic> --cam-info <topic>` — `sensor_msgs/msg/CameraInfo` topics
-  - `bagwiz calib cam-lidar -i <input> -t <topic>` — `sensor_msgs/msg/Image`
+  - `bagwiz calib cam-lidar -i <input> ... --pcd <topic>` —
+    `sensor_msgs/msg/PointCloud2` topics
+  - `bagwiz calib cam-lidar -i <input> ... --pose <topic>` —
+    `tf2_msgs/msg/TFMessage`, `nav_msgs/msg/Odometry`,
+    `geometry_msgs/msg/PoseStamped`, or
+    `geometry_msgs/msg/PoseWithCovarianceStamped` topics
+  - `bagwiz calib cam-lidar -i <input> ... --cam <topic>` — `sensor_msgs/msg/Image`
     or `sensor_msgs/msg/CompressedImage` topics
   - `bagwiz calib cam-lidar -i <input> ... --cam-info <topic>` —
     `sensor_msgs/msg/CameraInfo` topics
@@ -299,6 +306,7 @@ name only — it offers plain topic names either way, typed as-is.
   - `bagwiz traj dump -i <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
   - `bagwiz traj join -i <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
   - `bagwiz pcd undistort -i <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
+  - `bagwiz calib cam-lidar -i <input> ... --ref <FRAME>` / `--of <FRAME>` (all TF topics)
   - `bagwiz tf static calc -i <input> ... --ref <FRAME>` / `--of <FRAME>`
     (**only** static `*/tf_static` topics, since `tf static calc` resolves the
     static tree)
@@ -306,9 +314,8 @@ name only — it offers plain topic names either way, typed as-is.
     `*/tf_static` topics, for the same reason: `--frame` names a frame of the
     bag's static TF tree)
   - `bagwiz calib cam-lidar -i <input> ... --parent <FRAME>` /
-    `--child <FRAME>` / `--traj-frame <FRAME>` (**only** static `*/tf_static`
-    topics: the edited edge must be carried by a static TF topic, and the
-    trajectory frame must resolve through the static tree to the camera)
+    `--child <FRAME>` (**only** static `*/tf_static`
+    topics: the edited edge must be carried by a static TF topic)
 
   The bag is opened lazily and only the first ~5000 TF messages are scanned
   so per-keystroke latency stays bounded on large bags. When the bag opens

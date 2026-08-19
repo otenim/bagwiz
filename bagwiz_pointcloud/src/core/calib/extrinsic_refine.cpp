@@ -127,7 +127,7 @@ RefineResult refine_extrinsic(
   if (!std::isfinite(result.nid_before)) {
     result.error =
       "no sample projects enough map points at the initial extrinsic; "
-      "check --traj-frame, the TF chain, and the depth window";
+      "check --of, the TF chain, and the depth window";
     return result;
   }
 

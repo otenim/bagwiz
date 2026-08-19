@@ -8,10 +8,14 @@
 
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
+#include "bagwiz/core/pointcloud/deskew.hpp"
+#include "bagwiz/core/pointcloud/point_time.hpp"
+
 #include <fmt/core.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -46,6 +50,68 @@ const char * axis_observability_name(core::calib::AxisObservability observabilit
   return "unknown";  // unreachable; keeps -Wreturn-type / cppcheck happy
 }
 
+// Read one point's field as a float regardless of its declared datatype.
+// `offset` must be in bounds for the cloud's point_step (callers check via the
+// field table). Little-endian point data only — accumulate_cloud_into_map
+// rejects big-endian clouds before reading anything.
+float read_cloud_field(
+  const core::pointcloud::PointCloud2 & cloud, std::size_t point_idx, std::uint32_t offset,
+  core::pointcloud::PointFieldType type)
+{
+  const std::byte * base = cloud.data.data() + point_idx * cloud.point_step + offset;
+  switch (type) {
+    case core::pointcloud::PointFieldType::kFloat32: {
+      float v;
+      std::memcpy(&v, base, sizeof(v));
+      return v;
+    }
+    case core::pointcloud::PointFieldType::kFloat64: {
+      double v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kInt8: {
+      std::int8_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kUint8: {
+      std::uint8_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kInt16: {
+      std::int16_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kUint16: {
+      std::uint16_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kInt32: {
+      std::int32_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kUint32: {
+      std::uint32_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+  }
+  return 0.0F;  // unreachable; keeps -Wreturn-type / cppcheck happy
+}
+
+// The field's declared offset+size fits inside point_step (and its count is 1,
+// so the readback below sees one value per point).
+bool field_readable(const core::pointcloud::PointField & field, std::uint32_t point_step)
+{
+  return field.count == 1 &&
+         field.offset + core::pointcloud::datatype_size(field.datatype) <= point_step;
+}
+
 // Minimal JSON string escaping for frame names, which come straight from CLI
 // arguments (untrusted input): quotes, backslashes, and control characters
 // that would otherwise break the hand-built JSON.
@@ -75,6 +141,9 @@ std::string json_escape(const std::string & s)
 
 std::string validate_calibrate_flags(const CalibCamLidarArgs & args)
 {
+  if (args.of_frame.empty() || args.ref_frame.empty()) {
+    return "--of and --ref must be non-empty";
+  }
   if (args.samples < 3) {
     return "--samples must be at least 3 (6-DOF needs multiple viewpoints)";
   }
@@ -281,6 +350,109 @@ std::optional<core::calib::Mat4> interpolate_trajectory(
   return mat4_from_quat(
     p0.tx + a * (p1.tx - p0.tx), p0.ty + a * (p1.ty - p0.ty), p0.tz + a * (p1.tz - p0.tz), q[0],
     q[1], q[2], q[3]);
+}
+
+std::optional<std::string> accumulate_cloud_into_map(
+  core::pointcloud::PcdCloud & map, core::pointcloud::PointCloud2 cloud,
+  std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats)
+{
+  ++stats.clouds_read;
+
+  // The field layout, captured by value up front: deskew below replaces the
+  // cloud (field table preserved), which would dangle pointers into the old
+  // one. intensity is mandatory (NID needs it); x/y/z must be readable.
+  struct FieldRef
+  {
+    std::uint32_t offset;
+    core::pointcloud::PointFieldType type;
+  };
+  const auto field_ref = [&cloud](const std::string & name) -> std::optional<FieldRef> {
+    for (const auto & f : cloud.fields) {
+      if (f.name == name && field_readable(f, cloud.point_step)) {
+        return FieldRef{f.offset, f.datatype};
+      }
+    }
+    return std::nullopt;
+  };
+  if (cloud.is_bigendian) {
+    return std::string("big-endian point data is not supported");
+  }
+  const auto fx = field_ref("x");
+  const auto fy = field_ref("y");
+  const auto fz = field_ref("z");
+  const auto fi = field_ref("intensity");
+  if (!fx.has_value() || !fy.has_value() || !fz.has_value()) {
+    return std::string("no readable x/y/z fields");
+  }
+  if (!fi.has_value()) {
+    return std::string("no intensity field; NID needs lidar intensity");
+  }
+  const std::size_t n = static_cast<std::size_t>(cloud.height) * cloud.width;
+  if (cloud.data.size() < n * cloud.point_step) {
+    return std::string("inconsistent point layout (data smaller than height*width*point_step)");
+  }
+
+  // The cloud's placement pose (and deskew reference stamp). A cloud outside
+  // the trajectory span is skipped: clamping it to an endpoint pose would
+  // smear the map.
+  const std::int64_t stamp_ns = cloud.timestamp_ns;
+  const auto t_ref_of = interpolate_trajectory(trajectory, stamp_ns);
+  if (!t_ref_of.has_value()) {
+    ++stats.clouds_skipped_out_of_span;
+    return std::nullopt;
+  }
+
+  // T_of_cloud as a Mat4 (identity when the cloud frame already is --of).
+  core::calib::Mat4 t_of_cloud_mat = core::calib::identity_mat4();
+  if (t_of_cloud.has_value()) {
+    const auto m = mat4_from_quat(
+      t_of_cloud->translation.x, t_of_cloud->translation.y, t_of_cloud->translation.z,
+      t_of_cloud->rotation.x, t_of_cloud->rotation.y, t_of_cloud->rotation.z,
+      t_of_cloud->rotation.w);
+    if (!m.has_value()) {
+      return std::string("the cloud frame's static extrinsic is not a usable transform");
+    }
+    t_of_cloud_mat = *m;
+  }
+
+  // Deskew gate: a usable per-point time field whose values are not all one
+  // stamp. An all-zero relative field, or the t_ref-constant field an
+  // already-undistorted cloud carries, has a zero span — no sweep motion to
+  // undo, so the cloud is accumulated as-is.
+  if (const auto time_field = core::pointcloud::find_point_time_field(cloud.fields);
+      time_field.has_value()) {
+    const auto span = core::pointcloud::absolute_point_time_span_ns(cloud, *time_field, stamp_ns);
+    if (span.has_value() && span->max_ns > span->min_ns) {
+      auto deskewed =
+        core::pointcloud::deskew_pointcloud2(std::move(cloud), stamp_ns, trajectory, t_of_cloud);
+      if (!deskewed.ok()) {
+        return deskewed.error;
+      }
+      cloud = std::move(*deskewed.cloud);
+      ++stats.clouds_deskewed;
+      stats.points_clamped_out_of_span += deskewed.points_out_of_span;
+    }
+  }
+
+  const core::calib::Mat4 t_ref_cloud = core::calib::mat4_multiply(*t_ref_of, t_of_cloud_mat);
+  map.points.reserve(map.points.size() + n);
+  map.intensities.reserve(map.intensities.size() + n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const float x = read_cloud_field(cloud, i, fx->offset, fx->type);
+    const float y = read_cloud_field(cloud, i, fy->offset, fy->type);
+    const float z = read_cloud_field(cloud, i, fz->offset, fz->type);
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+      ++stats.points_dropped_nonfinite;
+      continue;
+    }
+    const auto p = core::calib::transform_point(t_ref_cloud, {x, y, z});
+    map.points.push_back(
+      {static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])});
+    map.intensities.push_back(read_cloud_field(cloud, i, fi->offset, fi->type));
+    ++stats.points_added;
+  }
+  return std::nullopt;
 }
 
 std::string default_calib_cam_lidar_output_path(const std::filesystem::path & input)

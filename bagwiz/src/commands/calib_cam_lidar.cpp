@@ -18,6 +18,7 @@
 #include "bagwiz/core/image/packed_raster.hpp"
 #include "bagwiz/core/image/raw_image.hpp"
 #include "bagwiz/core/pointcloud/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/tf_buffer_loader.hpp"
 #include "bagwiz/core/tf/tf_chain.hpp"
 #include "bagwiz/core/tf/tf_static_collect.hpp"
@@ -28,6 +29,7 @@
 #include "bagwiz/io/bag_open.hpp"
 #include "bagwiz/io/topics.hpp"
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "pcd_undistort_common.hpp"    // NOLINT(build/include_subdir) src-local shared header
 
 #include <tf2/buffer_core.hpp>
 #include <tf2/exceptions.hpp>
@@ -47,21 +49,24 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <map>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
-// Wires the pure helpers in calib_cam_lidar_common.{hpp,cpp} (Task 7) and
-// the calibration core in bagwiz_pointcloud's core::calib namespace (Tasks
-// 2-6) into `bagwiz calib cam-lidar`'s actual bag-driving run. Structure
-// mirrors tf_static_dump.cpp: small phase helpers, one error path per
-// failure (log + return 1), success writes the output YAML and prints the
-// summary/--json report to stdout.
+// Wires the pure helpers in calib_cam_lidar_common.{hpp,cpp} and the
+// calibration core in bagwiz_pointcloud's core::calib namespace into
+// `bagwiz calib cam-lidar`'s actual bag-driving run. Everything the
+// command needs comes out of the one bag: the --pose topic feeds the --of ->
+// --ref trajectory (the same builder `pcd undistort` uses), the --pcd topic's
+// clouds are accumulated into the map through that trajectory, and the --cam
+// images are sampled against it. Structure mirrors tf_static_dump.cpp: small
+// phase helpers, one error path per failure (log + return 1), success writes
+// the output YAML and prints the summary/--json report to stdout.
 namespace bagwiz::commands
 {
 namespace
@@ -72,13 +77,18 @@ constexpr const char * kLogger = "bagwiz.cmd.calib.cam_lidar";
 // interpolate_trajectory always has bracketing poses on both sides.
 constexpr std::int64_t kSampleMarginNs = 3'000'000'000LL;
 
-// Mirrors core::image::packed_raster.cpp's own private copies of these two
-// type strings (is_supported_image_type()/to_packed_raster() cover the
-// decode side; this file additionally needs to peek at just the header stamp
-// during the cheap phase-6 scan, so it re-checks the type here too). Keep in
-// sync by hand.
+// Private copies of the two image type strings (is_supported_image_type()/
+// to_packed_raster() cover the decode side; this file additionally needs to
+// peek at just the header stamp during the cheap phase-6 scan, so it
+// re-checks the type here too). Mirrors kImageTopicTypes in
+// bagwiz/include/bagwiz/commands/topic_types.hpp together with
+// generate_video_common.cpp's and packed_raster.cpp's copies — keep all four
+// in sync by hand.
 constexpr std::string_view kImageMsgType = "sensor_msgs/msg/Image";
 constexpr std::string_view kCompressedImageMsgType = "sensor_msgs/msg/CompressedImage";
+// The one type --pcd accepts. Mirrors the private kPointCloud2Type copies
+// listed in topic_types.hpp.
+constexpr std::string_view kPointCloud2MsgType = "sensor_msgs/msg/PointCloud2";
 
 // ---- small formatting helpers -------------------------------------------
 
@@ -99,66 +109,51 @@ std::string edges_csv(const std::vector<std::pair<std::string, std::string>> & e
   return core::join_csv(rendered);
 }
 
-// ---- phase 2: map ---------------------------------------------------------
+// ---- phase 2: --pcd / --pose topics -----------------------------------------
 
-// Loads args.map_path and checks it carries intensity (required by NID).
-// Returns nullopt (and logs) on any failure.
-std::optional<core::pointcloud::PcdCloud> load_map(const CalibCamLidarArgs & args)
+// Validates the --pcd topic (present, PointCloud2) and the --pose topic
+// (present, one of the pose types `pcd undistort --pose` accepts) against the
+// bag's topic list, logging the command's errors on the first failure.
+// Returns the pose topic's TopicInfo (aliasing the reader's internal list) on
+// success, nullptr after logging otherwise.
+const io::TopicInfo * validate_pcd_and_pose_topics(
+  const CalibCamLidarArgs & args, io::BagReader & reader)
 {
-  std::ifstream in(args.map_path, std::ios::binary);
-  if (!in) {
-    BAGWIZ_LOG_ERROR(kLogger, "Failed to open map '%s' for reading.", args.map_path.c_str());
-    return std::nullopt;
+  const io::TopicInfo * pcd_ti =
+    io::find_topic_or_log(reader, args.pcd_topic, args.input_path, kLogger);
+  if (pcd_ti == nullptr) {
+    return nullptr;
   }
-  auto result = core::pointcloud::read_pcd(in);
-  if (!result.ok) {
+  if (pcd_ti->type != kPointCloud2MsgType) {
     BAGWIZ_LOG_ERROR(
-      kLogger, "Failed to read map '%s': %s", args.map_path.c_str(), result.error.c_str());
-    return std::nullopt;
+      kLogger, "Topic '%s' has type '%s', which `--pcd` cannot read; expected %s.",
+      args.pcd_topic.c_str(), pcd_ti->type.c_str(), std::string(kPointCloud2MsgType).c_str());
+    return nullptr;
   }
-  if (result.cloud.intensities.empty()) {
+  const io::TopicInfo * pose_ti =
+    io::find_topic_or_log(reader, args.pose_topic, args.input_path, kLogger);
+  if (pose_ti == nullptr) {
+    return nullptr;
+  }
+  if (!is_supported_pose_topic_type(pose_ti->type)) {
     BAGWIZ_LOG_ERROR(
       kLogger,
-      "map '%s' has no intensity field; NID needs lidar intensity (re-run map slam on a bag "
-      "whose clouds carry it)",
-      args.map_path.c_str());
-    return std::nullopt;
+      "Topic '%s' has type '%s', which `--pose` cannot read; expected tf2_msgs/msg/TFMessage, "
+      "nav_msgs/msg/Odometry, geometry_msgs/msg/PoseStamped, or "
+      "geometry_msgs/msg/PoseWithCovarianceStamped.",
+      args.pose_topic.c_str(), pose_ti->type.c_str());
+    return nullptr;
   }
-  return std::move(result.cloud);
+  return pose_ti;
 }
 
-// ---- phase 3: trajectory ---------------------------------------------------
-
-std::optional<std::vector<core::TrajectoryPose>> load_trajectory(const CalibCamLidarArgs & args)
-{
-  std::ifstream in(args.traj_path);
-  if (!in) {
-    BAGWIZ_LOG_ERROR(
-      kLogger, "Failed to open trajectory '%s' for reading.", args.traj_path.c_str());
-    return std::nullopt;
-  }
-  auto result = core::read_tum(in);
-  if (result.skipped_lines > 0) {
-    BAGWIZ_LOG_WARN(
-      kLogger, "Trajectory '%s': skipped %" PRId64 " malformed line(s).", args.traj_path.c_str(),
-      result.skipped_lines);
-  }
-  if (result.poses.size() < 2) {
-    BAGWIZ_LOG_ERROR(
-      kLogger, "Trajectory '%s' has fewer than 2 poses; cannot interpolate.",
-      args.traj_path.c_str());
-    return std::nullopt;
-  }
-  return std::move(result.poses);
-}
-
-// ---- phase 4: image topic + CameraInfo ------------------------------------
+// ---- phase 2: image topic + CameraInfo --------------------------------------
 
 std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
   const CalibCamLidarArgs & args, io::BagReader & reader)
 {
   const io::TopicInfo * image_topic =
-    io::find_topic_or_log(reader, args.topic, args.input_path, kLogger);
+    io::find_topic_or_log(reader, args.cam_topic, args.input_path, kLogger);
   if (image_topic == nullptr) {
     return std::nullopt;
   }
@@ -167,7 +162,7 @@ std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
       kLogger,
       "Topic '%s' has type '%s', which `calib cam-lidar` cannot read; expected "
       "sensor_msgs/msg/Image or sensor_msgs/msg/CompressedImage.",
-      args.topic.c_str(), image_topic->type.c_str());
+      args.cam_topic.c_str(), image_topic->type.c_str());
     return std::nullopt;
   }
 
@@ -181,7 +176,8 @@ std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
     }
     cam_info_topic = args.cam_info_topic;
   } else {
-    const auto resolved = core::camera_info::resolve_camera_info_topic(args.topic, reader.topics());
+    const auto resolved =
+      core::camera_info::resolve_camera_info_topic(args.cam_topic, reader.topics());
     if (!resolved.topic.has_value()) {
       BAGWIZ_LOG_ERROR(
         kLogger, "%s. Pass it explicitly with --cam-info.",
@@ -206,7 +202,40 @@ std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
   return std::move(*ci.info);
 }
 
-// ---- phase 5: static TF chain ---------------------------------------------
+// ---- phase 3: trajectory -----------------------------------------------------
+
+// Builds the --of -> --ref trajectory from the --pose topic (the same builder
+// `pcd undistort` runs) and requires at least two poses so
+// interpolate_trajectory has something to bracket. The TF buffer the builder
+// fills is deliberately dropped afterwards: for a TFMessage --pose topic it
+// carries replayed dynamic edges, while the chain resolution below works off
+// a static-only buffer.
+std::optional<std::vector<core::TrajectoryPose>> build_trajectory(
+  const CalibCamLidarArgs & args, const io::TopicInfo & pose_ti)
+{
+  tf2::BufferCore buffer{std::chrono::hours(24 * 365)};
+  auto built = build_sorted_of_ref_trajectory(
+    args.input_path, pose_ti, args.ref_frame, args.of_frame, /*motion_is_twist=*/false, buffer,
+    kLogger);
+  if (!built.ok()) {
+    if (!built.error.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", built.error.c_str());
+    } else {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "No poses decoded from --pose topic '%s'.", args.pose_topic.c_str());
+    }
+    return std::nullopt;
+  }
+  if (built.trajectory.size() < 2) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "Trajectory from --pose topic '%s' has fewer than 2 poses; cannot interpolate.",
+      args.pose_topic.c_str());
+    return std::nullopt;
+  }
+  return std::move(built.trajectory);
+}
+
+// ---- phase 4: static TF chain ---------------------------------------------
 
 // mat4_from_quat over a geometry_msgs Transform, naming the offending leg when
 // the recorded quaternion cannot be normalized (zero norm, or a non-finite
@@ -229,24 +258,21 @@ std::optional<core::calib::Mat4> mat4_of_transform(
 // as the six scalars the delta is added to (EdgeChain::edge_bag). The edge is
 // sourced from a static topic's own transforms rather than the resolved
 // buffer, so the report's "bag value" matches what a later `tf static update`
-// would see.
+// would see. `tf_buffer` is the caller's static-only buffer (the trajectory
+// builder's own buffer may carry replayed dynamic edges from a TFMessage
+// --pose topic, which must not leak into this chain).
 std::optional<core::calib::EdgeChain> resolve_edge_chain(
-  const CalibCamLidarArgs & args, const std::string & optical_frame)
+  const CalibCamLidarArgs & args, const tf2::BufferCore & tf_buffer,
+  const std::string & optical_frame)
 {
-  tf2::BufferCore tf_buffer{std::chrono::hours(24 * 365)};
-  if (const auto err = core::load_static_tf_buffer(args.input_path, tf_buffer); err.has_value()) {
-    BAGWIZ_LOG_ERROR(kLogger, "%s", err->c_str());
-    return std::nullopt;
-  }
-
   const std::vector<std::string> chain_frames =
-    core::resolve_chain(tf_buffer, args.traj_frame, optical_frame, tf2::TimePointZero);
+    core::resolve_chain(tf_buffer, args.of_frame, optical_frame, tf2::TimePointZero);
   if (chain_frames.empty()) {
     BAGWIZ_LOG_ERROR(
       kLogger,
-      "No static TF path from --traj-frame '%s' to the image's optical frame '%s'. Available "
+      "No static TF path from --of '%s' to the image's optical frame '%s'. Available "
       "static frames: %s",
-      args.traj_frame.c_str(), optical_frame.c_str(), sorted_frames_csv(tf_buffer).c_str());
+      args.of_frame.c_str(), optical_frame.c_str(), sorted_frames_csv(tf_buffer).c_str());
     return std::nullopt;
   }
   const auto chain_edges = core::chain_to_edges(tf_buffer, chain_frames, tf2::TimePointZero);
@@ -257,9 +283,9 @@ std::optional<core::calib::EdgeChain> resolve_edge_chain(
   if (!edge_on_chain) {
     BAGWIZ_LOG_ERROR(
       kLogger,
-      "--parent '%s' --child '%s' is not an edge on the chain from --traj-frame '%s' to '%s'. "
+      "--parent '%s' --child '%s' is not an edge on the chain from --of '%s' to '%s'. "
       "Chain edges: %s",
-      args.parent_frame.c_str(), args.child_frame.c_str(), args.traj_frame.c_str(),
+      args.parent_frame.c_str(), args.child_frame.c_str(), args.of_frame.c_str(),
       optical_frame.c_str(), edges_csv(chain_edges).c_str());
     return std::nullopt;
   }
@@ -307,11 +333,10 @@ std::optional<core::calib::EdgeChain> resolve_edge_chain(
   chain.edge_bag = {edge_t[0], edge_t[1], edge_t[2], edge_rpy[0], edge_rpy[1], edge_rpy[2]};
   try {
     const auto tf_parent =
-      tf_buffer.lookupTransform(args.traj_frame, args.parent_frame, tf2::TimePointZero);
+      tf_buffer.lookupTransform(args.of_frame, args.parent_frame, tf2::TimePointZero);
     const auto tf_child =
       tf_buffer.lookupTransform(args.child_frame, optical_frame, tf2::TimePointZero);
-    const auto parent_mat =
-      mat4_of_transform(tf_parent.transform, "the --traj-frame to --parent leg");
+    const auto parent_mat = mat4_of_transform(tf_parent.transform, "the --of to --parent leg");
     const auto child_mat =
       mat4_of_transform(tf_child.transform, "the --child to camera-optical leg");
     if (!parent_mat.has_value() || !child_mat.has_value()) {
@@ -324,6 +349,109 @@ std::optional<core::calib::EdgeChain> resolve_edge_chain(
     return std::nullopt;
   }
   return chain;
+}
+
+// ---- phase 5: map accumulation ----------------------------------------------
+
+// Accumulates the --pcd topic's clouds into one map in the --ref frame. Each
+// cloud is placed by T_ref_of(header.stamp) * T_of_cloud (the extrinsic from
+// the static TF tree, cached per distinct cloud frame); clouds with a real
+// sweep (a usable, non-uniform per-point time field) are deskewed to their
+// header stamp first. The map needs intensity for NID — a cloud without it is
+// a hard error, as is an unparseable message.
+std::optional<core::pointcloud::PcdCloud> accumulate_map(
+  const CalibCamLidarArgs & args, std::span<const core::TrajectoryPose> poses,
+  const tf2::BufferCore & static_buffer)
+{
+  auto reader = io::open_read_or_log(args.input_path, kLogger);
+  if (!reader) {
+    return std::nullopt;
+  }
+  io::ReadFilter filter;
+  filter.topics = {args.pcd_topic};
+  reader->set_filter(filter);
+
+  core::pointcloud::PcdCloud map;
+  MapAccumulationStats stats;
+  std::unordered_map<std::string, std::optional<geometry_msgs::msg::Transform>> extrinsic_by_frame;
+  io::RawMessage raw;
+  try {
+    while (reader->next(raw)) {
+      auto parsed = core::pointcloud::parse_pointcloud2(raw.payload);
+      if (!parsed.ok()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "Failed to parse a cloud on '%s': %s", args.pcd_topic.c_str(),
+          parsed.error.c_str());
+        return std::nullopt;
+      }
+      const std::string & cloud_frame = parsed.cloud->frame_id;
+      auto [ext_it, inserted] = extrinsic_by_frame.try_emplace(cloud_frame);
+      if (inserted) {
+        if (cloud_frame == args.of_frame) {
+          ext_it->second = std::nullopt;  // identity: the cloud frame already is --of
+        } else {
+          try {
+            ext_it->second =
+              static_buffer.lookupTransform(args.of_frame, cloud_frame, tf2::TimePointZero)
+                .transform;
+          } catch (const tf2::TransformException & e) {
+            BAGWIZ_LOG_ERROR(
+              kLogger,
+              "No static TF path from --of '%s' to the cloud frame '%s' (needed to place the "
+              "--pcd clouds): %s",
+              args.of_frame.c_str(), cloud_frame.c_str(), e.what());
+            return std::nullopt;
+          }
+        }
+      }
+      if (const auto err =
+            accumulate_cloud_into_map(map, std::move(*parsed.cloud), poses, ext_it->second, stats);
+          err.has_value()) {
+        BAGWIZ_LOG_ERROR(kLogger, "Topic '%s': %s.", args.pcd_topic.c_str(), err->c_str());
+        return std::nullopt;
+      }
+    }
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.pcd_topic.c_str(), e.what());
+    return std::nullopt;
+  }
+
+  if (stats.clouds_read == 0) {
+    BAGWIZ_LOG_ERROR(kLogger, "Topic '%s' carries no messages.", args.pcd_topic.c_str());
+    return std::nullopt;
+  }
+  if (map.points.empty()) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "No usable map points: all %" PRIu64
+      " cloud(s) on '%s' fell outside the --pose trajectory's time span.",
+      stats.clouds_skipped_out_of_span, args.pcd_topic.c_str());
+    return std::nullopt;
+  }
+  if (stats.clouds_skipped_out_of_span > 0) {
+    BAGWIZ_LOG_WARN(
+      kLogger,
+      "%" PRIu64 " of %" PRIu64
+      " cloud(s) on '%s' fell outside the --pose trajectory's time span; skipped them.",
+      stats.clouds_skipped_out_of_span, stats.clouds_read, args.pcd_topic.c_str());
+  }
+  if (stats.points_clamped_out_of_span > 0) {
+    BAGWIZ_LOG_WARN(
+      kLogger,
+      "%" PRIu64
+      " point(s) fell outside the trajectory's time span while deskewing; their poses were "
+      "clamped to the trajectory endpoints.",
+      stats.points_clamped_out_of_span);
+  }
+  if (stats.points_dropped_nonfinite > 0) {
+    BAGWIZ_LOG_WARN(
+      kLogger, "Dropped %" PRIu64 " non-finite point(s) from the accumulated map.",
+      stats.points_dropped_nonfinite);
+  }
+  BAGWIZ_LOG_INFO(
+    kLogger, "Map: %zu point(s) from %" PRIu64 " cloud(s) on '%s' (%" PRIu64 " deskewed).",
+    map.points.size(), stats.clouds_read, args.pcd_topic.c_str(), stats.clouds_deskewed);
+  return map;
 }
 
 // ---- phase 6: cheap stamp scan ---------------------------------------------
@@ -350,7 +478,7 @@ std::optional<std::vector<std::int64_t>> scan_image_stamps(
   const CalibCamLidarArgs & args, io::BagReader & reader)
 {
   io::ReadFilter filter;
-  filter.topics = {args.topic};
+  filter.topics = {args.cam_topic};
   reader.set_filter(filter);
 
   std::vector<std::int64_t> stamps;
@@ -367,18 +495,18 @@ std::optional<std::vector<std::int64_t>> scan_image_stamps(
       }
     }
   } catch (const std::exception & e) {
-    BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.topic.c_str(), e.what());
+    BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.cam_topic.c_str(), e.what());
     return std::nullopt;
   }
   if (stamps.empty()) {
-    BAGWIZ_LOG_ERROR(kLogger, "Topic '%s' carries no messages.", args.topic.c_str());
+    BAGWIZ_LOG_ERROR(kLogger, "Topic '%s' carries no messages.", args.cam_topic.c_str());
     return std::nullopt;
   }
   if (fallback_count > 0) {
     BAGWIZ_LOG_WARN(
       kLogger,
       "%zu of %zu image message(s) on '%s' had no header stamp; using bag record time for those.",
-      fallback_count, stamps.size(), args.topic.c_str());
+      fallback_count, stamps.size(), args.cam_topic.c_str());
   }
   return stamps;
 }
@@ -496,7 +624,7 @@ std::optional<std::vector<DecodedSample>> decode_picked_samples(
     return std::nullopt;
   }
   io::ReadFilter filter;
-  filter.topics = {args.topic};
+  filter.topics = {args.cam_topic};
   reader->set_filter(filter);
 
   std::vector<DecodedSample> decoded;
@@ -529,7 +657,7 @@ std::optional<std::vector<DecodedSample>> decode_picked_samples(
       ++pick_i;
     }
   } catch (const std::exception & e) {
-    BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.topic.c_str(), e.what());
+    BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.cam_topic.c_str(), e.what());
     return std::nullopt;
   }
   return decoded;
@@ -657,7 +785,7 @@ std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
     BAGWIZ_LOG_ERROR(
       kLogger,
       "Only %zu of %zu decoded sample(s) survived pre-culling; at least 3 are needed. Check "
-      "--traj-frame, the TF chain, and --min-depth/--max-depth.",
+      "--of, the TF chain, and --min-depth/--max-depth.",
       samples.size(), decoded.size());
     return std::nullopt;
   }
@@ -675,21 +803,14 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   }
   const std::array<bool, 6> fixed_axes = parse_fixed_axes(args.fix_axes).first;
 
-  // 2. Map (needs intensity for NID).
-  const auto cloud = load_map(args);
-  if (!cloud.has_value()) {
-    return 1;
-  }
-
-  // 3. Trajectory.
-  const auto poses = load_trajectory(args);
-  if (!poses.has_value()) {
-    return 1;
-  }
-
-  // 4. Image topic + CameraInfo.
+  // 2. Topics: --pcd (PointCloud2), --pose (a supported pose type), and the
+  // --cam image topic + its CameraInfo.
   auto reader = io::open_read_or_log(args.input_path, kLogger);
   if (!reader) {
+    return 1;
+  }
+  const io::TopicInfo * pose_ti = validate_pcd_and_pose_topics(args, *reader);
+  if (pose_ti == nullptr) {
     return 1;
   }
   const auto cam_info = resolve_image_and_cam_info(args, *reader);
@@ -697,9 +818,28 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
     return 1;
   }
 
-  // 5. Static TF chain around the edited edge.
-  const auto chain = resolve_edge_chain(args, cam_info->frame_id);
+  // 3. Trajectory from the --pose topic (T_ref_of, sorted).
+  const auto poses = build_trajectory(args, *pose_ti);
+  if (!poses.has_value()) {
+    return 1;
+  }
+
+  // 4. Static TF chain around the edited edge, off a static-only buffer the
+  // map accumulation also resolves the cloud extrinsic from.
+  tf2::BufferCore static_buffer{std::chrono::hours(24 * 365)};
+  if (const auto err = core::load_static_tf_buffer(args.input_path, static_buffer);
+      err.has_value()) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", err->c_str());
+    return 1;
+  }
+  const auto chain = resolve_edge_chain(args, static_buffer, cam_info->frame_id);
   if (!chain.has_value()) {
+    return 1;
+  }
+
+  // 5. Map: accumulate the --pcd topic's clouds into the --ref frame.
+  const auto cloud = accumulate_map(args, *poses, static_buffer);
+  if (!cloud.has_value()) {
     return 1;
   }
 

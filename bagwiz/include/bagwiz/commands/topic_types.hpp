@@ -71,11 +71,13 @@ inline constexpr std::array<std::string_view, 3> kUndistortTwistTopicTypes{{
 }};
 
 // Image types the shared to_packed_raster() decoder handles — `generate video`
-// rendering, `walk`'s image preview, and `map slam --color` all gate on it.
-// Must mirror is_supported_type() in
+// rendering, `walk`'s image preview, `map slam --color`, and `calib cam-lidar
+// --cam` all gate on it. Must mirror is_supported_type() in
 // bagwiz/src/commands/generate_video_common.cpp AND is_supported_image_type()
-// in bagwiz_image/src/core/image/packed_raster.cpp — two independent private
-// copies, not one.
+// in bagwiz_image/src/core/image/packed_raster.cpp AND the
+// kImageMsgType/kCompressedImageMsgType pair in
+// bagwiz/src/commands/calib_cam_lidar.cpp — three independent private copies,
+// not one.
 inline constexpr std::array<std::string_view, 2> kImageTopicTypes{{
   "sensor_msgs/msg/Image",
   "sensor_msgs/msg/CompressedImage",
@@ -96,7 +98,9 @@ inline constexpr std::array<std::string_view, 1> kCameraInfoType{{
 // bagwiz/src/commands/pcd_concat.cpp (`pcd concat --pcd`), and
 // bagwiz/src/commands/map_slam.cpp (`map slam --pcd`) — plus the
 // differently-named kPointCloudType in
-// bagwiz/src/commands/generate_video_common.cpp (`generate video --pcd`).
+// bagwiz/src/commands/generate_video_common.cpp (`generate video --pcd`) and
+// kPointCloud2MsgType in bagwiz/src/commands/calib_cam_lidar.cpp
+// (`calib cam-lidar --pcd`).
 inline constexpr std::array<std::string_view, 1> kPointCloud2Type{{
   "sensor_msgs/msg/PointCloud2",
 }};

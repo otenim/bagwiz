@@ -8,17 +8,25 @@
 
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/pointcloud2.hpp"
+
+#include <geometry_msgs/msg/transform.hpp>
+
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace commands = bagwiz::commands;
+namespace pc = bagwiz::core::pointcloud;
 
 namespace
 {
@@ -26,10 +34,9 @@ commands::CalibCamLidarArgs valid_args()
 {
   commands::CalibCamLidarArgs args;
   args.input_path = "in.db3";
-  args.map_path = "map.pcd";
-  args.traj_path = "traj.tum";
-  args.traj_frame = "base_link";
-  args.topic = "/cam/image_raw/compressed";
+  args.pcd_topic = "/lidar/points";
+  args.pose_topic = "/odom";
+  args.cam_topic = "/cam/image_raw/compressed";
   args.parent_frame = "cabin";
   args.child_frame = "cam_link";
   return args;
@@ -340,4 +347,226 @@ TEST(CalibCamLidarCommonTest, ValidateRejectsNegativeKeyframeThresholds)
   args.keyframe_dist = 1.0;
   args.keyframe_rot_deg = 10.0;
   EXPECT_EQ(commands::validate_calibrate_flags(args), "");
+}
+
+TEST(CalibCamLidarCommonTest, ValidateRejectsEmptyOfOrRefFrame)
+{
+  auto args = valid_args();
+  args.of_frame.clear();
+  EXPECT_NE(commands::validate_calibrate_flags(args), "");
+  args = valid_args();
+  args.ref_frame.clear();
+  EXPECT_NE(commands::validate_calibrate_flags(args), "");
+}
+
+// ---- accumulate_cloud_into_map ----------------------------------------------
+
+// Two poses at 0 s and 10 s translating along +x at `v_mps`, so the
+// interpolated T_ref_of at stamp t seconds is the translation (v*t, 0, 0).
+std::vector<bagwiz::core::TrajectoryPose> moving_trajectory(double v_mps)
+{
+  std::vector<bagwiz::core::TrajectoryPose> poses(2);
+  poses[0].timestamp_ns = 0;
+  poses[0].qw = 1.0;
+  poses[1].timestamp_ns = 10'000'000'000LL;
+  poses[1].tx = v_mps * 10.0;
+  poses[1].qw = 1.0;
+  return poses;
+}
+
+geometry_msgs::msg::Transform translation_transform(double tx, double ty, double tz)
+{
+  geometry_msgs::msg::Transform t;
+  t.translation.x = tx;
+  t.translation.y = ty;
+  t.translation.z = tz;
+  t.rotation.w = 1.0;
+  return t;
+}
+
+// x/y/z/intensity as 4x float32 (point_step 16). `pts`: {x, y, z, intensity}.
+pc::PointCloud2 make_cloud_xyzi(
+  const std::vector<std::array<float, 4>> & pts, std::int64_t stamp_ns)
+{
+  pc::PointCloud2 c;
+  c.timestamp_ns = stamp_ns;
+  c.frame_id = "lidar";
+  c.height = 1;
+  c.width = static_cast<std::uint32_t>(pts.size());
+  c.point_step = 16;
+  c.row_step = c.point_step * c.width;
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat32, 1},
+    {"y", 4, pc::PointFieldType::kFloat32, 1},
+    {"z", 8, pc::PointFieldType::kFloat32, 1},
+    {"intensity", 12, pc::PointFieldType::kFloat32, 1},
+  };
+  c.data.resize(static_cast<std::size_t>(c.point_step) * c.width);
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    std::memcpy(c.data.data() + i * c.point_step, pts[i].data(), sizeof(float) * 4);
+  }
+  return c;
+}
+
+// x/y/z/intensity/t as 5x float32 (point_step 20). `pts`: {x, y, z, intensity,
+// t_seconds} with t relative to the cloud's header stamp.
+pc::PointCloud2 make_cloud_xyzit(
+  const std::vector<std::array<float, 5>> & pts, std::int64_t stamp_ns)
+{
+  pc::PointCloud2 c;
+  c.timestamp_ns = stamp_ns;
+  c.frame_id = "lidar";
+  c.height = 1;
+  c.width = static_cast<std::uint32_t>(pts.size());
+  c.point_step = 20;
+  c.row_step = c.point_step * c.width;
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat32, 1},  {"y", 4, pc::PointFieldType::kFloat32, 1},
+    {"z", 8, pc::PointFieldType::kFloat32, 1},  {"intensity", 12, pc::PointFieldType::kFloat32, 1},
+    {"t", 16, pc::PointFieldType::kFloat32, 1},
+  };
+  c.data.resize(static_cast<std::size_t>(c.point_step) * c.width);
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    std::memcpy(c.data.data() + i * c.point_step, pts[i].data(), sizeof(float) * 5);
+  }
+  return c;
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudAppendsPointsWithIntensities)
+{
+  pc::PcdCloud map;
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.25F}, {4.0F, 5.0F, 6.0F, 0.75F}}, 5'000'000'000LL),
+    trajectory, std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  ASSERT_EQ(map.points.size(), 2U);
+  EXPECT_FLOAT_EQ(map.points[0][0], 1.0F);
+  EXPECT_FLOAT_EQ(map.points[0][1], 2.0F);
+  EXPECT_FLOAT_EQ(map.points[0][2], 3.0F);
+  ASSERT_EQ(map.intensities.size(), 2U);
+  EXPECT_FLOAT_EQ(map.intensities[0], 0.25F);
+  EXPECT_FLOAT_EQ(map.intensities[1], 0.75F);
+  EXPECT_EQ(stats.clouds_read, 1U);
+  EXPECT_EQ(stats.points_added, 2U);
+  EXPECT_EQ(stats.clouds_deskewed, 0U);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudAppliesPoseAndExtrinsic)
+{
+  pc::PcdCloud map;
+  commands::MapAccumulationStats stats;
+  // T_ref_of(5 s) = (5, 0, 0); the extrinsic lifts the cloud frame by +1 in y,
+  // so (1, 2, 3) in the cloud lands at (6, 3, 3) in the ref frame.
+  const auto trajectory = moving_trajectory(1.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL), trajectory,
+    translation_transform(0.0, 1.0, 0.0), stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  ASSERT_EQ(map.points.size(), 1U);
+  EXPECT_FLOAT_EQ(map.points[0][0], 6.0F);
+  EXPECT_FLOAT_EQ(map.points[0][1], 3.0F);
+  EXPECT_FLOAT_EQ(map.points[0][2], 3.0F);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudRejectsCloudWithoutIntensity)
+{
+  pc::PointCloud2 c;
+  c.timestamp_ns = 5'000'000'000LL;
+  c.frame_id = "lidar";
+  c.height = 1;
+  c.width = 1;
+  c.point_step = 12;
+  c.row_step = c.point_step;
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat32, 1},
+    {"y", 4, pc::PointFieldType::kFloat32, 1},
+    {"z", 8, pc::PointFieldType::kFloat32, 1},
+  };
+  c.data.resize(c.point_step);
+  pc::PcdCloud map;
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  EXPECT_TRUE(
+    commands::accumulate_cloud_into_map(map, c, trajectory, std::nullopt, stats).has_value());
+  EXPECT_TRUE(map.points.empty());
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudSkipsStampOutsideTrajectorySpan)
+{
+  pc::PcdCloud map;
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);  // spans 0..10 s
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 20'000'000'000LL), trajectory, std::nullopt,
+    stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  EXPECT_TRUE(map.points.empty());
+  EXPECT_EQ(stats.clouds_skipped_out_of_span, 1U);
+  EXPECT_EQ(stats.points_added, 0U);
+}
+
+// A cloud whose per-point times are all one value (e.g. the all-zero field
+// `pcd undistort` leaves behind) carries no sweep motion, so it must be
+// accumulated as-is — deskewing it would be a no-op that only rewrites bytes.
+TEST(CalibCamLidarCommonTest, AccumulateCloudDoesNotDeskewUniformTimeField)
+{
+  pc::PcdCloud map;
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(1.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzit({{0.0F, 0.0F, 0.0F, 0.5F, 0.0F}}, 5'000'000'000LL), trajectory,
+    std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  ASSERT_EQ(map.points.size(), 1U);
+  EXPECT_FLOAT_EQ(map.points[0][0], 5.0F);  // placed at the header stamp, un-deskewed
+  EXPECT_EQ(stats.clouds_deskewed, 0U);
+}
+
+// A non-uniform per-point time field means a real sweep: deskew each point to
+// the header stamp before the ref-frame placement, so the point captured 0.5 s
+// into the sweep lands at the pose of 5.5 s, not 5 s.
+TEST(CalibCamLidarCommonTest, AccumulateCloudDeskewsVaryingTimeField)
+{
+  pc::PcdCloud map;
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(1.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map,
+    make_cloud_xyzit(
+      {{0.0F, 0.0F, 0.0F, 0.5F, 0.5F}, {0.0F, 0.0F, 0.0F, 0.25F, 0.0F}}, 5'000'000'000LL),
+    trajectory, std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  ASSERT_EQ(map.points.size(), 2U);
+  EXPECT_FLOAT_EQ(map.points[0][0], 5.5F);
+  EXPECT_FLOAT_EQ(map.points[1][0], 5.0F);
+  EXPECT_EQ(stats.clouds_deskewed, 1U);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudDropsNonFinitePoints)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  pc::PcdCloud map;
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzi({{nan, 0.0F, 0.0F, 0.5F}, {1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL),
+    trajectory, std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  ASSERT_EQ(map.points.size(), 1U);
+  EXPECT_FLOAT_EQ(map.points[0][0], 1.0F);
+  EXPECT_EQ(stats.points_dropped_nonfinite, 1U);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudRejectsBigEndianCloud)
+{
+  auto c = make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL);
+  c.is_bigendian = true;
+  pc::PcdCloud map;
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  EXPECT_TRUE(
+    commands::accumulate_cloud_into_map(map, c, trajectory, std::nullopt, stats).has_value());
+  EXPECT_TRUE(map.points.empty());
 }

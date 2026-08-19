@@ -9,48 +9,60 @@
 #include "bagwiz/core/cdr_walker/cdr_writer.hpp"
 #include "bagwiz/core/image/camera_info.hpp"
 #include "bagwiz/core/image/raw_image.hpp"
-#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
+#include "bagwiz/core/introspection/introspection_loader.hpp"
+#include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/core/tf/tf_static_tree_yaml.hpp"
 #include "bagwiz/core/tf/tf_transform_format.hpp"
-#include "bagwiz/core/tf/trajectory.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
 #include <gtest/gtest.h>
+#include <rcutils/allocator.h>
+#include <rmw/rmw.h>
+#include <rmw/serialized_message.h>
+#include <rmw/types.h>
 
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <span>
 #include <string>
 #include <vector>
 
-// End-to-end test of `bagwiz calib cam-lidar`'s run path: synthetic
-// map.pcd + traj.tum + an MCAP bag drive run_calib_cam_lidar() directly
-// (no CLI parsing). The scene follows the amended correlated-scene pattern
-// from bagwiz_pointcloud/test/core/calib/correlated_scene.hpp (see the Task 6
-// report referenced there): a frontal wall of map points at a fixed depth,
-// each carrying an intensity equal to its own ground-truth projected pixel
-// column, painted against an image that is a plain horizontal gray ramp. That
-// keeps the gray/lidar joint histogram diagonal at the true pose instead of
-// producing the quantization plateau a splatted, piecewise-constant render
-// would, which is what makes the happy-path recovery test converge reliably.
+// End-to-end test of `bagwiz calib cam-lidar`'s run path: one synthetic MCAP
+// bag carrying /tf_static, CameraInfo, the image topic, the --pcd PointCloud2
+// topic, and the --pose PoseStamped topic drives run_calib_cam_lidar()
+// directly (no CLI parsing). The scene follows the amended correlated-scene
+// pattern from bagwiz_pointcloud/test/core/calib/correlated_scene.hpp: a
+// frontal wall of map points at a fixed depth, each carrying an intensity
+// equal to its own ground-truth projected pixel column, painted against an
+// image that is a plain horizontal gray ramp. That keeps the gray/lidar joint
+// histogram diagonal at the true pose instead of producing the quantization
+// plateau a splatted, piecewise-constant render would, which is what makes
+// the happy-path recovery test converge reliably.
 namespace
 {
 
 using bagwiz::commands::CalibCamLidarArgs;
 using bagwiz::commands::run_calib_cam_lidar;
+namespace pc = bagwiz::core::pointcloud;
 
 constexpr const char * kParentFrame = "base_link";
 constexpr const char * kChildFrame = "cam_link";
+constexpr const char * kLidarFrame = "lidar";
+constexpr const char * kRefFrame = "map";
 constexpr const char * kImageTopic = "/cam/image_raw";
 constexpr const char * kCamInfoTopic = "/cam/camera_info";
+constexpr const char * kPcdTopic = "/lidar/points";
+constexpr const char * kPoseTopic = "/pose";
 constexpr const char * kTfStaticTopic = "/tf_static";
 
 constexpr std::uint32_t kImageWidth = 320;
@@ -63,11 +75,14 @@ constexpr double kWallZ = 8.0;
 
 // ---- hand-rolled CDR fixture serializers -----------------------------------
 //
-// Both go through bagwiz_msg's cdr_walker::CdrWriter (the alignment-aware CDR-1
-// writer already proven against CdrReader — the same reader
-// core::image::extract_camera_info / extract_raw_image use) rather than a
-// bespoke byte-writer, so the alignment/length-prefix rules do not have to be
-// re-derived by hand here.
+// The image and CameraInfo serializers go through bagwiz_msg's
+// cdr_walker::CdrWriter (the alignment-aware CDR-1 writer already proven
+// against CdrReader — the same reader core::image::extract_camera_info /
+// extract_raw_image use) rather than a bespoke byte-writer, so the
+// alignment/length-prefix rules do not have to be re-derived by hand here. The
+// pose topic is consumed through the introspection decoder instead, so it is
+// serialized with the matching typesupport (serialize_typed below), and the
+// cloud with the library's own serialize_pointcloud2.
 
 // sensor_msgs/msg/Image: header{stamp{int32 sec, uint32 nsec}, string
 // frame_id}, uint32 height, uint32 width, string encoding, uint8 is_bigendian,
@@ -126,6 +141,27 @@ std::vector<std::byte> serialize_camera_info(
   return w.take();
 }
 
+// Typed-message CDR round-trip through the introspection typesupport (the
+// pcd_undistort_common_test idiom), for the pose topic the trajectory builder
+// reads through the introspection decoder.
+template <typename T>
+std::vector<std::byte> serialize_typed(const T & msg, const char * type_name)
+{
+  auto intro = bagwiz::core::load_introspection(type_name);
+  EXPECT_TRUE(intro.ok()) << intro.error;
+
+  rmw_serialized_message_t serialized = rmw_get_zero_initialized_serialized_message();
+  rcutils_allocator_t alloc = rcutils_get_default_allocator();
+  EXPECT_EQ(rmw_serialized_message_init(&serialized, 0, &alloc), RMW_RET_OK);
+  EXPECT_EQ(rmw_serialize(&msg, intro.typesupport, &serialized), RMW_RET_OK);
+  std::vector<std::byte> out(serialized.buffer_length);
+  if (serialized.buffer_length > 0) {
+    std::memcpy(out.data(), serialized.buffer, serialized.buffer_length);
+  }
+  rmw_serialized_message_fini(&serialized);
+  return out;
+}
+
 std::array<double, 9> camera_k()
 {
   return {kFx, 0, kCx, 0, kFy, kCy, 0, 0, 1};
@@ -174,30 +210,48 @@ Scene build_scene()
   return scene;
 }
 
-void write_map_pcd(const std::filesystem::path & path, const Scene & scene, bool with_intensity)
+// The scene's wall as one PointCloud2 message in the lidar frame: x/y/z
+// float32, a float32 intensity field (omitted when `with_intensity` is false,
+// for the rejection test), and — when `with_time_field` is set — an all-zero
+// float32 "t" field, the shape a cloud that already went through `pcd
+// undistort` carries and which the map accumulation must NOT re-deskew.
+pc::PointCloud2 make_wall_cloud(
+  const Scene & scene, std::int64_t stamp_ns, bool with_intensity, bool with_time_field)
 {
-  std::ofstream out(path, std::ios::binary);
-  ASSERT_TRUE(out.is_open());
+  pc::PointCloud2 c;
+  c.timestamp_ns = stamp_ns;
+  c.frame_id = kLidarFrame;
+  c.height = 1;
+  c.width = static_cast<std::uint32_t>(scene.points.size());
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat32, 1},
+    {"y", 4, pc::PointFieldType::kFloat32, 1},
+    {"z", 8, pc::PointFieldType::kFloat32, 1},
+  };
+  std::uint32_t offset = 12;
+  std::optional<std::uint32_t> intensity_offset;
   if (with_intensity) {
-    bagwiz::core::pointcloud::write_pcd(out, scene.points, scene.intensities);
-  } else {
-    bagwiz::core::pointcloud::write_pcd(out, scene.points);
+    c.fields.push_back({"intensity", offset, pc::PointFieldType::kFloat32, 1});
+    intensity_offset = offset;
+    offset += 4;
   }
-}
-
-// A static vehicle: identity pose at each end of the span, so
-// interpolate_trajectory's slerp/lerp is trivial and the trajectory frame
-// coincides with the map's own world frame everywhere in between.
-void write_traj_tum(const std::filesystem::path & path, std::int64_t t0_ns, std::int64_t t1_ns)
-{
-  std::vector<bagwiz::core::TrajectoryPose> poses(2);
-  poses[0].timestamp_ns = t0_ns;
-  poses[0].qw = 1.0;
-  poses[1].timestamp_ns = t1_ns;
-  poses[1].qw = 1.0;
-  std::ofstream out(path);
-  ASSERT_TRUE(out.is_open());
-  bagwiz::core::write_tum(out, poses);
+  if (with_time_field) {
+    c.fields.push_back({"t", offset, pc::PointFieldType::kFloat32, 1});
+    offset += 4;
+  }
+  c.point_step = offset;
+  c.row_step = c.point_step * c.width;
+  c.is_dense = true;
+  c.data.resize(static_cast<std::size_t>(c.row_step));
+  for (std::size_t i = 0; i < scene.points.size(); ++i) {
+    std::byte * base = c.data.data() + i * c.point_step;
+    std::memcpy(base, scene.points[i].data(), sizeof(float) * 3);
+    if (intensity_offset.has_value()) {
+      std::memcpy(base + *intensity_offset, &scene.intensities[i], sizeof(float));
+    }
+    // The time field, when present, stays all zeros (uniform → no sweep motion).
+  }
+  return c;
 }
 
 bagwiz::io::CreateOptions mcap_options()
@@ -209,12 +263,18 @@ bagwiz::io::CreateOptions mcap_options()
   return options;
 }
 
-bagwiz::io::TopicInfo tf_static_topic_info()
+bagwiz::io::TopicInfo topic_info(const std::string & name, const std::string & type)
 {
   bagwiz::io::TopicInfo t;
-  t.name = kTfStaticTopic;
-  t.type = "tf2_msgs/msg/TFMessage";
+  t.name = name;
+  t.type = type;
   t.serialization_format = "cdr";
+  return t;
+}
+
+bagwiz::io::TopicInfo tf_static_topic_info()
+{
+  bagwiz::io::TopicInfo t = topic_info(kTfStaticTopic, "tf2_msgs/msg/TFMessage");
   t.schema_encoding = "ros2msg";
   t.schema_text = bagwiz::core::kTfMessageWireSchema;
   return t;
@@ -260,60 +320,77 @@ Scene optical_convention_scene(const Scene & scene)
   return out;
 }
 
-// Writes /tf_static (`static_edges`), /cam/camera_info (one message, whose
-// header.frame_id is the chain's optical frame), and /cam/image_raw (one bgr8
-// message per entry of `image_stamps_ns`, all sharing the scene's ramp
-// raster).
-void write_fixture_bag_edges(
-  const std::filesystem::path & path,
-  std::span<const geometry_msgs::msg::TransformStamped> static_edges,
-  const std::string & optical_frame, std::span<const std::int64_t> image_stamps_ns,
-  const Scene & scene)
+// Everything the fixture bag carries, with defaults matching the happy path:
+// a static vehicle (identity poses bracketing the image span), the wall cloud
+// stamped inside the pose span.
+struct FixtureBagOptions
 {
-  bagwiz::io::TopicInfo image_topic;
-  image_topic.name = kImageTopic;
-  image_topic.type = "sensor_msgs/msg/Image";
-  image_topic.serialization_format = "cdr";
+  // The edited static edge(s). The writer appends the identity
+  // base_link -> lidar edge the --pcd cloud's frame resolves through.
+  std::vector<geometry_msgs::msg::TransformStamped> static_edges;
+  std::string optical_frame = kChildFrame;
+  std::vector<std::int64_t> image_stamps_ns;
+  std::int64_t cloud_stamp_ns = 20'000'000'000LL;
+  std::int64_t pose_t0_ns = 10'000'000'000LL;
+  std::int64_t pose_t1_ns = 50'000'000'000LL;
+  bool cloud_with_intensity = true;
+  bool cloud_with_time_field = false;
+};
 
-  bagwiz::io::TopicInfo cam_info_topic;
-  cam_info_topic.name = kCamInfoTopic;
-  cam_info_topic.type = "sensor_msgs/msg/CameraInfo";
-  cam_info_topic.serialization_format = "cdr";
-
+// Writes one bag with /tf_static (the edges plus the identity lidar edge),
+// /cam/camera_info (one message, whose header.frame_id is the chain's optical
+// frame), /cam/image_raw (one bgr8 message per image stamp, all sharing the
+// scene's ramp raster), /lidar/points (the scene's wall cloud), and /pose
+// (identity PoseStamped in the ref frame at the two span endpoints).
+void write_fixture_bag(
+  const std::filesystem::path & path, const Scene & scene, const FixtureBagOptions & opts)
+{
   auto writer = bagwiz::io::open_write(path, mcap_options());
   writer->declare_topic(tf_static_topic_info());
-  writer->declare_topic(image_topic);
-  writer->declare_topic(cam_info_topic);
+  writer->declare_topic(topic_info(kImageTopic, "sensor_msgs/msg/Image"));
+  writer->declare_topic(topic_info(kCamInfoTopic, "sensor_msgs/msg/CameraInfo"));
+  writer->declare_topic(topic_info(kPcdTopic, "sensor_msgs/msg/PointCloud2"));
+  writer->declare_topic(topic_info(kPoseTopic, "geometry_msgs/msg/PoseStamped"));
 
-  const auto tf_cdr = bagwiz::core::serialize_tf_message(static_edges);
+  auto edges = opts.static_edges;
+  geometry_msgs::msg::TransformStamped lidar_edge;
+  lidar_edge.header.frame_id = kParentFrame;
+  lidar_edge.child_frame_id = kLidarFrame;
+  lidar_edge.transform.rotation.w = 1.0;
+  edges.push_back(lidar_edge);
+  const auto tf_cdr = bagwiz::core::serialize_tf_message(edges);
   writer->write(kTfStaticTopic, 0, std::span<const std::byte>(tf_cdr.data(), tf_cdr.size()));
 
   const auto cam_info_cdr =
-    serialize_camera_info(0, 0, optical_frame, kImageWidth, kImageHeight, camera_k());
+    serialize_camera_info(0, 0, opts.optical_frame, kImageWidth, kImageHeight, camera_k());
   writer->write(
     kCamInfoTopic, 0, std::span<const std::byte>(cam_info_cdr.data(), cam_info_cdr.size()));
 
-  for (const std::int64_t stamp_ns : image_stamps_ns) {
+  for (const std::int64_t stamp_ns : opts.image_stamps_ns) {
     const auto sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
     const auto image_cdr =
-      serialize_image_bgr8(sec, 0, optical_frame, kImageWidth, kImageHeight, scene.ramp_bgr);
+      serialize_image_bgr8(sec, 0, opts.optical_frame, kImageWidth, kImageHeight, scene.ramp_bgr);
     writer->write(
       kImageTopic, stamp_ns, std::span<const std::byte>(image_cdr.data(), image_cdr.size()));
   }
-  writer->close();
-}
 
-// The single-edge fixture the yaw-recovery tests use: base_link -> cam_link
-// off by `edge_yaw_rad` from the identity pose the images were rendered at,
-// with cam_link doubling as the optical frame.
-void write_fixture_bag(
-  const std::filesystem::path & path, double edge_yaw_rad,
-  std::span<const std::int64_t> image_stamps_ns, const Scene & scene)
-{
-  const auto edge = make_static_edge(edge_yaw_rad);
-  write_fixture_bag_edges(
-    path, std::span<const geometry_msgs::msg::TransformStamped>(&edge, 1), kChildFrame,
-    image_stamps_ns, scene);
+  const auto cloud = make_wall_cloud(
+    scene, opts.cloud_stamp_ns, opts.cloud_with_intensity, opts.cloud_with_time_field);
+  const auto cloud_cdr = pc::serialize_pointcloud2(cloud);
+  writer->write(
+    kPcdTopic, opts.cloud_stamp_ns, std::span<const std::byte>(cloud_cdr.data(), cloud_cdr.size()));
+
+  for (const std::int64_t stamp_ns : {opts.pose_t0_ns, opts.pose_t1_ns}) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header.frame_id = kRefFrame;
+    pose.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
+    pose.header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
+    pose.pose.orientation.w = 1.0;
+    const auto pose_cdr = serialize_typed(pose, "geometry_msgs/msg/PoseStamped");
+    writer->write(
+      kPoseTopic, stamp_ns, std::span<const std::byte>(pose_cdr.data(), pose_cdr.size()));
+  }
+  writer->close();
 }
 
 // The six per-axis values of one field of render_calibrate_json's output, in
@@ -351,10 +428,11 @@ CalibCamLidarArgs base_args(const std::filesystem::path & tmp_dir)
 {
   CalibCamLidarArgs args;
   args.input_path = (tmp_dir / "bag.mcap").string();
-  args.map_path = (tmp_dir / "map.pcd").string();
-  args.traj_path = (tmp_dir / "traj.tum").string();
-  args.traj_frame = kParentFrame;
-  args.topic = kImageTopic;
+  args.pcd_topic = kPcdTopic;
+  args.pose_topic = kPoseTopic;
+  args.cam_topic = kImageTopic;
+  args.of_frame = kParentFrame;
+  args.ref_frame = kRefFrame;
   args.parent_frame = kParentFrame;
   args.child_frame = kChildFrame;
   args.output_path = (tmp_dir / "out.yaml").string();
@@ -384,7 +462,7 @@ protected:
 }  // namespace
 
 // Pins the fixture serializers' alignment against the real parsers before
-// they are trusted inside a bag (per the task brief's ruling).
+// they are trusted inside a bag.
 TEST(CalibCamLidarFixtureSerializersTest, CameraInfoRoundTrips)
 {
   const auto payload =
@@ -414,14 +492,62 @@ TEST(CalibCamLidarFixtureSerializersTest, ImageRoundTrips)
   EXPECT_EQ(static_cast<std::uint8_t>(result.image->data[0]), 0x42);
 }
 
-TEST_F(CalibCamLidarTest, RejectsMapWithoutIntensity)
+TEST(CalibCamLidarFixtureSerializersTest, PointCloud2RoundTrips)
 {
   const auto scene = build_scene();
-  write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/false);
-  write_traj_tum(tmp_dir_ / "traj.tum", 10'000'000'000LL, 50'000'000'000LL);
-  write_fixture_bag(tmp_dir_ / "bag.mcap", 0.0, default_image_stamps_ns(), scene);
+  const auto cloud = make_wall_cloud(scene, 20'000'000'000LL, true, true);
+  const auto payload = pc::serialize_pointcloud2(cloud);
+  const auto parsed = pc::parse_pointcloud2(payload);
+  ASSERT_TRUE(parsed.ok()) << parsed.error;
+  EXPECT_EQ(parsed.cloud->timestamp_ns, 20'000'000'000LL);
+  EXPECT_EQ(parsed.cloud->frame_id, kLidarFrame);
+  EXPECT_EQ(parsed.cloud->width, scene.points.size());
+  EXPECT_TRUE(parsed.cloud->field_offset("intensity").has_value());
+  EXPECT_TRUE(parsed.cloud->field_offset("t").has_value());
+  ASSERT_EQ(parsed.cloud->data.size(), cloud.data.size());
+  float x = 0.0F;
+  std::memcpy(&x, parsed.cloud->data.data(), sizeof(float));
+  EXPECT_FLOAT_EQ(x, scene.points[0][0]);
+}
+
+TEST_F(CalibCamLidarTest, RejectsCloudWithoutIntensity)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  opts.cloud_with_intensity = false;
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
 
   const auto args = base_args(tmp_dir_);
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+}
+
+TEST_F(CalibCamLidarTest, RejectsMissingPcdTopic)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.pcd_topic = "/no/such/topic";
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+}
+
+TEST_F(CalibCamLidarTest, RejectsMissingPoseTopic)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.pose_topic = "/no/such/topic";
   EXPECT_EQ(run_calib_cam_lidar(args), 1);
   EXPECT_FALSE(std::filesystem::exists(args.output_path));
 }
@@ -429,9 +555,10 @@ TEST_F(CalibCamLidarTest, RejectsMapWithoutIntensity)
 TEST_F(CalibCamLidarTest, RejectsEdgeNotOnChain)
 {
   const auto scene = build_scene();
-  write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
-  write_traj_tum(tmp_dir_ / "traj.tum", 10'000'000'000LL, 50'000'000'000LL);
-  write_fixture_bag(tmp_dir_ / "bag.mcap", 0.0, default_image_stamps_ns(), scene);
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
 
   auto args = base_args(tmp_dir_);
   args.child_frame = "bogus";
@@ -442,11 +569,16 @@ TEST_F(CalibCamLidarTest, RejectsEdgeNotOnChain)
 TEST_F(CalibCamLidarTest, RejectsWhenImageStampsMissTrajectory)
 {
   const auto scene = build_scene();
-  write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
-  // Trajectory spans 100..200 s; the fixture's images stay at 15..43 s, so no
-  // image stamp falls inside the (margin-shrunk) trajectory span.
-  write_traj_tum(tmp_dir_ / "traj.tum", 100'000'000'000LL, 200'000'000'000LL);
-  write_fixture_bag(tmp_dir_ / "bag.mcap", 0.0, default_image_stamps_ns(), scene);
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  // The pose topic spans 100..200 s while the images stay at 15..43 s, so no
+  // image stamp falls inside the (margin-shrunk) trajectory span. The cloud is
+  // stamped inside the pose span so the map itself accumulates fine.
+  opts.pose_t0_ns = 100'000'000'000LL;
+  opts.pose_t1_ns = 200'000'000'000LL;
+  opts.cloud_stamp_ns = 150'000'000'000LL;
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
 
   const auto args = base_args(tmp_dir_);
   EXPECT_EQ(run_calib_cam_lidar(args), 1);
@@ -456,13 +588,14 @@ TEST_F(CalibCamLidarTest, RejectsWhenImageStampsMissTrajectory)
 TEST_F(CalibCamLidarTest, RecoversInjectedYawIntoYaml)
 {
   const auto scene = build_scene();
-  write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
-  write_traj_tum(tmp_dir_ / "traj.tum", 10'000'000'000LL, 50'000'000'000LL);
   // The bag's base_link -> cam_link edge is off by +1 deg of yaw from the
   // identity pose the images were actually rendered at; refine must find
   // delta yaw ~= -1 deg so the refined edge is (near) identity again.
   constexpr double kInjectedYawRad = 1.0 * M_PI / 180.0;
-  write_fixture_bag(tmp_dir_ / "bag.mcap", kInjectedYawRad, default_image_stamps_ns(), scene);
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(kInjectedYawRad)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
 
   auto args = base_args(tmp_dir_);
   // At a single-depth frontal wall, yaw and translation are projectively
@@ -495,6 +628,31 @@ TEST_F(CalibCamLidarTest, RecoversInjectedYawIntoYaml)
   EXPECT_NEAR(rpy.pitch, 0.0, kWeakAxisToleranceRad);
 }
 
+// The all-zero "t" field a cloud carries after `pcd undistort` rewrote it:
+// uniform per-point times must pass the accumulation's deskew gate untouched
+// (no sweep motion to undo) and the command still succeeds end to end.
+TEST_F(CalibCamLidarTest, AcceptsCloudWithUniformTimeField)
+{
+  const auto scene = build_scene();
+  constexpr double kInjectedYawRad = 1.0 * M_PI / 180.0;
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(kInjectedYawRad)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  opts.cloud_with_time_field = true;
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.fix_axes = "x,y,z";
+
+  ASSERT_EQ(run_calib_cam_lidar(args), 0);
+  ASSERT_TRUE(std::filesystem::exists(args.output_path));
+
+  const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
+  ASSERT_TRUE(parsed.ok()) << parsed.error;
+  const auto rpy = bagwiz::core::quaternion_to_rpy(parsed.transforms->front().transform.rotation);
+  EXPECT_NEAR(rpy.yaw, 0.0, 0.15 * M_PI / 180.0);
+}
+
 // --keyframe-dist on the (stationary) fixture: the pose gate collapses to one
 // interval, so the command must warn, fall back to plain even time spacing,
 // and still succeed end to end — the gate is an optimization, never a new
@@ -502,10 +660,11 @@ TEST_F(CalibCamLidarTest, RecoversInjectedYawIntoYaml)
 TEST_F(CalibCamLidarTest, KeyframeGateFallsBackOnStationaryTrajectory)
 {
   const auto scene = build_scene();
-  write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
-  write_traj_tum(tmp_dir_ / "traj.tum", 10'000'000'000LL, 50'000'000'000LL);
   constexpr double kInjectedYawRad = 1.0 * M_PI / 180.0;
-  write_fixture_bag(tmp_dir_ / "bag.mcap", kInjectedYawRad, default_image_stamps_ns(), scene);
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(kInjectedYawRad)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
 
   auto args = base_args(tmp_dir_);
   args.fix_axes = "x,y,z";
@@ -544,13 +703,10 @@ TEST_F(CalibCamLidarTest, OpticalConventionEdgeYamlMatchesTheReportedEdge)
   constexpr double kInjectedYaw = 2.0 * kDeg;
 
   const auto scene = optical_convention_scene(build_scene());
-  write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
-  write_traj_tum(tmp_dir_ / "traj.tum", 10'000'000'000LL, 50'000'000'000LL);
-  const auto edge = make_static_edge_rpy(kTrueRoll, kTruePitch, kTrueYaw + kInjectedYaw);
-  const auto stamps = default_image_stamps_ns();
-  write_fixture_bag_edges(
-    tmp_dir_ / "bag.mcap", std::span<const geometry_msgs::msg::TransformStamped>(&edge, 1),
-    kChildFrame, stamps, scene);
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge_rpy(kTrueRoll, kTruePitch, kTrueYaw + kInjectedYaw)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
 
   auto args = base_args(tmp_dir_);
   args.fix_axes = "x,y,z,roll,pitch";

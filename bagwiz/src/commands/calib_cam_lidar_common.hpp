@@ -12,7 +12,11 @@
 #include "bagwiz/core/calib/extrinsic_refine.hpp"
 #include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/se3.hpp"
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
+
+#include <geometry_msgs/msg/transform.hpp>
 
 #include <array>
 #include <cstddef>
@@ -25,27 +29,31 @@
 #include <vector>
 
 // Internals of `bagwiz calib cam-lidar`, split out so the flag validation,
-// sample picking, trajectory interpolation, and report rendering can be
-// unit-tested without a bag or a real refinement run. Pure over the args, no
-// bag access. CLI-internal: this header lives with the command sources and is
-// not installed.
+// sample picking, trajectory interpolation, map accumulation, and report
+// rendering can be unit-tested without a bag or a real refinement run. Pure
+// over the args, no bag access. CLI-internal: this header lives with the
+// command sources and is not installed.
 namespace bagwiz::commands
 {
 
 // Parsed arguments for `bagwiz calib cam-lidar`. Refines one static-TF edge on
-// a camera's chain by registering the bag's LiDAR map (from a prior `bagwiz map
-// slam` run) against the bag's images via NID, and writes a YAML that `bagwiz
-// tf static update` applies.
+// a camera's chain by registering the bag's LiDAR clouds (accumulated into a
+// map through the bag's own pose topic) against the bag's images via NID, and
+// writes a YAML that `bagwiz tf static update` applies.
 struct CalibCamLidarArgs
 {
   // -i,--input: bag path (file or directory). A std::filesystem::path (not a
   // string) because set_topic_input() binds the completion registry's topic
   // slots to it — the same shape every other slot-declaring command uses.
   std::filesystem::path input_path;
-  std::string map_path;        // --map: dense map PCD from `map slam`
-  std::string traj_path;       // --traj: TUM trajectory from `map slam`
-  std::string traj_frame;      // --traj-frame: frame the trajectory poses express
-  std::string topic;           // -t,--topic: image topic to calibrate against
+  std::string pcd_topic;   // --pcd: PointCloud2 topic accumulated into the map
+  std::string pose_topic;  // --pose: self-position topic (same types as `pcd undistort --pose`)
+  std::string cam_topic;   // --cam: image topic to calibrate against
+  // --of / --ref: the trajectory expresses the pose of --of in the --ref frame
+  // (the same pair and defaults as `pcd undistort`). --of anchors the static
+  // TF chain to the camera's optical frame and the per-cloud extrinsic.
+  std::string of_frame = "base_link";
+  std::string ref_frame = "map";
   std::string parent_frame;    // --parent: parent frame of the edited static edge
   std::string child_frame;     // --child: child frame of the edited static edge
   std::string cam_info_topic;  // --cam-info; empty = auto-resolve from the image topic
@@ -150,6 +158,43 @@ struct CalibCamLidarArgs
 [[nodiscard]] std::optional<core::calib::Mat4> interpolate_trajectory(
   std::span<const core::TrajectoryPose> poses, std::int64_t stamp_ns);
 
+// Running tallies of the --pcd accumulation pass (one call per cloud on the
+// topic), surfaced as the run path's end-of-pass info/warning lines.
+struct MapAccumulationStats
+{
+  std::uint64_t clouds_read = 0;                 // clouds offered to the pass
+  std::uint64_t clouds_skipped_out_of_span = 0;  // header.stamp outside the trajectory span
+  std::uint64_t clouds_deskewed = 0;             // clouds deskewed before accumulation
+  std::uint64_t points_added = 0;
+  std::uint64_t points_dropped_nonfinite = 0;
+  // Points the deskew clamped to a trajectory endpoint (their own stamp fell
+  // outside the trajectory span) — deskewed against a pose at a different
+  // time than their own, so never silent.
+  std::uint64_t points_clamped_out_of_span = 0;
+};
+
+// Append one --pcd cloud to the accumulated map, expressed in the
+// trajectory's --ref frame: each point is placed by
+// T_ref_of(header.stamp) * T_of_cloud, where `trajectory` carries T_ref_of
+// (sorted ascending) and `t_of_cloud` is the cloud frame's static extrinsic
+// into the --of frame (nullopt = the cloud frame already is --of). A cloud
+// whose per-point time field is usable AND non-uniform is deskewed to its
+// header stamp first (deskew_pointcloud2 with the same trajectory and
+// extrinsic); a uniform field — all zeros, or the t_ref-constant field `pcd
+// undistort` leaves behind — means no sweep motion and the cloud is
+// accumulated as-is. A cloud whose header.stamp falls outside the trajectory
+// span is skipped (counted, not an error: clamping it to an endpoint pose
+// would smear the map), and non-finite points are dropped (counted).
+//
+// Returns an error message only for an unusable cloud: no intensity field
+// (NID needs it), an unreadable field layout, big-endian point data, an
+// unusable static extrinsic, or a deskew failure. The caller reports it
+// against the topic and aborts.
+[[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
+  core::pointcloud::PcdCloud & map, core::pointcloud::PointCloud2 cloud,
+  std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats);
+
 // Default `-o/--output` path when omitted: "<input stem>_calib_cam_lidar.yaml"
 // in the current working directory.
 [[nodiscard]] std::string default_calib_cam_lidar_output_path(const std::filesystem::path & input);
@@ -172,27 +217,26 @@ struct CalibCamLidarArgs
 // instead of a JSON library — this command's only JSON output, so pulling one
 // in isn't worth it). Rotation axes are left in radians (the edge's native
 // unit, same as `edge_before` / RefineResult::delta) rather than converted to
-// degrees, unlike render_calibrate_summary's human table.
-//
-// Deviates from the brief's `render_calibrate_json(result, edge_before)`
-// signature: producing the required "parent"/"child" fields needs the edge's
-// frame names, which only `args` carries, so `args` is threaded through here
-// too (matching render_calibrate_summary's first parameter). Flagged for
-// Task 8/9 — see the Task 7 report.
+// degrees, unlike render_calibrate_summary's human table. The signature takes
+// `args` (not just the result) because the "parent"/"child" fields name the
+// edited edge's frames, which only `args` carries — the same threading
+// render_calibrate_summary uses.
 [[nodiscard]] std::string render_calibrate_json(
   const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before);
 
-// Entry point for `bagwiz calib cam-lidar`'s run path: loads the map PCD and
-// TUM trajectory, resolves the image's CameraInfo and the static-TF chain from
-// --traj-frame to the camera's optical frame, samples images spread across the
-// trajectory span, refines the --parent/--child edge via
+// Entry point for `bagwiz calib cam-lidar`'s run path: builds the --of -> --ref
+// trajectory from the --pose topic, accumulates the --pcd topic's clouds into
+// a map in the --ref frame, resolves the image's CameraInfo and the static-TF
+// chain from --of to the camera's optical frame, samples images spread across
+// the trajectory span, refines the --parent/--child edge via
 // core::calib::refine_extrinsic, and writes the result as a static-TF-tree
 // YAML that `bagwiz tf static update` applies. Returns 0 on success, 1 on any
-// error (bad flag combination, unreadable map/trajectory, missing/wrong-typed
-// image or CameraInfo topic, an unresolvable or off-chain edge, too few usable
-// image samples, or a refinement failure), with messages through the same
-// logging pattern run_tf_static_dump uses. Defined in calib_cam_lidar.cpp.
+// error (bad flag combination, missing/wrong-typed --pcd/--pose/--cam or
+// CameraInfo topic, a --pcd topic without an intensity field, an unresolvable
+// or off-chain edge, too few usable image samples, or a refinement failure),
+// with messages through the same logging pattern run_tf_static_dump uses.
+// Defined in calib_cam_lidar.cpp.
 int run_calib_cam_lidar(const CalibCamLidarArgs & args);
 
 }  // namespace bagwiz::commands
