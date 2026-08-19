@@ -14,9 +14,9 @@
 #include "bagwiz/core/tui/image/terminal_image_renderer.hpp"
 #include "bagwiz/core/tui/renderer.hpp"
 #include "bagwiz/core/tui/width.hpp"
-#include "walk_frame.hpp"           // NOLINT(build/include_subdir) src-local shared header
-#include "walk_preview_legend.hpp"  // NOLINT(build/include_subdir) src-local shared header
-#include "walk_save.hpp"            // NOLINT(build/include_subdir) src-local shared header
+#include "walk_frame.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "walk_help.hpp"   // NOLINT(build/include_subdir) src-local shared header
+#include "walk_save.hpp"   // NOLINT(build/include_subdir) src-local shared header
 
 #include <fmt/core.h>
 
@@ -25,6 +25,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -250,6 +251,10 @@ void ImagePreviewSession::toggle_pin()
 
 void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
 {
+  if (show_help_) {
+    render_help(out, term);
+    return;
+  }
   const std::size_t index = cursor_.index();
   const auto & cache = cursor_.cache();
   const bool exhausted = cursor_.exhausted();
@@ -302,32 +307,27 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   // width.cpp), so it does not perturb the wrap/truncate accounting below.
   auto hl = [](auto && value) { return fmt::format("\x1B[1;36m{}\x1B[0m", value); };
 
-  info += fmt::format("   rectify: {}", hl(rectify_enabled_ ? "on" : "off"));
-  if (!pcd.topics.empty()) {
-    const std::string range_text =
-      pcd.auto_range ? "auto" : fmt::format("{:.2f}-{:.2f}", pcd.manual_min, pcd.manual_max);
-    info += fmt::format("   pcd: {}", hl(pcd.enabled ? "on" : "off"));
-    // The frame-match readings come from the last maybe_overlay(), which runs
-    // inside the compose_frame() above — but only while the overlay is
-    // enabled. Showing them only then keeps them from going stale behind a
-    // switched-off overlay.
-    if (pcd.enabled) {
-      info += fmt::format("   match: {}", hl(pcd_match_clock_name(pcd)));
-      // With a scene grid on screen every tile's caption carries its own Δ,
-      // which is the comparison that matters; repeating the live tile's here
-      // would only be noise.
-      if (pins_.empty()) {
-        const std::string residual_text =
-          pcd.last_residual_ns.has_value()
-            ? fmt::format("{:+.1f}ms", static_cast<double>(*pcd.last_residual_ns) / 1e6)
-            : "n/a";
-        info += fmt::format("   Δ: {}", hl(residual_text));
-      }
+  // State badges only while a state is on; the settings themselves surface
+  // transiently on the status row as their keys adjust them, so the
+  // persistent row stays one compact line.
+  if (rectify_enabled_) {
+    info += fmt::format("   {}", hl("rect"));
+  }
+  if (!pcd.topics.empty() && pcd.enabled) {
+    info += fmt::format("   {}", hl("pcd"));
+    // The frame-match residual comes from the last maybe_overlay(), which
+    // runs inside the compose_frame() above — but only while the overlay is
+    // enabled, so it cannot go stale behind a switched-off overlay. With a
+    // scene grid on screen every tile's caption carries its own delta, which
+    // is the comparison that matters; repeating the live tile's here would
+    // only be noise.
+    if (pins_.empty()) {
+      const std::string residual_text =
+        pcd.last_residual_ns.has_value()
+          ? fmt::format("{:+.1f}ms", static_cast<double>(*pcd.last_residual_ns) / 1e6)
+          : "n/a";
+      info += fmt::format(" Δ {}", hl(residual_text));
     }
-    info += fmt::format(
-      "   property: {}   range: {}   scheme: {}   size: {}   alpha: {}",
-      hl(pcd_property_name(pcd.property)), hl(range_text), hl(pcd_scheme_name(pcd.scheme)),
-      hl(pcd.point_size), hl(fmt::format("{:.1f}", pcd.alpha)));
   }
   if (!pins_.empty()) {
     info += fmt::format("   pins: {}", hl(fmt::format("{}/{}", pins_.size(), kMaxScenePins)));
@@ -349,18 +349,14 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
     core::tui::draw_line(out, 1 + static_cast<int>(i), header_lines[i], cols);
   }
 
-  // Wrap the key legend the way the YAML footer does, so a narrow terminal
-  // shows every key on continuation lines instead of truncating the row. The
-  // wrapped legend is pinned to the bottom and the image region above shrinks
-  // to make room, mirroring how the YAML view derives its body height from
-  // the wrapped footer.
-  // The overlay adjustment keys are gated on the same condition the info row
-  // uses to show pcd state, so the legend and the state readout agree on when
-  // an overlay topic is in play.
-  const std::vector<std::string> legend_lines = core::tui::wrap_to_width(
-    build_preview_legend(
-      !pcd.topics.empty(), edit.editing, pin_number_of(pins_, index).has_value()),
-    cols);
+  // Wrap the key legend the way the YAML footer does, so a very narrow
+  // terminal shows every key on continuation lines instead of truncating the
+  // row. The wrapped legend is pinned to the bottom and the image region
+  // above shrinks to make room, mirroring how the YAML view derives its body
+  // height from the wrapped footer. The footer carries only the working set
+  // of the current mode — everything else lives in the '?' reference.
+  const std::vector<std::string> legend_lines =
+    core::tui::wrap_to_width(preview_footer_legend(!pcd.topics.empty(), edit.editing), cols);
   const int legend_top = std::max(1, rows - static_cast<int>(legend_lines.size()) + 1);
 
   // Image region: from the row just below the wrapped header down to the row
@@ -462,6 +458,42 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
 
   // Close the synchronized update: the terminal now reveals the fully
   // assembled frame in one atomic swap.
+  core::tui::end_synchronized_update(out);
+  out.flush();
+}
+
+void ImagePreviewSession::render_help(std::ostream & out, core::tui::Size term)
+{
+  const int rows = std::max(1, term.rows);
+  const int cols = std::max(1, term.cols);
+
+  core::tui::begin_synchronized_update(out);
+  core::tui::image::clear_image(out, image_caps_.backend);
+  out << "\x1B[2J";
+
+  std::vector<std::string> body;
+  append_wrapped(body, "  bagwiz walk keys", cols);
+  body.emplace_back();
+  for (const auto & line : preview_help_lines()) {
+    append_wrapped(body, line, cols);
+  }
+
+  // The close hint is pinned to the bottom like the preview's own footer;
+  // the reference scrolls in the region above it.
+  const std::vector<std::string> footer = core::tui::wrap_to_width("  [Esc] back", cols);
+  const int footer_top = std::max(1, rows - static_cast<int>(footer.size()) + 1);
+  const int body_rows = std::max(1, footer_top - 1);
+
+  const std::size_t max_scroll =
+    body.size() > static_cast<std::size_t>(body_rows) ? body.size() - body_rows : 0;
+  help_scroll_ = std::min(help_scroll_, max_scroll);
+  for (int i = 0; i < body_rows && help_scroll_ + i < body.size(); ++i) {
+    core::tui::draw_line(out, 1 + i, body[help_scroll_ + static_cast<std::size_t>(i)], cols);
+  }
+  for (std::size_t i = 0; i < footer.size(); ++i) {
+    core::tui::draw_line(out, footer_top + static_cast<int>(i), footer[i], cols);
+  }
+
   core::tui::end_synchronized_update(out);
   out.flush();
 }
@@ -663,6 +695,43 @@ void ImagePreviewSession::run()
       ev = core::read_key_event();
     }
 
+    if (show_help_) {
+      // The overlay accepts only its own keys: Esc closes it ('?' only
+      // opens it), the scroll keys page it, resize repaints it, and every
+      // other key — q included — is swallowed so a reference lookup can
+      // neither act behind the card nor leave the preview.
+      switch (ev) {
+        case core::KeyEvent::kBack:
+          show_help_ = false;
+          needs_render = true;
+          break;
+        case core::KeyEvent::kScrollDown:
+          ++help_scroll_;  // clamped against the content in render_help
+          needs_render = true;
+          break;
+        case core::KeyEvent::kScrollUp:
+          if (help_scroll_ > 0) {
+            --help_scroll_;
+            needs_render = true;
+          }
+          break;
+        case core::KeyEvent::kScrollHead:
+          help_scroll_ = 0;
+          needs_render = true;
+          break;
+        case core::KeyEvent::kScrollTail:
+          help_scroll_ = std::numeric_limits<std::size_t>::max();  // clamped in render_help
+          needs_render = true;
+          break;
+        case core::KeyEvent::kResize:
+          needs_render = true;
+          break;
+        default:
+          break;  // swallowed behind the reference
+      }
+      continue;
+    }
+
     switch (ev) {
       case core::KeyEvent::kNext:
         // Re-decode only when the cursor actually moved; otherwise the frame
@@ -709,6 +778,9 @@ void ImagePreviewSession::run()
             camera_info_error.empty() ? "rectify: no camera_info" : "rectify: " + camera_info_error;
         } else {
           rectify_enabled_ = !rectify_enabled_;
+          // The info row only badges the on state, so the toggle-off press
+          // still gets visible feedback here.
+          status_ = rectify_enabled_ ? "rectify: on" : "rectify: off";
         }
         needs_render = true;
         break;
@@ -746,30 +818,44 @@ void ImagePreviewSession::run()
         break;
       case core::KeyEvent::kCyclePcdProperty:
         overlay_.cycle_property();
+        // The settings left the persistent info row in the footer diet, so
+        // each adjustment reports its new value transiently instead (the
+        // status clears on the next cursor move).
+        status_ = fmt::format("property: {}", pcd_property_name(pcd.property));
         needs_render = true;
         break;
       case core::KeyEvent::kCyclePcdScheme:
         overlay_.cycle_scheme();
+        status_ = fmt::format("scheme: {}", pcd_scheme_name(pcd.scheme));
         needs_render = true;
         break;
       case core::KeyEvent::kTogglePcdRange:
         overlay_.prompt_for_range(pager_, image_caps.backend);
+        // Like the other adjustment keys: the range left the persistent info
+        // row, so the toggle reports where it landed.
+        status_ = pcd.auto_range
+                    ? "range: auto"
+                    : fmt::format("range: {:.2f}-{:.2f}", pcd.manual_min, pcd.manual_max);
         needs_render = true;
         break;
       case core::KeyEvent::kPcdPointSizeUp:
         pcd.point_size = std::min(pcd.point_size + 1, 64U);
+        status_ = fmt::format("point size: {}", pcd.point_size);
         needs_render = true;
         break;
       case core::KeyEvent::kPcdPointSizeDown:
         pcd.point_size = std::max(pcd.point_size - 1, 1U);
+        status_ = fmt::format("point size: {}", pcd.point_size);
         needs_render = true;
         break;
       case core::KeyEvent::kPcdAlphaUp:
         pcd.alpha = std::min(pcd.alpha + 0.1f, 1.0f);
+        status_ = fmt::format("alpha: {:.1f}", pcd.alpha);
         needs_render = true;
         break;
       case core::KeyEvent::kPcdAlphaDown:
         pcd.alpha = std::max(pcd.alpha - 0.1f, 0.0f);
+        status_ = fmt::format("alpha: {:.1f}", pcd.alpha);
         needs_render = true;
         break;
       case core::KeyEvent::kToggleEditExtrinsic: {
@@ -863,6 +949,24 @@ void ImagePreviewSession::run()
         toggle_pin();
         needs_render = true;
         break;
+      case core::KeyEvent::kHelp:
+        show_help_ = true;
+        help_scroll_ = 0;
+        needs_render = true;
+        break;
+      case core::KeyEvent::kBack: {
+        // Esc backs out one level: the edit mode first, the preview next
+        // (the YAML view's Esc then quits walk).
+        auto & edit = overlay_.edit_state();
+        if (edit.editing) {
+          edit.editing = false;
+          status_ = "(edit mode off; edits stay applied)";
+        } else {
+          running = false;
+        }
+        needs_render = true;
+        break;
+      }
       case core::KeyEvent::kQuit:
         running = false;
         break;
@@ -870,6 +974,8 @@ void ImagePreviewSession::run()
         break;  // scroll / expand keys are inert in the preview
     }
   }
+  // Re-entering the preview starts on the image, not on a leftover help.
+  show_help_ = false;
   // Hand a clean screen back to the pager for the YAML repaint.
   core::tui::image::clear_image(out, image_caps.backend);
   out << "\x1B[2J";

@@ -73,6 +73,8 @@ NavKey to_nav_key(KeyEvent ev) noexcept
       return NavKey::kScrollHead;
     case KeyEvent::kScrollTail:
       return NavKey::kScrollTail;
+    case KeyEvent::kBack:
+      return NavKey::kBack;
     case KeyEvent::kQuit:
       return NavKey::kQuit;
     case KeyEvent::kResize:
@@ -218,7 +220,29 @@ int ScrollablePager::run(
       continue;
     }
 
+    if (nav == NavKey::kBack) {
+      // Offer the app the chance to close something one level down (e.g.
+      // a help overlay); unhandled, Esc means "leave" just like kQuit.
+      if (on_nav) {
+        const AppKeyResult r = on_nav(nav);
+        if (r == AppKeyResult::kHandled) {
+          needs_redraw_ = true;
+          continue;
+        }
+      }
+      break;
+    }
+
     if (nav == NavKey::kQuit) {
+      // Offered to the app first so an overlay (e.g. walk's '?' help) can
+      // swallow it; unhandled it exits the pager as before.
+      if (on_nav) {
+        const AppKeyResult r = on_nav(nav);
+        if (r == AppKeyResult::kHandled) {
+          needs_redraw_ = true;
+          continue;
+        }
+      }
       break;
     }
 

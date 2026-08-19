@@ -66,8 +66,12 @@ enum class KeyEvent {
   kEditDumpYaml,         // export the edited edges as static-TF YAML (prompts)
   kEditApplyToBag,       // overwrite the input bag's static TF with the edits (prompts)
   kPinScene,             // pin/unpin the displayed frame as a preview scene tile
+  kHelp,                 // show the key-help overlay (walk command)
+  kBack,                 // back out one level (lone ESC): close the help,
+                         // leave the edit mode / preview; inert at the top
   kConfirm,              // confirm the current prompt/selection
-  kQuit,                 // exit the interactive loop
+  kQuit,                 // quit the current view ('q'/'Q', ^C/^D); the '?'
+                         // help overlays swallow it (close with ESC first)
   kResize,               // terminal was resized (synthesised by read_key_event
                          // from a SIGWINCH flag set by the signal_handler
                          // module; never produced by classify_key)
@@ -93,9 +97,10 @@ enum class KeyEvent {
 //     (reset edge), 'D' (dump edited edges as YAML — walk),
 //     'A' (apply the edited edges to the input bag's static TF — walk),
 //     'P' (pin/unpin the displayed frame as a preview scene — walk),
+//     '?' (show the key-help overlay — walk),
 //     Enter/Return (confirm the current prompt or selection),
-//     'q'/'Q' (quit), plus control
-//     chars (^C, ^D) and a lone ESC (0x1B) for quit
+//     a lone ESC (0x1B) to back out one level (kBack), and 'q'/'Q' plus
+//     the control chars ^C / ^D to quit the current view (kQuit)
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"
 //     (Left -> prev), "ESC [ A" (Up -> scroll up), "ESC [ B" (Down ->
 //     scroll down), "ESC [ H" (Home -> scroll head), "ESC [ F" (End ->

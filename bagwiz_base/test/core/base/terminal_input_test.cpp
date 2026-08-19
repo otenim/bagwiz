@@ -65,11 +65,21 @@ TEST(ClassifyKey, StepForwardAndBackward10s)
 
 TEST(ClassifyKey, QuitBindings)
 {
+  // 'q'/'Q' quit the current view (walk itself from the YAML view); the
+  // '?' help overlays swallow kQuit so a reference lookup cannot end the
+  // session. A lone ESC is kBack, not quit (see BackBinding).
   EXPECT_EQ(classify_key("q"), KeyEvent::kQuit);
   EXPECT_EQ(classify_key("Q"), KeyEvent::kQuit);
-  EXPECT_EQ(classify_key(std::string_view("\x1B", 1)), KeyEvent::kQuit);  // lone ESC
   EXPECT_EQ(classify_key(std::string_view("\x03", 1)), KeyEvent::kQuit);  // Ctrl-C
   EXPECT_EQ(classify_key(std::string_view("\x04", 1)), KeyEvent::kQuit);  // Ctrl-D
+}
+
+TEST(ClassifyKey, BackBinding)
+{
+  // A lone ESC backs out one level (help -> edit mode -> preview -> YAML
+  // view -> exit). classify_key cannot see context, so it reports kBack and
+  // each view decides what one level up means.
+  EXPECT_EQ(classify_key(std::string_view("\x1B", 1)), KeyEvent::kBack);
 }
 
 TEST(ClassifyKey, SaveYamlBinding)
@@ -167,6 +177,14 @@ TEST(ClassifyKey, PinSceneBinding)
   // live side by side in the same preview.
   EXPECT_EQ(classify_key("P"), KeyEvent::kPinScene);
   EXPECT_EQ(classify_key("p"), KeyEvent::kToggleProjectPcd);
+}
+
+TEST(ClassifyKey, HelpBinding)
+{
+  // '?' opens the key-help overlay in walk's interactive views: the footers
+  // advertise only the working set, so the full reference needs one
+  // discoverable key shared by the YAML pager and the image preview.
+  EXPECT_EQ(classify_key("?"), KeyEvent::kHelp);
 }
 
 TEST(ClassifyKey, ScrollBindings)
