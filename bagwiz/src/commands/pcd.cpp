@@ -76,8 +76,7 @@ private:
       ->check(CLI::ExistingPath);
     set_topic_input(*sub, concat_args_.input_path);
     add_topic_option(
-      *sub, "-t,--topic", concat_args_.output_topic,
-      "Name of the new concatenated PointCloud2 topic",
+      *sub, "--as", concat_args_.output_topic, "Name of the new concatenated PointCloud2 topic",
       TopicSlotSpec{
         .mode = TopicSelectorMode::kLiteral,
         .reject_reason = "it names the new concatenated topic to create"})
@@ -117,7 +116,7 @@ private:
       "Drop the source --pcd topics from the output (default: keep them).");
     sub->add_flag(
       "--force", concat_args_.force,
-      "Proceed even if <output_topic> already exists in the bag (replaces that topic).");
+      "Proceed even if the --as topic already exists in the bag (replaces that topic).");
     sub->add_flag(
       "-w,--overwrite", concat_args_.overwrite, "Overwrite an existing -o/--output path.");
     sub

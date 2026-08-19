@@ -387,10 +387,10 @@ TEST(PcdConcatCliWiring, StampOffsetIsScopedToThePcdOptionInDeclarationOrder)
   auto * concat_sub = app.get_subcommand_no_throw("concat");
   ASSERT_NE(concat_sub, nullptr);
   const auto slots = bagwiz::commands::topic_slots_of(*concat_sub);
-  // -t/--topic, then --pcd, then --stamp-offset, in declaration order.
+  // --as, then --pcd, then --stamp-offset, in declaration order.
   ASSERT_EQ(slots.size(), 3U);
 
-  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"topic"}));
+  EXPECT_EQ(slots[0].option->get_lnames(), (std::vector<std::string>{"as"}));
   EXPECT_EQ(slots[0].spec.scope, nullptr);
   EXPECT_TRUE(slots[0].option->get_required());
 
@@ -404,8 +404,8 @@ TEST(PcdConcatCliWiring, StampOffsetIsScopedToThePcdOptionInDeclarationOrder)
   EXPECT_EQ(slots[2].spec.scope, slots[1].option);
 }
 
-// Task 8: -t/--topic is a literal-only write-side operand (it names the topic
-// to CREATE, so there is nothing existing for a glob to match against), and
+// --as is a literal-only write-side operand (it names the topic to CREATE, so
+// there is nothing existing for a glob to match against), and
 // `pcd undistort --pose`/`--twist` are literal-only single-value slots on the
 // sibling subcommand PcdCommand::configure() also wires. Same registry-driven
 // idiom as StampOffsetIsScopedToThePcdOptionInDeclarationOrder above.
@@ -427,10 +427,10 @@ TEST(PcdCliWiring, ConcatTopicAndUndistortPoseTwistAreLiteralOnly)
   ASSERT_NE(concat_sub, nullptr);
   const auto concat_slots = bagwiz::commands::topic_slots_of(*concat_sub);
   ASSERT_EQ(concat_slots.size(), 3U);
-  const auto * concat_topic_slot = bagwiz::test::slot_for(concat_slots, "topic");
-  ASSERT_NE(concat_topic_slot, nullptr);
-  EXPECT_EQ(concat_topic_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  EXPECT_TRUE(concat_topic_slot->spec.allowed_types.empty());
+  const auto * concat_as_slot = bagwiz::test::slot_for(concat_slots, "as");
+  ASSERT_NE(concat_as_slot, nullptr);
+  EXPECT_EQ(concat_as_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_TRUE(concat_as_slot->spec.allowed_types.empty());
 
   auto * undistort_sub = app.get_subcommand_no_throw("undistort");
   ASSERT_NE(undistort_sub, nullptr);

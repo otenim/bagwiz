@@ -100,12 +100,12 @@ TEST(CompletionSlotWiring, TrajDumpAndJoin)
     slot_for(topic_slots_of(*dump), "topic"), TopicSelectorMode::kLiteral,
     bagwiz::commands::kTrajDumpSupportedTypes);
 
-  // `join`'s -t/--topic names the topic the trajectory is embedded under —
+  // `join`'s --as names the topic the trajectory is embedded under —
   // a new name, not a selection from the bag — so it declares no
   // allowed_types; only its mode is asserted.
   auto * join = app.get_subcommand_no_throw("join");
   ASSERT_NE(join, nullptr);
-  expect_slot(slot_for(topic_slots_of(*join), "topic"), TopicSelectorMode::kLiteral);
+  expect_slot(slot_for(topic_slots_of(*join), "as"), TopicSelectorMode::kLiteral);
 }
 
 TEST(CompletionSlotWiring, TfTreeAndStatic)
@@ -124,14 +124,14 @@ TEST(CompletionSlotWiring, TfTreeAndStatic)
   auto * group = app.get_subcommand_no_throw("static");
   ASSERT_NE(group, nullptr);
 
-  // `join`'s and `update`'s -t/--topic each name the topic newly added
+  // `join`'s --as and `update`'s -t/--topic each name the topic newly added
   // transforms are embedded under — a new name, not a selection — so
   // neither declares allowed_types; only mode is asserted. Their completion
   // (offering the bag's *tf_static topics) is command-specific, not
   // registry-driven — see completion.cpp's complete_tf_static_update().
   auto * join = group->get_subcommand_no_throw("join");
   ASSERT_NE(join, nullptr);
-  expect_slot(slot_for(topic_slots_of(*join), "topic"), TopicSelectorMode::kLiteral);
+  expect_slot(slot_for(topic_slots_of(*join), "as"), TopicSelectorMode::kLiteral);
 
   auto * update = group->get_subcommand_no_throw("update");
   ASSERT_NE(update, nullptr);
@@ -212,9 +212,9 @@ TEST(CompletionSlotWiring, PcdConcatAndUndistort)
   auto * concat = app.get_subcommand_no_throw("concat");
   ASSERT_NE(concat, nullptr);
   const auto concat_slots = topic_slots_of(*concat);
-  // -t/--topic names the new concatenated topic to create — a new name, not
+  // --as names the new concatenated topic to create — a new name, not
   // a selection — so it declares no allowed_types.
-  expect_slot(slot_for(concat_slots, "topic"), TopicSelectorMode::kLiteral);
+  expect_slot(slot_for(concat_slots, "as"), TopicSelectorMode::kLiteral);
   expect_slot(slot_for(concat_slots, "pcd"), TopicSelectorMode::kGlob, pcd_types);
   // --stamp-offset is scoped to --pcd (see pcd.cpp's `.scope = pcd_opt`)
   // rather than carrying its own allowed_types; its completion stays

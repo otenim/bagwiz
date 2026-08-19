@@ -613,7 +613,7 @@ TEST_F(CompletionTest, TrajDumpTopicCompletionEmptyWhenNoSupportedTopics)
     "");
 }
 
-// `traj join -t <TAB>` names a new topic to embed the trajectory under, not a
+// `traj join --as <TAB>` names a new topic to embed the trajectory under, not a
 // topic that already exists in the bag, so no bag-topic candidates are offered.
 TEST_F(CompletionTest, TrajJoinTopicCompletionListsBagTopics)
 {
@@ -625,7 +625,7 @@ TEST_F(CompletionTest, TrajJoinTopicCompletionListsBagTopics)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "8", "bagwiz", "traj", "join", "-i", "~/fixture.mcap", "--traj",
-       traj_arg, "-t"}),
+       traj_arg, "--as"}),
     "");
 }
 
@@ -887,8 +887,8 @@ TEST(FlagCompletionTest, TrajJoinDashListsJoinFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "traj", "join", "-"}),
-    "--force\n--format\n--help\n--input\n--msg-type\n--of\n--output\n--overwrite\n--ref\n--topic\n-"
-    "-traj\n-h\n-i\n-m\n-o\n-t\n-w\n");
+    "--as\n--force\n--format\n--help\n--input\n--msg-type\n--of\n--output\n--overwrite\n--ref\n"
+    "--traj\n-h\n-i\n-m\n-o\n-w\n");
 }
 
 TEST(FlagCompletionTest, TfParentDashListsHelpFlags)
@@ -1056,14 +1056,14 @@ TEST(FlagCompletionTest, TfStaticDumpDashListsDumpFlags)
     "--help\n--input\n--output\n--overwrite\n-h\n-i\n-o\n-w\n");
 }
 
-// `tf static join -` adds --yaml, -t/--topic, and --force to the dump set. The
-// --yaml value is a file path and --topic names a topic being created, so neither
+// `tf static join -` adds --yaml, --as, and --force to the dump set. The
+// --yaml value is a file path and --as names a topic being created, so neither
 // carries bagwiz candidates; both fall through to the shell.
 TEST(FlagCompletionTest, TfStaticJoinDashListsJoinFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "join", "-"}),
-    "--force\n--help\n--input\n--output\n--overwrite\n--topic\n--yaml\n-h\n-i\n-o\n-t\n-w\n");
+    "--as\n--force\n--help\n--input\n--output\n--overwrite\n--yaml\n-h\n-i\n-o\n-w\n");
 }
 
 // `tf static drop -` surfaces -i/-o/--overwrite plus --frame. --frame values
@@ -1076,9 +1076,11 @@ TEST(FlagCompletionTest, TfStaticDropDashListsDropFlags)
     "--frame\n--help\n--input\n--output\n--overwrite\n-h\n-i\n-o\n-w\n");
 }
 
-// `tf static update -` is the join set minus --force. --yaml is a file path, so it
-// falls through to the shell; --topic values complete from the bag's static TF
-// topics (see TfStaticUpdateTopicFlagListsStaticTfTopics).
+// `tf static update -` is the join set minus --force, with -t/--topic in place of
+// join's --as (update edits existing topics first, so its slot selects as much as
+// it names). --yaml is a file path, so it falls through to the shell; --topic
+// values complete from the bag's static TF topics (see
+// TfStaticUpdateTopicFlagListsStaticTfTopics).
 TEST(FlagCompletionTest, TfStaticUpdateDashListsUpdateFlags)
 {
   EXPECT_EQ(
@@ -1579,8 +1581,8 @@ TEST(FlagCompletionTest, PcdConcatDashListsConcatFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "pcd", "concat", "-"}),
-    "--drop-inputs\n--force\n--frame\n--help\n--input\n--output\n--overwrite\n--pcd\n--stamp-"
-    "offset\n--threads\n--tolerance\n--topic\n-h\n-i\n-j\n-o\n-t\n-w\n");
+    "--as\n--drop-inputs\n--force\n--frame\n--help\n--input\n--output\n--overwrite\n--pcd\n"
+    "--stamp-offset\n--threads\n--tolerance\n-h\n-i\n-j\n-o\n-w\n");
 }
 
 // `pcd concat <bag> <out> --stamp-offset <TAB>` completes the <topic> half of the

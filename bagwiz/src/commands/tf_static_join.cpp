@@ -40,10 +40,10 @@ int run_tf_static_join(
   const std::string & topic, const std::optional<std::filesystem::path> & output_path, bool force,
   bool overwrite)
 {
-  // CLI11 marks -t/--topic as having a default but still accepts an explicit
+  // CLI11 marks --as as having a default but still accepts an explicit
   // empty string, which would declare an unnameable topic.
   if (topic.empty()) {
-    BAGWIZ_LOG_ERROR(kLogger, "-t/--topic must be a non-empty topic name.");
+    BAGWIZ_LOG_ERROR(kLogger, "--as must be a non-empty topic name.");
     return 1;
   }
   // Not an error: a caller may have their own reader for a differently-named
