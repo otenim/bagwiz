@@ -8,7 +8,6 @@
 
 #include "walk_preview.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
-#include "bagwiz/commands/tf_static_update.hpp"
 #include "bagwiz/core/base/terminal_input.hpp"
 #include "bagwiz/core/image/image_encoder.hpp"
 #include "bagwiz/core/tui/image/terminal_image_renderer.hpp"
@@ -46,8 +45,8 @@ namespace
 constexpr std::size_t kPreviewCacheCapacity = 16;
 
 // Upper bound on rectified frames kept alongside. Smaller than the decode
-// cache: the hot set is the pinned tiles plus the live frame, and each entry
-// is another full-size raster.
+// cache: each entry is another full-size raster, and only recently viewed
+// frames need it.
 constexpr std::size_t kRectifiedCacheCapacity = 8;
 
 }  // namespace
@@ -85,8 +84,7 @@ core::image::RectifyHelper * ImagePreviewSession::ensure_rectify_helper(
   return rectify_helper_.get();
 }
 
-ImagePreviewSession::ComposedFrame ImagePreviewSession::compose_frame(
-  std::size_t idx, std::size_t slot)
+ImagePreviewSession::ComposedFrame ImagePreviewSession::compose_frame(std::size_t idx)
 {
   ComposedFrame composed;
   auto & pr = composed.frame;
@@ -128,40 +126,12 @@ ImagePreviewSession::ComposedFrame ImagePreviewSession::compose_frame(
 
   pr.raster = *source;  // copy the pristine frame before mutating overlays
   if (overlay_.state().enabled) {
-    composed.readings = overlay_.maybe_overlay(
-      slot, &*pr.raster, msg.timestamp_ns, camera_info_,
+    overlay_.maybe_overlay(
+      &*pr.raster, msg.timestamp_ns, camera_info_,
       [this](std::uint32_t w, std::uint32_t h) { return ensure_rectify_helper(w, h); },
       rectify_enabled_);
   }
   return composed;
-}
-
-std::vector<TileCaption> ImagePreviewSession::tile_captions() const
-{
-  const std::size_t index = cursor_.index();
-  const auto & cache = cursor_.cache();
-
-  std::vector<TileCaption> tiles;
-  tiles.reserve(pins_.size() + 1);
-
-  TileCaption live;
-  live.pin = ScenePin{index, cache[index].timestamp_ns};
-  live.live = true;
-  // A pin on the frame the cursor is showing labels this one tile as both,
-  // rather than drawing the same frame twice.
-  live.pin_number = pin_number_of(pins_, index).value_or(0);
-  tiles.push_back(live);
-
-  for (std::size_t i = 0; i < pins_.size(); ++i) {
-    if (pins_[i].index == index) {
-      continue;  // already on screen as the live tile
-    }
-    TileCaption tile;
-    tile.pin = pins_[i];
-    tile.pin_number = i + 1;
-    tiles.push_back(tile);
-  }
-  return tiles;
 }
 
 std::string ImagePreviewSession::encode_tile(
@@ -183,70 +153,37 @@ std::string ImagePreviewSession::encode_tile(
 }
 
 void ImagePreviewSession::emit_tile(
-  std::ostream & out, std::size_t slot, std::size_t msg_index, const ComposedFrame * composed,
-  core::tui::image::CellRegion region, OverlayFrameReadings & readings, std::string & error)
+  std::ostream & out, std::size_t msg_index, const ComposedFrame * composed,
+  core::tui::image::CellRegion region, std::string & error)
 {
   const TileRenderKey key = tile_render_key(
     overlay_.state(), rectify_enabled_, overlay_.composition_generation(), msg_index, region,
     image_caps_);
-  if (const auto * hit = tile_cache_.find(slot, key); hit != nullptr) {
-    // Byte-identical to what a recomposition would transmit, so replay it:
-    // this is what keeps pinned tiles free on plain navigation.
+  if (const auto * hit = tile_cache_.find(key); hit != nullptr) {
+    // Byte-identical to what a recomposition would transmit, so replay it.
     out << hit->payload;
-    readings = hit->readings;
     error.clear();
     return;
   }
 
   ComposedFrame local;
   if (composed == nullptr) {
-    local = compose_frame(msg_index, slot);
+    local = compose_frame(msg_index);
     composed = &local;
   }
-  readings = composed->readings;
   std::string payload = encode_tile(composed->frame, region, error);
   if (!error.empty()) {
     return;  // failures are not cached; the next repaint retries
   }
   out << payload;
-  // The composition itself can move the key: a pinned tile's first cloud can
+  // The composition itself can move the key: the frame's first cloud can
   // stretch the auto range mid-compose, and the pixels above were painted
   // with the stretched bounds. Store under the post-compose key so the entry
   // replays next repaint instead of guaranteeing itself a miss.
   const TileRenderKey stored_key = tile_render_key(
     overlay_.state(), rectify_enabled_, overlay_.composition_generation(), msg_index, region,
     image_caps_);
-  tile_cache_.store(slot, TileRenderEntry{stored_key, std::move(payload), composed->readings});
-}
-
-void ImagePreviewSession::toggle_pin()
-{
-  status_.clear();
-  if (overlay_.state().topics.empty()) {
-    // Pinning exists to judge one projection against several scenes, so it
-    // waits for an overlay topic the same way the adjustment keys do.
-    status_ = "pin: select a pcd topic first ([t])";
-    return;
-  }
-  const std::size_t index = cursor_.index();
-  const ScenePin pin{index, cursor_.cache()[index].timestamp_ns};
-  switch (toggle_scene_pin(pins_, pin)) {
-    case PinOutcome::kPinned:
-      status_ = fmt::format("pinned #{} ({}/{})", index, pins_.size(), kMaxScenePins);
-      break;
-    case PinOutcome::kUnpinned:
-      status_ = fmt::format("unpinned #{} ({}/{})", index, pins_.size(), kMaxScenePins);
-      break;
-    case PinOutcome::kFull:
-      status_ = fmt::format("pin limit reached ({} scenes)", kMaxScenePins);
-      return;  // nothing changed, so the slots still match the pins
-  }
-  // Unpinning shifts the pins above it down one slot, so their tiles reload
-  // their clouds once; the slots the grid no longer shows are released here
-  // rather than holding a cloud (and a rendered payload) each for the rest
-  // of the session.
-  overlay_.retain_slots(pins_.size() + 1);
-  tile_cache_.trim(pins_.size() + 1);
+  tile_cache_.store(TileRenderEntry{stored_key, std::move(payload)});
 }
 
 void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
@@ -281,11 +218,9 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
 
   const char * total_suffix = exhausted ? "" : "+";
   const std::size_t last_loaded_index = cache.size() - 1;
-  // The tiles this repaint shows, and the cursor's own frame among them. The
-  // live tile is composed first because the info row and the grid layout are
-  // both derived from it.
-  const auto tiles_meta = tile_captions();
-  const auto live = compose_frame(index, kLiveOverlaySlot);
+  // The frame this repaint shows. Composed first because the info row is
+  // derived from it.
+  const auto live = compose_frame(index);
   const auto & pr = live.frame;
 
   std::string info;
@@ -317,24 +252,12 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
     info += fmt::format("   {}", hl("pcd"));
     // The frame-match residual comes from the last maybe_overlay(), which
     // runs inside the compose_frame() above — but only while the overlay is
-    // enabled, so it cannot go stale behind a switched-off overlay. With a
-    // scene grid on screen every tile's caption carries its own delta, which
-    // is the comparison that matters; repeating the live tile's here would
-    // only be noise.
-    if (pins_.empty()) {
-      const std::string residual_text =
-        pcd.last_residual_ns.has_value()
-          ? fmt::format("{:+.1f}ms", static_cast<double>(*pcd.last_residual_ns) / 1e6)
-          : "n/a";
-      info += fmt::format(" Δ {}", hl(residual_text));
-    }
-  }
-  if (!pins_.empty()) {
-    info += fmt::format("   pins: {}", hl(fmt::format("{}/{}", pins_.size(), kMaxScenePins)));
-  }
-  const auto & edit = overlay_.edit_state();
-  if (edit.editing) {
-    info += fmt::format("   {}", edit_info_text(edit));
+    // enabled, so it cannot go stale behind a switched-off overlay.
+    const std::string residual_text =
+      pcd.last_residual_ns.has_value()
+        ? fmt::format("{:+.1f}ms", static_cast<double>(*pcd.last_residual_ns) / 1e6)
+        : "n/a";
+    info += fmt::format(" Δ {}", hl(residual_text));
   }
 
   // Header: the topic/type row and the info row, each wrapped to width the
@@ -356,7 +279,7 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   // height from the wrapped footer. The footer carries only the working set
   // of the current mode — everything else lives in the '?' reference.
   const std::vector<std::string> legend_lines =
-    core::tui::wrap_to_width(preview_footer_legend(!pcd.topics.empty(), edit.editing), cols);
+    core::tui::wrap_to_width(preview_footer_legend(), cols);
   const int legend_top = std::max(1, rows - static_cast<int>(legend_lines.size()) + 1);
 
   // Image region: from the row just below the wrapped header down to the row
@@ -369,87 +292,13 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
   region.rows = region_rows;
   region.cols = cols;
 
-  // The live frame alone, centred in the whole region: the only view when
-  // nothing is pinned, and the fallback when no tile grid fits.
-  const auto emit_live_full_region = [&] {
-    OverlayFrameReadings readings;
+  // The frame, centred in the whole region.
+  {
     std::string err;
-    emit_tile(out, kLiveOverlaySlot, index, &live, region, readings, err);
+    emit_tile(out, index, &live, region, err);
     if (!err.empty()) {
       core::tui::draw_line(out, region_row, fmt::format("  {}", err), cols);
     }
-  };
-
-  if (pins_.empty()) {
-    // Nothing pinned: exactly the view the preview had before scene pinning
-    // existed.
-    emit_live_full_region();
-  } else {
-    // The grid shape is chosen against the live frame's aspect; a frame that
-    // failed to decode carries none, so fall back to a 16:9 tile.
-    const std::uint32_t fit_w = pr.ok() ? pr.raster->width : 1920U;
-    const std::uint32_t fit_h = pr.ok() ? pr.raster->height : 1080U;
-    auto tiles = tile_regions(region, tiles_meta.size(), fit_w, fit_h, image_caps.cell);
-    std::string notice;
-    if (tiles.empty()) {
-      // No grid fits this terminal. Show the live frame alone and say so,
-      // rather than a mosaic too small to judge an alignment in.
-      notice = "  pinned scenes hidden: terminal too small for a grid";
-      tiles = tile_regions(region, 1, fit_w, fit_h, image_caps.cell);
-    }
-    if (tiles.empty()) {
-      // Not even one tile fits: draw the live frame across the whole region so
-      // the renderer's own "too small" reason reaches the screen.
-      emit_live_full_region();
-    }
-
-    // Caption rows are composed whole before being drawn: draw_line() erases
-    // the row it writes, so two tiles sharing a row have to be padded into one
-    // string first.
-    const std::int64_t live_stamp = cache[index].timestamp_ns;
-    std::string caption_text;
-    int caption_row = 0;
-    const auto flush_captions = [&]() {
-      if (caption_row > 0) {
-        core::tui::draw_line(out, caption_row, caption_text, cols);
-      }
-    };
-    for (std::size_t i = 0; i < tiles.size(); ++i) {
-      if (tiles[i].caption_row != caption_row) {
-        flush_captions();
-        caption_row = tiles[i].caption_row;
-        caption_text.clear();
-      }
-
-      // Emit before captioning: the caption reports what this tile itself
-      // paired with, which is the per-scene reading the grid exists to compare,
-      // and carries the failure when the tile could not be drawn at all. A
-      // pinned tile whose render key is unchanged replays its cached bytes
-      // (and cached readings) without recomposing.
-      TileCaption meta = tiles_meta[i];
-      OverlayFrameReadings readings;
-      std::string error;
-      if (i == 0) {
-        emit_tile(out, kLiveOverlaySlot, index, &live, tiles[i].image, readings, error);
-      } else {
-        emit_tile(out, meta.pin_number, meta.pin.index, nullptr, tiles[i].image, readings, error);
-      }
-      meta.residual_ns = readings.residual_ns;
-
-      std::string text = (i == 0 && !notice.empty()) ? notice : tile_caption(meta, live_stamp);
-      if (!error.empty()) {
-        text += fmt::format("  {}", error);
-      }
-      const int pad = tiles[i].col - 1 - core::tui::display_width(caption_text);
-      if (pad > 0) {
-        caption_text.append(static_cast<std::size_t>(pad), ' ');
-      }
-      // Reset after every segment: truncation drops a CSI sequence whole, so a
-      // caption cut short of its own reset would tint the next tile's.
-      caption_text += core::tui::truncate_to_width(text, tiles[i].cols);
-      caption_text += "\x1B[0m";
-    }
-    flush_captions();
   }
 
   for (std::size_t i = 0; i < legend_lines.size(); ++i) {
@@ -505,9 +354,7 @@ void ImagePreviewSession::save_image()
   const auto & image_caps = image_caps_;
 
   status_.clear();
-  // The live tile, at full resolution: a pinned grid changes what is on
-  // screen, not what [S] writes.
-  const auto composed = compose_frame(index, kLiveOverlaySlot);
+  const auto composed = compose_frame(index);
   const auto & pr = composed.frame;
   if (!pr.ok()) {
     status_ = fmt::format("cannot save: {}", pr.error);
@@ -539,112 +386,6 @@ void ImagePreviewSession::save_image()
   save_bytes_with_prompt(
     pager_, "Save image path", cwd, default_base,
     std::span<const std::byte>(bytes.data(), bytes.size()), status_);
-}
-
-void ImagePreviewSession::save_edit_yaml()
-{
-  status_.clear();
-  const auto & input = overlay_.input_path();
-  const std::string yaml = edit_yaml(
-    overlay_.edit_state(), fmt::format("edited with bagwiz walk from {}", input.string()));
-  if (yaml.empty()) {
-    status_ = "(no extrinsic edits to export)";
-    return;
-  }
-
-  std::filesystem::path cwd;
-  try {
-    cwd = std::filesystem::current_path();
-  } catch (const std::exception & e) {
-    status_ = fmt::format("cannot resolve working directory: {}", e.what());
-    return;
-  }
-  // Name the file after the bag; a rosbag2 directory given with a trailing
-  // separator has an empty stem, so fall back through its parent.
-  std::string stem = input.stem().string();
-  if (stem.empty()) {
-    stem = input.parent_path().stem().string();
-  }
-  if (stem.empty()) {
-    stem = "bag";
-  }
-  const std::string default_base = fmt::format("{}_tf_static_edit.yaml", stem);
-
-  // Drop the on-screen graphic before switching to cooked-mode line input so
-  // the prompt is not drawn over a kitty placement; run() repaints the frame
-  // afterward.
-  core::tui::image::clear_image(std::cout, image_caps_.backend);
-  std::cout << "\x1B[2J";
-  std::cout.flush();
-
-  save_bytes_with_prompt(
-    pager_, "Save TF static YAML path", cwd, default_base, std::as_bytes(std::span{yaml}), status_);
-}
-
-void ImagePreviewSession::apply_edits_to_bag()
-{
-  status_.clear();
-  auto & edit = overlay_.edit_state();
-  const auto transforms = edited_transforms(edit);
-  if (transforms.empty()) {
-    status_ = "(no extrinsic edits to apply)";
-    return;
-  }
-  const auto & input = overlay_.input_path();
-
-  // Drop the on-screen graphic before switching to cooked-mode line input so
-  // the prompt is not drawn over a kitty placement; run() repaints the frame
-  // afterward.
-  core::tui::image::clear_image(std::cout, image_caps_.backend);
-  std::cout << "\x1B[2J";
-  std::cout.flush();
-
-  bool applied = false;
-  bool cancelled = false;
-  pager_.with_line_input([&](std::istream & in, std::ostream & out) {
-    // Show exactly what will be written, in the same rendering the exit
-    // summary uses, so the confirmation is informed.
-    out << edit_summary(edit);
-    out << fmt::format(
-      "\nOverwrite the static TF of {} IN PLACE with the {} edited edge(s) above?\n"
-      "The bag is rewritten atomically (a full copy, then a swap) — this can take a\n"
-      "while for a large bag and cannot be undone. [D] exports a YAML instead.\n"
-      "Type \"yes\" to overwrite, anything else cancels: ",
-      input.string(), transforms.size());
-    out.flush();
-    std::string line;
-    if (!std::getline(in, line) || line != "yes") {
-      cancelled = true;
-      return;
-    }
-
-    // Run the update while still in cooked mode: its log lines (progress,
-    // the added/updated summary, any warnings) then print sequentially
-    // instead of scribbling over the repainted preview.
-    const int rc = run_tf_static_update(
-      input, transforms, "/tf_static", /*output_path=*/std::nullopt, /*overwrite=*/false);
-    applied = rc == 0;
-    out << (applied ? "\nDone." : "\nFailed; the bag is unchanged.")
-        << " Press Enter to return to the preview.";
-    out.flush();
-    std::string pause;
-    std::getline(in, pause);
-  });
-
-  if (cancelled) {
-    status_ = "(apply cancelled; bag unchanged)";
-    return;
-  }
-  if (!applied) {
-    status_ = "apply failed; bag unchanged";
-    return;
-  }
-  // The edited values ARE the bag values now: rebase the edges onto them so
-  // deltas read zero, [D] and the exit summary have nothing left to report,
-  // and [0] resets to the value the bag actually carries. The projection is
-  // untouched — the TF buffer already holds these values.
-  commit_edits(edit);
-  status_ = fmt::format("updated {} ({} edge(s) applied)", input.string(), transforms.size());
 }
 
 ImagePreviewSession::Exit ImagePreviewSession::run()
@@ -874,125 +615,16 @@ ImagePreviewSession::Exit ImagePreviewSession::run()
         status_ = fmt::format("alpha: {:.1f}", pcd.alpha);
         needs_render = true;
         break;
-      case core::KeyEvent::kToggleEditExtrinsic: {
-        auto & edit = overlay_.edit_state();
-        if (edit.editing) {
-          edit.editing = false;
-          status_ = "(edit mode off; edits stay applied)";
-        } else if (!camera_info.has_value()) {
-          status_ =
-            camera_info_error.empty() ? "edit: no camera_info" : "edit: " + camera_info_error;
-        } else if (load_in_flight) {
-          status_ = "pcd overlay still loading ...";
-        } else if (overlay_.tf_buffer() == nullptr || !pcd.enabled) {
-          status_ = "edit: enable the pcd overlay first ([p])";
-        } else {
-          // Re-entering resumes the previous edge; the first entry derives
-          // the candidates and, when there are several, asks which edge to
-          // edit.
-          const bool had_candidates = !edit.edges.empty();
-          if (had_candidates || overlay_.refresh_edit_candidates(camera_info->frame_id)) {
-            if (!had_candidates && edit.edges.size() > 1) {
-              const PickerOutcome outcome = overlay_.prompt_for_edge(image_caps.backend);
-              if (outcome == PickerOutcome::kTerminate) {
-                exit = Exit::kTerminate;
-                running = false;
-              } else {
-                edit.editing = outcome == PickerOutcome::kConfirmed;
-              }
-            } else {
-              edit.editing = true;
-              status_ = fmt::format("editing {}", edge_label(edit.edges[edit.active]));
-            }
-          }
-        }
-        needs_render = true;
-        break;
-      }
-      case core::KeyEvent::kSelectEditEdge: {
-        auto & edit = overlay_.edit_state();
-        if (!camera_info.has_value()) {
-          status_ =
-            camera_info_error.empty() ? "edit: no camera_info" : "edit: " + camera_info_error;
-        } else if (load_in_flight) {
-          status_ = "pcd overlay still loading ...";
-        } else if (overlay_.tf_buffer() == nullptr || !pcd.enabled) {
-          status_ = "edit: enable the pcd overlay first ([p])";
-        } else if (overlay_.refresh_edit_candidates(camera_info->frame_id)) {
-          const PickerOutcome outcome = overlay_.prompt_for_edge(image_caps.backend);
-          if (outcome == PickerOutcome::kTerminate) {
-            exit = Exit::kTerminate;
-            running = false;
-          } else {
-            edit.editing = outcome == PickerOutcome::kConfirmed;
-          }
-        }
-        needs_render = true;
-        break;
-      }
-      case core::KeyEvent::kEditTransXUp:
-      case core::KeyEvent::kEditTransXDown:
-      case core::KeyEvent::kEditTransYUp:
-      case core::KeyEvent::kEditTransYDown:
-      case core::KeyEvent::kEditTransZUp:
-      case core::KeyEvent::kEditTransZDown:
-      case core::KeyEvent::kEditRollUp:
-      case core::KeyEvent::kEditRollDown:
-      case core::KeyEvent::kEditPitchUp:
-      case core::KeyEvent::kEditPitchDown:
-      case core::KeyEvent::kEditYawUp:
-      case core::KeyEvent::kEditYawDown:
-      case core::KeyEvent::kEditStepUp:
-      case core::KeyEvent::kEditStepDown:
-      case core::KeyEvent::kEditReset: {
-        // Outside the edit mode the nudge letters stay inert, so a stray
-        // press cannot silently move a calibration.
-        auto & edit = overlay_.edit_state();
-        if (edit.editing && apply_edit_key(edit, ev)) {
-          overlay_.apply_active_edit();
-          needs_render = true;
-        }
-        break;
-      }
-      case core::KeyEvent::kEditDumpYaml:
-        save_edit_yaml();
-        needs_render = true;
-        break;
-      case core::KeyEvent::kEditApplyToBag:
-        // Blocked while a scan worker is reading the bag: the scan opened the
-        // bag before the swap, so letting it finish afterwards would install
-        // a TF buffer built from the OLD content while the committed edits no
-        // longer re-apply on top — the overlay would silently revert on
-        // screen while the bag on disk carries the fix.
-        if (load_in_flight) {
-          status_ = "pcd overlay still loading ...";
-        } else {
-          apply_edits_to_bag();
-        }
-        needs_render = true;
-        break;
-      case core::KeyEvent::kPinScene:
-        toggle_pin();
-        needs_render = true;
-        break;
       case core::KeyEvent::kHelp:
         show_help_ = true;
         help_scroll_ = 0;
         needs_render = true;
         break;
-      case core::KeyEvent::kBack: {
-        // Esc backs out one level: the edit mode first, the preview next
-        // (the YAML view's Esc then quits walk).
-        auto & edit = overlay_.edit_state();
-        if (edit.editing) {
-          edit.editing = false;
-          status_ = "(edit mode off; edits stay applied)";
-        } else {
-          running = false;
-        }
-        needs_render = true;
+      case core::KeyEvent::kBack:
+        // Esc backs out of the preview to the YAML view (the YAML view's Esc
+        // then quits walk).
+        running = false;
         break;
-      }
       case core::KeyEvent::kQuit:
         // Ctrl-C / Ctrl-D: leave the preview and end the whole walk session.
         exit = Exit::kTerminate;

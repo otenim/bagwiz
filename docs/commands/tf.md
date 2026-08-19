@@ -785,10 +785,7 @@ the rest of the tree. The counterpart of [`drop`](#bagwiz-tf-static-drop), which
 removes frames.
 
 `--yaml <file>` is a publisher-config YAML (the schema
-[`static dump`](#bagwiz-tf-static-dump) writes). One way to produce it is the
-[`bagwiz walk`](walk.md#editing-static-extrinsics) image preview's extrinsic
-edit mode, which tunes a static edge visually against the point-cloud overlay
-and exports the edited edges in exactly this schema. Each of the YAML's edges
+[`static dump`](#bagwiz-tf-static-dump) writes). Each of the YAML's edges
 is **added** when its child is new to the tree, and applied as an **update**
 when the child already exists: the edge is rewritten in place with the
 config's values, and a differing parent re-parents it (logged). The config is parsed as strictly as

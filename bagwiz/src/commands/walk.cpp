@@ -72,16 +72,13 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //   a             : toggle full-expansion of long primitive arrays
 //   i             : toggle in-terminal image preview (image topics on a
 //                   Kitty/Sixel-capable terminal; absent otherwise)
-//   Esc           : back out one level — close the help, leave the edit
-//                   mode, leave the preview; absorbed at the YAML view
+//   Esc           : back out one level — close the help, leave the
+//                   preview; absorbed at the YAML view
 //   q / Q         : quit walk (bound in the YAML view only; inert in the
 //                   preview, the pickers and the help overlays)
 //   Ctrl-C / Ctrl-D : terminate walk outright, from any screen
-// Inside the image preview u/p/t (rectify, pcd overlay, topic picker), the
-// overlay adjusters f/c/r/=/-/]/[, P (scene pins, see walk_pins.hpp) and the
-// static-extrinsic edit mode (e, nudge keys, D/A export/apply — see
-// walk_edit.hpp / walk_overlay.hpp) apply; any uncommitted edits are also
-// summarised on stdout when walk exits.
+// Inside the image preview u/p/t (rectify, pcd overlay, topic picker) and
+// the overlay adjusters f/c/r/=/-/]/[ apply.
 // Messages are cached lazily so `prev` stays O(1) for anything already
 // seen and `G` is the only key that always triggers a full-remaining scan
 // (the forward time steps `.` / `>` read ahead only as far as the target
@@ -353,15 +350,6 @@ public:
 
     const int exit_code = pager.run(build_frame, on_nav, on_app_key);
 
-    // Surface any extrinsic edits after the pager restored the terminal: the
-    // values would otherwise die with the session when the YAML was never
-    // exported ([D] in the preview writes it).
-    const std::string edits = edit_summary(overlay.edit_state());
-    if (!edits.empty()) {
-      std::cout << "\nEdited static TF edges (preview only — the bag is unchanged):\n\n"
-                << edits << "\nApply: export the YAML with [D] in the image preview, then run\n"
-                << "  bagwiz tf static update -i " << input_path_.string() << " --yaml <file>\n";
-    }
     return exit_code;
   }
 

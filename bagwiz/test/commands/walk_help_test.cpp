@@ -99,53 +99,21 @@ TEST(WalkHelpFooters, YamlFooterAdvertisesPreviewOnlyWhenAvailable)
   EXPECT_EQ(strip_sgr(yaml_footer_legend(false)).find("preview"), std::string::npos);
 }
 
-TEST(WalkHelpFooters, PreviewFooterGatesOverlayEntriesOnASelectedTopic)
+TEST(WalkHelpFooters, PreviewFooterCarriesOnlyTheWorkingSet)
 {
-  const std::string base = preview_footer_legend(false, false);
+  const std::string footer = preview_footer_legend();
   // Space/b navigation is unlabeled here too — the working set starts at
   // the view toggles.
-  EXPECT_EQ(base.find("next/prev"), std::string::npos) << base;
-  EXPECT_NE(base.find("[u] rectify"), std::string::npos) << base;
-  EXPECT_NE(base.find("[p] pcd"), std::string::npos) << base;
-  EXPECT_NE(base.find("[?] help"), std::string::npos) << base;
-  EXPECT_TRUE(base.ends_with("[Esc] back")) << base;
-  // The edit mode and the scene pins need an overlay topic to be useful, so
-  // their hints wait for one.
-  EXPECT_EQ(base.find("[e] edit"), std::string::npos) << base;
-  EXPECT_EQ(base.find("[P] pin"), std::string::npos) << base;
-
-  const std::string with_topic = preview_footer_legend(true, false);
-  EXPECT_NE(with_topic.find("[e] edit"), std::string::npos) << with_topic;
-  EXPECT_NE(with_topic.find("[P] pin"), std::string::npos) << with_topic;
-  EXPECT_TRUE(with_topic.ends_with("[Esc] back")) << with_topic;
-}
-
-TEST(WalkHelpFooters, PreviewFooterSwapsToTheEditWorkingSet)
-{
-  // Edit mode replaces the footer instead of appending to it: while nudging
-  // a calibration the nudge keys are the working set, everything else is
-  // reference material behind [?].
-  const std::string edit = preview_footer_legend(true, true);
-  EXPECT_NE(edit.find("[x/y/z] move"), std::string::npos) << edit;
-  EXPECT_NE(edit.find("[l/n/w] rotate"), std::string::npos) << edit;
-  EXPECT_NE(edit.find("[m] step"), std::string::npos) << edit;
-  EXPECT_NE(edit.find("[0] reset"), std::string::npos) << edit;
-  EXPECT_NE(edit.find("[A] apply"), std::string::npos) << edit;
-  EXPECT_NE(edit.find("[D] yaml"), std::string::npos) << edit;
-  EXPECT_NE(edit.find("[e] done"), std::string::npos) << edit;
-  EXPECT_NE(edit.find("[?] help"), std::string::npos) << edit;
-  EXPECT_EQ(edit.find("[u] rectify"), std::string::npos) << edit;
-  EXPECT_EQ(edit.find("next/prev"), std::string::npos) << edit;
-  EXPECT_EQ(edit.find("[p] pcd"), std::string::npos) << edit;
+  EXPECT_EQ(footer.find("next/prev"), std::string::npos) << footer;
+  EXPECT_NE(footer.find("[u] rectify"), std::string::npos) << footer;
+  EXPECT_NE(footer.find("[p] pcd"), std::string::npos) << footer;
+  EXPECT_NE(footer.find("[?] help"), std::string::npos) << footer;
+  EXPECT_TRUE(footer.ends_with("[Esc] back")) << footer;
 }
 
 TEST(WalkHelpFooters, PreviewFooterFitsOneRowOfAModestTerminal)
 {
-  for (const bool topic : {false, true}) {
-    for (const bool edit : {false, true}) {
-      EXPECT_LE(preview_footer_legend(topic, edit).size(), 100U) << topic << edit;
-    }
-  }
+  EXPECT_LE(preview_footer_legend().size(), 100U);
 }
 
 TEST(WalkHelpReference, YamlHelpListsEveryBindingTheFooterHides)
@@ -163,9 +131,7 @@ TEST(WalkHelpReference, PreviewHelpListsEveryBindingTheFooterHides)
 {
   const std::string help = flatten(preview_help_lines());
   for (const char * hint :
-       {". / ,", "> / <", "g / G", "rectify", "PNG", "f / c / r", "= / -", "] / [", "pin / unpin",
-        "x/X y/Y z/Z", "l/L n/N w/W", "m / M", "reset", "choose the edited edge", "static-TF YAML",
-        "apply the edits to the input bag"}) {
+       {". / ,", "> / <", "g / G", "rectify", "PNG", "f / c / r", "= / -", "] / ["}) {
     EXPECT_NE(help.find(hint), std::string::npos) << "missing: " << hint << "\n" << help;
   }
 }
@@ -179,7 +145,6 @@ TEST(WalkHelpReference, HelpIsGroupedBySection)
   const std::string preview_help = flatten(preview_help_lines());
   EXPECT_NE(preview_help.find("Navigate"), std::string::npos);
   EXPECT_NE(preview_help.find("PCD overlay"), std::string::npos);
-  EXPECT_NE(preview_help.find("Edit extrinsic"), std::string::npos);
 }
 
 TEST(WalkHelpReference, HelpAdvertisesEscAsItsOnlyCloseKey)
@@ -193,15 +158,11 @@ TEST(WalkHelpReference, HelpAdvertisesEscAsItsOnlyCloseKey)
   }
 }
 
-TEST(WalkHelpFooters, BackIsEscInThePreviewFooters)
+TEST(WalkHelpFooters, BackIsEscInThePreviewFooter)
 {
   // q quits from the YAML view; going back a level is Esc, so the preview
-  // footers advertise [Esc] back and leave q to the '?' reference.
-  for (const bool topic : {false, true}) {
-    for (const bool edit : {false, true}) {
-      EXPECT_EQ(preview_footer_legend(topic, edit).find("[q]"), std::string::npos) << topic << edit;
-    }
-  }
+  // footer advertises [Esc] back and leaves q to the '?' reference.
+  EXPECT_EQ(preview_footer_legend().find("[q]"), std::string::npos);
 }
 
 TEST(WalkHelpReference, HelpListsTheLeaveKeys)
