@@ -647,7 +647,7 @@ void ImagePreviewSession::apply_edits_to_bag()
   status_ = fmt::format("updated {} ({} edge(s) applied)", input.string(), transforms.size());
 }
 
-void ImagePreviewSession::run()
+ImagePreviewSession::Exit ImagePreviewSession::run()
 {
   auto & pcd = overlay_.state();
   const auto & camera_info = camera_info_;
@@ -656,6 +656,9 @@ void ImagePreviewSession::run()
 
   std::ostream & out = std::cout;
   bool running = true;
+  // Set when Ctrl-C / Ctrl-D asked to end the whole walk session; the caller
+  // turns Exit::kTerminate into the pager's quit.
+  Exit exit = Exit::kBack;
   bool needs_render = true;
   // True while an overlay initialization is (or may be) unfinished on its
   // worker thread: the loop then reads keys with a timeout so the status row
@@ -698,9 +701,14 @@ void ImagePreviewSession::run()
     if (show_help_) {
       // The overlay accepts only its own keys: Esc closes it ('?' only
       // opens it), the scroll keys page it, resize repaints it, and every
-      // other key — q included — is swallowed so a reference lookup can
-      // neither act behind the card nor leave the preview.
+      // other key — q included — is swallowed so a reference lookup cannot
+      // act behind the card. The one exception is Ctrl-C / Ctrl-D, which
+      // terminates the session from any screen, overlays included.
       switch (ev) {
+        case core::KeyEvent::kQuit:
+          exit = Exit::kTerminate;
+          running = false;
+          break;
         case core::KeyEvent::kBack:
           show_help_ = false;
           needs_render = true;
@@ -790,9 +798,12 @@ void ImagePreviewSession::run()
         } else if (load_in_flight) {
           status_ = "pcd overlay still loading ...";
         } else if (pcd.topics.empty()) {
-          if (auto topics = overlay_.prompt_for_topics(image_caps.backend);
-              topics.has_value() && !topics->empty()) {
-            load_in_flight = overlay_.start_initialize(*topics);
+          const auto [outcome, topics] = overlay_.prompt_for_topics(image_caps.backend);
+          if (outcome == PickerOutcome::kTerminate) {
+            exit = Exit::kTerminate;
+            running = false;
+          } else if (outcome == PickerOutcome::kConfirmed && !topics.empty()) {
+            load_in_flight = overlay_.start_initialize(topics);
           }
         } else {
           pcd.enabled = !pcd.enabled;
@@ -803,12 +814,17 @@ void ImagePreviewSession::run()
         if (camera_info.has_value()) {
           if (load_in_flight) {
             status_ = "pcd overlay still loading ...";
-          } else if (auto topics = overlay_.prompt_for_topics(image_caps.backend);
-                     topics.has_value()) {
-            if (topics->empty()) {
-              pcd.enabled = false;
-            } else {
-              load_in_flight = overlay_.start_initialize(*topics);
+          } else {
+            const auto [outcome, topics] = overlay_.prompt_for_topics(image_caps.backend);
+            if (outcome == PickerOutcome::kTerminate) {
+              exit = Exit::kTerminate;
+              running = false;
+            } else if (outcome == PickerOutcome::kConfirmed) {
+              if (topics.empty()) {
+                pcd.enabled = false;
+              } else {
+                load_in_flight = overlay_.start_initialize(topics);
+              }
             }
           }
         } else {
@@ -877,7 +893,13 @@ void ImagePreviewSession::run()
           const bool had_candidates = !edit.edges.empty();
           if (had_candidates || overlay_.refresh_edit_candidates(camera_info->frame_id)) {
             if (!had_candidates && edit.edges.size() > 1) {
-              edit.editing = overlay_.prompt_for_edge(image_caps.backend);
+              const PickerOutcome outcome = overlay_.prompt_for_edge(image_caps.backend);
+              if (outcome == PickerOutcome::kTerminate) {
+                exit = Exit::kTerminate;
+                running = false;
+              } else {
+                edit.editing = outcome == PickerOutcome::kConfirmed;
+              }
             } else {
               edit.editing = true;
               status_ = fmt::format("editing {}", edge_label(edit.edges[edit.active]));
@@ -896,10 +918,14 @@ void ImagePreviewSession::run()
           status_ = "pcd overlay still loading ...";
         } else if (overlay_.tf_buffer() == nullptr || !pcd.enabled) {
           status_ = "edit: enable the pcd overlay first ([p])";
-        } else if (
-          overlay_.refresh_edit_candidates(camera_info->frame_id) &&
-          overlay_.prompt_for_edge(image_caps.backend)) {
-          edit.editing = true;
+        } else if (overlay_.refresh_edit_candidates(camera_info->frame_id)) {
+          const PickerOutcome outcome = overlay_.prompt_for_edge(image_caps.backend);
+          if (outcome == PickerOutcome::kTerminate) {
+            exit = Exit::kTerminate;
+            running = false;
+          } else {
+            edit.editing = outcome == PickerOutcome::kConfirmed;
+          }
         }
         needs_render = true;
         break;
@@ -968,10 +994,14 @@ void ImagePreviewSession::run()
         break;
       }
       case core::KeyEvent::kQuit:
+        // Ctrl-C / Ctrl-D: leave the preview and end the whole walk session.
+        exit = Exit::kTerminate;
         running = false;
         break;
       default:
-        break;  // scroll / expand keys are inert in the preview
+        // Scroll / expand keys are inert in the preview — and so is 'q'
+        // (kQuitView): quitting walk on 'q' is the YAML view's binding.
+        break;
     }
   }
   // Re-entering the preview starts on the image, not on a leftover help.
@@ -980,6 +1010,7 @@ void ImagePreviewSession::run()
   core::tui::image::clear_image(out, image_caps.backend);
   out << "\x1B[2J";
   out.flush();
+  return exit;
 }
 
 }  // namespace bagwiz::commands

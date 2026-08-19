@@ -74,8 +74,9 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //                   Kitty/Sixel-capable terminal; absent otherwise)
 //   Esc           : back out one level — close the help, leave the edit
 //                   mode, leave the preview; absorbed at the YAML view
-//   q / Q / Ctrl-C / Ctrl-D : quit the current view (walk itself from the
-//                   YAML view); swallowed while the '?' help is open
+//   q / Q         : quit walk (bound in the YAML view only; inert in the
+//                   preview, the pickers and the help overlays)
+//   Ctrl-C / Ctrl-D : terminate walk outright, from any screen
 // Inside the image preview u/p/t (rectify, pcd overlay, topic picker), the
 // overlay adjusters f/c/r/=/-/]/[, P (scene pins, see walk_pins.hpp) and the
 // static-extrinsic edit mode (e, nudge keys, D/A export/apply — see
@@ -221,6 +222,8 @@ public:
         // repaints it, the scroll keys (handled inside the pager) move it,
         // and every other key — q included — is swallowed so a reference
         // lookup can neither act behind the card nor end the session.
+        // (Ctrl-C / Ctrl-D never reaches this callback: the pager exits on
+        // kTerminate before offering the key here.)
         switch (nav) {
           case core::tui::NavKey::kBack:
             close_help();
@@ -338,7 +341,10 @@ public:
             status = "(image preview not supported in this terminal)";
             return core::tui::AppKeyResult::kHandled;
           }
-          preview.run();
+          if (preview.run() == ImagePreviewSession::Exit::kTerminate) {
+            // Ctrl-C / Ctrl-D inside the preview ends the whole session.
+            return core::tui::AppKeyResult::kQuit;
+          }
           return core::tui::AppKeyResult::kHandled;
         default:
           return core::tui::AppKeyResult::kIgnored;

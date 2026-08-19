@@ -99,14 +99,16 @@ KeyEvent classify_key(std::string_view bytes)
     switch (c) {
       // A lone ESC backs out one level; the views decide what that means
       // (close the help, leave the edit mode or the preview; inert at the
-      // top). 'q' quits the current view outright.
+      // top). ^C/^D terminate the session outright; 'q' is a separate event
+      // so a view can leave it unbound (only walk's YAML view quits on it).
       case 0x1B:  // lone ESC
         return KeyEvent::kBack;
       case 0x03:  // Ctrl-C
       case 0x04:  // Ctrl-D
+        return KeyEvent::kQuit;
       case 'q':
       case 'Q':
-        return KeyEvent::kQuit;
+        return KeyEvent::kQuitView;
       case ' ':
         return KeyEvent::kNext;
       case '\r':

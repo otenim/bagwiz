@@ -85,8 +85,9 @@ image preview that decodes the current message and draws the real image
 in the terminal instead of the YAML byte array. Navigation stays live
 in the preview — `→`/`Space` (next), `←`/`b` (prev), `.` (+1s), `,` (-1s), `>`
 (+10s), `<` (-10s), `g` (first), `G` (last) re-decode and re-render the new
-frame — and the view redraws on resize. Press `Esc` or `q` to return to the
-YAML view.
+frame — and the view redraws on resize. Press `Esc` to return to the
+YAML view (`q` is inert in the preview; `Ctrl-C` / `Ctrl-D` quit walk
+outright, as on every screen).
 
 - **Supported encodings mirror `bagwiz generate video`:** raw
   `sensor_msgs/msg/Image` in `bgr8`/`rgb8`, and `sensor_msgs/msg/CompressedImage`
@@ -146,8 +147,8 @@ The first time the overlay is enabled in a session, bagwiz opens a checkbox
 list of every `sensor_msgs/msg/PointCloud2` topic in the bag. Use `↑/↓` (or
 `k`/`j`) to move the cursor, `g`/`G` to jump to the first/last topic, `Space`
 (or `→`) to check/uncheck a topic, and `Enter` to confirm. You can select any
-number of topics; their projected points are drawn together. Press `Esc` or
-`q` to cancel without changing the current selection. Confirming a selection
+number of topics; their projected points are drawn together. Press `Esc`
+to cancel without changing the current selection. Confirming a selection
 identical to the one already active is treated the same way — the status line
 reports `(topic selection unchanged)` and no rescan is started. Confirming an
 empty selection from `t` turns the overlay off instead of rescanning. The
@@ -232,7 +233,7 @@ between each selected cloud topic's frame and the camera frame, resolved at
 the current frame's TF-lookup time, that a static TF topic (`*/tf_static`)
 actually carries — a chain link fed by dynamic TF is not editable, since it
 is not tf_static data. With more than one candidate the first `e` opens a
-picker (`↑`/`↓`/`k`/`j` move, `g`/`G` jump, `Enter` confirms, `Esc`/`q`
+picker (`↑`/`↓`/`k`/`j` move, `g`/`G` jump, `Enter` confirms, `Esc`
 cancels); `E` re-opens it at any time to switch edges, also re-deriving the
 candidates so a changed topic selection is picked up. Leaving the mode with
 `e` or `Esc` keeps the edits applied to the preview, and re-entering resumes
@@ -284,7 +285,7 @@ point cloud per selected topic resident and adds one re-projection whenever
 the projection itself changes — a nudge, an overlay adjustment, or a rectify
 toggle. Plain navigation costs the same however many scenes are pinned: only
 the live tile is re-rendered, and the pinned tiles are replayed from a cache
-of their last rendering. Pins survive leaving the preview with `Esc` (or `q`)
+of their last rendering. Pins survive leaving the preview with `Esc`
 and coming
 back, and are kept when the overlay's topic selection changes.
 
@@ -412,43 +413,44 @@ press `?` in either view for this full reference without leaving the
 terminal (scroll it with `j`/`k`; any other key closes it). In the
 preview's extrinsic edit mode the footer swaps to the nudge keys.
 
-| Key                             | Action                                                                                                                                                                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `→` / `Space`                   | Next message (wraps from last back to first).                                                                                                                                                                                   |
-| `←` / `b`                       | Previous message.                                                                                                                                                                                                               |
-| `.`                             | Jump forward to the next message at least one second after the current one.                                                                                                                                                     |
-| `,`                             | Jump backward to the previous message at least one second before the current one.                                                                                                                                               |
-| `>`                             | Jump forward to the next message at least ten seconds after the current one.                                                                                                                                                    |
-| `<`                             | Jump backward to the previous message at least ten seconds before the current one.                                                                                                                                              |
-| `↑` / `k`                       | Scroll body up one line.                                                                                                                                                                                                        |
-| `↓` / `j`                       | Scroll body down one line.                                                                                                                                                                                                      |
-| `Home` / `H`                    | Jump body scroll to the head.                                                                                                                                                                                                   |
-| `End` / `T`                     | Jump body scroll to the tail.                                                                                                                                                                                                   |
-| `g`                             | Jump to the first message.                                                                                                                                                                                                      |
-| `G`                             | Jump to the last message (forces a full-remaining scan).                                                                                                                                                                        |
-| `S`                             | Save as yaml - writes the current message body (prompts for path). In the image preview, `S` saves the decoded image including any rectification or point-cloud overlay.                                                        |
-| `a`                             | Toggle full expansion of long primitive arrays (default off).                                                                                                                                                                   |
-| `i`                             | Toggle in-terminal image preview (image topics on a Kitty- or Sixel-capable terminal; hidden otherwise). See [Image preview](#image-preview).                                                                                   |
-| `u`                             | Toggle rectification (lens-distortion correction) in the image preview (when CameraInfo is available). Also re-aims the point-cloud overlay: off projects onto the raw (distorted) image, on projects onto the rectified image. |
-| `p`                             | Toggle PointCloud2 projection overlay in the image preview. See [Point-cloud overlay](#point-cloud-overlay).                                                                                                                    |
-| `t`                             | Open the PointCloud2 topic picker to select or change the overlay topics.                                                                                                                                                       |
-| `f`                             | Cycle the point-cloud overlay property.                                                                                                                                                                                         |
-| `c`                             | Cycle the point-cloud overlay color scheme.                                                                                                                                                                                     |
-| `r`                             | Toggle auto/manual value range for the overlay.                                                                                                                                                                                 |
-| `=` / `+` / `-`                 | Increase / decrease overlay point size.                                                                                                                                                                                         |
-| `]` / `[`                       | Increase / decrease overlay alpha.                                                                                                                                                                                              |
-| `e`                             | Enter/leave the static-extrinsic edit mode in the image preview (needs the overlay). See [Editing static extrinsics](#editing-static-extrinsics).                                                                               |
-| `E`                             | Open the picker that chooses the edited static TF edge.                                                                                                                                                                         |
-| `x`/`X`, `y`/`Y`, `z`/`Z`       | Edit mode: nudge that translation component up/down one step.                                                                                                                                                                   |
-| `l`/`L`, `n`/`N`, `w`/`W`       | Edit mode: nudge roll / pitch / yaw up/down one step.                                                                                                                                                                           |
-| `m` / `M`                       | Edit mode: coarser / finer nudge step.                                                                                                                                                                                          |
-| `0`                             | Edit mode: reset the edited edge to the bag's value.                                                                                                                                                                            |
-| `D`                             | Export the edited static TF edges as YAML (prompts for a path).                                                                                                                                                                 |
-| `A`                             | Overwrite the input bag's static TF in place with the edited edges, after an explicit `yes` confirmation. See [Persisting the fix](#persisting-the-fix).                                                                        |
-| `P`                             | Pin/unpin the displayed frame as an extra image-preview tile (needs a selected pcd topic), so several scenes are re-projected together. See [Comparing several scenes at once](#comparing-several-scenes-at-once).              |
-| `?`                             | Open the key-help overlay (YAML view and image preview). While it is open, `Esc` closes it, `j`/`k` scroll it, and every other key — `q` included — is ignored.                                                                 |
-| `Esc`                           | Back out one level: close the help overlay, leave the edit mode, leave the preview. Absorbed at the YAML view — quitting walk is `q`.                                                                                           |
-| `q` / `Q` / `Ctrl-C` / `Ctrl-D` | Quit (in the image preview, returns to the YAML view). Inert while the help overlay is open — close it with `Esc` first.                                                                                                        |
+| Key                       | Action                                                                                                                                                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `→` / `Space`             | Next message (wraps from last back to first).                                                                                                                                                                                   |
+| `←` / `b`                 | Previous message.                                                                                                                                                                                                               |
+| `.`                       | Jump forward to the next message at least one second after the current one.                                                                                                                                                     |
+| `,`                       | Jump backward to the previous message at least one second before the current one.                                                                                                                                               |
+| `>`                       | Jump forward to the next message at least ten seconds after the current one.                                                                                                                                                    |
+| `<`                       | Jump backward to the previous message at least ten seconds before the current one.                                                                                                                                              |
+| `↑` / `k`                 | Scroll body up one line.                                                                                                                                                                                                        |
+| `↓` / `j`                 | Scroll body down one line.                                                                                                                                                                                                      |
+| `Home` / `H`              | Jump body scroll to the head.                                                                                                                                                                                                   |
+| `End` / `T`               | Jump body scroll to the tail.                                                                                                                                                                                                   |
+| `g`                       | Jump to the first message.                                                                                                                                                                                                      |
+| `G`                       | Jump to the last message (forces a full-remaining scan).                                                                                                                                                                        |
+| `S`                       | Save as yaml - writes the current message body (prompts for path). In the image preview, `S` saves the decoded image including any rectification or point-cloud overlay.                                                        |
+| `a`                       | Toggle full expansion of long primitive arrays (default off).                                                                                                                                                                   |
+| `i`                       | Toggle in-terminal image preview (image topics on a Kitty- or Sixel-capable terminal; hidden otherwise). See [Image preview](#image-preview).                                                                                   |
+| `u`                       | Toggle rectification (lens-distortion correction) in the image preview (when CameraInfo is available). Also re-aims the point-cloud overlay: off projects onto the raw (distorted) image, on projects onto the rectified image. |
+| `p`                       | Toggle PointCloud2 projection overlay in the image preview. See [Point-cloud overlay](#point-cloud-overlay).                                                                                                                    |
+| `t`                       | Open the PointCloud2 topic picker to select or change the overlay topics.                                                                                                                                                       |
+| `f`                       | Cycle the point-cloud overlay property.                                                                                                                                                                                         |
+| `c`                       | Cycle the point-cloud overlay color scheme.                                                                                                                                                                                     |
+| `r`                       | Toggle auto/manual value range for the overlay.                                                                                                                                                                                 |
+| `=` / `+` / `-`           | Increase / decrease overlay point size.                                                                                                                                                                                         |
+| `]` / `[`                 | Increase / decrease overlay alpha.                                                                                                                                                                                              |
+| `e`                       | Enter/leave the static-extrinsic edit mode in the image preview (needs the overlay). See [Editing static extrinsics](#editing-static-extrinsics).                                                                               |
+| `E`                       | Open the picker that chooses the edited static TF edge.                                                                                                                                                                         |
+| `x`/`X`, `y`/`Y`, `z`/`Z` | Edit mode: nudge that translation component up/down one step.                                                                                                                                                                   |
+| `l`/`L`, `n`/`N`, `w`/`W` | Edit mode: nudge roll / pitch / yaw up/down one step.                                                                                                                                                                           |
+| `m` / `M`                 | Edit mode: coarser / finer nudge step.                                                                                                                                                                                          |
+| `0`                       | Edit mode: reset the edited edge to the bag's value.                                                                                                                                                                            |
+| `D`                       | Export the edited static TF edges as YAML (prompts for a path).                                                                                                                                                                 |
+| `A`                       | Overwrite the input bag's static TF in place with the edited edges, after an explicit `yes` confirmation. See [Persisting the fix](#persisting-the-fix).                                                                        |
+| `P`                       | Pin/unpin the displayed frame as an extra image-preview tile (needs a selected pcd topic), so several scenes are re-projected together. See [Comparing several scenes at once](#comparing-several-scenes-at-once).              |
+| `?`                       | Open the key-help overlay (YAML view and image preview). While it is open, `Esc` closes it, `j`/`k` scroll it, and every other key — `q` included — is ignored (`Ctrl-C` / `Ctrl-D` still quit walk).                           |
+| `Esc`                     | Back out one level: close the help overlay, leave the edit mode, leave the preview. Absorbed at the YAML view — quitting walk is `q` / `Ctrl-C` / `Ctrl-D`.                                                                     |
+| `q` / `Q`                 | Quit walk. Bound in the YAML view only — inert in the image preview, the pickers, and the help overlay.                                                                                                                         |
+| `Ctrl-C` / `Ctrl-D`       | Quit walk immediately, from any screen — the image preview, a picker, or a help overlay included.                                                                                                                               |
 
 When the body is taller than the visible window, a `lines X-Y of N`
 indicator is shown above the key legend. Wrapping past the last message

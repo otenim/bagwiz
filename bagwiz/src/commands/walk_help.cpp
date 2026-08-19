@@ -121,7 +121,7 @@ std::vector<std::string> preview_help_lines()
     "  A              apply the edits to the input bag (asks first)",
     "Other",
     "  Esc            close this help / back (edit mode -> preview)",
-    "  q              back to the YAML view",
+    "  Ctrl-C / Ctrl-D  quit walk",
   };
 }
 
