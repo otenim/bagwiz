@@ -12,7 +12,9 @@
 #include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <future>
 #include <limits>
 #include <vector>
@@ -36,10 +38,9 @@ double total_cost(
   std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,
   const std::array<double, 6> & delta, const NidParams & nid, int * valid_out)
 {
-  const Mat4 d = make_transform({delta[0], delta[1], delta[2]}, {delta[3], delta[4], delta[5]});
   const Mat4 t_trajframe_cam = mat4_multiply(
     chain.t_trajframe_parent,
-    mat4_multiply(chain.t_parent_child, mat4_multiply(d, chain.t_child_camoptical)));
+    mat4_multiply(edge_transform(chain.edge_bag, delta), chain.t_child_camoptical));
 
   std::vector<std::future<std::optional<double>>> futures;
   futures.reserve(samples.size());
@@ -66,6 +67,22 @@ double total_cost(
 }
 
 }  // namespace
+
+std::array<double, 6> apply_edge_delta(
+  const std::array<double, 6> & edge_bag, const std::array<double, 6> & delta)
+{
+  std::array<double, 6> out{};
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    out[i] = edge_bag[i] + delta[i];
+  }
+  return out;
+}
+
+Mat4 edge_transform(const std::array<double, 6> & edge_bag, const std::array<double, 6> & delta)
+{
+  const auto e = apply_edge_delta(edge_bag, delta);
+  return make_transform({e[0], e[1], e[2]}, {e[3], e[4], e[5]});
+}
 
 RefineResult refine_extrinsic(
   std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,

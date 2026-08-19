@@ -93,15 +93,22 @@ struct TfStaticCalibrateArgs
 // poses) and the run path (tf2::BufferCore::lookupTransform results,
 // TransformStamped records from the bag's static TF) so both go through one
 // quaternion-to-rotation-matrix implementation.
-[[nodiscard]] core::calib::Mat4 mat4_from_quat(
+//
+// nullopt when the input cannot produce a usable transform: a quaternion whose
+// norm is zero (an all-zero geometry_msgs Quaternion is the common case) or
+// non-finite, or a non-finite translation component. Callers treat that as a
+// skipped sample (interpolate_trajectory) or a hard error (the run path)
+// rather than propagating NaNs into the chain.
+[[nodiscard]] std::optional<core::calib::Mat4> mat4_from_quat(
   double tx, double ty, double tz, double qx, double qy, double qz, double qw);
 
 // Interpolate the trajectory frame's pose at `stamp_ns`: translation lerp,
 // orientation shortest-path SLERP (nlerp near-parallel) between the two poses
 // bracketing the stamp, returned as a rigid transform. `poses` must be sorted
-// ascending by timestamp_ns. nullopt when `poses` has fewer than two entries
-// or `stamp_ns` falls outside [poses.front().timestamp_ns,
-// poses.back().timestamp_ns] (no extrapolation).
+// ascending by timestamp_ns. nullopt when `poses` has fewer than two entries,
+// `stamp_ns` falls outside [poses.front().timestamp_ns,
+// poses.back().timestamp_ns] (no extrapolation), or the interpolated pose is
+// not a usable rigid transform (see mat4_from_quat).
 [[nodiscard]] std::optional<core::calib::Mat4> interpolate_trajectory(
   std::span<const core::TrajectoryPose> poses, std::int64_t stamp_ns);
 
@@ -112,10 +119,12 @@ struct TfStaticCalibrateArgs
 // Render the human-readable stdout summary of a refine result: a per-axis
 // table (bag value / refined value / delta / observability, rotations shown
 // in degrees), the NID before/after, the sample count used, one warning line
-// per degenerate axis ("its value is the bag's, consider --fix <axis>"), and
-// the `tf static update` apply hint. `edge_before` is the edited edge's
-// x,y,z,roll,pitch,yaw (meters/radians) as recorded in the bag, in the same
-// axis order as RefineResult::delta.
+// per degenerate axis (the delta there is unconstrained, so the warning points
+// at `--fix <axis>`), and the `tf static update` apply hint. `edge_before` is
+// the edited edge's x,y,z,roll,pitch,yaw (meters/radians) as recorded in the
+// bag, in the same axis order as RefineResult::delta; the "refined value"
+// column is core::calib::apply_edge_delta of the two, the same composition the
+// emitted YAML uses.
 [[nodiscard]] std::string render_calibrate_summary(
   const TfStaticCalibrateArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before, const std::string & yaml_path);

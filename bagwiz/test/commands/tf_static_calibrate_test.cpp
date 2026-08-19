@@ -233,13 +233,42 @@ geometry_msgs::msg::TransformStamped make_static_edge(double yaw_rad)
   return ts;
 }
 
-// Writes /tf_static (base_link -> cam_link, off by `edge_yaw_rad` from the
-// identity pose the images were actually rendered at), /cam/camera_info (one
-// message), and /cam/image_raw (one bgr8 message per entry of
-// `image_stamps_ns`, all sharing the scene's ramp raster).
-void write_fixture_bag(
-  const std::filesystem::path & path, double edge_yaw_rad,
-  std::span<const std::int64_t> image_stamps_ns, const Scene & scene)
+// base_link -> cam_link carrying an arbitrary rpy triple, for the fixtures
+// whose edited edge is not a plain yaw about z.
+geometry_msgs::msg::TransformStamped make_static_edge_rpy(
+  double roll_rad, double pitch_rad, double yaw_rad)
+{
+  geometry_msgs::msg::TransformStamped ts;
+  ts.header.frame_id = kParentFrame;
+  ts.child_frame_id = kChildFrame;
+  ts.transform.rotation = bagwiz::core::rpy_to_quaternion({roll_rad, pitch_rad, yaw_rad});
+  return ts;
+}
+
+// The same wall, re-expressed for a camera mounted in the optical convention
+// (rpy = -90, 0, -90): that rotation sends camera +z to world +x, camera +x to
+// world -y and camera +y to world -z, so a point the scene places at
+// (x, y, kWallZ) in camera coordinates sits at (kWallZ, -x, -y) in the world.
+// Its intensity is unchanged — it was already derived from the ground-truth
+// projected column, which the remapping does not move.
+Scene optical_convention_scene(const Scene & scene)
+{
+  Scene out = scene;
+  for (auto & p : out.points) {
+    p = {p[2], -p[0], -p[1]};
+  }
+  return out;
+}
+
+// Writes /tf_static (`static_edges`), /cam/camera_info (one message, whose
+// header.frame_id is the chain's optical frame), and /cam/image_raw (one bgr8
+// message per entry of `image_stamps_ns`, all sharing the scene's ramp
+// raster).
+void write_fixture_bag_edges(
+  const std::filesystem::path & path,
+  std::span<const geometry_msgs::msg::TransformStamped> static_edges,
+  const std::string & optical_frame, std::span<const std::int64_t> image_stamps_ns,
+  const Scene & scene)
 {
   bagwiz::io::TopicInfo image_topic;
   image_topic.name = kImageTopic;
@@ -256,24 +285,57 @@ void write_fixture_bag(
   writer->declare_topic(image_topic);
   writer->declare_topic(cam_info_topic);
 
-  const auto edge = make_static_edge(edge_yaw_rad);
-  const auto tf_cdr = bagwiz::core::serialize_tf_message(
-    std::span<const geometry_msgs::msg::TransformStamped>(&edge, 1));
+  const auto tf_cdr = bagwiz::core::serialize_tf_message(static_edges);
   writer->write(kTfStaticTopic, 0, std::span<const std::byte>(tf_cdr.data(), tf_cdr.size()));
 
   const auto cam_info_cdr =
-    serialize_camera_info(0, 0, kChildFrame, kImageWidth, kImageHeight, camera_k());
+    serialize_camera_info(0, 0, optical_frame, kImageWidth, kImageHeight, camera_k());
   writer->write(
     kCamInfoTopic, 0, std::span<const std::byte>(cam_info_cdr.data(), cam_info_cdr.size()));
 
   for (const std::int64_t stamp_ns : image_stamps_ns) {
     const auto sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
     const auto image_cdr =
-      serialize_image_bgr8(sec, 0, kChildFrame, kImageWidth, kImageHeight, scene.ramp_bgr);
+      serialize_image_bgr8(sec, 0, optical_frame, kImageWidth, kImageHeight, scene.ramp_bgr);
     writer->write(
       kImageTopic, stamp_ns, std::span<const std::byte>(image_cdr.data(), image_cdr.size()));
   }
   writer->close();
+}
+
+// The single-edge fixture the yaw-recovery tests use: base_link -> cam_link
+// off by `edge_yaw_rad` from the identity pose the images were rendered at,
+// with cam_link doubling as the optical frame.
+void write_fixture_bag(
+  const std::filesystem::path & path, double edge_yaw_rad,
+  std::span<const std::int64_t> image_stamps_ns, const Scene & scene)
+{
+  const auto edge = make_static_edge(edge_yaw_rad);
+  write_fixture_bag_edges(
+    path, std::span<const geometry_msgs::msg::TransformStamped>(&edge, 1), kChildFrame,
+    image_stamps_ns, scene);
+}
+
+// The six per-axis values of one field of render_calibrate_json's output, in
+// its fixed x,y,z,roll,pitch,yaw order. The JSON is hand-built with a stable
+// shape, so scanning for the field's occurrences in order is enough and keeps
+// a JSON dependency out of the test. ("before" cannot collide with
+// "nid_before": the leading quote is part of the key.)
+std::array<double, 6> json_axis_field(const std::string & json, const std::string & field)
+{
+  std::array<double, 6> out{};
+  const std::string key = "\"" + field + "\": ";
+  std::size_t pos = 0;
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    pos = json.find(key, pos);
+    EXPECT_NE(pos, std::string::npos) << "missing '" << field << "' #" << i << " in:\n" << json;
+    if (pos == std::string::npos) {
+      return out;
+    }
+    pos += key.size();
+    out[i] = std::stod(json.substr(pos));
+  }
+  return out;
 }
 
 std::vector<std::int64_t> default_image_stamps_ns()
@@ -421,4 +483,87 @@ TEST_F(TfStaticCalibrateTest, RecoversInjectedYawIntoYaml)
   const auto rpy = bagwiz::core::quaternion_to_rpy(t.transform.rotation);
   constexpr double kToleranceRad = 0.15 * M_PI / 180.0;
   EXPECT_NEAR(rpy.yaw, 0.0, kToleranceRad);
+  // Roll and pitch were never perturbed, so they must come back near zero
+  // too. The tolerance is deliberately looser than the yaw one: the ramp
+  // fixture only varies along u, so roll and pitch are far more weakly
+  // determined than yaw and the optimizer drifts on them (~0.5 deg observed
+  // on this fixture). 0.75 deg still catches a gross mis-parametrization —
+  // the axis swap a right-multiplied delta produces is degrees wide — while
+  // leaving room for that drift.
+  constexpr double kWeakAxisToleranceRad = 0.75 * M_PI / 180.0;
+  EXPECT_NEAR(rpy.roll, 0.0, kWeakAxisToleranceRad);
+  EXPECT_NEAR(rpy.pitch, 0.0, kWeakAxisToleranceRad);
+}
+
+// The regression test for the parametrization the report and the emitted YAML
+// used to disagree on. The edited edge carries a real optical-convention
+// rotation (rpy = -90, 0, -90 deg: camera +z along world +x, world +z up),
+// the case where an additive delta and a right-multiplied SE3 factor differ by
+// an axis swap — an additive yaw pans the camera about the mast, a
+// right-multiplied one rolls it about its own optical axis. The assertions are
+// about the parametrization, not about recovery quality (which
+// RecoversInjectedYawIntoYaml covers): a uniform column shift is nearly
+// invisible to a mutual-information cost when both the image ramp and the
+// point intensities are monotone in that column, so this fixture's optimizer
+// only nibbles at the injected error. What must hold regardless is that the
+// YAML on disk is the same edge the report printed, and that a --fix'd axis
+// does not move at all — a right-multiplied yaw delta would have rotated the
+// held roll and pitch right along with it.
+TEST_F(TfStaticCalibrateTest, OpticalConventionEdgeYamlMatchesTheReportedEdge)
+{
+  constexpr double kDeg = M_PI / 180.0;
+  constexpr double kTrueRoll = -90.0 * kDeg;
+  constexpr double kTruePitch = 0.0;
+  constexpr double kTrueYaw = -90.0 * kDeg;
+  constexpr double kInjectedYaw = 2.0 * kDeg;
+
+  const auto scene = optical_convention_scene(build_scene());
+  write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
+  write_traj_tum(tmp_dir_ / "traj.tum", 10'000'000'000LL, 50'000'000'000LL);
+  const auto edge = make_static_edge_rpy(kTrueRoll, kTruePitch, kTrueYaw + kInjectedYaw);
+  const auto stamps = default_image_stamps_ns();
+  write_fixture_bag_edges(
+    tmp_dir_ / "bag.mcap", std::span<const geometry_msgs::msg::TransformStamped>(&edge, 1),
+    kChildFrame, stamps, scene);
+
+  auto args = base_args(tmp_dir_);
+  args.fix_axes = "x,y,z,roll,pitch";
+  args.max_rot_deg = 5.0;  // the injected 2 deg must sit inside the trust region
+  args.json = true;        // machine-readable before/after/delta to check against the YAML
+
+  ::testing::internal::CaptureStdout();
+  const int rc = run_tf_static_calibrate(args);
+  const std::string report = ::testing::internal::GetCapturedStdout();
+  ASSERT_EQ(rc, 0) << report;
+  ASSERT_TRUE(std::filesystem::exists(args.output_path));
+
+  const auto before = json_axis_field(report, "before");
+  const auto after = json_axis_field(report, "after");
+  const auto delta = json_axis_field(report, "delta");
+  for (std::size_t axis = 0; axis < 6; ++axis) {
+    EXPECT_NEAR(after[axis], before[axis] + delta[axis], 1e-12) << "axis " << axis;
+  }
+  // The bag's own values came back verbatim, and the held axes did not move.
+  EXPECT_NEAR(before[3], kTrueRoll, 1e-9);
+  EXPECT_NEAR(before[4], kTruePitch, 1e-9);
+  EXPECT_NEAR(before[5], kTrueYaw + kInjectedYaw, 1e-9);
+  EXPECT_EQ(delta[3], 0.0);
+  EXPECT_EQ(delta[4], 0.0);
+  // The free axis did move, so the fixed-axis check above is not vacuous: with
+  // a right-multiplied delta this much yaw would have shifted roll and pitch
+  // by a comparable amount.
+  EXPECT_GT(std::abs(delta[5]), 0.01 * kDeg);
+
+  // The file on disk is that same edge, axis for axis.
+  const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
+  ASSERT_TRUE(parsed.ok()) << parsed.error;
+  ASSERT_EQ(parsed.transforms->size(), 1U);
+  const auto & t = parsed.transforms->front();
+  EXPECT_NEAR(t.transform.translation.x, after[0], 1e-9);
+  EXPECT_NEAR(t.transform.translation.y, after[1], 1e-9);
+  EXPECT_NEAR(t.transform.translation.z, after[2], 1e-9);
+  const auto rpy = bagwiz::core::quaternion_to_rpy(t.transform.rotation);
+  EXPECT_NEAR(rpy.roll, after[3], 1e-9);
+  EXPECT_NEAR(rpy.pitch, after[4], 1e-9);
+  EXPECT_NEAR(rpy.yaw, after[5], 1e-9);
 }

@@ -10,6 +10,12 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <limits>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace commands = bagwiz::commands;
@@ -27,6 +33,77 @@ commands::TfStaticCalibrateArgs valid_args()
   args.parent_frame = "cabin";
   args.child_frame = "cam_link";
   return args;
+}
+
+// The edited edge's bag value the render tests measure "before + delta"
+// against: deliberately non-zero on every axis so a dropped or swapped one
+// shows up.
+constexpr std::array<double, 6> kEdgeBefore{1.5, -0.25, 2.0, 0.1, -0.2, 0.3};
+
+bagwiz::core::calib::RefineResult sample_result()
+{
+  using bagwiz::core::calib::AxisObservability;
+  bagwiz::core::calib::RefineResult result;
+  result.ok = true;
+  result.delta = {0.01, -0.02, 0.03, 0.001, -0.002, 0.003};
+  result.nid_before = 0.5;
+  result.nid_after = 0.25;
+  result.samples_used = 7;
+  result.observability = {AxisObservability::kStrong,     AxisObservability::kWeak,
+                          AxisObservability::kDegenerate, AxisObservability::kStrong,
+                          AxisObservability::kFixed,      AxisObservability::kStrong};
+  return result;
+}
+
+// One per-axis row of render_calibrate_summary's table, located by its leading
+// axis name so the test does not restate the column formatting.
+struct AxisRow
+{
+  double before = 0.0;
+  double after = 0.0;
+  double delta = 0.0;
+  std::string observability;
+};
+
+AxisRow parse_summary_row(const std::string & summary, const std::string & axis)
+{
+  std::istringstream lines(summary);
+  std::string line;
+  while (std::getline(lines, line)) {
+    std::istringstream fields(line);
+    std::string name;
+    AxisRow row;
+    if (!(fields >> name) || name != axis) {
+      continue;
+    }
+    if (fields >> row.before >> row.after >> row.delta >> row.observability) {
+      return row;
+    }
+  }
+  ADD_FAILURE() << "no row for axis '" << axis << "' in:\n" << summary;
+  return {};
+}
+
+// The six per-axis values of one field of render_calibrate_json's output, in
+// its fixed x,y,z,roll,pitch,yaw order. The JSON is hand-built with a stable
+// shape, so scanning for the field's occurrences in order is enough and keeps
+// a JSON dependency out of the test. ("before" cannot collide with
+// "nid_before": the leading quote is part of the key.)
+std::array<double, 6> json_axis_field(const std::string & json, const std::string & field)
+{
+  std::array<double, 6> out{};
+  const std::string key = "\"" + field + "\": ";
+  std::size_t pos = 0;
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    pos = json.find(key, pos);
+    EXPECT_NE(pos, std::string::npos) << "missing '" << field << "' #" << i << " in:\n" << json;
+    if (pos == std::string::npos) {
+      return out;
+    }
+    pos += key.size();
+    out[i] = std::stod(json.substr(pos));
+  }
+  return out;
 }
 }  // namespace
 
@@ -92,4 +169,99 @@ TEST(TfStaticCalibrateCommonTest, DefaultOutputPathUsesInputStem)
 {
   EXPECT_EQ(
     commands::default_calibrate_output_path("/data/run_0.db3"), "run_0_tf_static_calib.yaml");
+}
+
+TEST(TfStaticCalibrateCommonTest, Mat4FromQuatRejectsUnusableRotations)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_TRUE(commands::mat4_from_quat(1, 2, 3, 0, 0, 0, 1).has_value());
+  // A default-initialised geometry_msgs Quaternion is all zeros: normalizing
+  // it would divide by zero and fill the transform with NaNs.
+  EXPECT_FALSE(commands::mat4_from_quat(0, 0, 0, 0, 0, 0, 0).has_value());
+  EXPECT_FALSE(commands::mat4_from_quat(0, 0, 0, nan, 0, 0, 1).has_value());
+  EXPECT_FALSE(commands::mat4_from_quat(nan, 0, 0, 0, 0, 0, 1).has_value());
+}
+
+TEST(TfStaticCalibrateCommonTest, RenderCalibrateSummaryIsAdditivePerAxis)
+{
+  const auto args = valid_args();
+  const auto result = sample_result();
+  const std::string summary =
+    commands::render_calibrate_summary(args, result, kEdgeBefore, "/tmp/out.yaml");
+
+  const std::array<const char *, 6> names{"x", "y", "z", "roll", "pitch", "yaw"};
+  for (std::size_t axis = 0; axis < names.size(); ++axis) {
+    const auto row = parse_summary_row(summary, names[axis]);
+    // Rotations are shown in degrees, translations in meters; either way the
+    // refined value is the bag value plus the delta in the SAME unit.
+    const double scale = axis >= 3 ? 180.0 / M_PI : 1.0;
+    EXPECT_NEAR(row.before, kEdgeBefore[axis] * scale, 2e-6) << names[axis];
+    EXPECT_NEAR(row.delta, result.delta[axis] * scale, 2e-6) << names[axis];
+    EXPECT_NEAR(row.after, row.before + row.delta, 2e-6) << names[axis];
+  }
+  EXPECT_EQ(parse_summary_row(summary, "x").observability, "strong");
+  EXPECT_EQ(parse_summary_row(summary, "y").observability, "weak");
+  EXPECT_EQ(parse_summary_row(summary, "z").observability, "degenerate");
+  EXPECT_EQ(parse_summary_row(summary, "pitch").observability, "fixed");
+
+  // The degenerate axis warns that its delta is unconstrained — it is NOT the
+  // bag's value, which is what --fix would give.
+  EXPECT_NE(
+    summary.find(
+      "warning: z is not observable from this data; the delta shown is unconstrained — re-run "
+      "with --fix z to hold the bag value"),
+    std::string::npos)
+    << summary;
+  // Only the degenerate axis warns.
+  EXPECT_EQ(summary.find("warning: x is not"), std::string::npos) << summary;
+  EXPECT_NE(
+    summary.find("apply with: bagwiz tf static update -i in.db3 --yaml /tmp/out.yaml"),
+    std::string::npos)
+    << summary;
+  EXPECT_NE(summary.find("samples used: 7"), std::string::npos) << summary;
+  EXPECT_NE(summary.find("tf static calibrate: cabin -> cam_link"), std::string::npos) << summary;
+}
+
+TEST(TfStaticCalibrateCommonTest, RenderCalibrateJsonIsAdditivePerAxis)
+{
+  const auto args = valid_args();
+  const auto result = sample_result();
+  const std::string json = commands::render_calibrate_json(args, result, kEdgeBefore);
+
+  ASSERT_FALSE(json.empty());
+  EXPECT_EQ(json.front(), '{');
+  EXPECT_EQ(json.back(), '}');
+  int depth = 0;
+  for (const char c : json) {
+    depth += c == '{' ? 1 : c == '}' ? -1 : 0;
+    ASSERT_GE(depth, 0) << json;
+  }
+  EXPECT_EQ(depth, 0) << json;
+  EXPECT_EQ(json.find(",\n  }"), std::string::npos) << "trailing comma:\n" << json;
+  EXPECT_EQ(json.find(",\n    }"), std::string::npos) << "trailing comma:\n" << json;
+
+  // Rotation axes stay in radians here, unlike the human table.
+  const auto before = json_axis_field(json, "before");
+  const auto after = json_axis_field(json, "after");
+  const auto delta = json_axis_field(json, "delta");
+  for (std::size_t axis = 0; axis < 6; ++axis) {
+    EXPECT_DOUBLE_EQ(before[axis], kEdgeBefore[axis]) << "axis " << axis;
+    EXPECT_DOUBLE_EQ(delta[axis], result.delta[axis]) << "axis " << axis;
+    EXPECT_DOUBLE_EQ(after[axis], kEdgeBefore[axis] + result.delta[axis]) << "axis " << axis;
+  }
+  EXPECT_NE(json.find("\"parent\": \"cabin\""), std::string::npos) << json;
+  EXPECT_NE(json.find("\"child\": \"cam_link\""), std::string::npos) << json;
+  EXPECT_NE(json.find("\"samples\": 7"), std::string::npos) << json;
+  EXPECT_NE(json.find("\"nid_before\": 0.5"), std::string::npos) << json;
+  EXPECT_NE(json.find("\"nid_after\": 0.25"), std::string::npos) << json;
+  EXPECT_NE(json.find("\"observability\": \"degenerate\""), std::string::npos) << json;
+  EXPECT_NE(json.find("\"observability\": \"fixed\""), std::string::npos) << json;
+}
+
+TEST(TfStaticCalibrateCommonTest, RenderCalibrateJsonEscapesFrameNames)
+{
+  auto args = valid_args();
+  args.parent_frame = "ca\"b\\in";
+  const std::string json = commands::render_calibrate_json(args, sample_result(), kEdgeBefore);
+  EXPECT_NE(json.find("\"parent\": \"ca\\\"b\\\\in\""), std::string::npos) << json;
 }

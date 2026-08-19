@@ -954,6 +954,16 @@ minimizes the mean NID across all samples, confined to the trust region
 around the edge's bag value (`--max-trans`, `--max-rot`), so a bad initial
 mount value or an unconstrained axis cannot wander to an unrelated optimum.
 
+The six numbers the search moves are the edge's own `x, y, z, roll, pitch,
+yaw` — the scalars [`static dump`](#bagwiz-tf-static-dump) writes and
+[`walk`](walk.md#editing-static-extrinsics)'s edit mode nudges — and the delta
+is added to them axis by axis. The value the cost was evaluated at, the
+`refined value` column of the report, and the transform in the output YAML are
+therefore the same arithmetic, `before + delta` per axis, and cannot describe
+different edges. `--fix <axis>` holds an axis by forcing its delta to zero,
+which leaves the bag's own scalar for that axis in the output verbatim even
+when the edge's rotation does not commute (an optical-convention mount, say).
+
 ### Observability report
 
 After refining, each of the six axes is probed independently around the

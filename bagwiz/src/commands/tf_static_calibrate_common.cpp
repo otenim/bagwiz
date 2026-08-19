@@ -143,10 +143,18 @@ std::vector<std::size_t> pick_sample_indices(
   return picks;
 }
 
-core::calib::Mat4 mat4_from_quat(
+std::optional<core::calib::Mat4> mat4_from_quat(
   double tx, double ty, double tz, double qx, double qy, double qz, double qw)
 {
   const double norm = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+  // A zero-norm quaternion (an all-zero geometry_msgs Quaternion straight off
+  // the wire is the common one) or any non-finite component would otherwise
+  // divide through to NaNs and silently poison every transform downstream.
+  if (
+    !std::isfinite(norm) || norm <= 0.0 || !std::isfinite(tx) || !std::isfinite(ty) ||
+    !std::isfinite(tz)) {
+    return std::nullopt;
+  }
   const double x = qx / norm;
   const double y = qy / norm;
   const double z = qz / norm;
@@ -227,11 +235,12 @@ std::string render_calibrate_summary(
   out += fmt::format(
     "{:<6} {:>14} {:>14} {:>14}  {}\n", "axis", "bag value", "refined value", "delta",
     "observability");
+  const auto edge_after = core::calib::apply_edge_delta(edge_before, result.delta);
   for (std::size_t axis = 0; axis < 6; ++axis) {
     const double unit_scale = is_rotation_axis(axis) ? kRadToDeg : 1.0;
     const double before = edge_before[axis] * unit_scale;
     const double delta = result.delta[axis] * unit_scale;
-    const double after = before + delta;
+    const double after = edge_after[axis] * unit_scale;
     out += fmt::format(
       "{:<6} {:>14.6f} {:>14.6f} {:>14.6f}  {}\n", kAxisNames[axis], before, after, delta,
       axis_observability_name(result.observability[axis]));
@@ -268,10 +277,11 @@ std::string render_calibrate_json(
   out += fmt::format("  \"nid_after\": {},\n", result.nid_after);
   out += fmt::format("  \"samples\": {},\n", result.samples_used);
   out += "  \"axes\": {\n";
+  const auto edge_after = core::calib::apply_edge_delta(edge_before, result.delta);
   for (std::size_t axis = 0; axis < 6; ++axis) {
     const double before = edge_before[axis];
     const double delta = result.delta[axis];
-    const double after = before + delta;
+    const double after = edge_after[axis];
     out += fmt::format("    \"{}\": {{\n", kAxisNames[axis]);
     out += fmt::format("      \"before\": {},\n", before);
     out += fmt::format("      \"after\": {},\n", after);

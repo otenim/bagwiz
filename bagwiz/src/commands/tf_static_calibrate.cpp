@@ -207,10 +207,28 @@ std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
 
 // ---- phase 5: static TF chain ---------------------------------------------
 
-// The three legs of the edited edge's chain, plus the edge's raw bag value
-// (t_parent_child, sourced from a static topic's own transforms rather than
-// the resolved buffer, so the report's "bag value" matches what a later
-// `tf static update` would see).
+// mat4_from_quat over a geometry_msgs Transform, naming the offending leg when
+// the recorded quaternion cannot be normalized (zero norm, or a non-finite
+// component) rather than letting a NaN-filled matrix poison the whole chain.
+std::optional<core::calib::Mat4> mat4_of_transform(
+  const geometry_msgs::msg::Transform & transform, const char * leg)
+{
+  auto m = mat4_from_quat(
+    transform.translation.x, transform.translation.y, transform.translation.z, transform.rotation.x,
+    transform.rotation.y, transform.rotation.z, transform.rotation.w);
+  if (!m.has_value()) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "The rotation recorded for %s is not a usable quaternion (zero norm or non-finite).",
+      leg);
+  }
+  return m;
+}
+
+// The two fixed legs of the edited edge's chain, plus the edge's own bag value
+// as the six scalars the delta is added to (EdgeChain::edge_bag). The edge is
+// sourced from a static topic's own transforms rather than the resolved
+// buffer, so the report's "bag value" matches what a later `tf static update`
+// would see.
 std::optional<core::calib::EdgeChain> resolve_edge_chain(
   const TfStaticCalibrateArgs & args, const std::string & optical_frame)
 {
@@ -276,25 +294,30 @@ std::optional<core::calib::EdgeChain> resolve_edge_chain(
   }
 
   core::calib::EdgeChain chain;
-  chain.t_parent_child = mat4_from_quat(
-    edge_record->transform.translation.x, edge_record->transform.translation.y,
-    edge_record->transform.translation.z, edge_record->transform.rotation.x,
-    edge_record->transform.rotation.y, edge_record->transform.rotation.z,
-    edge_record->transform.rotation.w);
+  const auto edge_mat = mat4_of_transform(edge_record->transform, "the edited static edge");
+  if (!edge_mat.has_value()) {
+    return std::nullopt;
+  }
+  // The delta is added to these six scalars (core::calib::apply_edge_delta),
+  // so the edge is carried as scalars from here on and never as a matrix the
+  // report and the emitted YAML could re-derive differently.
+  const auto edge_t = core::calib::translation_of(*edge_mat);
+  const auto edge_rpy = core::calib::rpy_of(*edge_mat);
+  chain.edge_bag = {edge_t[0], edge_t[1], edge_t[2], edge_rpy[0], edge_rpy[1], edge_rpy[2]};
   try {
     const auto tf_parent =
       tf_buffer.lookupTransform(args.traj_frame, args.parent_frame, tf2::TimePointZero);
-    chain.t_trajframe_parent = mat4_from_quat(
-      tf_parent.transform.translation.x, tf_parent.transform.translation.y,
-      tf_parent.transform.translation.z, tf_parent.transform.rotation.x,
-      tf_parent.transform.rotation.y, tf_parent.transform.rotation.z,
-      tf_parent.transform.rotation.w);
     const auto tf_child =
       tf_buffer.lookupTransform(args.child_frame, optical_frame, tf2::TimePointZero);
-    chain.t_child_camoptical = mat4_from_quat(
-      tf_child.transform.translation.x, tf_child.transform.translation.y,
-      tf_child.transform.translation.z, tf_child.transform.rotation.x,
-      tf_child.transform.rotation.y, tf_child.transform.rotation.z, tf_child.transform.rotation.w);
+    const auto parent_mat =
+      mat4_of_transform(tf_parent.transform, "the --traj-frame to --parent leg");
+    const auto child_mat =
+      mat4_of_transform(tf_child.transform, "the --child to camera-optical leg");
+    if (!parent_mat.has_value() || !child_mat.has_value()) {
+      return std::nullopt;
+    }
+    chain.t_trajframe_parent = *parent_mat;
+    chain.t_child_camoptical = *child_mat;
   } catch (const tf2::TransformException & e) {
     BAGWIZ_LOG_ERROR(kLogger, "Could not resolve the chain around the edited edge: %s", e.what());
     return std::nullopt;
@@ -471,7 +494,8 @@ std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
   const int pad_px = precull_pad_px(cam, max_rot_rad, args.max_trans, args.min_depth);
   const core::calib::Mat4 t_trajframe_cam0 = core::calib::mat4_multiply(
     chain.t_trajframe_parent,
-    core::calib::mat4_multiply(chain.t_parent_child, chain.t_child_camoptical));
+    core::calib::mat4_multiply(
+      core::calib::edge_transform(chain.edge_bag, {}), chain.t_child_camoptical));
   const core::calib::NidParams default_nid;
 
   std::vector<core::calib::CalibSample> samples;
@@ -620,27 +644,21 @@ int run_tf_static_calibrate(const TfStaticCalibrateArgs & args)
     return 1;
   }
 
-  // 10. Output: the refined edge as a one-transform static-TF-tree YAML.
-  const auto edge_before_t = core::calib::translation_of(chain->t_parent_child);
-  const auto edge_before_rpy = core::calib::rpy_of(chain->t_parent_child);
-  const std::array<double, 6> edge_before{edge_before_t[0],   edge_before_t[1],
-                                          edge_before_t[2],   edge_before_rpy[0],
-                                          edge_before_rpy[1], edge_before_rpy[2]};
-
-  const core::calib::Mat4 delta_t = core::calib::make_transform(
-    {result.delta[0], result.delta[1], result.delta[2]},
-    {result.delta[3], result.delta[4], result.delta[5]});
-  const core::calib::Mat4 refined = core::calib::mat4_multiply(chain->t_parent_child, delta_t);
-  const auto refined_t = core::calib::translation_of(refined);
-  const auto refined_rpy = core::calib::rpy_of(refined);
+  // 10. Output: the refined edge as a one-transform static-TF-tree YAML. The
+  // refined edge is the bag's six scalars plus the delta, axis by axis — the
+  // exact composition refine_extrinsic minimized over and the one
+  // render_calibrate_summary/json print, so the file and the report cannot
+  // describe different edges.
+  const std::array<double, 6> & edge_before = chain->edge_bag;
+  const auto edge_after = core::calib::apply_edge_delta(edge_before, result.delta);
 
   geometry_msgs::msg::TransformStamped ts;
   ts.header.frame_id = args.parent_frame;
   ts.child_frame_id = args.child_frame;
-  ts.transform.translation.x = refined_t[0];
-  ts.transform.translation.y = refined_t[1];
-  ts.transform.translation.z = refined_t[2];
-  ts.transform.rotation = core::rpy_to_quaternion({refined_rpy[0], refined_rpy[1], refined_rpy[2]});
+  ts.transform.translation.x = edge_after[0];
+  ts.transform.translation.y = edge_after[1];
+  ts.transform.translation.z = edge_after[2];
+  ts.transform.rotation = core::rpy_to_quaternion({edge_after[3], edge_after[4], edge_after[5]});
 
   const std::string yaml = core::emit_static_tf_tree_yaml(
     std::span<const geometry_msgs::msg::TransformStamped>(&ts, 1),
