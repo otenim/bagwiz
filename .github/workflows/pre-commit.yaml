@@ -33,7 +33,11 @@ jobs:
       # clang-format/cpplint come from the hooks' own pip envs, but cppcheck is a
       # native binary with no pip distribution.
       - name: Install cppcheck
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cppcheck
+        timeout-minutes: 5
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: cppcheck
+          version: 1.0
 
       - name: Run pre-commit
         run: pre-commit run --all-files --show-diff-on-failure

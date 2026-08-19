@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "tf_static_calibrate_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <fmt/core.h>
 
@@ -73,7 +73,7 @@ std::string json_escape(const std::string & s)
 
 }  // namespace
 
-std::string validate_calibrate_flags(const TfStaticCalibrateArgs & args)
+std::string validate_calibrate_flags(const CalibCamLidarArgs & args)
 {
   if (args.samples < 3) {
     return "--samples must be at least 3 (6-DOF needs multiple viewpoints)";
@@ -283,17 +283,16 @@ std::optional<core::calib::Mat4> interpolate_trajectory(
     q[1], q[2], q[3]);
 }
 
-std::string default_calibrate_output_path(const std::filesystem::path & input)
+std::string default_calib_cam_lidar_output_path(const std::filesystem::path & input)
 {
-  return input.stem().string() + "_tf_static_calib.yaml";
+  return input.stem().string() + "_calib_cam_lidar.yaml";
 }
 
 std::string render_calibrate_summary(
-  const TfStaticCalibrateArgs & args, const core::calib::RefineResult & result,
+  const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before, const std::string & yaml_path)
 {
-  std::string out =
-    fmt::format("tf static calibrate: {} -> {}\n", args.parent_frame, args.child_frame);
+  std::string out = fmt::format("calib cam-lidar: {} -> {}\n", args.parent_frame, args.child_frame);
   out += fmt::format(
     "{:<6} {:>14} {:>14} {:>14}  {}\n", "axis", "bag value", "refined value", "delta",
     "observability");
@@ -329,7 +328,7 @@ std::string render_calibrate_summary(
 }
 
 std::string render_calibrate_json(
-  const TfStaticCalibrateArgs & args, const core::calib::RefineResult & result,
+  const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before)
 {
   std::string out = "{\n";

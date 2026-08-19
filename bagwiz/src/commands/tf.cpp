@@ -25,7 +25,6 @@
 #include "bagwiz/core/tf/tf_transform_format.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
-#include "tf_static_calibrate_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <rang.hpp>
 #include <tf2/buffer_core.hpp>
@@ -407,8 +406,6 @@ public:
         return run_tree();
       case Subcommand::kStaticCalc:
         return run_static_calc();
-      case Subcommand::kStaticCalibrate:
-        return run_tf_static_calibrate(static_calibrate_args_);
       case Subcommand::kStaticCp:
         return run_static_cp();
       case Subcommand::kStaticDrop:
@@ -431,7 +428,6 @@ private:
     kNone,
     kTree,
     kStaticCalc,
-    kStaticCalibrate,
     kStaticCp,
     kStaticDrop,
     kStaticDump,
@@ -453,13 +449,6 @@ private:
     std::string ref_frame;
     bool json = false;
   } static_args_;
-
-  // Defined in tf_static_calibrate_common.hpp (not nested here like the
-  // sibling *Args structs above): its helpers (validate_calibrate_flags,
-  // render_calibrate_summary, ...) and the run_tf_static_calibrate entry
-  // point all take it by const-reference, so it needs to be visible outside
-  // this translation unit too.
-  TfStaticCalibrateArgs static_calibrate_args_;
 
   struct StaticCpArgs
   {
@@ -645,12 +634,11 @@ private:
   }
 
   // `static` is a command group, not a leaf: its actions live under
-  // `static calc` (resolve a transform), `static calibrate` (refine one edge
-  // against the bag's map and images, writing YAML), `static cp` (copy static
-  // TF between bags), `static drop` (remove frames and their subtrees from the
-  // static tree), `static dump` (write the static tree as YAML), `static join`
-  // (read that YAML back into a bag), and `static update` (edge-granular
-  // add/update of the static tree from YAML). Modeling it as a group
+  // `static calc` (resolve a transform), `static cp` (copy static TF between
+  // bags), `static drop` (remove frames and their subtrees from the static
+  // tree), `static dump` (write the static tree as YAML), `static join` (read
+  // that YAML back into a bag), and `static update` (edge-granular add/update
+  // of the static tree from YAML). Modeling it as a group
   // (require_subcommand(1)) keeps room for further static-tree queries and keeps
   // `bagwiz tf static` from doing anything without an explicit verb.
   void configure_static(CLI::App & app)
@@ -658,7 +646,6 @@ private:
     auto * group = app.add_subcommand("static", "Static TF tree queries and edits");
     group->require_subcommand(1);
     configure_static_calc(*group);
-    configure_static_calibrate(*group);
     configure_static_cp(*group);
     configure_static_drop(*group);
     configure_static_dump(*group);
@@ -684,90 +671,6 @@ private:
       ->required();
     sub->add_flag("--json", static_args_.json, "Emit the transform as JSON instead of text");
     sub->callback([this]() { selected_ = Subcommand::kStaticCalc; });
-  }
-
-  void configure_static_calibrate(CLI::App & group)
-  {
-    auto * sub = group.add_subcommand(
-      "calibrate",
-      "Refine one static-TF edge on a camera's chain by registering the bag's "
-      "LiDAR map against its images (NID). Needs a prior `bagwiz map slam` run's "
-      "map.pcd and traj.tum; writes a YAML that `tf static update` applies.");
-    sub->add_option("-i,--input", static_calibrate_args_.input_path, "Bag path (file or directory)")
-      ->required()
-      ->check(CLI::ExistingPath);
-    // -t/--topic and --cam-info are declared as topic slots (not plain
-    // options) so shell completion offers the bag's image / CameraInfo
-    // topics, exactly as `walk`'s equivalents do.
-    set_topic_input(*sub, static_calibrate_args_.input_path);
-    sub
-      ->add_option(
-        "--map", static_calibrate_args_.map_path,
-        "Dense map PCD from `map slam` (needs an intensity field)")
-      ->required()
-      ->check(CLI::ExistingFile);
-    sub->add_option("--traj", static_calibrate_args_.traj_path, "TUM trajectory from `map slam`")
-      ->required()
-      ->check(CLI::ExistingFile);
-    sub
-      ->add_option(
-        "--traj-frame", static_calibrate_args_.traj_frame,
-        "Frame the trajectory poses express (matches `map slam --frame`)")
-      ->required();
-    add_topic_option(
-      *sub, "-t,--topic", static_calibrate_args_.topic, "Image topic to calibrate against",
-      TopicSlotSpec{.allowed_types = kImageTopicTypes, .mode = TopicSelectorMode::kLiteral})
-      ->required();
-    sub
-      ->add_option(
-        "--parent", static_calibrate_args_.parent_frame,
-        "Parent frame of the static edge to refine")
-      ->required();
-    sub
-      ->add_option(
-        "--child", static_calibrate_args_.child_frame, "Child frame of the static edge to refine")
-      ->required();
-    auto * cam_info_opt = add_topic_option(
-      *sub, "--cam-info", static_calibrate_args_.cam_info_topic,
-      "CameraInfo topic (auto-resolved from the image topic when omitted)",
-      TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral});
-    sub->add_option(
-      "-o,--output", static_calibrate_args_.output_path,
-      "Output YAML path (default: <bag>_tf_static_calib.yaml)");
-    sub->add_option(
-      "--samples", static_calibrate_args_.samples, "Image samples to use (default 8, min 3)");
-    sub->add_option(
-      "--fix", static_calibrate_args_.fix_axes,
-      "Comma list of axes to hold at the bag value (x,y,z,roll,pitch,yaw)");
-    sub->add_option(
-      "--max-trans", static_calibrate_args_.max_trans,
-      "Trust region: max translation delta in meters (default 0.2)");
-    sub->add_option(
-      "--max-rot", static_calibrate_args_.max_rot_deg,
-      "Trust region: max rotation delta in degrees (default 2.0)");
-    sub->add_option(
-      "--nid-bins", static_calibrate_args_.nid_bins, "NID histogram bins (default 16)");
-    sub->add_option(
-      "--keyframe-dist", static_calibrate_args_.keyframe_dist,
-      "Pose-gated keyframe sampling: open a new keyframe interval each time the interpolated "
-      "pose moves this many meters, then use each picked interval's sharpest frame (default 0 = "
-      "plain even time spacing)");
-    sub->add_option(
-      "--keyframe-rot", static_calibrate_args_.keyframe_rot_deg,
-      "Rotation half of the keyframe gate, in degrees (default 0 = disabled)");
-    sub->add_option(
-      "--min-depth", static_calibrate_args_.min_depth,
-      "Nearest projected point depth in meters (default 2)");
-    sub->add_option(
-      "--max-depth", static_calibrate_args_.max_depth,
-      "Farthest projected point depth in meters (default 150)");
-    sub->add_flag("--json", static_calibrate_args_.json, "Emit the stdout summary as JSON");
-    sub->add_flag(
-      "-w,--overwrite", static_calibrate_args_.overwrite, "Replace an existing -o/--output path");
-    sub->callback([this, cam_info_opt]() {
-      static_calibrate_args_.cam_info_given = cam_info_opt->count() > 0;
-      selected_ = Subcommand::kStaticCalibrate;
-    });
   }
 
   void configure_static_cp(CLI::App & group)

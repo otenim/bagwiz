@@ -159,8 +159,7 @@ source ~/.config/fish/completions/bagwiz.fish
   - `bagwiz <cmd> <subcommand> -<TAB>` for every nested subcommand
     (`cam-info replace`, `cam-info recompute-p`, `cam-info dump`,
     `convert format`, `generate video`, `map slam`, `map viewer`,
-    `pcd concat`, `pcd undistort`, `tf static calc`, `tf static calibrate`,
-    `tf static cp`,
+    `pcd concat`, `pcd undistort`, `tf static calc`, `tf static cp`,
     `tf static drop`, `tf static dump`, `tf static join`, `tf static update`,
     `tf tree`, `topic drop`, `topic keep`,
     `topic rename`, `traj dump`, `traj join`);
@@ -184,13 +183,15 @@ source ~/.config/fish/completions/bagwiz.fish
     static frame ids — see the sections below); `tf static update -<TAB>` surfaces
     the `join` set minus `--force` (its `--yaml` likewise falls through to the
     shell, while `--topic`/`-t` completes static TF topics — see the sections
-    below); `tf static calibrate -<TAB>` surfaces its full flag set (see
-    [`tf static calibrate`](tf.md#bagwiz-tf-static-calibrate)) — its
+    below).
+    `calib` is a command group; `calib <TAB>` completes its subcommand
+    (`cam-lidar`) and `calib -<TAB>` lists just the help flags; `calib cam-lidar
+-<TAB>` surfaces its full flag set (see [`calib cam-lidar`](calib.md)) — its
     `--topic`/`-t` completes the bag's image topics, `--cam-info` its
     CameraInfo topics, and `--parent`/`--child`/`--traj-frame` complete static
     frame ids — see the sections below.
     `tf static` is itself a command group, so `tf static <TAB>` completes its
-    actions (`calc`, `calibrate`, `cp`, `drop`, `dump`, `join`, `update`) and `tf static -<TAB>` lists just the help flags.
+    actions (`calc`, `cp`, `drop`, `dump`, `join`, `update`) and `tf static -<TAB>` lists just the help flags.
     `cam-info`, `generate`, `map`, `pcd`, and `topic` are likewise
     command groups: `cam-info <TAB>` completes `replace`, `recompute-p`, `dump`,
     `generate <TAB>` completes `video`, `map <TAB>`
@@ -223,9 +224,9 @@ name only — it offers plain topic names either way, typed as-is.
     `<topic>=`) at every value of the run; once the cursor moves past `=`,
     the `<info_topic>` half has nothing to suggest
   - `bagwiz walk -i <input> -t <topic> --cam-info <topic>` — `sensor_msgs/msg/CameraInfo` topics
-  - `bagwiz tf static calibrate -i <input> -t <topic>` — `sensor_msgs/msg/Image`
+  - `bagwiz calib cam-lidar -i <input> -t <topic>` — `sensor_msgs/msg/Image`
     or `sensor_msgs/msg/CompressedImage` topics
-  - `bagwiz tf static calibrate -i <input> ... --cam-info <topic>` —
+  - `bagwiz calib cam-lidar -i <input> ... --cam-info <topic>` —
     `sensor_msgs/msg/CameraInfo` topics
   - `bagwiz pcd concat -i <input> ... --pcd <topic>...` —
     `sensor_msgs/msg/PointCloud2` topics, offered at every value of the variadic
@@ -303,7 +304,7 @@ name only — it offers plain topic names either way, typed as-is.
   - `bagwiz tf static drop -i <input> ... --frame <FRAME>` (**only** static
     `*/tf_static` topics, for the same reason: `--frame` names a frame of the
     bag's static TF tree)
-  - `bagwiz tf static calibrate -i <input> ... --parent <FRAME>` /
+  - `bagwiz calib cam-lidar -i <input> ... --parent <FRAME>` /
     `--child <FRAME>` / `--traj-frame <FRAME>` (**only** static `*/tf_static`
     topics: the edited edge must be carried by a static TF topic, and the
     trajectory frame must resolve through the static tree to the camera)

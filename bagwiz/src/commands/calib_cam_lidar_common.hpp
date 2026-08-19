@@ -6,8 +6,8 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef COMMANDS__TF_STATIC_CALIBRATE_COMMON_HPP_
-#define COMMANDS__TF_STATIC_CALIBRATE_COMMON_HPP_
+#ifndef COMMANDS__CALIB_CAM_LIDAR_COMMON_HPP_
+#define COMMANDS__CALIB_CAM_LIDAR_COMMON_HPP_
 
 #include "bagwiz/core/calib/extrinsic_refine.hpp"
 #include "bagwiz/core/calib/nid_cost.hpp"
@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-// Internals of `tf static calibrate`, split out so the flag validation,
+// Internals of `bagwiz calib cam-lidar`, split out so the flag validation,
 // sample picking, trajectory interpolation, and report rendering can be
 // unit-tested without a bag or a real refinement run. Pure over the args, no
 // bag access. CLI-internal: this header lives with the command sources and is
@@ -32,11 +32,11 @@
 namespace bagwiz::commands
 {
 
-// Parsed arguments for `bagwiz tf static calibrate`. Refines one static-TF
-// edge on a camera's chain by registering the bag's LiDAR map (from a prior
-// `bagwiz map slam` run) against the bag's images via NID, and writes a YAML
-// that `bagwiz tf static update` applies.
-struct TfStaticCalibrateArgs
+// Parsed arguments for `bagwiz calib cam-lidar`. Refines one static-TF edge on
+// a camera's chain by registering the bag's LiDAR map (from a prior `bagwiz map
+// slam` run) against the bag's images via NID, and writes a YAML that `bagwiz
+// tf static update` applies.
+struct CalibCamLidarArgs
 {
   // -i,--input: bag path (file or directory). A std::filesystem::path (not a
   // string) because set_topic_input() binds the completion registry's topic
@@ -53,10 +53,11 @@ struct TfStaticCalibrateArgs
   // explicit empty string can be told apart from "omitted" — mirrors `walk`'s
   // empty-vs-omitted rule for optional topic overrides.
   bool cam_info_given = false;
-  std::string output_path;  // -o,--output; empty = default name (see default_calibrate_output_path)
-  int samples = 8;          // --samples; image samples to use (min 3)
-  std::string fix_axes;     // --fix; raw csv of axes to hold at the bag value
-  double max_trans = 0.2;   // --max-trans; trust region, meters
+  std::string
+    output_path;    // -o,--output; empty = default name (see default_calib_cam_lidar_output_path)
+  int samples = 8;  // --samples; image samples to use (min 3)
+  std::string fix_axes;      // --fix; raw csv of axes to hold at the bag value
+  double max_trans = 0.2;    // --max-trans; trust region, meters
   double max_rot_deg = 2.0;  // --max-rot; trust region, degrees
   int nid_bins = 16;         // --nid-bins; NID histogram bins
   double min_depth = 2.0;    // --min-depth; nearest projected point depth, meters
@@ -77,9 +78,9 @@ struct TfStaticCalibrateArgs
 // Validate the cross-field/range constraints the per-option CLI checks
 // cannot express. Returns the first violation found as a human-readable
 // message, or an empty string when the combination is valid. Pure over
-// TfStaticCalibrateArgs (no bag access), so run_tf_static_calibrate calls it
-// before any bag work.
-[[nodiscard]] std::string validate_calibrate_flags(const TfStaticCalibrateArgs & args);
+// CalibCamLidarArgs (no bag access), so run_calib_cam_lidar calls it before
+// any bag work.
+[[nodiscard]] std::string validate_calibrate_flags(const CalibCamLidarArgs & args);
 
 // Parse --fix's comma-separated axis list (x, y, z, roll, pitch, yaw) into a
 // per-axis "hold at the bag value" flag array in that fixed order. An empty
@@ -149,9 +150,9 @@ struct TfStaticCalibrateArgs
 [[nodiscard]] std::optional<core::calib::Mat4> interpolate_trajectory(
   std::span<const core::TrajectoryPose> poses, std::int64_t stamp_ns);
 
-// Default `-o/--output` path when omitted: "<input stem>_tf_static_calib.yaml"
+// Default `-o/--output` path when omitted: "<input stem>_calib_cam_lidar.yaml"
 // in the current working directory.
-[[nodiscard]] std::string default_calibrate_output_path(const std::filesystem::path & input);
+[[nodiscard]] std::string default_calib_cam_lidar_output_path(const std::filesystem::path & input);
 
 // Render the human-readable stdout summary of a refine result: a per-axis
 // table (bag value / refined value / delta / observability, rotations shown
@@ -163,7 +164,7 @@ struct TfStaticCalibrateArgs
 // column is core::calib::apply_edge_delta of the two, the same composition the
 // emitted YAML uses.
 [[nodiscard]] std::string render_calibrate_summary(
-  const TfStaticCalibrateArgs & args, const core::calib::RefineResult & result,
+  const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before, const std::string & yaml_path);
 
 // Render the machine-readable `--json` summary of a refine result, mirroring
@@ -179,21 +180,21 @@ struct TfStaticCalibrateArgs
 // too (matching render_calibrate_summary's first parameter). Flagged for
 // Task 8/9 — see the Task 7 report.
 [[nodiscard]] std::string render_calibrate_json(
-  const TfStaticCalibrateArgs & args, const core::calib::RefineResult & result,
+  const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before);
 
-// Entry point for `bagwiz tf static calibrate`'s run path: loads the map PCD
-// and TUM trajectory, resolves the image's CameraInfo and the static-TF chain
-// from --traj-frame to the camera's optical frame, samples images spread
-// across the trajectory span, refines the --parent/--child edge via
+// Entry point for `bagwiz calib cam-lidar`'s run path: loads the map PCD and
+// TUM trajectory, resolves the image's CameraInfo and the static-TF chain from
+// --traj-frame to the camera's optical frame, samples images spread across the
+// trajectory span, refines the --parent/--child edge via
 // core::calib::refine_extrinsic, and writes the result as a static-TF-tree
 // YAML that `bagwiz tf static update` applies. Returns 0 on success, 1 on any
 // error (bad flag combination, unreadable map/trajectory, missing/wrong-typed
 // image or CameraInfo topic, an unresolvable or off-chain edge, too few usable
 // image samples, or a refinement failure), with messages through the same
-// logging pattern run_tf_static_dump uses. Defined in tf_static_calibrate.cpp.
-int run_tf_static_calibrate(const TfStaticCalibrateArgs & args);
+// logging pattern run_tf_static_dump uses. Defined in calib_cam_lidar.cpp.
+int run_calib_cam_lidar(const CalibCamLidarArgs & args);
 
 }  // namespace bagwiz::commands
 
-#endif  // COMMANDS__TF_STATIC_CALIBRATE_COMMON_HPP_
+#endif  // COMMANDS__CALIB_CAM_LIDAR_COMMON_HPP_
