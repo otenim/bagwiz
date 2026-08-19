@@ -8,6 +8,8 @@
 
 #include "walk_help.hpp"  // NOLINT(build/include_subdir) header under test
 
+#include "bagwiz/core/tui/width.hpp"
+
 #include <gtest/gtest.h>
 
 #include <string>
@@ -20,6 +22,27 @@ using bagwiz::commands::preview_footer_legend;
 using bagwiz::commands::preview_help_lines;
 using bagwiz::commands::yaml_footer_legend;
 using bagwiz::commands::yaml_help_lines;
+
+// Strip SGR escape sequences (\x1B[...m) so tests can match the visible
+// characters of a styled entry like the rainbow [i] hint.
+std::string strip_sgr(const std::string & text)
+{
+  std::string out;
+  out.reserve(text.size());
+  for (std::size_t i = 0; i < text.size();) {
+    if (text[i] == '\x1B' && i + 1 < text.size() && text[i + 1] == '[') {
+      i += 2;
+      while (i < text.size() && text[i] != 'm') {
+        ++i;
+      }
+      i += i < text.size() ? 1 : 0;  // consume the terminating 'm'
+      continue;
+    }
+    out.push_back(text[i]);
+    ++i;
+  }
+  return out;
+}
 
 // The help reference is checked as one string: which line carries a hint is
 // layout, not contract.
@@ -53,16 +76,27 @@ TEST(WalkHelpFooters, YamlFooterCarriesOnlyTheWorkingSet)
 TEST(WalkHelpFooters, YamlFooterFitsOneRowOfAModestTerminal)
 {
   // The point of the diet: the footer stays a single row on a 100-column
-  // terminal instead of wrapping to three. The footer is ASCII, so byte
-  // length equals display width.
-  EXPECT_LE(yaml_footer_legend(true).size(), 100U);
-  EXPECT_LE(yaml_footer_legend(false).size(), 100U);
+  // terminal instead of wrapping to three. Measured as display width — the
+  // rainbow [i] hint carries zero-width SGR escapes.
+  EXPECT_LE(bagwiz::core::tui::display_width(yaml_footer_legend(true)), 100);
+  EXPECT_LE(bagwiz::core::tui::display_width(yaml_footer_legend(false)), 100);
+}
+
+TEST(WalkHelpFooters, YamlPreviewHintIsRainbowColored)
+{
+  // The [i] hint keeps its per-character rainbow paint; the SGR escapes are
+  // zero display width, so wrapping and the one-row budget are unaffected.
+  EXPECT_NE(yaml_footer_legend(true).find("\x1B[31m"), std::string::npos);
+  // Without the preview there is no colored entry at all.
+  EXPECT_EQ(yaml_footer_legend(false).find("\x1B["), std::string::npos);
 }
 
 TEST(WalkHelpFooters, YamlFooterAdvertisesPreviewOnlyWhenAvailable)
 {
-  EXPECT_NE(yaml_footer_legend(true).find("[i] preview"), std::string::npos);
-  EXPECT_EQ(yaml_footer_legend(false).find("[i] preview"), std::string::npos);
+  // The rainbow paint interleaves SGR escapes with the hint's characters,
+  // so match against the escape-stripped text.
+  EXPECT_NE(strip_sgr(yaml_footer_legend(true)).find("[i] preview"), std::string::npos);
+  EXPECT_EQ(strip_sgr(yaml_footer_legend(false)).find("preview"), std::string::npos);
 }
 
 TEST(WalkHelpFooters, PreviewFooterGatesOverlayEntriesOnASelectedTopic)

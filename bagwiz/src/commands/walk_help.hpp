@@ -22,9 +22,9 @@
 namespace bagwiz::commands
 {
 
-// One-row footer of the YAML pager. `preview_available` gates the [i] hint
-// the way the pager gates the key: image topics on a graphics-capable
-// terminal only.
+// One-row footer of the YAML pager. `preview_available` gates the
+// rainbow-painted [i] hint the way the pager gates the key: image topics on
+// a graphics-capable terminal only.
 [[nodiscard]] std::string yaml_footer_legend(bool preview_available);
 
 // One-row footer of the image preview. A selected PointCloud2 topic adds

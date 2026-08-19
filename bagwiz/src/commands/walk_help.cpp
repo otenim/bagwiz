@@ -9,10 +9,35 @@
 #include "walk_help.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bagwiz::commands
 {
+
+namespace
+{
+
+// Paint `text` as a rainbow by assigning each character a standard ANSI
+// foreground color in sequence. The returned string contains the SGR escapes
+// and a trailing reset; width-aware code treats those escapes as zero-width,
+// so wrapping/layout is unaffected.
+std::string rainbow_text(std::string_view text)
+{
+  // Red, yellow, green, cyan, blue, magenta — a classic 6-step rainbow.
+  constexpr const char * kColors[] = {"\x1B[31m", "\x1B[33m", "\x1B[32m",
+                                      "\x1B[36m", "\x1B[34m", "\x1B[35m"};
+  std::string out;
+  out.reserve(text.size() * 6);
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    out += kColors[i % std::size(kColors)];
+    out.push_back(text[i]);
+  }
+  out += "\x1B[0m";
+  return out;
+}
+
+}  // namespace
 
 std::string yaml_footer_legend(bool preview_available)
 {
@@ -20,7 +45,8 @@ std::string yaml_footer_legend(bool preview_available)
   // enough, and the '?' reference still lists them.
   std::string legend = "  [S] save   ";
   if (preview_available) {
-    legend += "[i] preview   ";
+    legend += rainbow_text("[i] preview");
+    legend += "   ";
   }
   legend += "[?] keys   [q] quit";
   return legend;

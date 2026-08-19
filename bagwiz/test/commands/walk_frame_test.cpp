@@ -185,7 +185,7 @@ TEST(WalkBuildYamlFrame, StatusRowShowsTransientMessage)
   EXPECT_EQ(frame.footer[3], "  saved /tmp/x.yaml");
 }
 
-TEST(WalkBuildYamlFrame, PreviewHintIsPlainText)
+TEST(WalkBuildYamlFrame, PreviewHintIsRainbowColored)
 {
   std::string status;
   auto cursor = make_cursor(1, status);
@@ -194,14 +194,12 @@ TEST(WalkBuildYamlFrame, PreviewHintIsPlainText)
 
   const auto with_preview =
     build_yaml_frame(0, kWide, cursor, decoder, false, "/topic", "pkg/msg/Type", status, true);
-  // The hint is gated on availability but no longer rainbow-painted: the
-  // footer diet removed the one SGR-styled entry it had.
-  EXPECT_NE(join(with_preview.footer).find("[i] preview"), std::string::npos);
-  EXPECT_EQ(join(with_preview.footer).find("\x1B["), std::string::npos);
+  // Each character of "[i] preview" carries its own SGR escape.
+  EXPECT_NE(join(with_preview.footer).find("\x1B[31m"), std::string::npos);
 
   const auto without_preview =
     build_yaml_frame(0, kWide, cursor, decoder, false, "/topic", "pkg/msg/Type", status, false);
-  EXPECT_EQ(join(without_preview.footer).find("[i] preview"), std::string::npos);
+  EXPECT_EQ(join(without_preview.footer).find("\x1B["), std::string::npos);
 }
 
 TEST(WalkBuildHelpFrame, BodyCarriesTheReferenceLines)
