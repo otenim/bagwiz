@@ -56,7 +56,7 @@ std::string preview_footer_legend()
 {
   // Space/b navigation is unlabeled here too — the working set starts at the
   // view toggles.
-  return "  [u] rectify   [p] pcd   [?] help   [Esc] back";
+  return "  [u] rectify   [p] pcd overlay   [?] help   [Esc] back";
 }
 
 std::vector<std::string> yaml_help_lines()
