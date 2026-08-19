@@ -10,6 +10,7 @@
 #define COMMANDS__TF_STATIC_CALIBRATE_COMMON_HPP_
 
 #include "bagwiz/core/calib/extrinsic_refine.hpp"
+#include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
 
@@ -60,8 +61,17 @@ struct TfStaticCalibrateArgs
   int nid_bins = 16;         // --nid-bins; NID histogram bins
   double min_depth = 2.0;    // --min-depth; nearest projected point depth, meters
   double max_depth = 150.0;  // --max-depth; farthest projected point depth, meters
-  bool json = false;         // --json; emit the stdout summary as JSON
-  bool overwrite = false;    // -w,--overwrite; replace an existing -o/--output path
+  // --keyframe-dist / --keyframe-rot: pose-gated keyframe sampling. When
+  // either is > 0, eligible images are partitioned into gate intervals (a new
+  // interval opens once the interpolated pose moved >= keyframe_dist meters
+  // or rotated >= keyframe_rot_deg degrees from the interval's first frame),
+  // sample intervals are picked evenly, and each picked interval contributes
+  // its SHARPEST member (gray_sharpness) instead of an arbitrary one. Both 0
+  // (the default) keeps the plain even-time-spacing behavior.
+  double keyframe_dist = 0.0;
+  double keyframe_rot_deg = 0.0;
+  bool json = false;       // --json; emit the stdout summary as JSON
+  bool overwrite = false;  // -w,--overwrite; replace an existing -o/--output path
 };
 
 // Validate the cross-field/range constraints the per-option CLI checks
@@ -88,6 +98,30 @@ struct TfStaticCalibrateArgs
 [[nodiscard]] std::vector<std::size_t> pick_sample_indices(
   std::span<const std::int64_t> image_stamps_ns, std::int64_t traj_begin_ns,
   std::int64_t traj_end_ns, int samples, std::int64_t margin_ns);
+
+// The eligibility half of pick_sample_indices on its own: every index whose
+// stamp falls inside [traj_begin_ns + margin_ns, traj_end_ns - margin_ns], in
+// order. The keyframe-gated sampling path needs the full eligible list (to
+// interpolate a pose per frame) before deciding which frames to keep.
+[[nodiscard]] std::vector<std::size_t> eligible_sample_indices(
+  std::span<const std::int64_t> image_stamps_ns, std::int64_t traj_begin_ns,
+  std::int64_t traj_end_ns, std::int64_t margin_ns);
+
+// Partition time-ordered poses into keyframe gate intervals [begin, end).
+// A new interval opens at the first pose that moved >= min_dist_m meters or
+// rotated >= min_rot_rad radians from the current interval's ANCHOR (its
+// first pose) — the same gate `map slam --color-min-dist` applies before
+// colorizing. A threshold <= 0 disables that half of the gate; with both
+// disabled (or a stationary platform) every pose lands in one interval.
+// Empty input yields no intervals.
+[[nodiscard]] std::vector<std::pair<std::size_t, std::size_t>> pose_gate_intervals(
+  std::span<const core::calib::Mat4> poses, double min_dist_m, double min_rot_rad);
+
+// Whole-image sharpness: mean |gx| + |gy| central-difference gradient over
+// the interior pixels — the GrayImage counterpart of the colorizer's
+// image_sharpness_score convention (bagwiz_slam's colorize_keyframe). Higher
+// = sharper; a uniform image, or one without interior pixels, scores 0.
+[[nodiscard]] double gray_sharpness(const core::calib::GrayImage & image);
 
 // Build a rigid transform from a translation and a quaternion (x, y, z, w;
 // ROS / tf2 Hamilton convention). The quaternion is normalized internally, so

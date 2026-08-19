@@ -876,6 +876,7 @@ ever read, never modified.
 bagwiz tf static calibrate -i <input> --map <map.pcd> --traj <traj.tum> \
   --traj-frame <frame> -t|--topic <topic> --parent <frame> --child <frame> \
   [--cam-info <topic>] [-o <output>] [--samples <n>] [--fix <axes>] \
+  [--keyframe-dist <m>] [--keyframe-rot <deg>] \
   [--max-trans <m>] [--max-rot <deg>] [--nid-bins <n>] [--min-depth <m>] \
   [--max-depth <m>] [--json] [-w|--overwrite]
 ```
@@ -899,26 +900,28 @@ bagwiz tf static update -i capture.mcap --yaml capture_tf_static_calib.yaml
 
 ### Options
 
-| Flag                    | Description                                                                                                                                                                                                                  |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                                                                        |
-| `--map <path>`          | **Required.** Dense map PCD from `map slam` — needs an `intensity` field, which NID compares against image gray. Long-form only.                                                                                             |
-| `--traj <path>`         | **Required.** TUM trajectory from `map slam`. Long-form only.                                                                                                                                                                |
-| `--traj-frame <frame>`  | **Required.** Frame the trajectory poses express — must be the same `--frame` `map slam` was run with. Long-form only.                                                                                                       |
-| `-t`, `--topic <topic>` | **Required.** Image topic to calibrate against. Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name, not a glob.                                |
-| `--parent <frame>`      | **Required.** Parent frame of the static edge to refine. Long-form only.                                                                                                                                                     |
-| `--child <frame>`       | **Required.** Child frame of the static edge to refine. Long-form only.                                                                                                                                                      |
-| `--cam-info <topic>`    | CameraInfo topic. When omitted, resolved from `-t`/`--topic` using the same auto-resolution rules as [`generate video`'s `--cam-info`](generate.md#bagwiz-generate-video). A literal topic name, not a glob. Long-form only. |
-| `-o`, `--output <path>` | Output YAML path. Default: `<input>`'s filename stem plus `_tf_static_calib.yaml`, written in the current working directory (not necessarily beside `--input`).                                                              |
-| `--samples <n>`         | Image samples to pick, evenly spread across the trajectory span. Default `8`, minimum `3`. Long-form only.                                                                                                                   |
-| `--fix <axes>`          | Comma list of axes to hold at the bag's value instead of optimizing (`x,y,z,roll,pitch,yaw`, any subset). Fixing all six is rejected — nothing would be left to refine. Long-form only.                                      |
-| `--max-trans <m>`       | Trust region: max translation delta from the bag's value, in meters. Default `0.2`. Long-form only.                                                                                                                          |
-| `--max-rot <deg>`       | Trust region: max rotation delta from the bag's value, in degrees. Default `2.0`. Long-form only.                                                                                                                            |
-| `--nid-bins <n>`        | NID intensity/gray histogram bins, `4`–`256`. Default `16`. Long-form only.                                                                                                                                                  |
-| `--min-depth <m>`       | Nearest projected map-point depth kept, in meters. Default `2`. Long-form only.                                                                                                                                              |
-| `--max-depth <m>`       | Farthest projected map-point depth kept, in meters. Default `150`. Long-form only.                                                                                                                                           |
-| `--json`                | Emit the stdout summary as JSON instead of the human table. The YAML is written either way. Long-form only.                                                                                                                  |
-| `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path.                                                                                                                                                                                    |
+| Flag                    | Description                                                                                                                                                                                                                                                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                                                                                                                                                 |
+| `--map <path>`          | **Required.** Dense map PCD from `map slam` — needs an `intensity` field, which NID compares against image gray. Long-form only.                                                                                                                                                                      |
+| `--traj <path>`         | **Required.** TUM trajectory from `map slam`. Long-form only.                                                                                                                                                                                                                                         |
+| `--traj-frame <frame>`  | **Required.** Frame the trajectory poses express — must be the same `--frame` `map slam` was run with. Long-form only.                                                                                                                                                                                |
+| `-t`, `--topic <topic>` | **Required.** Image topic to calibrate against. Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name, not a glob.                                                                                                         |
+| `--parent <frame>`      | **Required.** Parent frame of the static edge to refine. Long-form only.                                                                                                                                                                                                                              |
+| `--child <frame>`       | **Required.** Child frame of the static edge to refine. Long-form only.                                                                                                                                                                                                                               |
+| `--cam-info <topic>`    | CameraInfo topic. When omitted, resolved from `-t`/`--topic` using the same auto-resolution rules as [`generate video`'s `--cam-info`](generate.md#bagwiz-generate-video). A literal topic name, not a glob. Long-form only.                                                                          |
+| `-o`, `--output <path>` | Output YAML path. Default: `<input>`'s filename stem plus `_tf_static_calib.yaml`, written in the current working directory (not necessarily beside `--input`).                                                                                                                                       |
+| `--samples <n>`         | Image samples to pick, evenly spread across the trajectory span (or across keyframe intervals — see `--keyframe-dist`). Default `8`, minimum `3`. Long-form only.                                                                                                                                     |
+| `--keyframe-dist <m>`   | Pose-gated keyframe sampling: a new keyframe interval opens each time the interpolated pose moves this many meters, samples spread over the intervals instead of over time, and each picked interval contributes its sharpest frame. `0` (the default) keeps plain even time spacing. Long-form only. |
+| `--keyframe-rot <deg>`  | Rotation half of the keyframe gate: an interval also opens after this much rotation from the interval's first frame, so a platform turning in place keeps contributing new viewpoints. `0` (the default) disables the rotation test. Long-form only.                                                  |
+| `--fix <axes>`          | Comma list of axes to hold at the bag's value instead of optimizing (`x,y,z,roll,pitch,yaw`, any subset). Fixing all six is rejected — nothing would be left to refine. Long-form only.                                                                                                               |
+| `--max-trans <m>`       | Trust region: max translation delta from the bag's value, in meters. Default `0.2`. Long-form only.                                                                                                                                                                                                   |
+| `--max-rot <deg>`       | Trust region: max rotation delta from the bag's value, in degrees. Default `2.0`. Long-form only.                                                                                                                                                                                                     |
+| `--nid-bins <n>`        | NID intensity/gray histogram bins, `4`–`256`. Default `16`. Long-form only.                                                                                                                                                                                                                           |
+| `--min-depth <m>`       | Nearest projected map-point depth kept, in meters. Default `2`. Long-form only.                                                                                                                                                                                                                       |
+| `--max-depth <m>`       | Farthest projected map-point depth kept, in meters. Default `150`. Long-form only.                                                                                                                                                                                                                    |
+| `--json`                | Emit the stdout summary as JSON instead of the human table. The YAML is written either way. Long-form only.                                                                                                                                                                                           |
+| `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path.                                                                                                                                                                                                                                                             |
 
 ### The map/trajectory handshake
 
@@ -940,6 +943,26 @@ from `--traj-frame` to the camera's optical frame, and recorded directly on a
 static TF topic (e.g. `/tf_static`) — an edge only reachable through dynamic
 `/tf` is not something `static update` can rewrite later, so `calibrate`
 rejects it up front.
+
+### Sample selection
+
+By default samples are spread evenly over the trajectory's **time** span
+(minus a 3 s margin at each end so every pick can be interpolated). Even time
+spacing is only even _viewpoint_ spacing at constant speed: a stop at a light
+turns several picks into near-duplicates of one scene, which both wastes
+samples and over-weights that scene in the NID sum. With `--keyframe-dist`
+(and optionally `--keyframe-rot`), the eligible frames are first partitioned
+into **keyframe intervals** — a new interval opens once the pose has moved or
+rotated enough since the interval's first frame, the same gate
+[`map slam --color-min-dist`](map.md#camera-colorization---color) applies —
+and `--samples` intervals are picked evenly instead. Each picked interval
+then contributes its **sharpest** member (highest mean image gradient, the
+`--color-keyframe-blur` policy): blur is what actually weakens NID, whether it
+came from a turn, a bump, or exposure, so sharpness is gated directly rather
+than by any motion proxy. A recording whose gate finds fewer than 3 intervals
+(a near-stationary platform) falls back to plain even time spacing with a
+warning. `--keyframe-dist 1.0 --keyframe-rot 10` is a reasonable starting
+point for driving data.
 
 ### Method
 

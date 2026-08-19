@@ -816,6 +816,7 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
 //                                                  --parent <frame> --child <frame>
 //                                                  [--cam-info <topic>] [-o <out>]
 //                                                  [--samples <n>] [--fix <axes>]
+//                                                  [--keyframe-dist <m>] [--keyframe-rot <deg>]
 //                                                  [--max-trans <m>] [--max-rot <deg>]
 //                                                  [--nid-bins <n>] [--min-depth <m>]
 //                                                  [--max-depth <m>] [--json] [-w|--overwrite]
@@ -883,11 +884,30 @@ std::vector<std::string> complete_tf_static_calibrate(
 {
   if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
     return matching(
-      with_help({"--cam-info", "--child",     "--fix",        "--input",     "--json",
-                 "--map",      "--max-depth", "--max-rot",    "--max-trans", "--min-depth",
-                 "--nid-bins", "--output",    "--overwrite",  "--parent",    "--samples",
-                 "--topic",    "--traj",      "--traj-frame", "-i",          "-o",
-                 "-t",         "-w"}),
+      with_help({"--cam-info",
+                 "--child",
+                 "--fix",
+                 "--input",
+                 "--json",
+                 "--keyframe-dist",
+                 "--keyframe-rot",
+                 "--map",
+                 "--max-depth",
+                 "--max-rot",
+                 "--max-trans",
+                 "--min-depth",
+                 "--nid-bins",
+                 "--output",
+                 "--overwrite",
+                 "--parent",
+                 "--samples",
+                 "--topic",
+                 "--traj",
+                 "--traj-frame",
+                 "-i",
+                 "-o",
+                 "-t",
+                 "-w"}),
       current);
   }
   if (request.cursor_word > 0) {

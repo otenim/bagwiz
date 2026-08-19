@@ -748,6 +748,14 @@ private:
     sub->add_option(
       "--nid-bins", static_calibrate_args_.nid_bins, "NID histogram bins (default 16)");
     sub->add_option(
+      "--keyframe-dist", static_calibrate_args_.keyframe_dist,
+      "Pose-gated keyframe sampling: open a new keyframe interval each time the interpolated "
+      "pose moves this many meters, then use each picked interval's sharpest frame (default 0 = "
+      "plain even time spacing)");
+    sub->add_option(
+      "--keyframe-rot", static_calibrate_args_.keyframe_rot_deg,
+      "Rotation half of the keyframe gate, in degrees (default 0 = disabled)");
+    sub->add_option(
       "--min-depth", static_calibrate_args_.min_depth,
       "Nearest projected point depth in meters (default 2)");
     sub->add_option(

@@ -40,6 +40,11 @@ using Mat4 = std::array<double, 16>;
 [[nodiscard]] std::array<double, 3> rpy_of(const Mat4 & t);
 
 /// Apply a rigid transform to a 3D point.
+// Angle in radians of the relative rotation between the two transforms'
+// rotation blocks (axis-angle magnitude of R_a^T * R_b, via the trace
+// formula). Translation does not contribute. Always in [0, pi].
+[[nodiscard]] double rotation_angle_between(const Mat4 & a, const Mat4 & b);
+
 [[nodiscard]] std::array<double, 3> transform_point(
   const Mat4 & t, const std::array<double, 3> & p);
 

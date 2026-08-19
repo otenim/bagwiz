@@ -8,6 +8,7 @@
 
 #include "bagwiz/core/calib/se3.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace bagwiz::core::calib
@@ -86,6 +87,21 @@ std::array<double, 3> rpy_of(const Mat4 & t)
   const double pitch = std::asin(-t[2]);
   const double yaw = std::atan2(t[1], t[0]);
   return {roll, pitch, yaw};
+}
+
+double rotation_angle_between(const Mat4 & a, const Mat4 & b)
+{
+  // trace(R_a^T * R_b): dot products of the two rotation blocks' matching
+  // columns, which never needs the relative rotation materialized.
+  double trace = 0.0;
+  for (int col = 0; col < 3; ++col) {
+    for (int row = 0; row < 3; ++row) {
+      trace += a[col * 4 + row] * b[col * 4 + row];
+    }
+  }
+  // Clamp against roundoff pushing (trace - 1) / 2 outside acos's domain.
+  const double c = std::clamp((trace - 1.0) / 2.0, -1.0, 1.0);
+  return std::acos(c);
 }
 
 std::array<double, 3> transform_point(const Mat4 & t, const std::array<double, 3> & p)

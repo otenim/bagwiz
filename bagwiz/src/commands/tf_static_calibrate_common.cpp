@@ -87,6 +87,9 @@ std::string validate_calibrate_flags(const TfStaticCalibrateArgs & args)
   if (args.min_depth <= 0.0 || args.max_depth <= args.min_depth) {
     return "--min-depth must be positive and below --max-depth";
   }
+  if (args.keyframe_dist < 0.0 || args.keyframe_rot_deg < 0.0) {
+    return "--keyframe-dist and --keyframe-rot must be non-negative (0 disables the gate)";
+  }
   return parse_fixed_axes(args.fix_axes).second;
 }
 
@@ -118,9 +121,9 @@ std::pair<std::array<bool, 6>, std::string> parse_fixed_axes(const std::string &
   return {flags, ""};
 }
 
-std::vector<std::size_t> pick_sample_indices(
+std::vector<std::size_t> eligible_sample_indices(
   std::span<const std::int64_t> image_stamps_ns, std::int64_t traj_begin_ns,
-  std::int64_t traj_end_ns, int samples, std::int64_t margin_ns)
+  std::int64_t traj_end_ns, std::int64_t margin_ns)
 {
   std::vector<std::size_t> eligible;
   for (std::size_t i = 0; i < image_stamps_ns.size(); ++i) {
@@ -130,6 +133,15 @@ std::vector<std::size_t> pick_sample_indices(
       eligible.push_back(i);
     }
   }
+  return eligible;
+}
+
+std::vector<std::size_t> pick_sample_indices(
+  std::span<const std::int64_t> image_stamps_ns, std::int64_t traj_begin_ns,
+  std::int64_t traj_end_ns, int samples, std::int64_t margin_ns)
+{
+  const std::vector<std::size_t> eligible =
+    eligible_sample_indices(image_stamps_ns, traj_begin_ns, traj_end_ns, margin_ns);
   if (eligible.size() <= static_cast<std::size_t>(samples)) {
     return eligible;
   }
@@ -141,6 +153,56 @@ std::vector<std::size_t> pick_sample_indices(
       eligible[static_cast<std::size_t>(a * static_cast<double>(eligible.size() - 1))]);
   }
   return picks;
+}
+
+std::vector<std::pair<std::size_t, std::size_t>> pose_gate_intervals(
+  std::span<const core::calib::Mat4> poses, double min_dist_m, double min_rot_rad)
+{
+  std::vector<std::pair<std::size_t, std::size_t>> intervals;
+  if (poses.empty()) {
+    return intervals;
+  }
+  std::size_t anchor = 0;
+  for (std::size_t i = 1; i < poses.size(); ++i) {
+    const auto a = core::calib::translation_of(poses[anchor]);
+    const auto b = core::calib::translation_of(poses[i]);
+    const double dx = b[0] - a[0];
+    const double dy = b[1] - a[1];
+    const double dz = b[2] - a[2];
+    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const bool moved = min_dist_m > 0.0 && dist >= min_dist_m;
+    const bool rotated = min_rot_rad > 0.0 && core::calib::rotation_angle_between(
+                                                poses[anchor], poses[i]) >= min_rot_rad;
+    if (moved || rotated) {
+      intervals.emplace_back(anchor, i);
+      anchor = i;
+    }
+  }
+  intervals.emplace_back(anchor, poses.size());
+  return intervals;
+}
+
+double gray_sharpness(const core::calib::GrayImage & image)
+{
+  if (
+    image.width < 3 || image.height < 3 ||
+    image.gray.size() != static_cast<std::size_t>(image.width) * image.height) {
+    return 0.0;
+  }
+  double sum = 0.0;
+  for (std::uint32_t y = 1; y + 1 < image.height; ++y) {
+    const std::size_t row = static_cast<std::size_t>(y) * image.width;
+    for (std::uint32_t x = 1; x + 1 < image.width; ++x) {
+      const int gx =
+        static_cast<int>(image.gray[row + x + 1]) - static_cast<int>(image.gray[row + x - 1]);
+      const int gy = static_cast<int>(image.gray[row + image.width + x]) -
+                     static_cast<int>(image.gray[row - image.width + x]);
+      sum += std::abs(gx) + std::abs(gy);
+    }
+  }
+  const auto interior =
+    static_cast<double>(image.width - 2) * static_cast<double>(image.height - 2);
+  return sum / interior;
 }
 
 std::optional<core::calib::Mat4> mat4_from_quat(

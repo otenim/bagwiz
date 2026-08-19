@@ -495,6 +495,32 @@ TEST_F(TfStaticCalibrateTest, RecoversInjectedYawIntoYaml)
   EXPECT_NEAR(rpy.pitch, 0.0, kWeakAxisToleranceRad);
 }
 
+// --keyframe-dist on the (stationary) fixture: the pose gate collapses to one
+// interval, so the command must warn, fall back to plain even time spacing,
+// and still succeed end to end — the gate is an optimization, never a new
+// failure mode.
+TEST_F(TfStaticCalibrateTest, KeyframeGateFallsBackOnStationaryTrajectory)
+{
+  const auto scene = build_scene();
+  write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
+  write_traj_tum(tmp_dir_ / "traj.tum", 10'000'000'000LL, 50'000'000'000LL);
+  constexpr double kInjectedYawRad = 1.0 * M_PI / 180.0;
+  write_fixture_bag(tmp_dir_ / "bag.mcap", kInjectedYawRad, default_image_stamps_ns(), scene);
+
+  auto args = base_args(tmp_dir_);
+  args.fix_axes = "x,y,z";
+  args.keyframe_dist = 0.5;
+  args.keyframe_rot_deg = 10.0;
+
+  ASSERT_EQ(run_tf_static_calibrate(args), 0);
+  ASSERT_TRUE(std::filesystem::exists(args.output_path));
+
+  const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
+  ASSERT_TRUE(parsed.ok()) << parsed.error;
+  const auto rpy = bagwiz::core::quaternion_to_rpy(parsed.transforms->front().transform.rotation);
+  EXPECT_NEAR(rpy.yaw, 0.0, 0.15 * M_PI / 180.0);
+}
+
 // The regression test for the parametrization the report and the emitted YAML
 // used to disagree on. The edited edge carries a real optical-convention
 // rotation (rpy = -90, 0, -90 deg: camera +z along world +x, world +z up),

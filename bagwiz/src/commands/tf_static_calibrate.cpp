@@ -48,6 +48,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -382,12 +383,108 @@ std::optional<std::vector<std::int64_t>> scan_image_stamps(
   return stamps;
 }
 
+// ---- phase 6b: keyframe-gated sample picking -------------------------------
+
+// Cap on how many members of one gate interval are decoded and
+// sharpness-scored. A long stationary interval can hold hundreds of
+// near-identical frames; scoring a small evenly-spaced subset finds a sharp
+// one without decoding them all.
+constexpr std::size_t kMaxScoredPerInterval = 8;
+
+// n indices evenly spread over [0, count), strictly increasing; all of them
+// when count <= n. The interval-level counterpart of pick_sample_indices'
+// linspace over eligible stamps.
+std::vector<std::size_t> evenly_spaced(std::size_t count, std::size_t n)
+{
+  std::vector<std::size_t> out;
+  if (count == 0 || n == 0) {
+    return out;
+  }
+  if (count <= n) {
+    out.resize(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      out[i] = i;
+    }
+    return out;
+  }
+  out.reserve(n);
+  std::size_t last = count;  // sentinel: no index emitted yet
+  for (std::size_t i = 0; i < n; ++i) {
+    const double a = n == 1 ? 0.0 : static_cast<double>(i) / static_cast<double>(n - 1);
+    const auto idx = static_cast<std::size_t>(a * static_cast<double>(count - 1));
+    if (idx != last) {
+      out.push_back(idx);
+      last = idx;
+    }
+  }
+  return out;
+}
+
+// Result of the keyframe-gated pick: a flat ascending pick list (indices into
+// the image-stamp list) plus, parallel to it, the gate interval each pick
+// belongs to. After decoding, each interval keeps only its sharpest member.
+struct GatedPicks
+{
+  std::vector<std::size_t> picks;
+  std::vector<std::size_t> group_of;  // parallel to picks
+  std::size_t interval_count = 0;     // gate intervals found (pre-selection)
+};
+
+// Pose-gate the eligible frames into keyframe intervals, pick args.samples of
+// those intervals evenly, and nominate up to kMaxScoredPerInterval candidate
+// frames per picked interval. Returns nullopt when fewer than 3 intervals
+// exist (a stationary or near-stationary recording) — the caller falls back
+// to plain even-time picking with a warning.
+std::optional<GatedPicks> keyframe_gated_picks(
+  const TfStaticCalibrateArgs & args, std::span<const std::int64_t> stamps,
+  std::span<const core::TrajectoryPose> poses, std::int64_t margin_ns)
+{
+  const auto eligible = eligible_sample_indices(
+    stamps, poses.front().timestamp_ns, poses.back().timestamp_ns, margin_ns);
+
+  // Pose per eligible frame; frames the trajectory cannot interpolate are
+  // left out of the gate entirely (assemble_samples would drop them anyway).
+  std::vector<std::size_t> gated_eligible;
+  std::vector<core::calib::Mat4> gated_poses;
+  gated_eligible.reserve(eligible.size());
+  gated_poses.reserve(eligible.size());
+  for (const auto idx : eligible) {
+    const auto pose = interpolate_trajectory(poses, stamps[idx]);
+    if (pose.has_value()) {
+      gated_eligible.push_back(idx);
+      gated_poses.push_back(*pose);
+    }
+  }
+
+  const auto intervals =
+    pose_gate_intervals(gated_poses, args.keyframe_dist, args.keyframe_rot_deg * M_PI / 180.0);
+  if (intervals.size() < 3) {
+    return std::nullopt;
+  }
+
+  GatedPicks out;
+  out.interval_count = intervals.size();
+  const auto chosen = evenly_spaced(intervals.size(), static_cast<std::size_t>(args.samples));
+  for (std::size_t g = 0; g < chosen.size(); ++g) {
+    const auto [begin, end] = intervals[chosen[g]];
+    for (const auto member : evenly_spaced(end - begin, kMaxScoredPerInterval)) {
+      out.picks.push_back(gated_eligible[begin + member]);
+      out.group_of.push_back(g);
+    }
+  }
+  return out;
+}
+
 // ---- phase 7: decode the picked samples ------------------------------------
 
 struct DecodedSample
 {
   core::calib::GrayImage gray;
   std::int64_t stamp_ns = 0;
+  // Index into the picks list this sample decoded from, so the keyframe-gated
+  // path can map a decoded frame back to its gate interval even when other
+  // picks were dropped by decode failures.
+  std::size_t pick_ordinal = 0;
 };
 
 std::optional<std::vector<DecodedSample>> decode_picked_samples(
@@ -426,6 +523,7 @@ std::optional<std::vector<DecodedSample>> decode_picked_samples(
       sample.gray = core::calib::gray_from_bgr24(
         packed.raster->bgr, packed.raster->width, packed.raster->height);
       sample.stamp_ns = stamps[idx];
+      sample.pick_ordinal = pick_i;
       decoded.push_back(std::move(sample));
       ++idx;
       ++pick_i;
@@ -435,6 +533,29 @@ std::optional<std::vector<DecodedSample>> decode_picked_samples(
     return std::nullopt;
   }
   return decoded;
+}
+
+// Reduce decoded candidates to one per gate interval: the sharpest member
+// (gray_sharpness), matching `map slam --color-keyframe-blur`'s policy that a
+// motion-blurred frame is worse than a redundant one.
+std::vector<DecodedSample> sharpest_per_group(
+  std::vector<DecodedSample> && decoded, std::span<const std::size_t> group_of)
+{
+  std::map<std::size_t, std::pair<double, std::size_t>> best;  // group -> (score, decoded idx)
+  for (std::size_t i = 0; i < decoded.size(); ++i) {
+    const double score = gray_sharpness(decoded[i].gray);
+    const std::size_t group = group_of[decoded[i].pick_ordinal];
+    const auto it = best.find(group);
+    if (it == best.end() || score > it->second.first) {
+      best[group] = {score, i};
+    }
+  }
+  std::vector<DecodedSample> reduced;
+  reduced.reserve(best.size());
+  for (auto & entry : best) {
+    reduced.push_back(std::move(decoded[entry.second.second]));
+  }
+  return reduced;
 }
 
 // ---- phase 8: pre-cull candidates + assemble CalibSamples ------------------
@@ -588,9 +709,31 @@ int run_tf_static_calibrate(const TfStaticCalibrateArgs & args)
   if (!stamps.has_value()) {
     return 1;
   }
-  const auto picks = pick_sample_indices(
-    *stamps, poses->front().timestamp_ns, poses->back().timestamp_ns, args.samples,
-    kSampleMarginNs);
+  std::vector<std::size_t> picks;
+  std::vector<std::size_t> group_of;  // gated mode only; parallel to picks
+  bool gated = args.keyframe_dist > 0.0 || args.keyframe_rot_deg > 0.0;
+  if (gated) {
+    const auto gp = keyframe_gated_picks(args, *stamps, *poses, kSampleMarginNs);
+    if (gp.has_value()) {
+      picks = gp->picks;
+      group_of = gp->group_of;
+      BAGWIZ_LOG_INFO(
+        kLogger,
+        "Keyframe gate: %zu interval(s); scoring %zu candidate frame(s) for up to %d sample(s).",
+        gp->interval_count, picks.size(), args.samples);
+    } else {
+      gated = false;
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "Keyframe gate found fewer than 3 intervals (near-stationary trajectory); falling back "
+        "to even time spacing.");
+    }
+  }
+  if (!gated) {
+    picks = pick_sample_indices(
+      *stamps, poses->front().timestamp_ns, poses->back().timestamp_ns, args.samples,
+      kSampleMarginNs);
+  }
   if (picks.size() < 3) {
     BAGWIZ_LOG_ERROR(
       kLogger,
@@ -603,10 +746,14 @@ int run_tf_static_calibrate(const TfStaticCalibrateArgs & args)
   }
 
   // 7. Decode only the picked messages + build the camera model from the
-  // first one.
-  const auto decoded = decode_picked_samples(args, picks, *stamps);
+  // first one. In gated mode every interval's candidates are decoded and the
+  // sharpest one per interval survives.
+  auto decoded = decode_picked_samples(args, picks, *stamps);
   if (!decoded.has_value()) {
     return 1;  // decode_picked_samples already logged the specific read error.
+  }
+  if (gated) {
+    *decoded = sharpest_per_group(std::move(*decoded), group_of);
   }
   if (decoded->size() < 3) {
     BAGWIZ_LOG_ERROR(

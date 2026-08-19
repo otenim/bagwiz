@@ -939,13 +939,15 @@ TEST(FlagCompletionTest, TfStaticCalcDashListsStaticFlags)
 // `tf static calibrate -` surfaces every one of the action's own flags
 // alongside the implicit help flags, sorted. None of its value slots (map,
 // trajectory, frames, or numeric parameters) carries bagwiz candidates, so
-// this is the whole story for `calibrate` completion — unlike `calc`/`drop`,
-// its `--parent`/`--child`/`--traj-frame` frame values are not offered.
+// value completion is covered separately: `--parent`/`--child`/`--traj-frame`
+// complete static frame ids and `-t`/`--cam-info` complete typed topics (see
+// the TfStaticCalibrate*Flag* CompletionTest cases).
 TEST(FlagCompletionTest, TfStaticCalibrateDashListsCalibrateFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "calibrate", "-"}),
-    "--cam-info\n--child\n--fix\n--help\n--input\n--json\n--map\n--max-depth\n--max-rot\n"
+    "--cam-info\n--child\n--fix\n--help\n--input\n--json\n--keyframe-dist\n--keyframe-rot\n"
+    "--map\n--max-depth\n--max-rot\n"
     "--max-trans\n--min-depth\n--nid-bins\n--output\n--overwrite\n--parent\n--samples\n--topic\n"
     "--traj\n--traj-frame\n-h\n-i\n-o\n-t\n-w\n");
 }

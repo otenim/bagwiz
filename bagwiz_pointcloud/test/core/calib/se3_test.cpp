@@ -56,3 +56,19 @@ TEST(Se3Test, RigidInverseUndoesTransform)
     EXPECT_NEAR(id[i], expect[i], 1e-12) << "index " << i;
   }
 }
+
+TEST(Se3Test, RotationAngleBetweenMeasuresRelativeRotation)
+{
+  const calib::Mat4 a = calib::make_transform({1, 2, 3}, {0, 0, 0.3});
+  const calib::Mat4 b = calib::make_transform({-4, 0, 7}, {0, 0, 0.5});
+  // Translation must not contribute; only the 0.2 rad relative yaw does.
+  EXPECT_NEAR(calib::rotation_angle_between(a, b), 0.2, 1e-12);
+  EXPECT_NEAR(calib::rotation_angle_between(a, a), 0.0, 1e-12);
+}
+
+TEST(Se3Test, RotationAngleBetweenIsAxisAgnostic)
+{
+  const calib::Mat4 a = calib::identity_mat4();
+  const calib::Mat4 b = calib::make_transform({0, 0, 0}, {M_PI / 2, 0, 0});
+  EXPECT_NEAR(calib::rotation_angle_between(a, b), M_PI / 2, 1e-12);
+}

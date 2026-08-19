@@ -265,3 +265,79 @@ TEST(TfStaticCalibrateCommonTest, RenderCalibrateJsonEscapesFrameNames)
   const std::string json = commands::render_calibrate_json(args, sample_result(), kEdgeBefore);
   EXPECT_NE(json.find("\"parent\": \"ca\\\"b\\\\in\""), std::string::npos) << json;
 }
+
+TEST(TfStaticCalibrateCommonTest, PoseGateSplitsOnTranslation)
+{
+  namespace calib = bagwiz::core::calib;
+  std::vector<calib::Mat4> poses;
+  for (int i = 0; i < 5; ++i) {
+    poses.push_back(calib::make_transform({0.4 * i, 0.0, 0.0}, {0, 0, 0}));
+  }
+  // Anchors at x=0.0 then x=1.2 (the first pose >= 1.0 m from its anchor).
+  const auto intervals = commands::pose_gate_intervals(poses, 1.0, 0.0);
+  ASSERT_EQ(intervals.size(), 2U);
+  EXPECT_EQ(intervals[0], (std::pair<std::size_t, std::size_t>{0, 3}));
+  EXPECT_EQ(intervals[1], (std::pair<std::size_t, std::size_t>{3, 5}));
+}
+
+TEST(TfStaticCalibrateCommonTest, PoseGateSplitsOnRotation)
+{
+  namespace calib = bagwiz::core::calib;
+  std::vector<calib::Mat4> poses;
+  for (int i = 0; i < 3; ++i) {
+    poses.push_back(calib::make_transform({0, 0, 0}, {0, 0, 0.06 * i}));
+  }
+  // Translation half disabled (<= 0); 0.12 rad >= 0.1 opens the second bucket.
+  const auto intervals = commands::pose_gate_intervals(poses, 0.0, 0.1);
+  ASSERT_EQ(intervals.size(), 2U);
+  EXPECT_EQ(intervals[0], (std::pair<std::size_t, std::size_t>{0, 2}));
+  EXPECT_EQ(intervals[1], (std::pair<std::size_t, std::size_t>{2, 3}));
+}
+
+TEST(TfStaticCalibrateCommonTest, PoseGateStationaryYieldsOneInterval)
+{
+  namespace calib = bagwiz::core::calib;
+  const std::vector<calib::Mat4> poses(6, calib::identity_mat4());
+  const auto intervals = commands::pose_gate_intervals(poses, 1.0, 0.1);
+  ASSERT_EQ(intervals.size(), 1U);
+  EXPECT_EQ(intervals[0], (std::pair<std::size_t, std::size_t>{0, 6}));
+  EXPECT_TRUE(commands::pose_gate_intervals({}, 1.0, 0.1).empty());
+}
+
+TEST(TfStaticCalibrateCommonTest, GraySharpnessPrefersEdgesOverUniform)
+{
+  namespace calib = bagwiz::core::calib;
+  calib::GrayImage uniform;
+  uniform.width = 8;
+  uniform.height = 8;
+  uniform.gray.assign(64, 128);
+  // Width-2 vertical stripes, not a 1-px checkerboard: a period-2 pattern is
+  // invisible to central differences (gray[x+1] == gray[x-1]).
+  calib::GrayImage stripes = uniform;
+  for (std::uint32_t y = 0; y < 8; ++y) {
+    for (std::uint32_t x = 0; x < 8; ++x) {
+      stripes.gray[y * 8 + x] = ((x / 2) % 2 == 0) ? 0 : 255;
+    }
+  }
+  EXPECT_EQ(commands::gray_sharpness(uniform), 0.0);
+  EXPECT_GT(commands::gray_sharpness(stripes), 100.0);
+  calib::GrayImage degenerate;  // no interior pixels
+  degenerate.width = 2;
+  degenerate.height = 2;
+  degenerate.gray.assign(4, 0);
+  EXPECT_EQ(commands::gray_sharpness(degenerate), 0.0);
+}
+
+TEST(TfStaticCalibrateCommonTest, ValidateRejectsNegativeKeyframeThresholds)
+{
+  auto args = valid_args();
+  args.keyframe_dist = -0.1;
+  EXPECT_NE(commands::validate_calibrate_flags(args), "");
+  args = valid_args();
+  args.keyframe_rot_deg = -1.0;
+  EXPECT_NE(commands::validate_calibrate_flags(args), "");
+  args = valid_args();
+  args.keyframe_dist = 1.0;
+  args.keyframe_rot_deg = 10.0;
+  EXPECT_EQ(commands::validate_calibrate_flags(args), "");
+}
