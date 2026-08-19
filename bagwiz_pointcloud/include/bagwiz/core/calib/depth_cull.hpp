@@ -18,6 +18,7 @@ namespace bagwiz::core::calib
 
 // Keep flags (1 = keep) parallel to the inputs. u/v are pixel coordinates
 // already verified in [0,width) x [0,height); depth is meters.
+// Preconditions: u.size() == v.size() == depth.size(); cell_px > 0.
 [[nodiscard]] std::vector<std::uint8_t> depth_cull_keep(
   std::span<const float> u, std::span<const float> v, std::span<const float> depth,
   std::uint32_t width, std::uint32_t height, std::uint32_t cell_px, float margin_m);
