@@ -370,7 +370,7 @@ private:
   {
     std::filesystem::path input_path;
     std::filesystem::path traj_path;
-    std::string topic;
+    std::string as_topic;
     std::optional<std::filesystem::path> output_path;
     std::string format;
     std::string msg_type = kJoinMsgTypeTf;
@@ -806,7 +806,7 @@ private:
       ->required()
       ->check(CLI::ExistingFile);
     add_topic_option(
-      *sub, "-t,--topic", join_args_.topic,
+      *sub, "--as", join_args_.as_topic,
       "Topic name to embed the trajectory under. When the topic already exists in <input>, "
       "pass --force to drop its existing messages and replace them.",
       TopicSlotSpec{
@@ -824,7 +824,7 @@ private:
     sub
       ->add_option(
         "-m,--msg-type", join_args_.msg_type,
-        "ROS message type to publish under <topic>. Only 'tf' (tf2_msgs/msg/TFMessage) is "
+        "ROS message type to publish under the --as topic. Only 'tf' (tf2_msgs/msg/TFMessage) is "
         "supported today.")
       ->check(CLI::IsMember({kJoinMsgTypeTf}));
     sub->add_option(
@@ -838,7 +838,7 @@ private:
     sub
       ->add_flag(
         "--force", join_args_.force,
-        "Overwrite when <topic> already carries messages in <input>; otherwise the command "
+        "Overwrite when the --as topic already carries messages in <input>; otherwise the command "
         "aborts.")
       ->default_val(false);
     sub->add_flag(
@@ -913,13 +913,13 @@ private:
     const std::vector<io::TopicInfo> input_topics_pre(
       reader->topics().begin(), reader->topics().end());
 
-    // 2. Count existing messages on <topic> and decide the conflict policy.
-    const auto existing_count = count_join_topic_messages(*reader, args.topic, args.input_path);
+    // 2. Count existing messages on the --as topic and decide the conflict policy.
+    const auto existing_count = count_join_topic_messages(*reader, args.as_topic, args.input_path);
     if (!existing_count.has_value()) {
       return 1;
     }
     const auto decision = core::decide_topic_write(
-      input_topics_pre, args.topic, kExpectedType, *existing_count, args.force);
+      input_topics_pre, args.as_topic, kExpectedType, *existing_count, args.force);
     if (!join_topic_decision_proceeds(decision)) {
       return 1;
     }
@@ -935,13 +935,13 @@ private:
     reader->populate_schemas();
     const std::vector<io::TopicInfo> input_topics(reader->topics().begin(), reader->topics().end());
 
-    // 4. Declare the input topics (plus <topic> itself when it is new).
-    if (!declare_join_pass_topics(*writer, input_topics, decision.action, args.topic)) {
+    // 4. Declare the input topics (plus the --as topic itself when it is new).
+    if (!declare_join_pass_topics(*writer, input_topics, decision.action, args.as_topic)) {
       return 1;
     }
 
     // 5. Serialize the trajectory up front so the copy can interleave it.
-    auto injected_messages = build_join_tf_messages(args.topic, transforms, stamps_ns);
+    auto injected_messages = build_join_tf_messages(args.as_topic, transforms, stamps_ns);
     if (!injected_messages.has_value()) {
       return 1;
     }
@@ -951,7 +951,7 @@ private:
     //    rather than after every copied message.
     core::InjectingWriter ordered(*writer, std::move(*injected_messages));
     const auto counts =
-      copy_join_pass_messages(*reader, ordered, decision.action, args.topic, args.input_path);
+      copy_join_pass_messages(*reader, ordered, decision.action, args.as_topic, args.input_path);
     if (!counts.has_value()) {
       return 1;
     }
@@ -967,7 +967,7 @@ private:
       kLogger,
       "traj join: copied %" PRIu64 " message(s), suppressed %" PRIu64 ", injected %" PRIu64
       " TFMessage(s) on '%s'.",
-      counts->copied, counts->suppressed, injected, args.topic.c_str());
+      counts->copied, counts->suppressed, injected, args.as_topic.c_str());
     return 0;
   }
 

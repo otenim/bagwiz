@@ -26,7 +26,7 @@ undistort still sees correct absolute times.
 ### Usage
 
 ```text
-bagwiz pcd concat -i <input> -t <output_topic> --pcd <topic>... [OPTIONS]
+bagwiz pcd concat -i <input> --as <output_topic> --pcd <topic>... [OPTIONS]
 ```
 
 ### Examples
@@ -34,7 +34,7 @@ bagwiz pcd concat -i <input> -t <output_topic> --pcd <topic>... [OPTIONS]
 ```bash
 # Concatenate four Seyond LiDARs (front/rear/left/right) into base_link,
 # with the left/right sensors triggering ~50 ms early.
-bagwiz pcd concat -i drive.mcap -t /sensing/lidar/concatenated/points \
+bagwiz pcd concat -i drive.mcap --as /sensing/lidar/concatenated/points \
   --frame base_link \
   --pcd /sensing/lidar/front/seyond_points /sensing/lidar/rear/seyond_points \
         /sensing/lidar/left/seyond_points  /sensing/lidar/right/seyond_points \
@@ -48,7 +48,7 @@ bagwiz pcd concat -i drive.mcap -t /sensing/lidar/concatenated/points \
 # the same 50 ms offset. The reference topic is now whichever seyond topic
 # sorts first by name, rather than an explicit choice — see
 # "Reference topic and --pcd order" below.
-bagwiz pcd concat -i drive.mcap -t /sensing/lidar/concatenated/points \
+bagwiz pcd concat -i drive.mcap --as /sensing/lidar/concatenated/points \
   --frame base_link \
   --pcd '/sensing/lidar/*/seyond_points' \
   --stamp-offset '/sensing/lidar/*/seyond_points=50ms' \
@@ -60,7 +60,7 @@ bagwiz pcd concat -i drive.mcap -t /sensing/lidar/concatenated/points \
 | Flag                           | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <input>`        | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `-t`, `--topic <output_topic>` | **Required.** Name of the new concatenated PointCloud2 topic. A literal topic name, not a glob — it names the topic being created.                                                                                                                                                                                                                                                                                                                                                                       |
+| `--as <output_topic>`          | **Required.** Name of the new concatenated PointCloud2 topic. A literal topic name, not a glob — it names the topic being created. Long-form only.                                                                                                                                                                                                                                                                                                                                                       |
 | `--pcd <t...>`                 | **Required.** PointCloud2 topic selectors to concatenate (2 or more resolved topics), a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Concatenation order follows this list, and a glob contributes its matches in topic-name order. The first topic in the resolved list is the reference — see [Reference topic and `--pcd` order](#reference-topic-and---pcd-order).                                                                                                  |
 | `--frame <frame>`              | Target frame all clouds are transformed into. Default: `base_link`. Required when the default is not reachable from every `--pcd` frame via the bag's static TF.                                                                                                                                                                                                                                                                                                                                         |
 | `-o`, `--output <path>`        | Output bag. When omitted, the input bag is rewritten in place (atomic tmp swap).                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -186,7 +186,7 @@ bagwiz pcd undistort -i drive.mcap --twist /vehicle/status/velocity_status \
 # Composition workflow: derive a trajectory with SLAM, embed it as a topic,
 # then deskew against it.
 bagwiz map slam -i drive.mcap --pcd /points -o out/                 # -> out/traj.tum
-bagwiz traj join -i drive.mcap --traj out/traj.tum -t /slam/tf --ref map --of base_link
+bagwiz traj join -i drive.mcap --traj out/traj.tum --as /slam/tf --ref map --of base_link
 bagwiz pcd undistort -i drive.mcap --pose /slam/tf --pcd /points -o undistorted.mcap
 
 # Deskew every lidar topic under /sensing/lidar via a glob (quoted so the

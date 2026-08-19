@@ -284,7 +284,7 @@ the message's receive time and the in-message `header.stamp`.
 ### Usage
 
 ```text
-bagwiz traj join -i <input> --traj <traj_file> -t <topic> [OPTIONS]
+bagwiz traj join -i <input> --traj <traj_file> --as <topic> [OPTIONS]
 ```
 
 ### Examples
@@ -292,32 +292,32 @@ bagwiz traj join -i <input> --traj <traj_file> -t <topic> [OPTIONS]
 ```bash
 # Replace input.mcap in place: embed traj.tum on /trajectory/tf
 # (map → base_link).
-bagwiz traj join -i input.mcap --traj traj.tum -t /trajectory/tf \
+bagwiz traj join -i input.mcap --traj traj.tum --as /trajectory/tf \
   --ref map --of base_link
 
 # Same content, but write to a new bag instead of replacing the input.
-bagwiz traj join -i input.mcap --traj traj.tum -t /trajectory/tf \
+bagwiz traj join -i input.mcap --traj traj.tum --as /trajectory/tf \
   --ref map --of base_link -o output.mcap
 
 # Force overwrite when /trajectory/tf already carries messages.
-bagwiz traj join -i input.mcap --traj traj.tum -t /trajectory/tf \
+bagwiz traj join -i input.mcap --traj traj.tum --as /trajectory/tf \
   --ref map --of base_link --force
 ```
 
 ### Options
 
-| Flag                    | Description                                                                                                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                                             |
-| `--traj <traj_file>`    | **Required.** Trajectory file. Format is selected by `--format`, or inferred from the file extension. Long-form only.                                                                             |
-| `-t`, `--topic <topic>` | **Required.** Topic name to publish the trajectory under. A literal topic name, not a glob — it names the topic the trajectory is embedded under. May already exist in `<input>` (see `--force`). |
-| `-o`, `--output <OUT>`  | Write the result to a new bag at `<OUT>`. When omitted, `<input>` is replaced in place via a sibling tmp directory.                                                                               |
-| `--format <F>`          | Trajectory format id. When omitted, inferred from the trajectory file extension. `--format` always wins over the extension when both are present. Long-form only.                                 |
-| `-m`, `--msg-type <T>`  | ROS message type to publish under `<topic>`. Currently only `tf` (= `tf2_msgs/msg/TFMessage`) is accepted. Default: `tf`.                                                                         |
-| `--ref <FRAME>`         | **Required** for `--msg-type tf`. Parent frame id, written to `TransformStamped.header.frame_id`. Long-form only.                                                                                 |
-| `--of <FRAME>`          | **Required** for `--msg-type tf`. Child frame id, written to `TransformStamped.child_frame_id`. Long-form only.                                                                                   |
-| `--force`               | Allow overwriting an existing `<topic>` in `<input>`: existing messages are dropped from the output and replaced with the trajectory. Long-form only.                                             |
-| `-w`, `--overwrite`     | Replace `-o`/`--output` if it already exists. Has no effect in in-place mode (when `-o` is omitted, `<input>` is replaced atomically by design).                                                  |
+| Flag                    | Description                                                                                                                                                                                                       |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                                                             |
+| `--traj <traj_file>`    | **Required.** Trajectory file. Format is selected by `--format`, or inferred from the file extension. Long-form only.                                                                                             |
+| `--as <topic>`          | **Required.** Topic name to publish the trajectory under. A literal topic name, not a glob — it names the topic the trajectory is embedded under. May already exist in `<input>` (see `--force`). Long-form only. |
+| `-o`, `--output <OUT>`  | Write the result to a new bag at `<OUT>`. When omitted, `<input>` is replaced in place via a sibling tmp directory.                                                                                               |
+| `--format <F>`          | Trajectory format id. When omitted, inferred from the trajectory file extension. `--format` always wins over the extension when both are present. Long-form only.                                                 |
+| `-m`, `--msg-type <T>`  | ROS message type to publish under `<topic>`. Currently only `tf` (= `tf2_msgs/msg/TFMessage`) is accepted. Default: `tf`.                                                                                         |
+| `--ref <FRAME>`         | **Required** for `--msg-type tf`. Parent frame id, written to `TransformStamped.header.frame_id`. Long-form only.                                                                                                 |
+| `--of <FRAME>`          | **Required** for `--msg-type tf`. Child frame id, written to `TransformStamped.child_frame_id`. Long-form only.                                                                                                   |
+| `--force`               | Allow overwriting an existing `<topic>` in `<input>`: existing messages are dropped from the output and replaced with the trajectory. Long-form only.                                                             |
+| `-w`, `--overwrite`     | Replace `-o`/`--output` if it already exists. Has no effect in in-place mode (when `-o` is omitted, `<input>` is replaced atomically by design).                                                                  |
 
 ### From rows to messages
 

@@ -16,12 +16,12 @@
 namespace bagwiz::commands
 {
 
-// The topic `tf static join` writes when -t/--topic is omitted. It is the name a
+// The topic `tf static join` writes when --as is omitted. It is the name a
 // static transform broadcaster publishes under, and the one every bagwiz static-TF
 // reader recognises.
 inline constexpr const char * kDefaultStaticTfTopic = "/tf_static";
 
-// Implements `bagwiz tf static join -i <input> --yaml <file> [-t <topic>]
+// Implements `bagwiz tf static join -i <input> --yaml <file> [--as <topic>]
 // [-o <output>] [--force] [-w|--overwrite]`: read a static-transform publisher
 // config — the nested parent -> child -> {x,y,z,roll,pitch,yaw} YAML that
 // `bagwiz tf static dump` writes, with rotations as RPY in radians — and embed it

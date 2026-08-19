@@ -175,15 +175,15 @@ source ~/.config/fish/completions/bagwiz.fish
     (long-form only — neither has a short form), `--output`/`-o`, `--force` and
     `-w`/`--overwrite`;
     `tf static dump -<TAB>` surfaces `--input`/`-i`, `--output`/`-o` and
-    `-w`/`--overwrite`; `tf static join -<TAB>` adds `--yaml`, `--topic`/`-t` and
-    `--force` to that set (its `--yaml` value is a file path and `--topic` names a
+    `-w`/`--overwrite`; `tf static join -<TAB>` adds `--yaml`, `--as` and
+    `--force` to that set (its `--yaml` value is a file path and `--as` names a
     topic being created, so neither carries bagwiz candidates — both fall through
     to the shell); `tf static drop -<TAB>` surfaces `--input`/`-i`,
     `--output`/`-o`, `-w`/`--overwrite` and `--frame` (its `--frame` completes
     static frame ids — see the sections below); `tf static update -<TAB>` surfaces
-    the `join` set minus `--force` (its `--yaml` likewise falls through to the
-    shell, while `--topic`/`-t` completes static TF topics — see the sections
-    below).
+    the `join` set with `--topic`/`-t` in place of `--as` and without `--force`
+    (its `--yaml` likewise falls through to the shell, while `--topic`/`-t`
+    completes static TF topics — see the sections below).
     `calib` is a command group; `calib <TAB>` completes its subcommand
     (`cam-lidar`) and `calib -<TAB>` lists just the help flags; `calib cam-lidar
 -<TAB>` surfaces its full flag set (see [`calib cam-lidar`](calib.md)) — its
@@ -277,7 +277,8 @@ name only — it offers plain topic names either way, typed as-is.
     `geometry_msgs/msg/PoseStamped`,
     `geometry_msgs/msg/PoseWithCovarianceStamped`, `nav_msgs/msg/Odometry`);
     topics of any other type are omitted
-  - `bagwiz traj join -i <input> --traj <traj_file> -t <topic>`
+  - `bagwiz traj join -i <input> --traj <traj_file> --as <topic>` — `--as` names a
+    new topic, so it has nothing to suggest
   - `bagwiz topic rename -i <input> --src <src_topic> --dst <dst_topic>` — every topic in the bag
     at the `<src_topic>` slot only; `<dst_topic>` is a new name with nothing to suggest
   - `bagwiz generate video -i <input> -t <image_topic> -o <output>` — restricted to the image

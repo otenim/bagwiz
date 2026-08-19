@@ -470,7 +470,7 @@ private:
   {
     std::filesystem::path input_path;
     std::filesystem::path yaml_path;
-    std::string topic = kDefaultStaticTfTopic;
+    std::string as_topic = kDefaultStaticTfTopic;
     std::optional<std::filesystem::path> output_path;
     bool force = false;
     bool overwrite = false;
@@ -734,7 +734,7 @@ private:
       ->required()
       ->check(CLI::ExistingFile);
     add_topic_option(
-      *sub, "-t,--topic", static_join_args_.topic,
+      *sub, "--as", static_join_args_.as_topic,
       "Topic to embed the transforms under. When it already carries messages, pass --force to "
       "replace them.",
       TopicSlotSpec{
@@ -746,7 +746,8 @@ private:
       "Write the result to this new bag instead of rewriting <input> in place.");
     sub->add_flag(
       "--force", static_join_args_.force,
-      "Replace <topic>'s existing messages in <input>; otherwise a populated <topic> aborts.");
+      "Replace the --as topic's existing messages in <input>; otherwise a populated --as topic "
+      "aborts.");
     sub->add_flag(
       "-w,--overwrite", static_join_args_.overwrite,
       "Replace an existing -o/--output path. Has no effect in in-place mode.");
@@ -948,7 +949,7 @@ private:
   {
     const auto & args = static_join_args_;
     return run_tf_static_join(
-      args.input_path, args.yaml_path, args.topic, args.output_path, args.force, args.overwrite);
+      args.input_path, args.yaml_path, args.as_topic, args.output_path, args.force, args.overwrite);
   }
 };
 

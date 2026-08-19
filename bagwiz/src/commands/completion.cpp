@@ -642,10 +642,10 @@ const TopicSlot * slot_for_cursor(const CLI::App & app, const CompletionRequest 
 // value, so a command-specific handler (or nothing, when none exists) takes
 // over instead of try_topic_completion:
 //  - a kLiteral, non-paired slot with a reject_reason exists to NAME
-//    something new (an output topic, a rename destination, an embedding
-//    target) rather than to SELECT something already in the bag — every
-//    such slot sets reject_reason to explain why a glob makes no sense there
-//    (see TopicSlotSpec::reject_reason). `tf static update -t` is one: its
+//    something new (an output topic via --as, a rename destination, an
+//    embedding target) rather than to SELECT something already in the bag —
+//    every such slot sets reject_reason to explain why a glob makes no sense
+//    there (see TopicSlotSpec::reject_reason). `tf static update -t` is one: its
 //    completion (the bag's static TF topics) is command-specific, a
 //    distinction the registry does not encode.
 //  - a scoped slot (TopicSlotSpec::scope) resolves against another option's
@@ -779,8 +779,8 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
     if (mode == "join") {
       return matching(
         with_help(
-          {"--force", "--format", "--input", "--msg-type", "--of", "--output", "--overwrite",
-           "--ref", "--topic", "--traj", "-i", "-m", "-o", "-t", "-w"}),
+          {"--as", "--force", "--format", "--input", "--msg-type", "--of", "--output",
+           "--overwrite", "--ref", "--traj", "-i", "-m", "-o", "-w"}),
         current);
     }
   }
@@ -945,8 +945,7 @@ std::vector<std::string> complete_tf_static(
   if (action == "join") {
     return complete_tf_static_flags_only(
       request, current,
-      {"--force", "--input", "--output", "--overwrite", "--topic", "--yaml", "-i", "-o", "-t",
-       "-w"});
+      {"--as", "--force", "--input", "--output", "--overwrite", "--yaml", "-i", "-o", "-w"});
   }
   if (action == "update") {
     return complete_tf_static_update(request, current);
@@ -1417,7 +1416,7 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 // path that falls through to the shell's file completion. Past the subcommand we
 // surface each subcommand's own flags for any `-` word.
 //
-// For `concat`, `-t`/`--topic` names a new topic to create — a declared
+// For `concat`, `--as` names a new topic to create — a declared
 // literal slot with a reject_reason, so try_topic_completion leaves it alone
 // and it offers nothing here either. `--pcd` is a declared topic slot
 // (PointCloud2 topics), so try_topic_completion handles its values. Only
@@ -1431,7 +1430,7 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 // topics. `--frame`, `--tolerance`, and `-o`/`--output` take free-form /
 // numeric / path values, so they get no value completion.
 //
-//   concat: `pcd`(0) `concat`(1) -i|--input <bag> -t|--topic <output_topic>
+//   concat: `pcd`(0) `concat`(1) -i|--input <bag> --as <output_topic>
 //           --pcd <t...> [--frame <f>] [--tolerance <val>]
 //           [--stamp-offset <t=v>...]... [-o <out>] [--drop-inputs] [--force]
 //           [-j|--threads <N>] [-w|--overwrite]
@@ -1465,8 +1464,8 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
     if (sub == "concat") {
       return matching(
         with_help(
-          {"--drop-inputs", "--force", "--frame", "--input", "--output", "--overwrite", "--pcd",
-           "--stamp-offset", "--threads", "--tolerance", "--topic", "-i", "-j", "-o", "-t", "-w"}),
+          {"--as", "--drop-inputs", "--force", "--frame", "--input", "--output", "--overwrite",
+           "--pcd", "--stamp-offset", "--threads", "--tolerance", "-i", "-j", "-o", "-w"}),
         current);
     }
     if (sub == "undistort") {

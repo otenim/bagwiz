@@ -601,7 +601,7 @@ individual edges of a tree the bag already carries, use
 ### Usage
 
 ```text
-bagwiz tf static join -i <input> --yaml <file> [-t <topic>] [-o <output>] [--force] [-w|--overwrite]
+bagwiz tf static join -i <input> --yaml <file> [--as <topic>] [-o <output>] [--force] [-w|--overwrite]
 ```
 
 ### Examples
@@ -617,7 +617,7 @@ bagwiz tf static join -i capture.mcap --yaml multi_tf_static.yaml -o with_tf.mca
 bagwiz tf static join -i capture.mcap --yaml multi_tf_static.yaml --force
 
 # Embed under a different static topic.
-bagwiz tf static join -i capture.mcap --yaml sensing.yaml -t /sensing/tf_static
+bagwiz tf static join -i capture.mcap --yaml sensing.yaml --as /sensing/tf_static
 
 # Round trip: recover a rig's config from one bag, put it into another.
 bagwiz tf static dump -i donor.mcap -o rig.yaml
@@ -626,14 +626,14 @@ bagwiz tf static join -i target.mcap --yaml rig.yaml
 
 ### Options
 
-| Flag                    | Description                                                                                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                |
-| `--yaml <file>`         | **Required.** Static TF YAML to embed, in the schema `tf static dump` writes. Long-form only.                                                        |
-| `-t`, `--topic <topic>` | Topic to embed the transforms under. A literal topic name, not a glob — it names the topic the transforms are embedded under. Default: `/tf_static`. |
-| `-o`, `--output <OUT>`  | Write the result to this new bag instead of rewriting `<input>` in place.                                                                            |
-| `--force`               | Replace `<topic>`'s existing messages in `<input>`; otherwise a populated `<topic>` aborts. Long-form only.                                          |
-| `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path. No effect in in-place mode.                                                                                |
+| Flag                    | Description                                                                                                                                                          |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                |
+| `--yaml <file>`         | **Required.** Static TF YAML to embed, in the schema `tf static dump` writes. Long-form only.                                                                        |
+| `--as <topic>`          | Topic to embed the transforms under. A literal topic name, not a glob — it names the topic the transforms are embedded under. Default: `/tf_static`. Long-form only. |
+| `-o`, `--output <OUT>`  | Write the result to this new bag instead of rewriting `<input>` in place.                                                                                            |
+| `--force`               | Replace `<topic>`'s existing messages in `<input>`; otherwise a populated `<topic>` aborts. Long-form only.                                                          |
+| `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path. No effect in in-place mode.                                                                                                |
 
 ### Rotation convention
 
@@ -765,9 +765,9 @@ rather than [`static cp`](#bagwiz-tf-static-cp)'s combined flag:
 
 ### Topic
 
-`-t`/`--topic` defaults to `/tf_static`, the name a static transform broadcaster
+`--as` defaults to `/tf_static`, the name a static transform broadcaster
 publishes under. The YAML carries no topic name, so a default is needed; pass
-`-t` to write e.g. `/sensing/tf_static` instead. A name whose final path
+`--as` to write e.g. `/sensing/tf_static` instead. A name whose final path
 segment is not `tf_static` is accepted but warns, because every bagwiz
 static-TF reader (`tf static dump`, `tf static calc`, `tf tree`'s static
 coloring, `tf static cp`) applies the [static TF definition](#bagwiz-tf) and
