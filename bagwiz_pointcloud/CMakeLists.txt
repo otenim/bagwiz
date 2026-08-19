@@ -39,6 +39,7 @@ find_package(tf2 REQUIRED)
 find_package(OpenCV REQUIRED)
 
 add_library(bagwiz_pointcloud
+  src/core/calib/se3.cpp
   src/core/pointcloud/cloud_concat.cpp
   src/core/pointcloud/cloud_transform.cpp
   src/core/pointcloud/color_mapper.cpp
@@ -168,6 +169,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_pointcloud_point_cloud_io_test test/core/pointcloud/point_cloud_io_test.cpp)
   target_link_libraries(bagwiz_pointcloud_point_cloud_io_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_se3_test test/core/calib/se3_test.cpp)
+  target_link_libraries(bagwiz_calib_se3_test bagwiz_pointcloud)
 endif()
 
 ament_package()
