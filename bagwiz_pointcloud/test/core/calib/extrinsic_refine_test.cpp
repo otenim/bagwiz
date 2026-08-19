@@ -8,6 +8,7 @@
 
 #include "bagwiz/core/calib/extrinsic_refine.hpp"
 
+#include "bagwiz/core/calib/observability.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 #include "correlated_scene.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
@@ -77,7 +78,8 @@ TEST(ExtrinsicRefineTest, FlatSceneReportsDegenerateVerticalAxis)
   // nothing the histogram can see, so y must be classified degenerate while
   // x stays observable.
   const auto cam = test_camera();
-  const auto params = test_params();
+  auto params = test_params();
+  params.auto_fix = false;  // pin the classify-only path; the auto-hold tests are below
   const std::vector<calib::CalibSample> samples{make_correlated_sample(cam, params.nid.bins)};
   calib::EdgeChain chain;
   chain.t_trajframe_parent = calib::identity_mat4();
@@ -86,6 +88,47 @@ TEST(ExtrinsicRefineTest, FlatSceneReportsDegenerateVerticalAxis)
   const auto result = calib::refine_extrinsic(samples, cam, chain, params);
   ASSERT_TRUE(result.ok) << result.error;
   EXPECT_EQ(result.observability[1], calib::AxisObservability::kDegenerate);
+  EXPECT_NE(result.observability[0], calib::AxisObservability::kDegenerate);
+  EXPECT_TRUE(result.auto_held.empty());
+}
+
+TEST(ExtrinsicRefineTest, AutoFixHoldsDegenerateAxisAtBagValue)
+{
+  // Same flat scene, default --fix auto behavior: the y axis the histogram
+  // cannot see must be held at the bag value (zero delta, exactly), reported
+  // as a held direction dominated by e_y, while the observable x axis is left
+  // free to move.
+  const auto cam = test_camera();
+  auto params = test_params();
+  const std::vector<calib::CalibSample> samples{make_correlated_sample(cam, params.nid.bins)};
+  calib::EdgeChain chain;
+  chain.t_trajframe_parent = calib::identity_mat4();
+  chain.edge_bag = {};
+  chain.t_child_camoptical = calib::identity_mat4();
+  const auto result = calib::refine_extrinsic(samples, cam, chain, params);
+  ASSERT_TRUE(result.ok) << result.error;
+  // Not exactly zero: the held eigen-direction is only y-DOMINANT, so a few
+  // percent of the y axis lives in the kept subspace and the optimizer leaks
+  // that much into delta[1]. A y axis left genuinely free would wander to the
+  // centimeter scale or beyond inside the trust region.
+  EXPECT_NEAR(result.delta[1], 0.0, 1e-3);
+  bool y_held = false;
+  for (const auto & held : result.auto_held) {
+    if (std::abs(held.unit[1]) > 0.9) {
+      y_held = true;
+    }
+    // Every held direction is genuinely unobservable: its content in the
+    // probe-step-normalized coordinates is zeroed exactly, so what remains of
+    // the delta along it is exactly the bag's value.
+    double component = 0.0;
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      const double step = axis < 3 ? calib::kProbeStepTrans : calib::kProbeStepRot;
+      component += (result.delta[axis] / step) * held.unit[axis];
+    }
+    EXPECT_NEAR(component, 0.0, 1e-9);
+  }
+  EXPECT_TRUE(y_held) << "expected a held direction dominated by the y axis";
+  // The x axis stays free: its observability is reported, not held.
   EXPECT_NE(result.observability[0], calib::AxisObservability::kDegenerate);
 }
 

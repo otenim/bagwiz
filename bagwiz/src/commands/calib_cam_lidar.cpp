@@ -801,7 +801,7 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
     BAGWIZ_LOG_ERROR(kLogger, "%s", err.c_str());
     return 1;
   }
-  const std::array<bool, 6> fixed_axes = parse_fixed_axes(args.fix_axes).first;
+  const auto fix_spec = parse_fix_spec(args.fix_axes).first;
 
   // 2. Topics: --pcd (PointCloud2), --pose (a supported pose type), and the
   // --cam image topic + its CameraInfo.
@@ -922,7 +922,8 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   params.nid.bins = args.nid_bins;
   params.nid.min_depth = args.min_depth;
   params.nid.max_depth = args.max_depth;
-  params.fixed = fixed_axes;
+  params.fixed = fix_spec.fixed;
+  params.auto_fix = fix_spec.auto_fix;
   params.max_trans = args.max_trans;
   params.max_rot = args.max_rot_deg * M_PI / 180.0;
   const auto result = core::calib::refine_extrinsic(*samples, cam, *chain, params);

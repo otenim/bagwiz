@@ -64,7 +64,9 @@ struct CalibCamLidarArgs
   std::string
     output_path;    // -o,--output; empty = default name (see default_calib_cam_lidar_output_path)
   int samples = 8;  // --samples; image samples to use (min 3)
-  std::string fix_axes;      // --fix; raw csv of axes to hold at the bag value
+  // --fix; raw csv of axes to hold at the bag value, plus `auto` (default:
+  // also hold every direction the data cannot constrain) and `none`.
+  std::string fix_axes = "auto";
   double max_trans = 0.2;    // --max-trans; trust region, meters
   double max_rot_deg = 2.0;  // --max-rot; trust region, degrees
   int nid_bins = 16;         // --nid-bins; NID histogram bins
@@ -90,13 +92,23 @@ struct CalibCamLidarArgs
 // any bag work.
 [[nodiscard]] std::string validate_calibrate_flags(const CalibCamLidarArgs & args);
 
-// Parse --fix's comma-separated axis list (x, y, z, roll, pitch, yaw) into a
-// per-axis "hold at the bag value" flag array in that fixed order. An empty
-// csv fixes nothing (all false). An unknown token, or a csv that fixes all
-// six axes (nothing left to optimize), is reported as an error message in the
-// second member; the first member is only meaningful when that message is
-// empty.
-[[nodiscard]] std::pair<std::array<bool, 6>, std::string> parse_fixed_axes(const std::string & csv);
+// The parsed --fix value: the axes held at the bag value no matter what,
+// plus whether directions the data cannot constrain are held automatically
+// (`auto`, the default). See parse_fix_spec.
+struct FixSpec
+{
+  std::array<bool, 6> fixed{};
+  bool auto_fix = true;
+};
+
+// Parse --fix's comma-separated list. Tokens: the six axis names (x, y, z,
+// roll, pitch, yaw) plus `auto` and `none`. An empty csv means `auto` (the
+// CLI default). A manual axis list alone switches auto off; `auto` composes
+// with manual axes; `none` must stand alone (nothing held — the pre-auto
+// behavior). Errors (returned in the second member; the first member is only
+// meaningful when it is empty): an unknown token, `none` combined with other
+// tokens, or a csv fixing all six axes (nothing left to optimize).
+[[nodiscard]] std::pair<FixSpec, std::string> parse_fix_spec(const std::string & csv);
 
 // Pick up to `samples` image-stamp indices into `image_stamps_ns` (sorted
 // ascending), evenly spread inside the trajectory span shrunk by `margin_ns`

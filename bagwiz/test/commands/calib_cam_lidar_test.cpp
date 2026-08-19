@@ -653,6 +653,38 @@ TEST_F(CalibCamLidarTest, AcceptsCloudWithUniformTimeField)
   EXPECT_NEAR(rpy.yaw, 0.0, 0.15 * M_PI / 180.0);
 }
 
+// The DEFAULT --fix (auto) end to end: on the ramp-wall scene, sliding the
+// camera along y changes only the image row, which the histogram cannot see,
+// so that direction is flat and must be held at the bag value automatically —
+// disclosed in the report — while the observable directions stay free. No
+// injected edge error: the run stays near the identity optimum, where the y
+// curvature is exactly zero.
+TEST_F(CalibCamLidarTest, AutoFixHoldsFlatDirectionAtBagValue)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);  // fix_axes stays at its "auto" default
+
+  ::testing::internal::CaptureStdout();
+  const int rc = run_calib_cam_lidar(args);
+  const std::string report = ::testing::internal::GetCapturedStdout();
+  ASSERT_EQ(rc, 0) << report;
+  ASSERT_TRUE(std::filesystem::exists(args.output_path));
+  EXPECT_NE(report.find("held at bag value (auto):"), std::string::npos) << report;
+
+  const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
+  ASSERT_TRUE(parsed.ok()) << parsed.error;
+  const auto & t = parsed.transforms->front().transform;
+  // The held direction keeps the bag's y (0) within a small leak. The free
+  // axes are NOT pinned down here: they drift the way the optimizer always
+  // does on this fixture, so only the held axis is asserted.
+  EXPECT_NEAR(t.translation.y, 0.0, 1e-3);
+}
+
 // --keyframe-dist on the (stationary) fixture: the pose gate collapses to one
 // interval, so the command must warn, fall back to plain even time spacing,
 // and still succeed end to end — the gate is an optimization, never a new

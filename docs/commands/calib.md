@@ -62,7 +62,7 @@ bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 | `--samples <n>`         | Image samples to pick, evenly spread across the trajectory span (or across keyframe intervals — see `--keyframe-dist`). Default `8`, minimum `3`. Long-form only.                                                                                                                                          |
 | `--keyframe-dist <m>`   | Pose-gated keyframe sampling: a new keyframe interval opens each time the interpolated pose moves this many meters, samples spread over the intervals instead of over time, and each picked interval contributes its sharpest frame. `0` (the default) keeps plain even time spacing. Long-form only.      |
 | `--keyframe-rot <deg>`  | Rotation half of the keyframe gate: an interval also opens after this much rotation from the interval's first frame, so a platform turning in place keeps contributing new viewpoints. `0` (the default) disables the rotation test. Long-form only.                                                       |
-| `--fix <axes>`          | Comma list of axes to hold at the bag's value instead of optimizing (`x,y,z,roll,pitch,yaw`, any subset). Fixing all six is rejected — nothing would be left to refine. Long-form only.                                                                                                                    |
+| `--fix <axes>`          | Comma list: axes to hold at the bag value (`x,y,z,roll,pitch,yaw`), plus `auto` — also hold every direction the data cannot constrain — and `none` — hold nothing. A manual axis list alone switches `auto` off; fixing all six is rejected. Default `auto`. Long-form only.                               |
 | `--max-trans <m>`       | Trust region: max translation delta from the bag's value, in meters. Default `0.2`. Long-form only.                                                                                                                                                                                                        |
 | `--max-rot <deg>`       | Trust region: max rotation delta from the bag's value, in degrees. Default `2.0`. Long-form only.                                                                                                                                                                                                          |
 | `--nid-bins <n>`        | NID intensity/gray histogram bins, `4`–`256`. Default `16`. Long-form only.                                                                                                                                                                                                                                |
@@ -148,49 +148,56 @@ therefore the same arithmetic, `before + delta` per axis, and cannot describe
 different edges. `--fix <axis>` holds an axis by forcing its delta to zero,
 which leaves the bag's own scalar for that axis in the output verbatim even
 when the edge's rotation does not commute (an optical-convention mount, say).
+The default `--fix auto` generalizes this from axes to directions — see the
+next section.
 
-### Observability report
+### Observability report and automatic holding
 
-After refining, each of the six axes is probed independently around the
-optimum and reported as `strong`, `weak`, `degenerate`, or (for an axis named
-by `--fix`) `fixed`. The probe is a symmetric second difference of the mean
-NID along that one axis: a cost surface that curves sharply around the optimum
-reads `strong`, a flat one `degenerate`. `degenerate` means the sampled views
-could not pin that axis down at all — its reported delta is essentially
-whatever the optimizer's flat cost surface happened to land on, not a real
-correction, and emphatically not the bag's own value — and a warning
-recommends re-running with `--fix <axis>` to hold it at the bag's value
-outright, rather than trusting a delta the data never actually constrained.
-A single forward-looking, narrow-field-of-view (telephoto) camera commonly
-cannot observe its own forward translation, and cannot tell lateral
-translation apart from yaw (both shift image content the same way from that
-vantage point), so those are the two common degenerate cases; a wider-angle
-or multi-view rig sees them better.
+After refining, each of the six axes is probed around the optimum and
+reported as `strong`, `weak`, `degenerate`, or (for an axis named by `--fix`)
+`fixed`. The probe is a symmetric second difference of the mean NID along
+that axis, estimated per sample: an axis's curvature is the mean of the
+per-sample second differences, and it counts as measured at all only when
+that mean both clears a small absolute floor and stands out of its own
+standard error across samples — `degenerate` otherwise, `strong` when it
+clears the wider 5-sigma band, `weak` in between. The per-sample pairing is
+what keeps the reading meaningful across scenes: a flat but quiet surface
+and a curved but noisy one do not classify the same.
 
-**What the classification does not tell you.** It is a coarse screen, not a
-covariance estimate, and it is worth reading with three caveats in mind:
+With the default `--fix auto`, the same measurement also runs on the
+eigen-directions of the full 6x6 curvature matrix rather than per axis, so a
+degenerate _combination_ — the classic forward-camera valley in which
+lateral translation and yaw shift the image the same way — is caught even
+though each of its axes curves on its own. Every unobservable direction is
+then held at the bag value (its delta component forced to zero) and the
+remaining directions are re-optimized, repeating until everything left is
+observable. The report lists each held direction as an axis mixture (`held
+at bag value (auto): 0.99y + 0.17yaw`), and `--json` echoes them under
+`held`. An axis-aligned held direction is exactly a `--fix <axis>` you did
+not have to write. When every direction of the edge is unobservable, the
+command fails instead of writing a YAML the data cannot justify.
 
-- It probes one axis at a time, so it only detects _hard, single-axis_
-  degeneracies. A pairwise trade-off — the lateral-translation/yaw valley
-  above is the standard example — leaves both axes curving along their own
-  probe directions and so reads `strong` on both, even though only their
-  combination is determined.
-- Its thresholds are absolute constants calibrated against a real recording,
-  not scaled to the scene, the sample count, or the NID's own noise floor. A
-  recording whose NID is flatter or noisier overall shifts every axis's
-  reading together.
-- Consequently, on real recordings all six axes can come back `strong` while a
-  span analysis over repeated runs (varying the samples, or sweeping one axis
-  and watching where the NID actually moves) shows several of them only weakly
-  determined. Treat `degenerate` as a reliable "definitely not observable" and
-  `strong` as no more than "not obviously unobservable"; for a number you are
-  going to ship, corroborate it against a second run over different samples.
+`--fix none` switches all of this off: every free axis is optimized, the
+classification is report-only, and a degenerate axis gets a warning
+recommending a manual `--fix <axis>` re-run.
+
+**What the classification does not tell you.**
+
+- It is a local probe at the found optimum, not a global guarantee. If the
+  search settles into a wrong but locally curved basin (a projectively
+  near-degenerate scene can do that to any 6-axis run), every direction
+  reads `strong` there while the result is simply off. Auto-holding removes
+  flat directions; it does not rescue the search from a bad basin.
+- It is a screening scale, not a covariance estimate. Treat `degenerate` as
+  a reliable "definitely not observable" and `strong` as no more than "not
+  obviously unobservable"; for a number you are going to ship, corroborate
+  it against a second run over different samples.
 
 ```text
 calib cam-lidar: truck_cabin_base_link -> top_front_narrow/camera_link
 axis        bag value  refined value          delta  observability
-x            0.180000       0.183214       0.003214  degenerate
-y           -0.050000      -0.047850       0.002150  degenerate
+x            0.180000       0.180000       0.000000  degenerate
+y           -0.050000      -0.050000       0.000000  degenerate
 z            1.420000       1.447213       0.027213  strong
 roll         0.000000      -0.008421      -0.008421  strong
 pitch        0.000000       0.014732       0.014732  strong
@@ -198,8 +205,8 @@ yaw          0.000000       0.009481       0.009481  degenerate
 
 nid: 0.412887 -> 0.276541
 samples used: 8
-warning: x is not observable from this data; the delta shown is unconstrained — re-run with --fix x to hold the bag value
-warning: y is not observable from this data; the delta shown is unconstrained — re-run with --fix y to hold the bag value
+held at bag value (auto): 1.00x
+held at bag value (auto): 1.00y
 warning: yaw is not observable from this data; the delta shown is unconstrained — re-run with --fix yaw to hold the bag value
 
 apply with: bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
@@ -207,13 +214,13 @@ apply with: bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lid
 
 Rotations in the human table are shown in degrees; `--json` reports the same
 `before`/`after`/`delta` per axis in radians instead, alongside the `parent`,
-`child`, `nid_before`, `nid_after`, and `samples` fields.
+`child`, `nid_before`, `nid_after`, `samples`, and `held` fields.
 
 ### Failures
 
 Beyond the codes in [Exit status](#exit-status) below, exit `1` covers: an
-invalid flag combination (`--samples` under 3, `--fix` naming an unknown axis
-or all six, a non-positive `--max-trans`/`--max-rot`/`--min-depth`, `--nid-bins`
+invalid flag combination (`--samples` under 3, `--fix` naming an unknown token,
+combining `none` with other tokens, or naming all six axes, a non-positive `--max-trans`/`--max-rot`/`--min-depth`, `--nid-bins`
 outside `4`–`256`, `--max-depth` at or below `--min-depth`, an empty
 `--of`/`--ref`, or a negative `--keyframe-dist`/`--keyframe-rot`), a missing or
 wrong-typed `--pcd`/`--pose`/`--cam` topic, a `--pcd` topic without an
@@ -224,7 +231,8 @@ CameraInfo, a cloud frame with no static-TF path from `--of`, a
 `--parent`/`--child` edge that is not on the static chain (or not directly on
 a static topic), too few usable image samples surviving the trajectory-span
 and pre-cull filtering, or a refinement failure (e.g. no sample projects
-enough map points at the initial estimate).
+enough map points at the initial estimate, or no direction of the edge is
+observable at all).
 
 ## Exit status
 

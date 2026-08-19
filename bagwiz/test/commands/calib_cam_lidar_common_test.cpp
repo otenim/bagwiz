@@ -130,16 +130,47 @@ TEST(CalibCamLidarCommonTest, RejectsTooFewSamplesAndBadDepthWindow)
   EXPECT_NE(commands::validate_calibrate_flags(args), "");
 }
 
-TEST(CalibCamLidarCommonTest, ParseFixedAxes)
+TEST(CalibCamLidarCommonTest, ParseFixSpec)
 {
-  const auto [flags, err] = commands::parse_fixed_axes("x,yaw");
-  EXPECT_EQ(err, "");
-  EXPECT_TRUE(flags[0]);
-  EXPECT_FALSE(flags[1]);
-  EXPECT_TRUE(flags[5]);
-  EXPECT_NE(commands::parse_fixed_axes("x,bogus").second, "");
-  EXPECT_NE(commands::parse_fixed_axes("x,y,z,roll,pitch,yaw").second, "");
-  EXPECT_EQ(commands::parse_fixed_axes("").second, "");
+  {
+    // Empty (the default) means auto: no manual axes, auto-fix on.
+    const auto [spec, err] = commands::parse_fix_spec("");
+    EXPECT_EQ(err, "");
+    EXPECT_TRUE(spec.auto_fix);
+    EXPECT_FALSE(spec.fixed[0]);
+    EXPECT_FALSE(spec.fixed[5]);
+  }
+  {
+    const auto [spec, err] = commands::parse_fix_spec("auto");
+    EXPECT_EQ(err, "");
+    EXPECT_TRUE(spec.auto_fix);
+  }
+  {
+    const auto [spec, err] = commands::parse_fix_spec("none");
+    EXPECT_EQ(err, "");
+    EXPECT_FALSE(spec.auto_fix);
+    EXPECT_FALSE(spec.fixed[0]);
+  }
+  {
+    // A manual axis list replaces the default auto.
+    const auto [spec, err] = commands::parse_fix_spec("x,yaw");
+    EXPECT_EQ(err, "");
+    EXPECT_FALSE(spec.auto_fix);
+    EXPECT_TRUE(spec.fixed[0]);
+    EXPECT_FALSE(spec.fixed[1]);
+    EXPECT_TRUE(spec.fixed[5]);
+  }
+  {
+    // auto composes with manual axes.
+    const auto [spec, err] = commands::parse_fix_spec("auto,x");
+    EXPECT_EQ(err, "");
+    EXPECT_TRUE(spec.auto_fix);
+    EXPECT_TRUE(spec.fixed[0]);
+  }
+  EXPECT_NE(commands::parse_fix_spec("x,bogus").second, "");
+  EXPECT_NE(commands::parse_fix_spec("x,y,z,roll,pitch,yaw").second, "");
+  EXPECT_NE(commands::parse_fix_spec("none,x").second, "");
+  EXPECT_NE(commands::parse_fix_spec("auto,none").second, "");
 }
 
 TEST(CalibCamLidarCommonTest, PickSampleIndicesRespectsMarginAndSpread)
@@ -271,6 +302,53 @@ TEST(CalibCamLidarCommonTest, RenderCalibrateJsonEscapesFrameNames)
   args.parent_frame = "ca\"b\\in";
   const std::string json = commands::render_calibrate_json(args, sample_result(), kEdgeBefore);
   EXPECT_NE(json.find("\"parent\": \"ca\\\"b\\\\in\""), std::string::npos) << json;
+}
+
+TEST(CalibCamLidarCommonTest, RenderSummaryListsHeldDirections)
+{
+  const auto args = valid_args();
+  auto result = sample_result();
+  bagwiz::core::calib::HeldDirection y_held;
+  y_held.unit = {0, 1, 0, 0, 0, 0};
+  y_held.curvature = 1e-7;
+  y_held.std_error = 5e-8;
+  result.auto_held.push_back(y_held);
+  bagwiz::core::calib::HeldDirection mixed;
+  const double s = std::sqrt(0.5);
+  mixed.unit = {0, s, 0, 0, 0, s};  // 0.71y + 0.71yaw in the normalized coordinates
+  result.auto_held.push_back(mixed);
+  // y reads degenerate here so the warning-suppression path is exercised: it
+  // is covered by the y-dominated held direction, so no warning may appear
+  // for it, while the uncovered degenerate z keeps its warning.
+  result.observability[1] = bagwiz::core::calib::AxisObservability::kDegenerate;
+
+  const std::string summary =
+    commands::render_calibrate_summary(args, result, kEdgeBefore, "/tmp/out.yaml");
+  EXPECT_NE(summary.find("held at bag value (auto): 1.00y"), std::string::npos) << summary;
+  // The mixed direction renders in physical units: 0.71 * 0.02 m of y against
+  // 0.71 * 0.0035 rad of yaw — dominant y with a small yaw share.
+  EXPECT_NE(summary.find("held at bag value (auto): 0.99y + 0.17yaw"), std::string::npos)
+    << summary;
+  EXPECT_EQ(summary.find("warning: y is not observable"), std::string::npos) << summary;
+  EXPECT_NE(summary.find("warning: z is not observable"), std::string::npos) << summary;
+}
+
+TEST(CalibCamLidarCommonTest, RenderJsonListsHeldDirections)
+{
+  auto result = sample_result();
+  const std::string empty_json = commands::render_calibrate_json(valid_args(), result, kEdgeBefore);
+  EXPECT_NE(empty_json.find("\"held\": []"), std::string::npos) << empty_json;
+
+  bagwiz::core::calib::HeldDirection y_held;
+  y_held.unit = {0, 1, 0, 0, 0, 0};
+  y_held.curvature = 1e-7;
+  y_held.std_error = 5e-8;
+  result.auto_held.push_back(y_held);
+  const std::string json = commands::render_calibrate_json(valid_args(), result, kEdgeBefore);
+  EXPECT_NE(json.find("\"held\": ["), std::string::npos) << json;
+  EXPECT_NE(json.find("\"direction\": {\"y\": 1}"), std::string::npos) << json;
+  EXPECT_EQ(json.find(",\n  ]"), std::string::npos) << "trailing comma:\n" << json;
+  EXPECT_EQ(json.find(",\n    }"), std::string::npos) << "trailing comma:\n" << json;
 }
 
 TEST(CalibCamLidarCommonTest, PoseGateSplitsOnTranslation)

@@ -118,7 +118,9 @@ private:
       "--samples", cam_lidar_args_.samples, "Image samples to use (default 8, min 3)");
     sub->add_option(
       "--fix", cam_lidar_args_.fix_axes,
-      "Comma list of axes to hold at the bag value (x,y,z,roll,pitch,yaw)");
+      "Comma list of axes to hold at the bag value (x,y,z,roll,pitch,yaw), plus 'auto' (also "
+      "hold every direction the data cannot constrain) and 'none' (hold nothing). A manual "
+      "list alone switches auto off (default: auto)");
     sub->add_option(
       "--max-trans", cam_lidar_args_.max_trans,
       "Trust region: max translation delta in meters (default 0.2)");
