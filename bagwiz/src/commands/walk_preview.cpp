@@ -834,6 +834,11 @@ void ImagePreviewSession::run()
         break;
       case core::KeyEvent::kTogglePcdRange:
         overlay_.prompt_for_range(pager_, image_caps.backend);
+        // Like the other adjustment keys: the range left the persistent info
+        // row, so the toggle reports where it landed.
+        status_ = pcd.auto_range
+                    ? "range: auto"
+                    : fmt::format("range: {:.2f}-{:.2f}", pcd.manual_min, pcd.manual_max);
         needs_render = true;
         break;
       case core::KeyEvent::kPcdPointSizeUp:
