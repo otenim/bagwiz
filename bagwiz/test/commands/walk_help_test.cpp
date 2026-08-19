@@ -60,7 +60,7 @@ TEST(WalkHelpFooters, YamlFooterCarriesOnlyTheWorkingSet)
 {
   const std::string footer = yaml_footer_legend(true);
   EXPECT_NE(footer.find("[S] save"), std::string::npos) << footer;
-  EXPECT_NE(footer.find("[?] keys"), std::string::npos) << footer;
+  EXPECT_NE(footer.find("[?] help"), std::string::npos) << footer;
   EXPECT_TRUE(footer.ends_with("[q] quit")) << footer;
   // The reference material moved behind [?]: the time steps, the scroll
   // jumps and the array toggle must no longer ride the footer — and the
@@ -107,7 +107,7 @@ TEST(WalkHelpFooters, PreviewFooterGatesOverlayEntriesOnASelectedTopic)
   EXPECT_EQ(base.find("next/prev"), std::string::npos) << base;
   EXPECT_NE(base.find("[u] rectify"), std::string::npos) << base;
   EXPECT_NE(base.find("[p] pcd"), std::string::npos) << base;
-  EXPECT_NE(base.find("[?] keys"), std::string::npos) << base;
+  EXPECT_NE(base.find("[?] help"), std::string::npos) << base;
   EXPECT_TRUE(base.ends_with("[Esc] back")) << base;
   // The edit mode and the scene pins need an overlay topic to be useful, so
   // their hints wait for one.
@@ -133,7 +133,7 @@ TEST(WalkHelpFooters, PreviewFooterSwapsToTheEditWorkingSet)
   EXPECT_NE(edit.find("[A] apply"), std::string::npos) << edit;
   EXPECT_NE(edit.find("[D] yaml"), std::string::npos) << edit;
   EXPECT_NE(edit.find("[e] done"), std::string::npos) << edit;
-  EXPECT_NE(edit.find("[?] keys"), std::string::npos) << edit;
+  EXPECT_NE(edit.find("[?] help"), std::string::npos) << edit;
   EXPECT_EQ(edit.find("[u] rectify"), std::string::npos) << edit;
   EXPECT_EQ(edit.find("next/prev"), std::string::npos) << edit;
   EXPECT_EQ(edit.find("[p] pcd"), std::string::npos) << edit;

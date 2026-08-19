@@ -48,7 +48,7 @@ std::string yaml_footer_legend(bool preview_available)
     legend += rainbow_text("[i] preview");
     legend += "   ";
   }
-  legend += "[?] keys   [q] quit";
+  legend += "[?] help   [q] quit";
   return legend;
 }
 
@@ -58,7 +58,7 @@ std::string preview_footer_legend(bool pcd_topic_selected, bool edit_active)
     // The nudge keys are the working set here; navigation and the overlay
     // toggles keep working but live behind [?] while the mode is on.
     return "  [x/y/z] move   [l/n/w] rotate   [m] step   [0] reset   [A] apply   [D] yaml"
-           "   [e] done   [?] keys";
+           "   [e] done   [?] help";
   }
   std::string legend = "  [u] rectify   [p] pcd   ";
   if (pcd_topic_selected) {
@@ -66,7 +66,7 @@ std::string preview_footer_legend(bool pcd_topic_selected, bool edit_active)
     // so their entry hints wait for an overlay topic like the keys do.
     legend += "[e] edit   [P] pin   ";
   }
-  legend += "[?] keys   [Esc] back";
+  legend += "[?] help   [Esc] back";
   return legend;
 }
 

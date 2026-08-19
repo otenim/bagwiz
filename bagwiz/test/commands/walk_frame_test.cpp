@@ -148,7 +148,7 @@ TEST(WalkBuildYamlFrame, FooterLayoutAndLegend)
   EXPECT_TRUE(frame.footer[3].empty());  // empty status renders a blank row
   const std::string legend = frame.footer[2];
   EXPECT_NE(legend.find("[S] save"), std::string::npos) << legend;
-  EXPECT_NE(legend.find("[?] keys"), std::string::npos) << legend;
+  EXPECT_NE(legend.find("[?] help"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[q] quit"), std::string::npos) << legend;
   EXPECT_EQ(legend.find("[i] preview"), std::string::npos) << legend;
   // The footer carries only the working set; the reference moved behind [?].
