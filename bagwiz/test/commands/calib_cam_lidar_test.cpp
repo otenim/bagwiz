@@ -15,7 +15,7 @@
 #include "bagwiz/core/tf/tf_transform_format.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
 #include "bagwiz/io/bag_io.hpp"
-#include "tf_static_calibrate_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
+#include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
@@ -31,8 +31,8 @@
 #include <string>
 #include <vector>
 
-// End-to-end test of `bagwiz tf static calibrate`'s run path: synthetic
-// map.pcd + traj.tum + an MCAP bag drive run_tf_static_calibrate() directly
+// End-to-end test of `bagwiz calib cam-lidar`'s run path: synthetic
+// map.pcd + traj.tum + an MCAP bag drive run_calib_cam_lidar() directly
 // (no CLI parsing). The scene follows the amended correlated-scene pattern
 // from bagwiz_pointcloud/test/core/calib/correlated_scene.hpp (see the Task 6
 // report referenced there): a frontal wall of map points at a fixed depth,
@@ -44,8 +44,8 @@
 namespace
 {
 
-using bagwiz::commands::run_tf_static_calibrate;
-using bagwiz::commands::TfStaticCalibrateArgs;
+using bagwiz::commands::CalibCamLidarArgs;
+using bagwiz::commands::run_calib_cam_lidar;
 
 constexpr const char * kParentFrame = "base_link";
 constexpr const char * kChildFrame = "cam_link";
@@ -347,9 +347,9 @@ std::vector<std::int64_t> default_image_stamps_ns()
   return stamps;
 }
 
-TfStaticCalibrateArgs base_args(const std::filesystem::path & tmp_dir)
+CalibCamLidarArgs base_args(const std::filesystem::path & tmp_dir)
 {
-  TfStaticCalibrateArgs args;
+  CalibCamLidarArgs args;
   args.input_path = (tmp_dir / "bag.mcap").string();
   args.map_path = (tmp_dir / "map.pcd").string();
   args.traj_path = (tmp_dir / "traj.tum").string();
@@ -365,13 +365,13 @@ TfStaticCalibrateArgs base_args(const std::filesystem::path & tmp_dir)
   return args;
 }
 
-class TfStaticCalibrateTest : public ::testing::Test
+class CalibCamLidarTest : public ::testing::Test
 {
 protected:
   void SetUp() override
   {
     tmp_dir_ = std::filesystem::temp_directory_path() /
-               ("bagwiz_tf_static_calibrate_" +
+               ("bagwiz_calib_cam_lidar_" +
                 std::to_string(::testing::UnitTest::GetInstance()->current_test_info()->line()));
     std::filesystem::remove_all(tmp_dir_);
     std::filesystem::create_directories(tmp_dir_);
@@ -385,7 +385,7 @@ protected:
 
 // Pins the fixture serializers' alignment against the real parsers before
 // they are trusted inside a bag (per the task brief's ruling).
-TEST(TfStaticCalibrateFixtureSerializersTest, CameraInfoRoundTrips)
+TEST(CalibCamLidarFixtureSerializersTest, CameraInfoRoundTrips)
 {
   const auto payload =
     serialize_camera_info(15, 0, kChildFrame, kImageWidth, kImageHeight, camera_k());
@@ -400,7 +400,7 @@ TEST(TfStaticCalibrateFixtureSerializersTest, CameraInfoRoundTrips)
   EXPECT_TRUE(result.info->d.empty());
 }
 
-TEST(TfStaticCalibrateFixtureSerializersTest, ImageRoundTrips)
+TEST(CalibCamLidarFixtureSerializersTest, ImageRoundTrips)
 {
   const std::vector<std::uint8_t> bgr(static_cast<std::size_t>(4) * 3 * 2, 0x42);
   const auto payload = serialize_image_bgr8(20, 5, kChildFrame, 4, 2, bgr);
@@ -414,7 +414,7 @@ TEST(TfStaticCalibrateFixtureSerializersTest, ImageRoundTrips)
   EXPECT_EQ(static_cast<std::uint8_t>(result.image->data[0]), 0x42);
 }
 
-TEST_F(TfStaticCalibrateTest, RejectsMapWithoutIntensity)
+TEST_F(CalibCamLidarTest, RejectsMapWithoutIntensity)
 {
   const auto scene = build_scene();
   write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/false);
@@ -422,11 +422,11 @@ TEST_F(TfStaticCalibrateTest, RejectsMapWithoutIntensity)
   write_fixture_bag(tmp_dir_ / "bag.mcap", 0.0, default_image_stamps_ns(), scene);
 
   const auto args = base_args(tmp_dir_);
-  EXPECT_EQ(run_tf_static_calibrate(args), 1);
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
   EXPECT_FALSE(std::filesystem::exists(args.output_path));
 }
 
-TEST_F(TfStaticCalibrateTest, RejectsEdgeNotOnChain)
+TEST_F(CalibCamLidarTest, RejectsEdgeNotOnChain)
 {
   const auto scene = build_scene();
   write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
@@ -435,11 +435,11 @@ TEST_F(TfStaticCalibrateTest, RejectsEdgeNotOnChain)
 
   auto args = base_args(tmp_dir_);
   args.child_frame = "bogus";
-  EXPECT_EQ(run_tf_static_calibrate(args), 1);
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
   EXPECT_FALSE(std::filesystem::exists(args.output_path));
 }
 
-TEST_F(TfStaticCalibrateTest, RejectsWhenImageStampsMissTrajectory)
+TEST_F(CalibCamLidarTest, RejectsWhenImageStampsMissTrajectory)
 {
   const auto scene = build_scene();
   write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
@@ -449,11 +449,11 @@ TEST_F(TfStaticCalibrateTest, RejectsWhenImageStampsMissTrajectory)
   write_fixture_bag(tmp_dir_ / "bag.mcap", 0.0, default_image_stamps_ns(), scene);
 
   const auto args = base_args(tmp_dir_);
-  EXPECT_EQ(run_tf_static_calibrate(args), 1);
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
   EXPECT_FALSE(std::filesystem::exists(args.output_path));
 }
 
-TEST_F(TfStaticCalibrateTest, RecoversInjectedYawIntoYaml)
+TEST_F(CalibCamLidarTest, RecoversInjectedYawIntoYaml)
 {
   const auto scene = build_scene();
   write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
@@ -470,7 +470,7 @@ TEST_F(TfStaticCalibrateTest, RecoversInjectedYawIntoYaml)
   // equivalent fixes translation): constrain to rotation only.
   args.fix_axes = "x,y,z";
 
-  ASSERT_EQ(run_tf_static_calibrate(args), 0);
+  ASSERT_EQ(run_calib_cam_lidar(args), 0);
   ASSERT_TRUE(std::filesystem::exists(args.output_path));
 
   const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
@@ -499,7 +499,7 @@ TEST_F(TfStaticCalibrateTest, RecoversInjectedYawIntoYaml)
 // interval, so the command must warn, fall back to plain even time spacing,
 // and still succeed end to end — the gate is an optimization, never a new
 // failure mode.
-TEST_F(TfStaticCalibrateTest, KeyframeGateFallsBackOnStationaryTrajectory)
+TEST_F(CalibCamLidarTest, KeyframeGateFallsBackOnStationaryTrajectory)
 {
   const auto scene = build_scene();
   write_map_pcd(tmp_dir_ / "map.pcd", scene, /*with_intensity=*/true);
@@ -512,7 +512,7 @@ TEST_F(TfStaticCalibrateTest, KeyframeGateFallsBackOnStationaryTrajectory)
   args.keyframe_dist = 0.5;
   args.keyframe_rot_deg = 10.0;
 
-  ASSERT_EQ(run_tf_static_calibrate(args), 0);
+  ASSERT_EQ(run_calib_cam_lidar(args), 0);
   ASSERT_TRUE(std::filesystem::exists(args.output_path));
 
   const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
@@ -535,7 +535,7 @@ TEST_F(TfStaticCalibrateTest, KeyframeGateFallsBackOnStationaryTrajectory)
 // YAML on disk is the same edge the report printed, and that a --fix'd axis
 // does not move at all — a right-multiplied yaw delta would have rotated the
 // held roll and pitch right along with it.
-TEST_F(TfStaticCalibrateTest, OpticalConventionEdgeYamlMatchesTheReportedEdge)
+TEST_F(CalibCamLidarTest, OpticalConventionEdgeYamlMatchesTheReportedEdge)
 {
   constexpr double kDeg = M_PI / 180.0;
   constexpr double kTrueRoll = -90.0 * kDeg;
@@ -558,7 +558,7 @@ TEST_F(TfStaticCalibrateTest, OpticalConventionEdgeYamlMatchesTheReportedEdge)
   args.json = true;        // machine-readable before/after/delta to check against the YAML
 
   ::testing::internal::CaptureStdout();
-  const int rc = run_tf_static_calibrate(args);
+  const int rc = run_calib_cam_lidar(args);
   const std::string report = ::testing::internal::GetCapturedStdout();
   ASSERT_EQ(rc, 0) << report;
   ASSERT_TRUE(std::filesystem::exists(args.output_path));

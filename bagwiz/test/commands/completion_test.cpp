@@ -911,12 +911,113 @@ TEST(FlagCompletionTest, TfSubcommandListsStaticAndTree)
   EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "tf", ""}), "static\ntree\n");
 }
 
+// `bagwiz calib <TAB>` lists the command group's subcommands, sorted.
+TEST(FlagCompletionTest, CalibSubcommandListsCamLidar)
+{
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "calib", ""}), "cam-lidar\n");
+}
+
+// `calib -` is the command-group slot; only the implicit help flags appear here.
+TEST(FlagCompletionTest, CalibGroupDashListsHelpFlagsOnly)
+{
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "calib", "-"}), "--help\n-h\n");
+}
+
+// `calib cam-lidar -` surfaces every one of the subcommand's own flags
+// alongside the implicit help flags, sorted. None of its value slots (map,
+// trajectory, frames, or numeric parameters) carries bagwiz candidates, so value
+// completion is covered separately: `--parent`/`--child`/`--traj-frame` complete
+// static frame ids and `-t`/`--cam-info` complete typed topics (see
+// CalibCamLidar*Flag* CompletionTest cases).
+TEST(FlagCompletionTest, CalibCamLidarDashListsCamLidarFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "calib", "cam-lidar", "-"}),
+    "--cam-info\n--child\n--fix\n--help\n--input\n--json\n--keyframe-dist\n--keyframe-rot\n"
+    "--map\n--max-depth\n--max-rot\n"
+    "--max-trans\n--min-depth\n--nid-bins\n--output\n--overwrite\n--parent\n--samples\n--topic\n"
+    "--traj\n--traj-frame\n-h\n-i\n-o\n-t\n-w\n");
+}
+
+// `calib cam-lidar --parent <TAB>` completes static frame ids: the edited edge
+// must be carried by a static TF topic, so a dynamic-only frame is never a
+// valid answer.
+TEST_F(CompletionTest, CalibCamLidarParentFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/mixed.mcap",
+       "--parent"}),
+    "base_link\nmap\nodom\n");
+}
+
+// `--child <TAB>` shares the same static-only frame-id source as `--parent`.
+TEST_F(CompletionTest, CalibCamLidarChildFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/mixed.mcap",
+       "--child"}),
+    "base_link\nmap\nodom\n");
+}
+
+// `--traj-frame <TAB>` completes the same static frame set: the trajectory
+// frame must resolve through the static tree to the camera's optical frame.
+TEST_F(CompletionTest, CalibCamLidarTrajFrameFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/mixed.mcap",
+       "--traj-frame"}),
+    "base_link\nmap\nodom\n");
+}
+
+// `calib cam-lidar -t <TAB>` completes the bag's image topics only (raw and
+// compressed) via the declared topic slot, like `walk -t` and `map slam --color`.
+TEST_F(CompletionTest, CalibCamLidarTopicListsOnlyImageTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_image_topics_fixture(tmp_dir_ / "images.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/images.mcap", "-t"}),
+    "/image\n/image/compressed\n");
+}
+
+// `calib cam-lidar --cam-info <TAB>` completes CameraInfo topics only.
+TEST_F(CompletionTest, CalibCamLidarCamInfoListsOnlyCameraInfoTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "calib", "cam-lidar", "-i", "~/cameras.mcap",
+       "--cam-info"}),
+    "/cam/camera_info\n");
+}
+
 // `tf static <TAB>` lists the command group's actions, sorted.
 TEST(FlagCompletionTest, TfStaticSubcommandListsEveryAction)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "static", ""}),
-    "calc\ncalibrate\ncp\ndrop\ndump\njoin\nupdate\n");
+    "calc\ncp\ndrop\ndump\njoin\nupdate\n");
 }
 
 // `tf static -` is the command-group slot; `--json` lives under `calc`, so only
@@ -934,22 +1035,6 @@ TEST(FlagCompletionTest, TfStaticCalcDashListsStaticFlags)
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "calc", "-"}),
     "--help\n--input\n--json\n--of\n--ref\n-h\n-i\n");
-}
-
-// `tf static calibrate -` surfaces every one of the action's own flags
-// alongside the implicit help flags, sorted. None of its value slots (map,
-// trajectory, frames, or numeric parameters) carries bagwiz candidates, so
-// value completion is covered separately: `--parent`/`--child`/`--traj-frame`
-// complete static frame ids and `-t`/`--cam-info` complete typed topics (see
-// the TfStaticCalibrate*Flag* CompletionTest cases).
-TEST(FlagCompletionTest, TfStaticCalibrateDashListsCalibrateFlags)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "calibrate", "-"}),
-    "--cam-info\n--child\n--fix\n--help\n--input\n--json\n--keyframe-dist\n--keyframe-rot\n"
-    "--map\n--max-depth\n--max-rot\n"
-    "--max-trans\n--min-depth\n--nid-bins\n--output\n--overwrite\n--parent\n--samples\n--topic\n"
-    "--traj\n--traj-frame\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `tf static cp -` surfaces the copy action's flags (--output/-o, -w/--overwrite)
@@ -1046,85 +1131,10 @@ TEST_F(CompletionTest, TfStaticDropFrameFlagListsStaticFrameIds)
     "base_link\nmap\nodom\n");
 }
 
-// `tf static calibrate --parent <TAB>` completes static frame ids like
-// `calc`'s --of/--ref: the edited edge must be carried by a static TF topic,
-// so a dynamic-only frame is never a valid answer.
-TEST_F(CompletionTest, TfStaticCalibrateParentFlagListsStaticFrameIds)
-{
-  const HomeEnvGuard home_guard(tmp_dir_);
-
-  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
-
-  EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/mixed.mcap",
-       "--parent"}),
-    "base_link\nmap\nodom\n");
-}
-
-// `--child <TAB>` shares the same static-only frame-id source as `--parent`.
-TEST_F(CompletionTest, TfStaticCalibrateChildFlagListsStaticFrameIds)
-{
-  const HomeEnvGuard home_guard(tmp_dir_);
-
-  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
-
-  EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/mixed.mcap",
-       "--child"}),
-    "base_link\nmap\nodom\n");
-}
-
-// `--traj-frame <TAB>` completes the same static frame set: the trajectory
-// frame must resolve through the static tree to the camera's optical frame.
-TEST_F(CompletionTest, TfStaticCalibrateTrajFrameFlagListsStaticFrameIds)
-{
-  const HomeEnvGuard home_guard(tmp_dir_);
-
-  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
-
-  EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/mixed.mcap",
-       "--traj-frame"}),
-    "base_link\nmap\nodom\n");
-}
-
-// `tf static calibrate -t <TAB>` completes the bag's image topics only (raw
-// and compressed) via the declared topic slot, like `walk -t` and
-// `map slam --color`.
-TEST_F(CompletionTest, TfStaticCalibrateTopicListsOnlyImageTopics)
-{
-  const HomeEnvGuard home_guard(tmp_dir_);
-
-  write_image_topics_fixture(tmp_dir_ / "images.mcap");
-
-  EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/images.mcap",
-       "-t"}),
-    "/image\n/image/compressed\n");
-}
-
-// `tf static calibrate --cam-info <TAB>` completes CameraInfo topics only.
-TEST_F(CompletionTest, TfStaticCalibrateCamInfoListsOnlyCameraInfoTopics)
-{
-  const HomeEnvGuard home_guard(tmp_dir_);
-
-  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");
-
-  EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/cameras.mcap",
-       "--cam-info"}),
-    "/cam/camera_info\n");
-}
-
-// `tf static update -t <TAB>` completes from the bag's *tf_static topics only. The
-// flag homes newly added edges, and an edge written to a non-static TF topic is
-// invisible to every bagwiz static-TF reader (collect_static_tf skips it), so
-// offering one would only steer the user into a dead end. The mixed fixture's
+// `tf static update -t <TAB>` completes from the bag's *tf_static topics only.
+// The flag homes newly added edges, and an edge written to a non-static TF topic
+// is invisible to every bagwiz static-TF reader (collect_static_tf skips it),
+// so offering one would only steer the user into a dead end. The mixed fixture's
 // /tf carries TFMessage but is not static, so it stays out of the candidates.
 TEST_F(CompletionTest, TfStaticUpdateTopicFlagListsStaticTfTopics)
 {

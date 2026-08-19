@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "tf_static_calibrate_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
+#include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
 #include <gtest/gtest.h>
 
@@ -22,9 +22,9 @@ namespace commands = bagwiz::commands;
 
 namespace
 {
-commands::TfStaticCalibrateArgs valid_args()
+commands::CalibCamLidarArgs valid_args()
 {
-  commands::TfStaticCalibrateArgs args;
+  commands::CalibCamLidarArgs args;
   args.input_path = "in.db3";
   args.map_path = "map.pcd";
   args.traj_path = "traj.tum";
@@ -107,12 +107,12 @@ std::array<double, 6> json_axis_field(const std::string & json, const std::strin
 }
 }  // namespace
 
-TEST(TfStaticCalibrateCommonTest, ValidArgsPass)
+TEST(CalibCamLidarCommonTest, ValidArgsPass)
 {
   EXPECT_EQ(commands::validate_calibrate_flags(valid_args()), "");
 }
 
-TEST(TfStaticCalibrateCommonTest, RejectsTooFewSamplesAndBadDepthWindow)
+TEST(CalibCamLidarCommonTest, RejectsTooFewSamplesAndBadDepthWindow)
 {
   auto args = valid_args();
   args.samples = 2;
@@ -123,7 +123,7 @@ TEST(TfStaticCalibrateCommonTest, RejectsTooFewSamplesAndBadDepthWindow)
   EXPECT_NE(commands::validate_calibrate_flags(args), "");
 }
 
-TEST(TfStaticCalibrateCommonTest, ParseFixedAxes)
+TEST(CalibCamLidarCommonTest, ParseFixedAxes)
 {
   const auto [flags, err] = commands::parse_fixed_axes("x,yaw");
   EXPECT_EQ(err, "");
@@ -135,7 +135,7 @@ TEST(TfStaticCalibrateCommonTest, ParseFixedAxes)
   EXPECT_EQ(commands::parse_fixed_axes("").second, "");
 }
 
-TEST(TfStaticCalibrateCommonTest, PickSampleIndicesRespectsMarginAndSpread)
+TEST(CalibCamLidarCommonTest, PickSampleIndicesRespectsMarginAndSpread)
 {
   std::vector<std::int64_t> stamps;
   for (int i = 0; i < 100; ++i) {
@@ -150,7 +150,7 @@ TEST(TfStaticCalibrateCommonTest, PickSampleIndicesRespectsMarginAndSpread)
   }
 }
 
-TEST(TfStaticCalibrateCommonTest, InterpolateTrajectoryLerpsBetweenPoses)
+TEST(CalibCamLidarCommonTest, InterpolateTrajectoryLerpsBetweenPoses)
 {
   std::vector<bagwiz::core::TrajectoryPose> poses(2);
   poses[0].timestamp_ns = 0;
@@ -165,13 +165,13 @@ TEST(TfStaticCalibrateCommonTest, InterpolateTrajectoryLerpsBetweenPoses)
   EXPECT_FALSE(commands::interpolate_trajectory(poses, 3'000'000'000).has_value());
 }
 
-TEST(TfStaticCalibrateCommonTest, DefaultOutputPathUsesInputStem)
+TEST(CalibCamLidarCommonTest, DefaultOutputPathUsesInputStem)
 {
   EXPECT_EQ(
-    commands::default_calibrate_output_path("/data/run_0.db3"), "run_0_tf_static_calib.yaml");
+    commands::default_calib_cam_lidar_output_path("/data/run_0.db3"), "run_0_calib_cam_lidar.yaml");
 }
 
-TEST(TfStaticCalibrateCommonTest, Mat4FromQuatRejectsUnusableRotations)
+TEST(CalibCamLidarCommonTest, Mat4FromQuatRejectsUnusableRotations)
 {
   const double nan = std::numeric_limits<double>::quiet_NaN();
   EXPECT_TRUE(commands::mat4_from_quat(1, 2, 3, 0, 0, 0, 1).has_value());
@@ -182,7 +182,7 @@ TEST(TfStaticCalibrateCommonTest, Mat4FromQuatRejectsUnusableRotations)
   EXPECT_FALSE(commands::mat4_from_quat(nan, 0, 0, 0, 0, 0, 1).has_value());
 }
 
-TEST(TfStaticCalibrateCommonTest, RenderCalibrateSummaryIsAdditivePerAxis)
+TEST(CalibCamLidarCommonTest, RenderCalibrateSummaryIsAdditivePerAxis)
 {
   const auto args = valid_args();
   const auto result = sample_result();
@@ -219,10 +219,10 @@ TEST(TfStaticCalibrateCommonTest, RenderCalibrateSummaryIsAdditivePerAxis)
     std::string::npos)
     << summary;
   EXPECT_NE(summary.find("samples used: 7"), std::string::npos) << summary;
-  EXPECT_NE(summary.find("tf static calibrate: cabin -> cam_link"), std::string::npos) << summary;
+  EXPECT_NE(summary.find("calib cam-lidar: cabin -> cam_link"), std::string::npos) << summary;
 }
 
-TEST(TfStaticCalibrateCommonTest, RenderCalibrateJsonIsAdditivePerAxis)
+TEST(CalibCamLidarCommonTest, RenderCalibrateJsonIsAdditivePerAxis)
 {
   const auto args = valid_args();
   const auto result = sample_result();
@@ -258,7 +258,7 @@ TEST(TfStaticCalibrateCommonTest, RenderCalibrateJsonIsAdditivePerAxis)
   EXPECT_NE(json.find("\"observability\": \"fixed\""), std::string::npos) << json;
 }
 
-TEST(TfStaticCalibrateCommonTest, RenderCalibrateJsonEscapesFrameNames)
+TEST(CalibCamLidarCommonTest, RenderCalibrateJsonEscapesFrameNames)
 {
   auto args = valid_args();
   args.parent_frame = "ca\"b\\in";
@@ -266,7 +266,7 @@ TEST(TfStaticCalibrateCommonTest, RenderCalibrateJsonEscapesFrameNames)
   EXPECT_NE(json.find("\"parent\": \"ca\\\"b\\\\in\""), std::string::npos) << json;
 }
 
-TEST(TfStaticCalibrateCommonTest, PoseGateSplitsOnTranslation)
+TEST(CalibCamLidarCommonTest, PoseGateSplitsOnTranslation)
 {
   namespace calib = bagwiz::core::calib;
   std::vector<calib::Mat4> poses;
@@ -280,7 +280,7 @@ TEST(TfStaticCalibrateCommonTest, PoseGateSplitsOnTranslation)
   EXPECT_EQ(intervals[1], (std::pair<std::size_t, std::size_t>{3, 5}));
 }
 
-TEST(TfStaticCalibrateCommonTest, PoseGateSplitsOnRotation)
+TEST(CalibCamLidarCommonTest, PoseGateSplitsOnRotation)
 {
   namespace calib = bagwiz::core::calib;
   std::vector<calib::Mat4> poses;
@@ -294,7 +294,7 @@ TEST(TfStaticCalibrateCommonTest, PoseGateSplitsOnRotation)
   EXPECT_EQ(intervals[1], (std::pair<std::size_t, std::size_t>{2, 3}));
 }
 
-TEST(TfStaticCalibrateCommonTest, PoseGateStationaryYieldsOneInterval)
+TEST(CalibCamLidarCommonTest, PoseGateStationaryYieldsOneInterval)
 {
   namespace calib = bagwiz::core::calib;
   const std::vector<calib::Mat4> poses(6, calib::identity_mat4());
@@ -304,7 +304,7 @@ TEST(TfStaticCalibrateCommonTest, PoseGateStationaryYieldsOneInterval)
   EXPECT_TRUE(commands::pose_gate_intervals({}, 1.0, 0.1).empty());
 }
 
-TEST(TfStaticCalibrateCommonTest, GraySharpnessPrefersEdgesOverUniform)
+TEST(CalibCamLidarCommonTest, GraySharpnessPrefersEdgesOverUniform)
 {
   namespace calib = bagwiz::core::calib;
   calib::GrayImage uniform;
@@ -328,7 +328,7 @@ TEST(TfStaticCalibrateCommonTest, GraySharpnessPrefersEdgesOverUniform)
   EXPECT_EQ(commands::gray_sharpness(degenerate), 0.0);
 }
 
-TEST(TfStaticCalibrateCommonTest, ValidateRejectsNegativeKeyframeThresholds)
+TEST(CalibCamLidarCommonTest, ValidateRejectsNegativeKeyframeThresholds)
 {
   auto args = valid_args();
   args.keyframe_dist = -0.1;

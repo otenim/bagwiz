@@ -27,7 +27,7 @@
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
 #include "bagwiz/io/topics.hpp"
-#include "tf_static_calibrate_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <tf2/buffer_core.hpp>
 #include <tf2/exceptions.hpp>
@@ -56,9 +56,9 @@
 #include <utility>
 #include <vector>
 
-// Wires the pure helpers in tf_static_calibrate_common.{hpp,cpp} (Task 7) and
+// Wires the pure helpers in calib_cam_lidar_common.{hpp,cpp} (Task 7) and
 // the calibration core in bagwiz_pointcloud's core::calib namespace (Tasks
-// 2-6) into `bagwiz tf static calibrate`'s actual bag-driving run. Structure
+// 2-6) into `bagwiz calib cam-lidar`'s actual bag-driving run. Structure
 // mirrors tf_static_dump.cpp: small phase helpers, one error path per
 // failure (log + return 1), success writes the output YAML and prints the
 // summary/--json report to stdout.
@@ -67,7 +67,7 @@ namespace bagwiz::commands
 namespace
 {
 
-constexpr const char * kLogger = "bagwiz.cmd.tf.static.calibrate";
+constexpr const char * kLogger = "bagwiz.cmd.calib.cam_lidar";
 // Sample picks are shrunk this far in from each end of the trajectory span so
 // interpolate_trajectory always has bracketing poses on both sides.
 constexpr std::int64_t kSampleMarginNs = 3'000'000'000LL;
@@ -103,7 +103,7 @@ std::string edges_csv(const std::vector<std::pair<std::string, std::string>> & e
 
 // Loads args.map_path and checks it carries intensity (required by NID).
 // Returns nullopt (and logs) on any failure.
-std::optional<core::pointcloud::PcdCloud> load_map(const TfStaticCalibrateArgs & args)
+std::optional<core::pointcloud::PcdCloud> load_map(const CalibCamLidarArgs & args)
 {
   std::ifstream in(args.map_path, std::ios::binary);
   if (!in) {
@@ -129,7 +129,7 @@ std::optional<core::pointcloud::PcdCloud> load_map(const TfStaticCalibrateArgs &
 
 // ---- phase 3: trajectory ---------------------------------------------------
 
-std::optional<std::vector<core::TrajectoryPose>> load_trajectory(const TfStaticCalibrateArgs & args)
+std::optional<std::vector<core::TrajectoryPose>> load_trajectory(const CalibCamLidarArgs & args)
 {
   std::ifstream in(args.traj_path);
   if (!in) {
@@ -155,7 +155,7 @@ std::optional<std::vector<core::TrajectoryPose>> load_trajectory(const TfStaticC
 // ---- phase 4: image topic + CameraInfo ------------------------------------
 
 std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
-  const TfStaticCalibrateArgs & args, io::BagReader & reader)
+  const CalibCamLidarArgs & args, io::BagReader & reader)
 {
   const io::TopicInfo * image_topic =
     io::find_topic_or_log(reader, args.topic, args.input_path, kLogger);
@@ -165,7 +165,7 @@ std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
   if (!core::image::is_supported_image_type(image_topic->type)) {
     BAGWIZ_LOG_ERROR(
       kLogger,
-      "Topic '%s' has type '%s', which `tf static calibrate` cannot read; expected "
+      "Topic '%s' has type '%s', which `calib cam-lidar` cannot read; expected "
       "sensor_msgs/msg/Image or sensor_msgs/msg/CompressedImage.",
       args.topic.c_str(), image_topic->type.c_str());
     return std::nullopt;
@@ -231,7 +231,7 @@ std::optional<core::calib::Mat4> mat4_of_transform(
 // buffer, so the report's "bag value" matches what a later `tf static update`
 // would see.
 std::optional<core::calib::EdgeChain> resolve_edge_chain(
-  const TfStaticCalibrateArgs & args, const std::string & optical_frame)
+  const CalibCamLidarArgs & args, const std::string & optical_frame)
 {
   tf2::BufferCore tf_buffer{std::chrono::hours(24 * 365)};
   if (const auto err = core::load_static_tf_buffer(args.input_path, tf_buffer); err.has_value()) {
@@ -347,7 +347,7 @@ std::int64_t header_stamp_ns_of(std::string_view type, std::span<const std::byte
 }
 
 std::optional<std::vector<std::int64_t>> scan_image_stamps(
-  const TfStaticCalibrateArgs & args, io::BagReader & reader)
+  const CalibCamLidarArgs & args, io::BagReader & reader)
 {
   io::ReadFilter filter;
   filter.topics = {args.topic};
@@ -436,7 +436,7 @@ struct GatedPicks
 // exist (a stationary or near-stationary recording) — the caller falls back
 // to plain even-time picking with a warning.
 std::optional<GatedPicks> keyframe_gated_picks(
-  const TfStaticCalibrateArgs & args, std::span<const std::int64_t> stamps,
+  const CalibCamLidarArgs & args, std::span<const std::int64_t> stamps,
   std::span<const core::TrajectoryPose> poses, std::int64_t margin_ns)
 {
   const auto eligible = eligible_sample_indices(
@@ -488,7 +488,7 @@ struct DecodedSample
 };
 
 std::optional<std::vector<DecodedSample>> decode_picked_samples(
-  const TfStaticCalibrateArgs & args, std::span<const std::size_t> picks,
+  const CalibCamLidarArgs & args, std::span<const std::size_t> picks,
   std::span<const std::int64_t> stamps)
 {
   auto reader = io::open_read_or_log(args.input_path, kLogger);
@@ -606,7 +606,7 @@ void fill_precull_candidates(
 }
 
 std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
-  const TfStaticCalibrateArgs & args, std::span<const DecodedSample> decoded,
+  const CalibCamLidarArgs & args, std::span<const DecodedSample> decoded,
   std::span<const core::TrajectoryPose> poses, const core::pointcloud::PcdCloud & cloud,
   const core::calib::CameraModel & cam, const core::calib::EdgeChain & chain)
 {
@@ -666,7 +666,7 @@ std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
 
 }  // namespace
 
-int run_tf_static_calibrate(const TfStaticCalibrateArgs & args)
+int run_calib_cam_lidar(const CalibCamLidarArgs & args)
 {
   // 1. Cross-field validation.
   if (const auto err = validate_calibrate_flags(args); !err.empty()) {
@@ -809,11 +809,12 @@ int run_tf_static_calibrate(const TfStaticCalibrateArgs & args)
 
   const std::string yaml = core::emit_static_tf_tree_yaml(
     std::span<const geometry_msgs::msg::TransformStamped>(&ts, 1),
-    args.input_path.string() + " (bagwiz tf static calibrate)");
+    args.input_path.string() + " (bagwiz calib cam-lidar)");
 
   const std::filesystem::path out_path =
-    args.output_path.empty() ? std::filesystem::path(default_calibrate_output_path(args.input_path))
-                             : std::filesystem::path(args.output_path);
+    args.output_path.empty()
+      ? std::filesystem::path(default_calib_cam_lidar_output_path(args.input_path))
+      : std::filesystem::path(args.output_path);
   if (const auto r = core::prepare_output_path(out_path, args.overwrite); !r.ok) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
     return 1;
@@ -833,7 +834,7 @@ int run_tf_static_calibrate(const TfStaticCalibrateArgs & args)
     return 1;
   }
   BAGWIZ_LOG_INFO(
-    kLogger, "tf static calibrate: wrote '%s' (%d sample(s), NID %.6f -> %.6f).", out_path.c_str(),
+    kLogger, "calib cam-lidar: wrote '%s' (%d sample(s), NID %.6f -> %.6f).", out_path.c_str(),
     result.samples_used, result.nid_before, result.nid_after);
   return 0;
 }
