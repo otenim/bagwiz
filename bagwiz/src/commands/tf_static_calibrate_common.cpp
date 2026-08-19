@@ -143,6 +143,31 @@ std::vector<std::size_t> pick_sample_indices(
   return picks;
 }
 
+core::calib::Mat4 mat4_from_quat(
+  double tx, double ty, double tz, double qx, double qy, double qz, double qw)
+{
+  const double norm = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+  const double x = qx / norm;
+  const double y = qy / norm;
+  const double z = qz / norm;
+  const double w = qw / norm;
+
+  core::calib::Mat4 m = core::calib::identity_mat4();
+  m[0] = 1 - 2 * (y * y + z * z);
+  m[1] = 2 * (x * y + z * w);
+  m[2] = 2 * (x * z - y * w);
+  m[4] = 2 * (x * y - z * w);
+  m[5] = 1 - 2 * (x * x + z * z);
+  m[6] = 2 * (y * z + x * w);
+  m[8] = 2 * (x * z + y * w);
+  m[9] = 2 * (y * z - x * w);
+  m[10] = 1 - 2 * (x * x + y * y);
+  m[12] = tx;
+  m[13] = ty;
+  m[14] = tz;
+  return m;
+}
+
 std::optional<core::calib::Mat4> interpolate_trajectory(
   std::span<const core::TrajectoryPose> poses, std::int64_t stamp_ns)
 {
@@ -181,30 +206,11 @@ std::optional<core::calib::Mat4> interpolate_trajectory(
       q[i] = (std::sin((1.0 - a) * theta) * q0[i] + std::sin(a * theta) * q1[i]) / s;
     }
   }
-  const double norm = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-  for (auto & c : q) {
-    c /= norm;
-  }
-
-  // Quaternion -> column-major rotation, translation lerped.
-  core::calib::Mat4 m = core::calib::identity_mat4();
-  const double x = q[0];
-  const double y = q[1];
-  const double z = q[2];
-  const double w = q[3];
-  m[0] = 1 - 2 * (y * y + z * z);
-  m[1] = 2 * (x * y + z * w);
-  m[2] = 2 * (x * z - y * w);
-  m[4] = 2 * (x * y - z * w);
-  m[5] = 1 - 2 * (x * x + z * z);
-  m[6] = 2 * (y * z + x * w);
-  m[8] = 2 * (x * z + y * w);
-  m[9] = 2 * (y * z - x * w);
-  m[10] = 1 - 2 * (x * x + y * y);
-  m[12] = p0.tx + a * (p1.tx - p0.tx);
-  m[13] = p0.ty + a * (p1.ty - p0.ty);
-  m[14] = p0.tz + a * (p1.tz - p0.tz);
-  return m;
+  // Quaternion -> column-major rotation (mat4_from_quat normalizes q itself),
+  // translation lerped.
+  return mat4_from_quat(
+    p0.tx + a * (p1.tx - p0.tx), p0.ty + a * (p1.ty - p0.ty), p0.tz + a * (p1.tz - p0.tz), q[0],
+    q[1], q[2], q[3]);
 }
 
 std::string default_calibrate_output_path(const std::filesystem::path & input)
@@ -277,14 +283,6 @@ std::string render_calibrate_json(
   out += "  }\n";
   out += "}";
   return out;
-}
-
-// Temporary stub: the real bag-driving refine run lands in Task 8's
-// tf_static_calibrate.cpp, which deletes this definition.
-int run_tf_static_calibrate(const TfStaticCalibrateArgs &)
-{
-  fmt::print(stderr, "tf static calibrate: not implemented yet\n");
-  return 1;
 }
 
 }  // namespace bagwiz::commands

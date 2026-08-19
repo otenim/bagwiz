@@ -86,6 +86,16 @@ struct TfStaticCalibrateArgs
   std::span<const std::int64_t> image_stamps_ns, std::int64_t traj_begin_ns,
   std::int64_t traj_end_ns, int samples, std::int64_t margin_ns);
 
+// Build a rigid transform from a translation and a quaternion (x, y, z, w;
+// ROS / tf2 Hamilton convention). The quaternion is normalized internally, so
+// a caller need not pre-normalize it (e.g. a raw geometry_msgs Quaternion
+// straight off the wire). Shared by interpolate_trajectory (TUM trajectory
+// poses) and the run path (tf2::BufferCore::lookupTransform results,
+// TransformStamped records from the bag's static TF) so both go through one
+// quaternion-to-rotation-matrix implementation.
+[[nodiscard]] core::calib::Mat4 mat4_from_quat(
+  double tx, double ty, double tz, double qx, double qy, double qz, double qw);
+
 // Interpolate the trajectory frame's pose at `stamp_ns`: translation lerp,
 // orientation shortest-path SLERP (nlerp near-parallel) between the two poses
 // bracketing the stamp, returned as a rigid transform. `poses` must be sorted
@@ -126,12 +136,16 @@ struct TfStaticCalibrateArgs
   const TfStaticCalibrateArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before);
 
-// Entry point for `bagwiz tf static calibrate`'s run path (Task 8). Declared
-// here so tf.cpp's dispatcher can call it while its real definition — the
-// bag-driving refine run — is still pending; the temporary stub in
-// tf_static_calibrate_common.cpp prints a "not implemented yet" message and
-// returns 1. Task 8 deletes that stub when it lands the real definition
-// (in a new tf_static_calibrate.cpp, following the run_tf_static_dump split).
+// Entry point for `bagwiz tf static calibrate`'s run path: loads the map PCD
+// and TUM trajectory, resolves the image's CameraInfo and the static-TF chain
+// from --traj-frame to the camera's optical frame, samples images spread
+// across the trajectory span, refines the --parent/--child edge via
+// core::calib::refine_extrinsic, and writes the result as a static-TF-tree
+// YAML that `bagwiz tf static update` applies. Returns 0 on success, 1 on any
+// error (bad flag combination, unreadable map/trajectory, missing/wrong-typed
+// image or CameraInfo topic, an unresolvable or off-chain edge, too few usable
+// image samples, or a refinement failure), with messages through the same
+// logging pattern run_tf_static_dump uses. Defined in tf_static_calibrate.cpp.
 int run_tf_static_calibrate(const TfStaticCalibrateArgs & args);
 
 }  // namespace bagwiz::commands

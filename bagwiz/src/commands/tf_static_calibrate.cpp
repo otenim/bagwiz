@@ -1,0 +1,635 @@
+// Copyright 2026 TIER IV, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+#include "bagwiz/core/base/atomic_write.hpp"
+#include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
+#include "bagwiz/core/base/str_utils.hpp"
+#include "bagwiz/core/calib/nid_cost.hpp"
+#include "bagwiz/core/calib/se3.hpp"
+#include "bagwiz/core/image/camera_distortion.hpp"
+#include "bagwiz/core/image/camera_info_resolver.hpp"
+#include "bagwiz/core/image/packed_raster.hpp"
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
+#include "bagwiz/core/tf/tf_buffer_loader.hpp"
+#include "bagwiz/core/tf/tf_chain.hpp"
+#include "bagwiz/core/tf/tf_static_collect.hpp"
+#include "bagwiz/core/tf/tf_static_tree_yaml.hpp"
+#include "bagwiz/core/tf/tf_transform_format.hpp"
+#include "bagwiz/core/tf/trajectory.hpp"
+#include "bagwiz/io/bag_io.hpp"
+#include "bagwiz/io/bag_open.hpp"
+#include "bagwiz/io/topics.hpp"
+#include "tf_static_calibrate_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+
+#include <tf2/buffer_core.hpp>
+#include <tf2/exceptions.hpp>
+#include <tf2/time.hpp>
+
+#include <geometry_msgs/msg/transform_stamped.hpp>
+
+#include <fmt/core.h>
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cinttypes>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <exception>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
+
+// Wires the pure helpers in tf_static_calibrate_common.{hpp,cpp} (Task 7) and
+// the calibration core in bagwiz_pointcloud's core::calib namespace (Tasks
+// 2-6) into `bagwiz tf static calibrate`'s actual bag-driving run. Structure
+// mirrors tf_static_dump.cpp: small phase helpers, one error path per
+// failure (log + return 1), success writes the output YAML and prints the
+// summary/--json report to stdout.
+namespace bagwiz::commands
+{
+namespace
+{
+
+constexpr const char * kLogger = "bagwiz.cmd.tf.static.calibrate";
+// Sample picks are shrunk this far in from each end of the trajectory span so
+// interpolate_trajectory always has bracketing poses on both sides.
+constexpr std::int64_t kSampleMarginNs = 3'000'000'000LL;
+
+// ---- small formatting helpers -------------------------------------------
+
+std::string sorted_frames_csv(const tf2::BufferCore & buffer)
+{
+  std::vector<std::string> frames = buffer.getAllFrameNames();
+  std::sort(frames.begin(), frames.end());
+  return core::join_csv(frames);
+}
+
+std::string edges_csv(const std::vector<std::pair<std::string, std::string>> & edges)
+{
+  std::vector<std::string> rendered;
+  rendered.reserve(edges.size());
+  for (const auto & [parent, child] : edges) {
+    rendered.push_back(fmt::format("{} -> {}", parent, child));
+  }
+  return core::join_csv(rendered);
+}
+
+// ---- phase 2: map ---------------------------------------------------------
+
+// Loads args.map_path and checks it carries intensity (required by NID).
+// Returns nullopt (and logs) on any failure.
+std::optional<core::pointcloud::PcdCloud> load_map(const TfStaticCalibrateArgs & args)
+{
+  std::ifstream in(args.map_path, std::ios::binary);
+  if (!in) {
+    BAGWIZ_LOG_ERROR(kLogger, "Failed to open map '%s' for reading.", args.map_path.c_str());
+    return std::nullopt;
+  }
+  auto result = core::pointcloud::read_pcd(in);
+  if (!result.ok) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "Failed to read map '%s': %s", args.map_path.c_str(), result.error.c_str());
+    return std::nullopt;
+  }
+  if (result.cloud.intensities.empty()) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "map '%s' has no intensity field; NID needs lidar intensity (re-run map slam on a bag "
+      "whose clouds carry it)",
+      args.map_path.c_str());
+    return std::nullopt;
+  }
+  return std::move(result.cloud);
+}
+
+// ---- phase 3: trajectory ---------------------------------------------------
+
+std::optional<std::vector<core::TrajectoryPose>> load_trajectory(const TfStaticCalibrateArgs & args)
+{
+  std::ifstream in(args.traj_path);
+  if (!in) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "Failed to open trajectory '%s' for reading.", args.traj_path.c_str());
+    return std::nullopt;
+  }
+  auto result = core::read_tum(in);
+  if (result.skipped_lines > 0) {
+    BAGWIZ_LOG_WARN(
+      kLogger, "Trajectory '%s': skipped %" PRId64 " malformed line(s).", args.traj_path.c_str(),
+      result.skipped_lines);
+  }
+  if (result.poses.size() < 2) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "Trajectory '%s' has fewer than 2 poses; cannot interpolate.",
+      args.traj_path.c_str());
+    return std::nullopt;
+  }
+  return std::move(result.poses);
+}
+
+// ---- phase 4: image topic + CameraInfo ------------------------------------
+
+std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
+  const TfStaticCalibrateArgs & args, io::BagReader & reader)
+{
+  const io::TopicInfo * image_topic =
+    io::find_topic_or_log(reader, args.topic, args.input_path, kLogger);
+  if (image_topic == nullptr) {
+    return std::nullopt;
+  }
+  if (!core::image::is_supported_image_type(image_topic->type)) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "Topic '%s' has type '%s', which `tf static calibrate` cannot read; expected "
+      "sensor_msgs/msg/Image or sensor_msgs/msg/CompressedImage.",
+      args.topic.c_str(), image_topic->type.c_str());
+    return std::nullopt;
+  }
+
+  std::string cam_info_topic;
+  if (args.cam_info_given) {
+    if (const auto err =
+          core::camera_info::validate_camera_info_topic(args.input_path, args.cam_info_topic);
+        err.has_value()) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", err->c_str());
+      return std::nullopt;
+    }
+    cam_info_topic = args.cam_info_topic;
+  } else {
+    const auto resolved = core::camera_info::resolve_camera_info_topic(args.topic, reader.topics());
+    if (!resolved.topic.has_value()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "%s. Pass it explicitly with --cam-info.",
+        resolved.error.value_or("could not resolve a CameraInfo topic").c_str());
+      return std::nullopt;
+    }
+    cam_info_topic = *resolved.topic;
+  }
+
+  auto ci = core::camera_info::load_camera_info(args.input_path, cam_info_topic);
+  if (!ci.ok()) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", ci.error.c_str());
+    return std::nullopt;
+  }
+  if (ci.info->frame_id.empty()) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "CameraInfo topic '%s' has an empty header.frame_id (needed as the optical frame).",
+      cam_info_topic.c_str());
+    return std::nullopt;
+  }
+
+  return std::move(*ci.info);
+}
+
+// ---- phase 5: static TF chain ---------------------------------------------
+
+// The three legs of the edited edge's chain, plus the edge's raw bag value
+// (t_parent_child, sourced from a static topic's own transforms rather than
+// the resolved buffer, so the report's "bag value" matches what a later
+// `tf static update` would see).
+std::optional<core::calib::EdgeChain> resolve_edge_chain(
+  const TfStaticCalibrateArgs & args, const std::string & optical_frame)
+{
+  tf2::BufferCore tf_buffer{std::chrono::hours(24 * 365)};
+  if (const auto err = core::load_static_tf_buffer(args.input_path, tf_buffer); err.has_value()) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", err->c_str());
+    return std::nullopt;
+  }
+
+  const std::vector<std::string> chain_frames =
+    core::resolve_chain(tf_buffer, args.traj_frame, optical_frame, tf2::TimePointZero);
+  if (chain_frames.empty()) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "No static TF path from --traj-frame '%s' to the image's optical frame '%s'. Available "
+      "static frames: %s",
+      args.traj_frame.c_str(), optical_frame.c_str(), sorted_frames_csv(tf_buffer).c_str());
+    return std::nullopt;
+  }
+  const auto chain_edges = core::chain_to_edges(tf_buffer, chain_frames, tf2::TimePointZero);
+  const bool edge_on_chain = std::any_of(
+    chain_edges.begin(), chain_edges.end(), [&](const std::pair<std::string, std::string> & e) {
+      return e.first == args.parent_frame && e.second == args.child_frame;
+    });
+  if (!edge_on_chain) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "--parent '%s' --child '%s' is not an edge on the chain from --traj-frame '%s' to '%s'. "
+      "Chain edges: %s",
+      args.parent_frame.c_str(), args.child_frame.c_str(), args.traj_frame.c_str(),
+      optical_frame.c_str(), edges_csv(chain_edges).c_str());
+    return std::nullopt;
+  }
+
+  std::vector<core::StaticTopicTransforms> static_topics;
+  try {
+    static_topics =
+      core::collect_static_tf(args.input_path, core::StaticTfRead::kFirstMessagePerTopic);
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "Failed to read static TF from %s: %s", args.input_path.c_str(), e.what());
+    return std::nullopt;
+  }
+  const geometry_msgs::msg::TransformStamped * edge_record = nullptr;
+  for (const auto & topic : static_topics) {
+    for (const auto & t : topic.transforms) {
+      if (t.header.frame_id == args.parent_frame && t.child_frame_id == args.child_frame) {
+        edge_record = &t;
+        break;
+      }
+    }
+    if (edge_record != nullptr) {
+      break;
+    }
+  }
+  if (edge_record == nullptr) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "--parent '%s' --child '%s' is on the TF chain but not directly recorded on any static TF "
+      "topic (e.g. /tf_static); nothing to refine.",
+      args.parent_frame.c_str(), args.child_frame.c_str());
+    return std::nullopt;
+  }
+
+  core::calib::EdgeChain chain;
+  chain.t_parent_child = mat4_from_quat(
+    edge_record->transform.translation.x, edge_record->transform.translation.y,
+    edge_record->transform.translation.z, edge_record->transform.rotation.x,
+    edge_record->transform.rotation.y, edge_record->transform.rotation.z,
+    edge_record->transform.rotation.w);
+  try {
+    const auto tf_parent =
+      tf_buffer.lookupTransform(args.traj_frame, args.parent_frame, tf2::TimePointZero);
+    chain.t_trajframe_parent = mat4_from_quat(
+      tf_parent.transform.translation.x, tf_parent.transform.translation.y,
+      tf_parent.transform.translation.z, tf_parent.transform.rotation.x,
+      tf_parent.transform.rotation.y, tf_parent.transform.rotation.z,
+      tf_parent.transform.rotation.w);
+    const auto tf_child =
+      tf_buffer.lookupTransform(args.child_frame, optical_frame, tf2::TimePointZero);
+    chain.t_child_camoptical = mat4_from_quat(
+      tf_child.transform.translation.x, tf_child.transform.translation.y,
+      tf_child.transform.translation.z, tf_child.transform.rotation.x,
+      tf_child.transform.rotation.y, tf_child.transform.rotation.z, tf_child.transform.rotation.w);
+  } catch (const tf2::TransformException & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "Could not resolve the chain around the edited edge: %s", e.what());
+    return std::nullopt;
+  }
+  return chain;
+}
+
+// ---- phase 6: cheap stamp scan ---------------------------------------------
+
+std::optional<std::vector<std::int64_t>> scan_image_stamps(
+  const TfStaticCalibrateArgs & args, io::BagReader & reader)
+{
+  io::ReadFilter filter;
+  filter.topics = {args.topic};
+  reader.set_filter(filter);
+
+  std::vector<std::int64_t> stamps;
+  io::RawMessage raw;
+  try {
+    while (reader.next(raw)) {
+      stamps.push_back(
+        core::image::image_capture_stamp_ns(raw.topic->type, raw.payload, raw.timestamp_ns));
+    }
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.topic.c_str(), e.what());
+    return std::nullopt;
+  }
+  if (stamps.empty()) {
+    BAGWIZ_LOG_ERROR(kLogger, "Topic '%s' carries no messages.", args.topic.c_str());
+    return std::nullopt;
+  }
+  return stamps;
+}
+
+// ---- phase 7: decode the picked samples ------------------------------------
+
+struct DecodedSample
+{
+  core::calib::GrayImage gray;
+  std::int64_t stamp_ns = 0;
+};
+
+std::optional<std::vector<DecodedSample>> decode_picked_samples(
+  const TfStaticCalibrateArgs & args, std::span<const std::size_t> picks,
+  std::span<const std::int64_t> stamps)
+{
+  auto reader = io::open_read_or_log(args.input_path, kLogger);
+  if (!reader) {
+    return std::nullopt;
+  }
+  io::ReadFilter filter;
+  filter.topics = {args.topic};
+  reader->set_filter(filter);
+
+  std::vector<DecodedSample> decoded;
+  decoded.reserve(picks.size());
+  io::RawMessage raw;
+  try {
+    std::size_t pick_i = 0;
+    std::size_t idx = 0;
+    while (pick_i < picks.size() && reader->next(raw)) {
+      if (idx != picks[pick_i]) {
+        ++idx;
+        continue;
+      }
+      const auto packed = core::image::to_packed_raster(raw.topic->type, raw.payload);
+      if (!packed.ok()) {
+        BAGWIZ_LOG_WARN(
+          kLogger, "Dropping sample at %" PRId64 " ns: failed to decode: %s", stamps[idx],
+          packed.error.c_str());
+        ++idx;
+        ++pick_i;
+        continue;
+      }
+      DecodedSample sample;
+      sample.gray = core::calib::gray_from_bgr24(
+        packed.raster->bgr, packed.raster->width, packed.raster->height);
+      sample.stamp_ns = stamps[idx];
+      decoded.push_back(std::move(sample));
+      ++idx;
+      ++pick_i;
+    }
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.topic.c_str(), e.what());
+    return std::nullopt;
+  }
+  return decoded;
+}
+
+// ---- phase 8: pre-cull candidates + assemble CalibSamples ------------------
+
+// Pixel-bound padding around the initial-estimate projection: the trust
+// region lets refine_extrinsic move the extrinsic by up to max_rot_rad /
+// max_trans, which shifts where a map point lands on the image, so the
+// pre-cull at delta=0 has to keep a margin wide enough that a point the
+// optimizer might need is not thrown away before it ever sees it. +64 is
+// slack for the depth-cull cell size and general roundoff.
+int precull_pad_px(
+  const core::calib::CameraModel & cam, double max_rot_rad, double max_trans, double min_depth)
+{
+  return static_cast<int>(std::ceil(cam.k[0] * (max_rot_rad + max_trans / min_depth))) + 64;
+}
+
+// Project `cloud`'s points through `t_cam_world` (the initial, delta=0
+// estimate) and keep the ones that land within the depth window and a
+// pad_px-widened pixel bound, pairing each kept point with its bin from
+// `full_bins` (computed once over the whole map before this loop, so every
+// sample buckets against the same histogram).
+void fill_precull_candidates(
+  const core::pointcloud::PcdCloud & cloud, std::span<const std::uint8_t> full_bins,
+  const core::calib::CameraModel & cam, const core::calib::Mat4 & t_cam_world, double min_depth,
+  double max_depth, int pad_px, core::calib::CalibSample & sample)
+{
+  const double lo_u = -static_cast<double>(pad_px);
+  const double lo_v = -static_cast<double>(pad_px);
+  const double hi_u = static_cast<double>(cam.width) + pad_px;
+  const double hi_v = static_cast<double>(cam.height) + pad_px;
+  for (std::size_t i = 0; i < cloud.points.size(); ++i) {
+    const auto & p = cloud.points[i];
+    const auto pc = core::calib::transform_point(
+      t_cam_world,
+      {static_cast<double>(p[0]), static_cast<double>(p[1]), static_cast<double>(p[2])});
+    if (pc[2] < min_depth || pc[2] > max_depth) {
+      continue;
+    }
+    const auto nd = core::image::distort_normalized(pc[0] / pc[2], pc[1] / pc[2], cam.model, cam.d);
+    const double u = cam.k[0] * nd.x + cam.k[2];
+    const double v = cam.k[4] * nd.y + cam.k[5];
+    if (u < lo_u || v < lo_v || u >= hi_u || v >= hi_v) {
+      continue;
+    }
+    sample.points_world.push_back(p);
+    sample.intensity_bins.push_back(full_bins[i]);
+  }
+}
+
+std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
+  const TfStaticCalibrateArgs & args, std::span<const DecodedSample> decoded,
+  std::span<const core::TrajectoryPose> poses, const core::pointcloud::PcdCloud & cloud,
+  const core::calib::CameraModel & cam, const core::calib::EdgeChain & chain)
+{
+  const auto full_bins = core::calib::equalize_intensity_bins(cloud.intensities, args.nid_bins);
+  const double max_rot_rad = args.max_rot_deg * M_PI / 180.0;
+  const int pad_px = precull_pad_px(cam, max_rot_rad, args.max_trans, args.min_depth);
+  const core::calib::Mat4 t_trajframe_cam0 = core::calib::mat4_multiply(
+    chain.t_trajframe_parent,
+    core::calib::mat4_multiply(chain.t_parent_child, chain.t_child_camoptical));
+  const core::calib::NidParams default_nid;
+
+  std::vector<core::calib::CalibSample> samples;
+  samples.reserve(decoded.size());
+  for (const auto & d : decoded) {
+    if (d.gray.width != cam.width || d.gray.height != cam.height) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "Dropping sample at %" PRId64 " ns: image size %ux%u does not match CameraInfo %ux%u.",
+        d.stamp_ns, d.gray.width, d.gray.height, cam.width, cam.height);
+      continue;
+    }
+    const auto pose = interpolate_trajectory(poses, d.stamp_ns);
+    if (!pose.has_value()) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "Dropping sample at %" PRId64 " ns: outside the trajectory's interpolation range.",
+        d.stamp_ns);
+      continue;
+    }
+    const core::calib::Mat4 t_cam_world0 =
+      core::calib::rigid_inverse(core::calib::mat4_multiply(*pose, t_trajframe_cam0));
+
+    core::calib::CalibSample sample;
+    sample.image = d.gray;
+    sample.t_world_trajframe = *pose;
+    fill_precull_candidates(
+      cloud, full_bins, cam, t_cam_world0, args.min_depth, args.max_depth, pad_px, sample);
+    if (sample.points_world.size() < default_nid.min_points) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "Dropping sample at %" PRId64 " ns: only %zu candidate map point(s) project into view.",
+        d.stamp_ns, sample.points_world.size());
+      continue;
+    }
+    samples.push_back(std::move(sample));
+  }
+  if (samples.size() < 3) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "Only %zu of %zu decoded sample(s) survived pre-culling; at least 3 are needed. Check "
+      "--traj-frame, the TF chain, and --min-depth/--max-depth.",
+      samples.size(), decoded.size());
+    return std::nullopt;
+  }
+  return samples;
+}
+
+}  // namespace
+
+int run_tf_static_calibrate(const TfStaticCalibrateArgs & args)
+{
+  // 1. Cross-field validation.
+  if (const auto err = validate_calibrate_flags(args); !err.empty()) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", err.c_str());
+    return 1;
+  }
+  const std::array<bool, 6> fixed_axes = parse_fixed_axes(args.fix_axes).first;
+
+  // 2. Map (needs intensity for NID).
+  const auto cloud = load_map(args);
+  if (!cloud.has_value()) {
+    return 1;
+  }
+
+  // 3. Trajectory.
+  const auto poses = load_trajectory(args);
+  if (!poses.has_value()) {
+    return 1;
+  }
+
+  // 4. Image topic + CameraInfo.
+  auto reader = io::open_read_or_log(args.input_path, kLogger);
+  if (!reader) {
+    return 1;
+  }
+  const auto cam_info = resolve_image_and_cam_info(args, *reader);
+  if (!cam_info.has_value()) {
+    return 1;
+  }
+
+  // 5. Static TF chain around the edited edge.
+  const auto chain = resolve_edge_chain(args, cam_info->frame_id);
+  if (!chain.has_value()) {
+    return 1;
+  }
+
+  // 6. Cheap stamp scan + sample picking (reuses `reader`; no next() has run
+  // on it yet, so set_filter here is still legal).
+  const auto stamps = scan_image_stamps(args, *reader);
+  if (!stamps.has_value()) {
+    return 1;
+  }
+  const auto picks = pick_sample_indices(
+    *stamps, poses->front().timestamp_ns, poses->back().timestamp_ns, args.samples,
+    kSampleMarginNs);
+  if (picks.size() < 3) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "Only %zu image sample(s) fall inside the trajectory span (with margin); at least 3 are "
+      "needed. Image stamps span [%" PRId64 ", %" PRId64 "] ns, trajectory spans [%" PRId64
+      ", %" PRId64 "] ns.",
+      picks.size(), stamps->front(), stamps->back(), poses->front().timestamp_ns,
+      poses->back().timestamp_ns);
+    return 1;
+  }
+
+  // 7. Decode only the picked messages + build the camera model from the
+  // first one.
+  const auto decoded = decode_picked_samples(args, picks, *stamps);
+  if (!decoded.has_value()) {
+    return 1;  // decode_picked_samples already logged the specific read error.
+  }
+  if (decoded->size() < 3) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "Only %zu of %zu picked sample(s) decoded successfully; at least 3 are needed.",
+      decoded->size(), picks.size());
+    return 1;
+  }
+  const auto & first = decoded->front();
+  const core::image::CameraInfo scaled_cam_info =
+    core::image::camera_info_for_size(*cam_info, first.gray.width, first.gray.height);
+  core::calib::CameraModel cam;
+  cam.k = scaled_cam_info.k;
+  cam.model = core::image::select_distortion_model(scaled_cam_info.distortion_model);
+  cam.d = scaled_cam_info.d;
+  cam.width = first.gray.width;
+  cam.height = first.gray.height;
+
+  // 8. Pre-cull candidates from the map and assemble the per-sample structs.
+  const auto samples = assemble_samples(args, *decoded, *poses, *cloud, cam, *chain);
+  if (!samples.has_value()) {
+    return 1;
+  }
+
+  // 9. Refine.
+  core::calib::RefineParams params;
+  params.nid.bins = args.nid_bins;
+  params.nid.min_depth = args.min_depth;
+  params.nid.max_depth = args.max_depth;
+  params.fixed = fixed_axes;
+  params.max_trans = args.max_trans;
+  params.max_rot = args.max_rot_deg * M_PI / 180.0;
+  const auto result = core::calib::refine_extrinsic(*samples, cam, *chain, params);
+  if (!result.ok) {
+    BAGWIZ_LOG_ERROR(kLogger, "Refinement failed: %s", result.error.c_str());
+    return 1;
+  }
+
+  // 10. Output: the refined edge as a one-transform static-TF-tree YAML.
+  const auto edge_before_t = core::calib::translation_of(chain->t_parent_child);
+  const auto edge_before_rpy = core::calib::rpy_of(chain->t_parent_child);
+  const std::array<double, 6> edge_before{edge_before_t[0],   edge_before_t[1],
+                                          edge_before_t[2],   edge_before_rpy[0],
+                                          edge_before_rpy[1], edge_before_rpy[2]};
+
+  const core::calib::Mat4 delta_t = core::calib::make_transform(
+    {result.delta[0], result.delta[1], result.delta[2]},
+    {result.delta[3], result.delta[4], result.delta[5]});
+  const core::calib::Mat4 refined = core::calib::mat4_multiply(chain->t_parent_child, delta_t);
+  const auto refined_t = core::calib::translation_of(refined);
+  const auto refined_rpy = core::calib::rpy_of(refined);
+
+  geometry_msgs::msg::TransformStamped ts;
+  ts.header.frame_id = args.parent_frame;
+  ts.child_frame_id = args.child_frame;
+  ts.transform.translation.x = refined_t[0];
+  ts.transform.translation.y = refined_t[1];
+  ts.transform.translation.z = refined_t[2];
+  ts.transform.rotation = core::rpy_to_quaternion({refined_rpy[0], refined_rpy[1], refined_rpy[2]});
+
+  const std::string yaml = core::emit_static_tf_tree_yaml(
+    std::span<const geometry_msgs::msg::TransformStamped>(&ts, 1),
+    args.input_path + " (bagwiz tf static calibrate)");
+
+  const std::filesystem::path out_path =
+    args.output_path.empty() ? std::filesystem::path(default_calibrate_output_path(args.input_path))
+                             : std::filesystem::path(args.output_path);
+  if (const auto r = core::prepare_output_path(out_path, args.overwrite); !r.ok) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+    return 1;
+  }
+  std::string write_error;
+  if (!core::write_file_atomically(out_path, yaml, write_error)) {
+    BAGWIZ_LOG_ERROR(kLogger, "Could not write '%s': %s", out_path.c_str(), write_error.c_str());
+    return 1;
+  }
+
+  const std::string report =
+    args.json ? render_calibrate_json(args, result, edge_before)
+              : render_calibrate_summary(args, result, edge_before, out_path.string());
+  fmt::print(stdout, "{}{}", report, args.json ? "\n" : "");
+  if (std::fflush(stdout) != 0) {
+    BAGWIZ_LOG_ERROR(kLogger, "Failed to write the calibration report to stdout");
+    return 1;
+  }
+  BAGWIZ_LOG_INFO(
+    kLogger, "tf static calibrate: wrote '%s' (%d sample(s), NID %.6f -> %.6f).", out_path.c_str(),
+    result.samples_used, result.nid_before, result.nid_after);
+  return 0;
+}
+
+}  // namespace bagwiz::commands
