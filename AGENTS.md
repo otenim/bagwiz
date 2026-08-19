@@ -72,7 +72,7 @@ to keep this file itself consistent over time.
   in any generated code, commit messages, pull request descriptions,
   documentation, or other output.
 
-### 4. Commits & Branch Names
+### 4. Commits, Branches & Worktrees
 
 - Follow the [Conventional Commits](https://www.conventionalcommits.org/)
   specification for every commit message. Use one of the standard types
@@ -82,6 +82,23 @@ to keep this file itself consistent over time.
 - Use the same type as the branch prefix when creating a branch for a
   pull request (e.g. `feat/multi-topic-inspect`, `fix/hesai-sop-order`).
   Do not use tool- or author-specific prefixes such as `claude/*`.
+- Do all implementation work inside a dedicated git worktree created
+  for the branch before the first change
+  (`git worktree add <path> -b <type>/<name>`), rather than switching
+  branches in the primary checkout. Keep the primary checkout on the
+  main branch as the stable base. A per-branch worktree keeps parallel
+  efforts from trampling one shared working tree, keeps each change's
+  build products and scratch state together (ccache still shares
+  compiled objects across worktrees — see "Build Workflow"), and makes
+  abandoning an attempt as cheap as removing one directory. Place the
+  worktree outside the repository (e.g. a sibling directory) or under
+  a git-ignored path, never at a tracked path.
+- The worktree lives exactly as long as its branch: it is removed as
+  the first step of the branch-retirement sequence that runs once the
+  branch's pull request has merged into the main branch — see "Remote
+  Repository Operations" (rule 7), which owns that cleanup. Do not
+  leave merged worktrees behind, and do not remove one while its pull
+  request is still open.
 - Prefer a new commit over rewriting an existing one. History rewrites
   (`git commit --amend`, interactive rebase, and the rest) are for a
   commit you created moments ago that nothing has seen yet: no reviewer
@@ -149,7 +166,8 @@ to keep this file itself consistent over time.
 - Retire the working branch as soon as its pull request is merged, so
   merged work stops accumulating locally and on the remote. Standing
   from a checkout other than the branch's own worktree, in this
-  order: remove the worktree if the branch had one
+  order: remove the branch's worktree — every implementation branch
+  has one, per rule 4 of this group
   (`git worktree remove <path>`), delete the local branch
   (`git branch -d <branch>`), delete the remote branch
   (`git push origin --delete <branch>`, skipped when the repository
