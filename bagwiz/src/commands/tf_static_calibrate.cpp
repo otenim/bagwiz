@@ -14,7 +14,9 @@
 #include "bagwiz/core/calib/se3.hpp"
 #include "bagwiz/core/image/camera_distortion.hpp"
 #include "bagwiz/core/image/camera_info_resolver.hpp"
+#include "bagwiz/core/image/compressed_image.hpp"
 #include "bagwiz/core/image/packed_raster.hpp"
+#include "bagwiz/core/image/raw_image.hpp"
 #include "bagwiz/core/pointcloud/point_cloud_io.hpp"
 #include "bagwiz/core/tf/tf_buffer_loader.hpp"
 #include "bagwiz/core/tf/tf_chain.hpp"
@@ -49,6 +51,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -67,6 +70,14 @@ constexpr const char * kLogger = "bagwiz.cmd.tf.static.calibrate";
 // Sample picks are shrunk this far in from each end of the trajectory span so
 // interpolate_trajectory always has bracketing poses on both sides.
 constexpr std::int64_t kSampleMarginNs = 3'000'000'000LL;
+
+// Mirrors core::image::packed_raster.cpp's own private copies of these two
+// type strings (is_supported_image_type()/to_packed_raster() cover the
+// decode side; this file additionally needs to peek at just the header stamp
+// during the cheap phase-6 scan, so it re-checks the type here too). Keep in
+// sync by hand.
+constexpr std::string_view kImageMsgType = "sensor_msgs/msg/Image";
+constexpr std::string_view kCompressedImageMsgType = "sensor_msgs/msg/CompressedImage";
 
 // ---- small formatting helpers -------------------------------------------
 
@@ -293,6 +304,24 @@ std::optional<core::calib::EdgeChain> resolve_edge_chain(
 
 // ---- phase 6: cheap stamp scan ---------------------------------------------
 
+// header.stamp for `type`/`payload` (0 when the message's own header carries
+// none, e.g. an unset builtin_interfaces/Time, or the payload fails to
+// parse). Only the two image types this command reads are recognized; any
+// other type reports unset.
+// cppcheck-suppress passedByValue  // string_view is the canonical by-value idiom
+std::int64_t header_stamp_ns_of(std::string_view type, std::span<const std::byte> payload)
+{
+  if (type == kCompressedImageMsgType) {
+    const auto view = core::image::extract_compressed_image(payload);
+    return view.ok() ? view.image->header_stamp_ns : 0;
+  }
+  if (type == kImageMsgType) {
+    const auto view = core::image::extract_raw_image(payload);
+    return view.ok() ? view.image->header_stamp_ns : 0;
+  }
+  return 0;
+}
+
 std::optional<std::vector<std::int64_t>> scan_image_stamps(
   const TfStaticCalibrateArgs & args, io::BagReader & reader)
 {
@@ -301,11 +330,17 @@ std::optional<std::vector<std::int64_t>> scan_image_stamps(
   reader.set_filter(filter);
 
   std::vector<std::int64_t> stamps;
+  std::size_t fallback_count = 0;
   io::RawMessage raw;
   try {
     while (reader.next(raw)) {
-      stamps.push_back(
-        core::image::image_capture_stamp_ns(raw.topic->type, raw.payload, raw.timestamp_ns));
+      const std::int64_t header_stamp_ns = header_stamp_ns_of(raw.topic->type, raw.payload);
+      if (header_stamp_ns != 0) {
+        stamps.push_back(header_stamp_ns);
+      } else {
+        stamps.push_back(raw.timestamp_ns);
+        ++fallback_count;
+      }
     }
   } catch (const std::exception & e) {
     BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.topic.c_str(), e.what());
@@ -314,6 +349,12 @@ std::optional<std::vector<std::int64_t>> scan_image_stamps(
   if (stamps.empty()) {
     BAGWIZ_LOG_ERROR(kLogger, "Topic '%s' carries no messages.", args.topic.c_str());
     return std::nullopt;
+  }
+  if (fallback_count > 0) {
+    BAGWIZ_LOG_WARN(
+      kLogger,
+      "%zu of %zu image message(s) on '%s' had no header stamp; using bag record time for those.",
+      fallback_count, stamps.size(), args.topic.c_str());
   }
   return stamps;
 }
