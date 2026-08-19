@@ -72,7 +72,9 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //   a             : toggle full-expansion of long primitive arrays
 //   i             : toggle in-terminal image preview (image topics on a
 //                   Kitty/Sixel-capable terminal; absent otherwise)
-//   q / Q / Esc / Ctrl-C / Ctrl-D : quit
+//   Esc           : back out one level — close the help, leave the edit
+//                   mode, leave the preview, quit at the YAML view
+//   Ctrl-C / Ctrl-D : quit from anywhere ('q' is not a key)
 // Inside the image preview u/p/t (rectify, pcd overlay, topic picker), the
 // overlay adjusters f/c/r/=/-/]/[, P (scene pins, see walk_pins.hpp) and the
 // static-extrinsic edit mode (e, nudge keys, D/A export/apply — see
@@ -213,13 +215,21 @@ public:
 
     auto on_nav = [&](core::tui::NavKey nav) -> core::tui::AppKeyResult {
       status.clear();
-      if (show_help && nav != core::tui::NavKey::kResize) {
-        // The overlay is a reference card, not a mode: any navigation key
-        // closes it without acting, so a stray press cannot move the cursor
-        // behind the help. (Scroll keys stay inside the pager and scroll
-        // the reference itself.)
-        close_help();
-        return core::tui::AppKeyResult::kHandled;
+      if (show_help) {
+        // The overlay accepts only its own keys: Esc closes it, resize
+        // repaints it, the scroll keys (handled inside the pager) move it,
+        // and every other key is swallowed so a stray press cannot act
+        // behind the reference.
+        if (nav == core::tui::NavKey::kBack) {
+          close_help();
+          return core::tui::AppKeyResult::kHandled;
+        }
+        return nav == core::tui::NavKey::kResize ? core::tui::AppKeyResult::kHandled
+                                                 : core::tui::AppKeyResult::kIgnored;
+      }
+      if (nav == core::tui::NavKey::kBack) {
+        // Nothing to close at the top level: Esc leaves walk itself.
+        return core::tui::AppKeyResult::kQuit;
       }
       switch (nav) {
         case core::tui::NavKey::kNext:
@@ -281,9 +291,9 @@ public:
         return core::tui::AppKeyResult::kHandled;
       }
       if (show_help) {
-        // Same swallow rule as the navigation keys above.
-        close_help();
-        return core::tui::AppKeyResult::kHandled;
+        // Same swallow rule as the navigation keys above: only '?' and Esc
+        // leave the reference.
+        return core::tui::AppKeyResult::kIgnored;
       }
       switch (ev) {
         case core::KeyEvent::kToggleArrayExpand:

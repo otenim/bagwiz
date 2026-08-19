@@ -97,11 +97,13 @@ KeyEvent classify_key(std::string_view bytes)
   if (bytes.size() == 1) {
     const unsigned char c = static_cast<unsigned char>(bytes[0]);
     switch (c) {
+      // A lone ESC backs out one level; the views decide what that means
+      // (close the help, leave the edit mode or the preview, quit at the
+      // top). 'q'/'Q' are retired so a stray letter cannot end the session.
       case 0x1B:  // lone ESC
+        return KeyEvent::kBack;
       case 0x03:  // Ctrl-C
       case 0x04:  // Ctrl-D
-      case 'q':
-      case 'Q':
         return KeyEvent::kQuit;
       case ' ':
         return KeyEvent::kNext;

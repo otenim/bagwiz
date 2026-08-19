@@ -38,6 +38,9 @@ enum class NavKey {
   kScrollDown,       // scroll body down by one line
   kScrollHead,       // jump body to first line
   kScrollTail,       // jump body to last line
+  kBack,             // back out one level (Esc). Forwarded to OnNav; when
+                     // the app has nothing to close (kIgnored), the pager
+                     // exits like kQuit.
   kQuit,             // exit the pager
   kResize,           // terminal was resized
 };
@@ -81,7 +84,9 @@ enum class AppKeyResult {
 //     whatever the frame reports.
 //   * OnNav: react to navigation NavKeys (next/prev/first/last). The
 //     pager handles kScroll* and kQuit itself but reports kResize via
-//     this callback for visibility / state-bookkeeping.
+//     this callback for visibility / state-bookkeeping. kBack is offered
+//     to the callback first: kHandled means the app closed something one
+//     level down; kIgnored (or no callback) exits the pager.
 //   * OnAppKey: invoked for KeyEvents that to_nav_key() maps to kNone
 //     (e.g. kSaveYaml, kToggleArrayExpand). The callback may call
 //     with_line_input() on `*this`.

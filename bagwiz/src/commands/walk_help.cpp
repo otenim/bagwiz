@@ -20,7 +20,7 @@ std::string yaml_footer_legend(bool preview_available)
   if (preview_available) {
     legend += "[i] preview   ";
   }
-  legend += "[?] keys   [q] quit";
+  legend += "[?] keys   [Esc] quit";
   return legend;
 }
 
@@ -38,7 +38,7 @@ std::string preview_footer_legend(bool pcd_topic_selected, bool edit_active)
     // so their entry hints wait for an overlay topic like the keys do.
     legend += "[e] edit   [P] pin   ";
   }
-  legend += "[?] keys   [q] back";
+  legend += "[?] keys   [Esc] back";
   return legend;
 }
 
@@ -59,8 +59,8 @@ std::vector<std::string> yaml_help_lines()
     "  i              open the image preview (image topics only)",
     "Other",
     "  S              save the message as YAML",
-    "  ?              close this help",
-    "  q              quit",
+    "  ? / Esc        close this help",
+    "  Esc            quit (from the YAML view; Ctrl-C / Ctrl-D too)",
   };
 }
 
@@ -92,8 +92,8 @@ std::vector<std::string> preview_help_lines()
     "  D              export the edits as static-TF YAML",
     "  A              apply the edits to the input bag (asks first)",
     "Other",
-    "  ?              close this help",
-    "  q              back to the YAML view",
+    "  ? / Esc        close this help",
+    "  Esc            back (edit mode -> preview -> YAML view)",
   };
 }
 

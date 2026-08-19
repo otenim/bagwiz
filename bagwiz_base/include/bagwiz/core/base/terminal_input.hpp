@@ -67,8 +67,10 @@ enum class KeyEvent {
   kEditApplyToBag,       // overwrite the input bag's static TF with the edits (prompts)
   kPinScene,             // pin/unpin the displayed frame as a preview scene tile
   kHelp,                 // show the key-help overlay (walk command)
+  kBack,                 // back out one level (lone ESC): close the help,
+                         // leave the edit mode / preview, quit at the top
   kConfirm,              // confirm the current prompt/selection
-  kQuit,                 // exit the interactive loop
+  kQuit,                 // hard quit (Ctrl-C / Ctrl-D)
   kResize,               // terminal was resized (synthesised by read_key_event
                          // from a SIGWINCH flag set by the signal_handler
                          // module; never produced by classify_key)
@@ -96,8 +98,9 @@ enum class KeyEvent {
 //     'P' (pin/unpin the displayed frame as a preview scene — walk),
 //     '?' (show the key-help overlay — walk),
 //     Enter/Return (confirm the current prompt or selection),
-//     'q'/'Q' (quit), plus control
-//     chars (^C, ^D) and a lone ESC (0x1B) for quit
+//     a lone ESC (0x1B) to back out one level (kBack), and the control
+//     chars ^C / ^D for a hard quit ('q'/'Q' are retired: with ESC as the
+//     one back/leave key, a stray letter must not end the whole session)
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"
 //     (Left -> prev), "ESC [ A" (Up -> scroll up), "ESC [ B" (Down ->
 //     scroll down), "ESC [ H" (Home -> scroll head), "ESC [ F" (End ->

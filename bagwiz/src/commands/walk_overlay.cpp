@@ -152,6 +152,7 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
       case core::KeyEvent::kConfirm:
         done = true;
         break;
+      case core::KeyEvent::kBack:
       case core::KeyEvent::kQuit:
         done = true;
         cancelled = true;
@@ -610,6 +611,7 @@ bool PcdOverlayController::prompt_for_edge(core::tui::image::ImageBackend backen
       case core::KeyEvent::kConfirm:
         done = true;
         break;
+      case core::KeyEvent::kBack:
       case core::KeyEvent::kQuit:
         done = true;
         cancelled = true;
