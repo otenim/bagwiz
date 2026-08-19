@@ -332,9 +332,12 @@ and their overlays and pickers) — and to any TUI added later.
   one TUI surface and something else in another. The established
   global bindings are: `?` opens the key reference, Esc backs out
   one level (close the overlay, leave the mode, leave the view;
-  absorbed at the top so it cannot end the session), `q` and
-  Ctrl-C / Ctrl-D quit the current view, and
-  `j`/`k` scroll. Never rebind one of these locally. When a view
+  absorbed at the top so it cannot end the session),
+  Ctrl-C / Ctrl-D terminate the session outright — from any screen,
+  overlays and pickers included — and `j`/`k` scroll. Never rebind
+  one of these locally. `q` is not a global binding: walk binds it
+  only in the YAML view, where it quits walk; every other screen
+  leaves it unbound (inert). When a view
   needs a new action, assign an unused key in `classify_key()`
   (`bagwiz_base/src/core/base/terminal_input.cpp`) — the single
   source of key bindings — instead of overloading a taken key with a

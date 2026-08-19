@@ -41,8 +41,13 @@ enum class NavKey {
   kBack,             // back out one level (Esc). Forwarded to OnNav; when
                      // the app has nothing to close (kIgnored), the pager
                      // exits like kQuit.
-  kQuit,             // exit the pager; offered to OnNav first so an
-                     // overlay can swallow it (kHandled keeps the pager)
+  kQuit,             // exit the pager ('q' via KeyEvent::kQuitView); offered
+                     // to OnNav first so an overlay can swallow it (kHandled
+                     // keeps the pager)
+  kTerminate,        // terminate the session (^C/^D via KeyEvent::kQuit, or
+                     // EOF / read interruption): the pager exits at once,
+                     // without offering it to OnNav, so no overlay can
+                     // swallow it
   kResize,           // terminal was resized
 };
 
@@ -84,11 +89,12 @@ enum class AppKeyResult {
 //     terminal width and the pager will adapt the body region around
 //     whatever the frame reports.
 //   * OnNav: react to navigation NavKeys (next/prev/first/last). The
-//     pager handles kScroll* and kQuit itself but reports kResize via
+//     pager handles kScroll* and kTerminate itself but reports kResize via
 //     this callback for visibility / state-bookkeeping. kBack and kQuit
 //     are offered to the callback first: kHandled means the app consumed
 //     the key (closed or kept an overlay); kIgnored (or no callback)
-//     exits the pager.
+//     exits the pager. kTerminate never reaches the callback — it ends
+//     the loop unconditionally, from any screen.
 //   * OnAppKey: invoked for KeyEvents that to_nav_key() maps to kNone
 //     (e.g. kSaveYaml, kToggleArrayExpand). The callback may call
 //     with_line_input() on `*this`.
@@ -105,7 +111,8 @@ public:
   explicit ScrollablePager(PagerConfig cfg = {});
 
   // Run the loop until OnNav / OnAppKey returns kQuit, the user presses
-  // kQuit, or read_key_event returns kQuit on EOF. Returns 0.
+  // kQuit, or a kTerminate arrives (^C/^D, EOF, read interruption).
+  // Returns 0.
   int run(const BuildFrame & build_frame, const OnNav & on_nav, const OnAppKey & on_app_key);
 
   // Temporarily yield the terminal to a cooked-mode line-input scope.

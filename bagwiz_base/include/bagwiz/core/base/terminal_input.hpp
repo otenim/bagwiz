@@ -70,8 +70,12 @@ enum class KeyEvent {
   kBack,                 // back out one level (lone ESC): close the help,
                          // leave the edit mode / preview; inert at the top
   kConfirm,              // confirm the current prompt/selection
-  kQuit,                 // quit the current view ('q'/'Q', ^C/^D); the '?'
-                         // help overlays swallow it (close with ESC first)
+  kQuit,                 // terminate the session outright (^C/^D; also
+                         // synthesized on EOF / read interruption). No view
+                         // may swallow it — it ends the session from anywhere
+  kQuitView,             // quit the current view ('q'/'Q'); bound only where a
+                         // view chooses to — today walk's YAML view alone, so
+                         // it is inert in the preview, pickers and overlays
   kResize,               // terminal was resized (synthesised by read_key_event
                          // from a SIGWINCH flag set by the signal_handler
                          // module; never produced by classify_key)
@@ -99,8 +103,9 @@ enum class KeyEvent {
 //     'P' (pin/unpin the displayed frame as a preview scene — walk),
 //     '?' (show the key-help overlay — walk),
 //     Enter/Return (confirm the current prompt or selection),
-//     a lone ESC (0x1B) to back out one level (kBack), and 'q'/'Q' plus
-//     the control chars ^C / ^D to quit the current view (kQuit)
+//     a lone ESC (0x1B) to back out one level (kBack), 'q'/'Q' to quit the
+//     current view where a view binds it (kQuitView), and the control chars
+//     ^C / ^D to terminate the session outright (kQuit)
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"
 //     (Left -> prev), "ESC [ A" (Up -> scroll up), "ESC [ B" (Down ->
 //     scroll down), "ESC [ H" (Home -> scroll head), "ESC [ F" (End ->

@@ -65,11 +65,12 @@ TEST(ClassifyKey, StepForwardAndBackward10s)
 
 TEST(ClassifyKey, QuitBindings)
 {
-  // 'q'/'Q' quit the current view (walk itself from the YAML view); the
-  // '?' help overlays swallow kQuit so a reference lookup cannot end the
-  // session. A lone ESC is kBack, not quit (see BackBinding).
-  EXPECT_EQ(classify_key("q"), KeyEvent::kQuit);
-  EXPECT_EQ(classify_key("Q"), KeyEvent::kQuit);
+  // ^C/^D terminate the session outright (kQuit) from any screen, while
+  // 'q'/'Q' are a separate event (kQuitView) that only walk's YAML view
+  // binds — every other screen leaves it inert. A lone ESC is kBack, not
+  // quit (see BackBinding).
+  EXPECT_EQ(classify_key("q"), KeyEvent::kQuitView);
+  EXPECT_EQ(classify_key("Q"), KeyEvent::kQuitView);
   EXPECT_EQ(classify_key(std::string_view("\x03", 1)), KeyEvent::kQuit);  // Ctrl-C
   EXPECT_EQ(classify_key(std::string_view("\x04", 1)), KeyEvent::kQuit);  // Ctrl-D
 }

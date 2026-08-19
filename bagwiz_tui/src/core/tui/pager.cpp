@@ -76,6 +76,8 @@ NavKey to_nav_key(KeyEvent ev) noexcept
     case KeyEvent::kBack:
       return NavKey::kBack;
     case KeyEvent::kQuit:
+      return NavKey::kTerminate;
+    case KeyEvent::kQuitView:
       return NavKey::kQuit;
     case KeyEvent::kResize:
       return NavKey::kResize;
@@ -230,6 +232,12 @@ int ScrollablePager::run(
           continue;
         }
       }
+      break;
+    }
+
+    if (nav == NavKey::kTerminate) {
+      // ^C/^D (or EOF / a read failure) ends the session outright: not
+      // offered to the app, so no overlay can swallow it.
       break;
     }
 

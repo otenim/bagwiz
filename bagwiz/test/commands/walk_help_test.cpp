@@ -204,13 +204,16 @@ TEST(WalkHelpFooters, BackIsEscInThePreviewFooters)
   }
 }
 
-TEST(WalkHelpReference, HelpListsBothLeaveKeys)
+TEST(WalkHelpReference, HelpListsTheLeaveKeys)
 {
-  // Esc backs out one level and q quits/leaves the view; both are real
-  // bindings, so the reference lists both.
+  // The YAML view quits walk on q, so its reference lists q. The preview
+  // goes back a level on Esc, quits walk on Ctrl-C / Ctrl-D and leaves q
+  // inert — its reference must say exactly that and not advertise q.
   EXPECT_NE(flatten(yaml_help_lines()).find("  q "), std::string::npos);
-  EXPECT_NE(flatten(preview_help_lines()).find("  q "), std::string::npos);
-  EXPECT_NE(flatten(preview_help_lines()).find("  Esc "), std::string::npos);
+  const std::string preview_help = flatten(preview_help_lines());
+  EXPECT_NE(preview_help.find("  Esc "), std::string::npos);
+  EXPECT_NE(preview_help.find("Ctrl-C / Ctrl-D"), std::string::npos);
+  EXPECT_EQ(preview_help.find("  q "), std::string::npos);
 }
 
 }  // namespace

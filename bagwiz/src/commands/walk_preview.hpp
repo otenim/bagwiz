@@ -116,9 +116,15 @@ public:
     const std::optional<core::image::CameraInfo> & camera_info,
     const std::string & camera_info_error);
 
-  // The preview key loop: navigation keys re-decode and re-render; q returns
-  // to the YAML view, which the pager then repaints.
-  void run();
+  // How the preview key loop ended: the user backed out to the YAML view
+  // (Esc), or asked to terminate the whole walk session (Ctrl-C / Ctrl-D).
+  enum class Exit { kBack, kTerminate };
+
+  // The preview key loop: navigation keys re-decode and re-render; Esc
+  // returns to the YAML view, which the pager then repaints; Ctrl-C /
+  // Ctrl-D exit with Exit::kTerminate so the caller can end walk. 'q' is
+  // inert here — quitting walk on 'q' is the YAML view's binding alone.
+  Exit run();
 
 private:
   core::image::RectifyHelper * ensure_rectify_helper(std::uint32_t w, std::uint32_t h);
@@ -203,9 +209,10 @@ private:
   const std::string & camera_info_error_;
 
   bool rectify_enabled_ = false;
-  // '?' overlay state: while shown, scroll keys move the reference and any
-  // key other than scroll/resize/quit closes it (see run()). Reset when the
-  // preview session ends so re-entering starts on the image.
+  // '?' overlay state: while shown, the scroll keys move the reference, Esc
+  // closes it, and every other key is swallowed — except Ctrl-C / Ctrl-D,
+  // which terminate the session (see run()). Reset when the preview session
+  // ends so re-entering starts on the image.
   bool show_help_ = false;
   std::size_t help_scroll_ = 0;
   std::unique_ptr<core::image::RectifyHelper> rectify_helper_;

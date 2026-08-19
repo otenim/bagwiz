@@ -132,6 +132,11 @@ struct OverlayFrameReadings
   std::optional<std::int64_t> residual_ns;
 };
 
+// How an interactive picker ended: a changed selection was confirmed, the
+// user left without one (Esc, or a confirmation identical to the applied
+// selection), or asked to terminate the walk session (Ctrl-C / Ctrl-D).
+enum class PickerOutcome { kConfirmed, kCancelled, kTerminate };
+
 class PcdOverlayController
 {
 public:
@@ -171,11 +176,13 @@ public:
   [[nodiscard]] PcdOverlayState & state() noexcept { return pcd_; }
   [[nodiscard]] const PcdOverlayState & state() const noexcept { return pcd_; }
 
-  // Interactive checkbox picker over the candidate topics. Returns the
-  // selected topics, or std::nullopt when the user cancelled or confirmed an
-  // unchanged selection (both leave the current overlay untouched).
-  // `backend` selects the graphics-clear protocol for the prompt redraws.
-  [[nodiscard]] std::optional<std::vector<std::string>> prompt_for_topics(
+  // Interactive checkbox picker over the candidate topics. kConfirmed
+  // carries the newly selected topics; a confirmation identical to the
+  // applied selection reports kCancelled instead (both leave the current
+  // overlay untouched). kTerminate is Ctrl-C / Ctrl-D: the caller ends the
+  // walk session. 'q' is inert — cancel is Esc alone. `backend` selects
+  // the graphics-clear protocol for the prompt redraws.
+  [[nodiscard]] std::pair<PickerOutcome, std::vector<std::string>> prompt_for_topics(
     core::tui::image::ImageBackend backend);
 
   // Start the overlay initialization on a worker thread: one combined bag
@@ -249,9 +256,11 @@ public:
   // no cloud has been displayed yet or no static edge lies on the chains.
   bool refresh_edit_candidates(const std::string & camera_frame);
 
-  // Interactive single-select list over the candidates. Returns true when a
-  // row was confirmed (stored in edit_state().active); Esc/q cancels.
-  bool prompt_for_edge(core::tui::image::ImageBackend backend);
+  // Interactive single-select list over the candidates. kConfirmed means a
+  // row was confirmed (stored in edit_state().active); Esc cancels; Ctrl-C /
+  // Ctrl-D reports kTerminate so the caller can end the walk session. 'q' is
+  // inert — cancel is Esc alone.
+  [[nodiscard]] PickerOutcome prompt_for_edge(core::tui::image::ImageBackend backend);
 
   // Write the active / every edited edge into the live TF buffer, so the
   // next projection composes with the edited values. apply_all_edits() runs

@@ -94,12 +94,12 @@ std::string_view pcd_scheme_name(core::pointcloud::ColorScheme s)
   return "?";
 }
 
-std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
+std::pair<PickerOutcome, std::vector<std::string>> PcdOverlayController::prompt_for_topics(
   core::tui::image::ImageBackend backend)
 {
   if (pcd_topics_.empty()) {
     status_ = "no PointCloud2 topics in bag";
-    return std::nullopt;
+    return {PickerOutcome::kCancelled, {}};
   }
 
   // Pre-check the topics that are currently active so the picker reflects
@@ -111,7 +111,7 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
   }
   std::size_t cursor = 0;
   bool done = false;
-  bool cancelled = false;
+  PickerOutcome outcome = PickerOutcome::kCancelled;
 
   while (!done) {
     core::tui::image::clear_image(std::cout, backend);
@@ -119,7 +119,7 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
     const auto term = core::tui::query_terminal_size();
     core::tui::draw_line(
       std::cout, 1,
-      "  Select PointCloud2 topics (Space toggle, Enter confirm, Esc/q cancel):", term.cols);
+      "  Select PointCloud2 topics (Space toggle, Enter confirm, Esc cancel):", term.cols);
     for (std::size_t i = 0; i < pcd_topics_.size(); ++i) {
       const std::string marker = (i == cursor) ? ">" : " ";
       const std::string box = checked[i] ? "[x]" : "[ ]";
@@ -151,21 +151,28 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
         break;
       case core::KeyEvent::kConfirm:
         done = true;
+        outcome = PickerOutcome::kConfirmed;
         break;
       case core::KeyEvent::kBack:
-      case core::KeyEvent::kQuit:
         done = true;
-        cancelled = true;
+        break;
+      case core::KeyEvent::kQuit:
+        // Ctrl-C / Ctrl-D terminates the session from any screen, this
+        // prompt included; the preview propagates it to the pager.
+        done = true;
+        outcome = PickerOutcome::kTerminate;
         break;
       case core::KeyEvent::kResize:
       default:
-        break;
+        break;  // 'q' (kQuitView) lands here: inert in the pickers
     }
   }
 
-  if (cancelled) {
-    status_ = "(topic selection cancelled)";
-    return std::nullopt;
+  if (outcome != PickerOutcome::kConfirmed) {
+    if (outcome == PickerOutcome::kCancelled) {
+      status_ = "(topic selection cancelled)";
+    }
+    return {outcome, {}};
   }
 
   std::vector<std::string> selected;
@@ -184,9 +191,9 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
   };
   if (!pcd_.topics.empty() && sorted(selected) == sorted(pcd_.topics)) {
     status_ = "(topic selection unchanged)";
-    return std::nullopt;
+    return {PickerOutcome::kCancelled, {}};
   }
-  return selected;
+  return {PickerOutcome::kConfirmed, std::move(selected)};
 }
 
 PcdOverlayController::~PcdOverlayController()
@@ -567,22 +574,21 @@ bool PcdOverlayController::refresh_edit_candidates(const std::string & camera_fr
   return true;
 }
 
-bool PcdOverlayController::prompt_for_edge(core::tui::image::ImageBackend backend)
+PickerOutcome PcdOverlayController::prompt_for_edge(core::tui::image::ImageBackend backend)
 {
   if (edit_.edges.empty()) {
-    return false;
+    return PickerOutcome::kCancelled;
   }
   std::size_t cursor = std::min(edit_.active, edit_.edges.size() - 1);
   bool done = false;
-  bool cancelled = false;
+  PickerOutcome outcome = PickerOutcome::kCancelled;
 
   while (!done) {
     core::tui::image::clear_image(std::cout, backend);
     std::cout << "\x1B[2J";
     const auto term = core::tui::query_terminal_size();
     core::tui::draw_line(
-      std::cout, 1,
-      "  Select the static TF edge to edit (Enter confirm, Esc/q cancel):", term.cols);
+      std::cout, 1, "  Select the static TF edge to edit (Enter confirm, Esc cancel):", term.cols);
     for (std::size_t i = 0; i < edit_.edges.size(); ++i) {
       const std::string marker = (i == cursor) ? ">" : " ";
       core::tui::draw_line(
@@ -610,25 +616,33 @@ bool PcdOverlayController::prompt_for_edge(core::tui::image::ImageBackend backen
         break;
       case core::KeyEvent::kConfirm:
         done = true;
+        outcome = PickerOutcome::kConfirmed;
         break;
       case core::KeyEvent::kBack:
-      case core::KeyEvent::kQuit:
         done = true;
-        cancelled = true;
+        break;
+      case core::KeyEvent::kQuit:
+        // Ctrl-C / Ctrl-D terminates the session from any screen, this
+        // prompt included; the preview propagates it to the pager.
+        done = true;
+        outcome = PickerOutcome::kTerminate;
         break;
       case core::KeyEvent::kResize:
       default:
-        break;
+        break;  // 'q' (kQuitView) lands here: inert in the pickers
     }
   }
 
-  if (cancelled) {
+  if (outcome == PickerOutcome::kCancelled) {
     status_ = "(edge selection cancelled)";
-    return false;
+    return outcome;
+  }
+  if (outcome == PickerOutcome::kTerminate) {
+    return outcome;
   }
   edit_.active = cursor;
   status_ = fmt::format("editing {}", edge_label(edit_.edges[edit_.active]));
-  return true;
+  return outcome;
 }
 
 void PcdOverlayController::retain_slots(std::size_t slot_count)
