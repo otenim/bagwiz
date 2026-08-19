@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 namespace calib = bagwiz::core::calib;
@@ -86,4 +87,38 @@ TEST(NidCostTest, GrayFromBgr24UsesLuma)
   const auto gray = calib::gray_from_bgr24(bgr, 2, 1);
   ASSERT_EQ(gray.gray.size(), 2U);
   EXPECT_LT(gray.gray[0], gray.gray[1]);
+}
+
+TEST(NidCostTest, NonFiniteAndUlpEdgePointsAreSkipped)
+{
+  // Two points the negative-form bounds checks used to let through: a
+  // non-finite one (every `<`/`>` against a NaN is false) and one whose column
+  // is just inside the frame as a double but rounds UP to exactly `width` once
+  // narrowed to float, which then indexes one past the last column of both the
+  // image row and depth_cull's cell grid. Neither may reach the histogram, so
+  // adding them must not move the cost at all.
+  const auto cam = test_camera();
+  calib::NidParams params;
+  params.min_points = 100;
+  const auto clean = make_correlated_sample(cam, params.bins);
+  const auto baseline = calib::nid_cost(clean, cam, calib::identity_mat4(), params);
+  ASSERT_TRUE(baseline.has_value());
+
+  // Pin the fixture's ULP property so the case cannot silently stop being
+  // covered if the test camera or the wall depth ever changes.
+  constexpr float kUlpEdgeX = 5.12F;
+  const double u_edge = cam.k[0] * (static_cast<double>(kUlpEdgeX) / 8.0) + cam.k[2];
+  ASSERT_LT(u_edge, static_cast<double>(cam.width));
+  ASSERT_FLOAT_EQ(static_cast<float>(u_edge), static_cast<float>(cam.width));
+
+  auto poisoned = clean;
+  const float nan_f = std::numeric_limits<float>::quiet_NaN();
+  poisoned.points_world.push_back({nan_f, nan_f, nan_f});
+  poisoned.intensity_bins.push_back(0);
+  poisoned.points_world.push_back({kUlpEdgeX, 0.0F, 8.0F});
+  poisoned.intensity_bins.push_back(0);
+
+  const auto poisoned_cost = calib::nid_cost(poisoned, cam, calib::identity_mat4(), params);
+  ASSERT_TRUE(poisoned_cost.has_value());
+  EXPECT_DOUBLE_EQ(*poisoned_cost, *baseline);
 }

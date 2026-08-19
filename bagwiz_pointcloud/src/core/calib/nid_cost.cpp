@@ -69,18 +69,26 @@ std::optional<double> nid_cost(
   for (std::size_t i = 0; i < sample.points_world.size(); ++i) {
     const auto & p = sample.points_world[i];
     const auto pc = transform_point(t_cam_world, {p[0], p[1], p[2]});
-    if (pc[2] < params.min_depth || pc[2] > params.max_depth) {
+    // Narrow first, then validate in POSITIVE form on the narrowed values.
+    // Both halves matter: a NaN passes every negative-form test (`NaN < min`
+    // and `NaN > max` are both false), and a double column just under `width`
+    // can round UP to exactly `width` when narrowed, which would index one
+    // past the last column of the image row and of depth_cull's cell grid.
+    const auto fz = static_cast<float>(pc[2]);
+    if (!(fz >= params.min_depth && fz <= params.max_depth)) {
       continue;
     }
     const auto nd = image::distort_normalized(pc[0] / pc[2], pc[1] / pc[2], cam.model, cam.d);
-    const double u = cam.k[0] * nd.x + cam.k[2];
-    const double v = cam.k[4] * nd.y + cam.k[5];
-    if (u < 0.0 || v < 0.0 || u >= cam.width || v >= cam.height) {
+    const auto fu = static_cast<float>(cam.k[0] * nd.x + cam.k[2]);
+    const auto fv = static_cast<float>(cam.k[4] * nd.y + cam.k[5]);
+    if (
+      !(fu >= 0.0F && fu < static_cast<float>(cam.width)) ||
+      !(fv >= 0.0F && fv < static_cast<float>(cam.height))) {
       continue;
     }
-    us.push_back(static_cast<float>(u));
-    vs.push_back(static_cast<float>(v));
-    depths.push_back(static_cast<float>(pc[2]));
+    us.push_back(fu);
+    vs.push_back(fv);
+    depths.push_back(fz);
     lidar_bins.push_back(sample.intensity_bins[i]);
   }
   if (us.size() < params.min_points) {
