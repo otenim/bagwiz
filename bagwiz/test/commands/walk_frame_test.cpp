@@ -147,10 +147,14 @@ TEST(WalkBuildYamlFrame, FooterLayoutAndLegend)
   EXPECT_EQ(frame.footer[1], "  [0 / 2]  /topic  pkg/msg/Type");
   EXPECT_TRUE(frame.footer[3].empty());  // empty status renders a blank row
   const std::string legend = frame.footer[2];
-  EXPECT_NE(legend.find("[S] save as yaml"), std::string::npos) << legend;
-  EXPECT_NE(legend.find("[a] expand arrays"), std::string::npos) << legend;
+  EXPECT_NE(legend.find("[S] save"), std::string::npos) << legend;
+  EXPECT_NE(legend.find("[?] keys"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[q] quit"), std::string::npos) << legend;
   EXPECT_EQ(legend.find("[i] preview"), std::string::npos) << legend;
+  // The footer carries only the working set; the reference moved behind [?].
+  EXPECT_EQ(legend.find("expand arrays"), std::string::npos) << legend;
+  EXPECT_EQ(legend.find("10s"), std::string::npos) << legend;
+  EXPECT_EQ(legend.find("Home"), std::string::npos) << legend;
 }
 
 TEST(WalkBuildYamlFrame, NotExhaustedIndexRowGetsPlusSuffix)
@@ -181,7 +185,7 @@ TEST(WalkBuildYamlFrame, StatusRowShowsTransientMessage)
   EXPECT_EQ(frame.footer[3], "  saved /tmp/x.yaml");
 }
 
-TEST(WalkBuildYamlFrame, PreviewHintIsRainbowColored)
+TEST(WalkBuildYamlFrame, PreviewHintIsPlainText)
 {
   std::string status;
   auto cursor = make_cursor(1, status);
@@ -190,12 +194,33 @@ TEST(WalkBuildYamlFrame, PreviewHintIsRainbowColored)
 
   const auto with_preview =
     build_yaml_frame(0, kWide, cursor, decoder, false, "/topic", "pkg/msg/Type", status, true);
-  // Each character of "[i] preview" carries its own SGR escape.
-  EXPECT_NE(join(with_preview.footer).find("\x1B[31m"), std::string::npos);
+  // The hint is gated on availability but no longer rainbow-painted: the
+  // footer diet removed the one SGR-styled entry it had.
+  EXPECT_NE(join(with_preview.footer).find("[i] preview"), std::string::npos);
+  EXPECT_EQ(join(with_preview.footer).find("\x1B["), std::string::npos);
 
   const auto without_preview =
     build_yaml_frame(0, kWide, cursor, decoder, false, "/topic", "pkg/msg/Type", status, false);
-  EXPECT_EQ(join(without_preview.footer).find("\x1B["), std::string::npos);
+  EXPECT_EQ(join(without_preview.footer).find("[i] preview"), std::string::npos);
+}
+
+TEST(WalkBuildHelpFrame, BodyCarriesTheReferenceLines)
+{
+  const std::vector<std::string> lines = {"Navigate", "  Space   next"};
+  const auto frame = bagwiz::commands::build_help_frame(kWide, lines);
+  EXPECT_EQ(frame.body, lines);
+  // The title names the overlay; the footer advertises how to leave it.
+  ASSERT_FALSE(frame.header.empty());
+  EXPECT_NE(frame.header[0].find("keys"), std::string::npos) << frame.header[0];
+  EXPECT_NE(join(frame.footer).find("[?] close"), std::string::npos);
+}
+
+TEST(WalkBuildHelpFrame, LongLinesWrapToTheTerminalWidth)
+{
+  const std::vector<std::string> lines = {std::string(100, 'x')};
+  const auto frame = bagwiz::commands::build_help_frame(kNarrow, lines);  // 80 cols
+  ASSERT_EQ(frame.body.size(), 2U);
+  EXPECT_EQ(frame.body[0].size(), 80U);
 }
 
 TEST(WalkBuildYamlFrame, ScrollHintAppearsWhenBodyOverflows)
