@@ -27,6 +27,7 @@ TEST(ToNavKey, NavBindings)
   EXPECT_EQ(to_nav_key(KeyEvent::kStepBackward1s), NavKey::kStepBackward1s);
   EXPECT_EQ(to_nav_key(KeyEvent::kStepForward10s), NavKey::kStepForward10s);
   EXPECT_EQ(to_nav_key(KeyEvent::kStepBackward10s), NavKey::kStepBackward10s);
+  EXPECT_EQ(to_nav_key(KeyEvent::kBack), NavKey::kBack);
   EXPECT_EQ(to_nav_key(KeyEvent::kScrollUp), NavKey::kScrollUp);
   EXPECT_EQ(to_nav_key(KeyEvent::kScrollDown), NavKey::kScrollDown);
   EXPECT_EQ(to_nav_key(KeyEvent::kScrollHead), NavKey::kScrollHead);

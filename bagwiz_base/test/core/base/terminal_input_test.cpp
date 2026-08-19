@@ -65,11 +65,20 @@ TEST(ClassifyKey, StepForwardAndBackward10s)
 
 TEST(ClassifyKey, QuitBindings)
 {
-  EXPECT_EQ(classify_key("q"), KeyEvent::kQuit);
-  EXPECT_EQ(classify_key("Q"), KeyEvent::kQuit);
-  EXPECT_EQ(classify_key(std::string_view("\x1B", 1)), KeyEvent::kQuit);  // lone ESC
   EXPECT_EQ(classify_key(std::string_view("\x03", 1)), KeyEvent::kQuit);  // Ctrl-C
   EXPECT_EQ(classify_key(std::string_view("\x04", 1)), KeyEvent::kQuit);  // Ctrl-D
+  // 'q'/'Q' are retired: Esc is the one back/leave key, so a stray letter
+  // can no longer fall through a mode change and end the whole walk.
+  EXPECT_EQ(classify_key("q"), KeyEvent::kUnknown);
+  EXPECT_EQ(classify_key("Q"), KeyEvent::kUnknown);
+}
+
+TEST(ClassifyKey, BackBinding)
+{
+  // A lone ESC backs out one level (help -> edit mode -> preview -> YAML
+  // view -> exit). classify_key cannot see context, so it reports kBack and
+  // each view decides what one level up means.
+  EXPECT_EQ(classify_key(std::string_view("\x1B", 1)), KeyEvent::kBack);
 }
 
 TEST(ClassifyKey, SaveYamlBinding)

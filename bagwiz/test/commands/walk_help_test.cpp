@@ -40,7 +40,7 @@ TEST(WalkHelpFooters, YamlFooterCarriesOnlyTheWorkingSet)
   EXPECT_NE(footer.find("[j/k] scroll"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[S] save"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[?] keys"), std::string::npos) << footer;
-  EXPECT_TRUE(footer.ends_with("[q] quit")) << footer;
+  EXPECT_TRUE(footer.ends_with("[Esc] quit")) << footer;
   // The reference material moved behind [?]: the time steps, the scroll
   // jumps and the array toggle must no longer ride the footer.
   EXPECT_EQ(footer.find("10s"), std::string::npos) << footer;
@@ -70,7 +70,7 @@ TEST(WalkHelpFooters, PreviewFooterGatesOverlayEntriesOnASelectedTopic)
   EXPECT_NE(base.find("[u] rectify"), std::string::npos) << base;
   EXPECT_NE(base.find("[p] pcd"), std::string::npos) << base;
   EXPECT_NE(base.find("[?] keys"), std::string::npos) << base;
-  EXPECT_TRUE(base.ends_with("[q] back")) << base;
+  EXPECT_TRUE(base.ends_with("[Esc] back")) << base;
   // The edit mode and the scene pins need an overlay topic to be useful, so
   // their hints wait for one.
   EXPECT_EQ(base.find("[e] edit"), std::string::npos) << base;
@@ -79,7 +79,7 @@ TEST(WalkHelpFooters, PreviewFooterGatesOverlayEntriesOnASelectedTopic)
   const std::string with_topic = preview_footer_legend(true, false);
   EXPECT_NE(with_topic.find("[e] edit"), std::string::npos) << with_topic;
   EXPECT_NE(with_topic.find("[P] pin"), std::string::npos) << with_topic;
-  EXPECT_TRUE(with_topic.ends_with("[q] back")) << with_topic;
+  EXPECT_TRUE(with_topic.ends_with("[Esc] back")) << with_topic;
 }
 
 TEST(WalkHelpFooters, PreviewFooterSwapsToTheEditWorkingSet)
@@ -146,8 +146,26 @@ TEST(WalkHelpReference, HelpIsGroupedBySection)
 
 TEST(WalkHelpReference, HelpAdvertisesItsOwnCloseKey)
 {
+  EXPECT_NE(flatten(yaml_help_lines()).find("? / Esc"), std::string::npos);
   EXPECT_NE(flatten(yaml_help_lines()).find("close this help"), std::string::npos);
+  EXPECT_NE(flatten(preview_help_lines()).find("? / Esc"), std::string::npos);
   EXPECT_NE(flatten(preview_help_lines()).find("close this help"), std::string::npos);
+}
+
+TEST(WalkHelpFooters, TheRetiredQuitKeyIsAdvertisedNowhere)
+{
+  // 'q' no longer classifies to anything, so a footer or reference still
+  // advertising it would send users to a dead key.
+  for (const bool preview : {false, true}) {
+    EXPECT_EQ(yaml_footer_legend(preview).find("[q]"), std::string::npos);
+  }
+  for (const bool topic : {false, true}) {
+    for (const bool edit : {false, true}) {
+      EXPECT_EQ(preview_footer_legend(topic, edit).find("[q]"), std::string::npos);
+    }
+  }
+  EXPECT_EQ(flatten(yaml_help_lines()).find("  q "), std::string::npos);
+  EXPECT_EQ(flatten(preview_help_lines()).find("  q "), std::string::npos);
 }
 
 }  // namespace
