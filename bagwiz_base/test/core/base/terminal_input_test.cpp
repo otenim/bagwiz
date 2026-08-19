@@ -169,6 +169,14 @@ TEST(ClassifyKey, PinSceneBinding)
   EXPECT_EQ(classify_key("p"), KeyEvent::kToggleProjectPcd);
 }
 
+TEST(ClassifyKey, HelpBinding)
+{
+  // '?' opens the key-help overlay in walk's interactive views: the footers
+  // advertise only the working set, so the full reference needs one
+  // discoverable key shared by the YAML pager and the image preview.
+  EXPECT_EQ(classify_key("?"), KeyEvent::kHelp);
+}
+
 TEST(ClassifyKey, ScrollBindings)
 {
   EXPECT_EQ(classify_key("k"), KeyEvent::kScrollUp);
