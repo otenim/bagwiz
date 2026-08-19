@@ -191,6 +191,7 @@ set(bagwiz_command_sources
   src/commands/traj.cpp
   src/commands/traj_common.cpp
   src/commands/tf.cpp
+  src/commands/tf_static_calibrate_common.cpp
   src/commands/tf_static_cp.cpp
   src/commands/tf_static_drop.cpp
   src/commands/tf_static_dump.cpp
@@ -460,6 +461,17 @@ if(BUILD_TESTING)
     src/commands/tf_static_dump.cpp)
   target_include_directories(bagwiz_tf_static_dump_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_tf_static_dump_test ${bagwiz_test_libs} fmt::fmt yaml-cpp)
+
+  # Pure helpers for `tf static calibrate` (validation, sample picking,
+  # trajectory interpolation, report rendering) — no bag access, so this links
+  # bagwiz_tf/bagwiz_pointcloud (via bagwiz_test_libs) for core::TrajectoryPose
+  # / core::calib::Mat4 / core::calib::RefineResult but no reader/writer setup.
+  ament_add_gtest(bagwiz_tf_static_calibrate_common_test
+    test/commands/tf_static_calibrate_common_test.cpp
+    src/commands/tf_static_calibrate_common.cpp)
+  target_include_directories(bagwiz_tf_static_calibrate_common_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_tf_static_calibrate_common_test ${bagwiz_test_libs} fmt::fmt)
 
   # pcd.cpp carries the PcdCommand registrar + CLI11 wiring for both `pcd
   # concat` and `pcd undistort` together, so proving pcd.cpp's own
