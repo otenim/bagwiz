@@ -11,6 +11,7 @@
 #include "bagwiz/core/base/str_utils.hpp"
 #include "bagwiz/core/msg_yaml/message_formatter.hpp"
 #include "bagwiz/core/tui/width.hpp"
+#include "walk_help.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <fmt/core.h>
 
@@ -21,30 +22,6 @@
 
 namespace bagwiz::commands
 {
-
-namespace
-{
-
-// Paint `text` as a rainbow by assigning each character a standard ANSI
-// foreground color in sequence. The returned string contains the SGR escapes
-// and a trailing reset; width-aware code treats those escapes as zero-width,
-// so wrapping/layout is unaffected.
-std::string rainbow_text(std::string_view text)
-{
-  // Red, yellow, green, cyan, blue, magenta — a classic 6-step rainbow.
-  constexpr const char * kColors[] = {"\x1B[31m", "\x1B[33m", "\x1B[32m",
-                                      "\x1B[36m", "\x1B[34m", "\x1B[35m"};
-  std::string out;
-  out.reserve(text.size() * 6);
-  for (std::size_t i = 0; i < text.size(); ++i) {
-    out += kColors[i % std::size(kColors)];
-    out.push_back(text[i]);
-  }
-  out += "\x1B[0m";
-  return out;
-}
-
-}  // namespace
 
 void append_wrapped(std::vector<std::string> & out, std::string_view line, int cols)
 {
@@ -156,17 +133,7 @@ core::tui::Frame build_yaml_frame(
   // wrapped footer height. resolve_scroll_hint negotiates it iteratively;
   // emit a placeholder index row for it to patch.
   footer_logical.emplace_back();
-  std::string legend =
-    "  [→ / Space] next   [← / b] prev   [,] -1s   [.] +1s   [<] -10s   [>] +10s   [↑ / k] "
-    "up   [↓ / j] down   "
-    "[Home / H] head   [End / T] tail   [g] first   [G] last   [S] save as yaml   "
-    "[a] expand arrays   ";
-  if (preview_available) {
-    legend += rainbow_text("[i] preview");
-    legend += "   ";
-  }
-  legend += "[q] quit";
-  footer_logical.emplace_back(std::move(legend));
+  footer_logical.emplace_back(yaml_footer_legend(preview_available));
   footer_logical.push_back(status.empty() ? std::string{} : fmt::format("  {}", status));
 
   const std::string index_no_hint = fmt::format(
@@ -177,6 +144,21 @@ core::tui::Frame build_yaml_frame(
                    term, frame.header.size(), index_no_hint, std::move(footer_logical),
                    frame.body.size(), scroll)
                    .footer;
+  return frame;
+}
+
+core::tui::Frame build_help_frame(core::tui::Size term, const std::vector<std::string> & lines)
+{
+  const int cols = std::max(1, term.cols);
+  core::tui::Frame frame;
+  append_wrapped(frame.header, "  bagwiz walk keys", cols);
+  frame.header.emplace_back();  // blank separator
+  frame.body.reserve(lines.size());
+  for (const auto & line : lines) {
+    append_wrapped(frame.body, line, cols);
+  }
+  frame.footer.emplace_back();  // blank separator
+  append_wrapped(frame.footer, "  [Esc] back", cols);
   return frame;
 }
 

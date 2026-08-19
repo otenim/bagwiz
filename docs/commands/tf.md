@@ -787,10 +787,7 @@ the rest of the tree. The counterpart of [`drop`](#bagwiz-tf-static-drop), which
 removes frames.
 
 `--yaml <file>` is a publisher-config YAML (the schema
-[`static dump`](#bagwiz-tf-static-dump) writes). One way to produce it is the
-[`bagwiz walk`](walk.md#editing-static-extrinsics) image preview's extrinsic
-edit mode, which tunes a static edge visually against the point-cloud overlay
-and exports the edited edges in exactly this schema. Each of the YAML's edges
+[`static dump`](#bagwiz-tf-static-dump) writes). Each of the YAML's edges
 is **added** when its child is new to the tree, and applied as an **update**
 when the child already exists: the edge is rewritten in place with the
 config's values, and a differing parent re-parents it (logged). The config is parsed as strictly as
@@ -861,11 +858,7 @@ Automatically refines one static-TF edge on a camera's chain by registering
 the bag's dense LiDAR map (from a prior
 [`bagwiz map slam`](map.md#bagwiz-map-slam) run) against the bag's own
 images, minimizing the normalized information distance (NID) between
-projected map intensity and image intensity. Where the
-[`walk`](walk.md#editing-static-extrinsics) image preview's extrinsic-edit
-mode nudges the same kind of edge by eye against a live overlay, `calibrate`
-runs an automatic search against a recorded map instead — same edge
-parametrization, no eyeballing. The refined edge is written as a
+projected map intensity and image intensity. The refined edge is written as a
 [`static dump`](#bagwiz-tf-static-dump)-schema YAML that
 [`static update`](#bagwiz-tf-static-update) applies; `--input` itself is only
 ever read, never modified.
@@ -978,9 +971,8 @@ around the edge's bag value (`--max-trans`, `--max-rot`), so a bad initial
 mount value or an unconstrained axis cannot wander to an unrelated optimum.
 
 The six numbers the search moves are the edge's own `x, y, z, roll, pitch,
-yaw` — the scalars [`static dump`](#bagwiz-tf-static-dump) writes and
-[`walk`](walk.md#editing-static-extrinsics)'s edit mode nudges — and the delta
-is added to them axis by axis. The value the cost was evaluated at, the
+yaw` — the scalars [`static dump`](#bagwiz-tf-static-dump) writes — and the
+delta is added to them axis by axis. The value the cost was evaluated at, the
 `refined value` column of the report, and the transform in the output YAML are
 therefore the same arithmetic, `before + delta` per axis, and cannot describe
 different edges. `--fix <axis>` holds an axis by forcing its delta to zero,

@@ -21,57 +21,45 @@ namespace bagwiz::core
 // chars or escape sequences) are collapsed into these buckets by
 // classify_key().
 enum class KeyEvent {
-  kNext,                 // next message
-  kPrev,                 // previous message
-  kFirst,                // jump to first
-  kLast,                 // jump to last (may force a full scan in the caller)
-  kStepForward1s,        // jump to the next message at least one second ahead
-  kStepBackward1s,       // jump to the previous message at least one second behind
-  kStepForward10s,       // jump ~10 seconds ahead ('>')
-  kStepBackward10s,      // jump ~10 seconds behind ('<')
-  kScrollUp,             // scroll the current message's rendered body up by one line
-  kScrollDown,           // scroll the current message's rendered body down by one line
-  kScrollHead,           // jump to the top of the current message's body
-  kScrollTail,           // jump to the bottom of the current message's body
-  kSaveYaml,             // save current message body as YAML (walk command)
-  kToggleArrayExpand,    // toggle full-expansion of long primitive arrays (walk command)
-  kTogglePreview,        // toggle in-terminal image preview (walk command)
-  kToggleRectify,        // toggle rectify in image preview (walk command)
-  kToggleProjectPcd,     // toggle point-cloud projection overlay in image preview (walk command)
-  kSelectPcdTopic,       // choose a PointCloud2 topic for the projection overlay
-  kCyclePcdProperty,     // cycle point-cloud visualization property (walk command)
-  kCyclePcdScheme,       // cycle point-cloud color scheme (walk command)
-  kTogglePcdRange,       // toggle point-cloud value range auto/manual (walk command)
-  kPcdPointSizeUp,       // increase projected point size (walk command)
-  kPcdPointSizeDown,     // decrease projected point size (walk command)
-  kPcdAlphaUp,           // increase point overlay opacity (walk command)
-  kPcdAlphaDown,         // decrease point overlay opacity (walk command)
-  kToggleEditExtrinsic,  // toggle the extrinsic edit mode in image preview (walk command)
-  kSelectEditEdge,       // choose the static TF edge the edit mode nudges
-  kEditTransXUp,         // nudge the edited edge's translation x up one step
-  kEditTransXDown,       // nudge the edited edge's translation x down one step
-  kEditTransYUp,         // nudge the edited edge's translation y up one step
-  kEditTransYDown,       // nudge the edited edge's translation y down one step
-  kEditTransZUp,         // nudge the edited edge's translation z up one step
-  kEditTransZDown,       // nudge the edited edge's translation z down one step
-  kEditRollUp,           // nudge the edited edge's roll up one step
-  kEditRollDown,         // nudge the edited edge's roll down one step
-  kEditPitchUp,          // nudge the edited edge's pitch up one step
-  kEditPitchDown,        // nudge the edited edge's pitch down one step
-  kEditYawUp,            // nudge the edited edge's yaw up one step
-  kEditYawDown,          // nudge the edited edge's yaw down one step
-  kEditStepUp,           // increase the edit nudge step size
-  kEditStepDown,         // decrease the edit nudge step size
-  kEditReset,            // reset the edited edge to its original bag value
-  kEditDumpYaml,         // export the edited edges as static-TF YAML (prompts)
-  kEditApplyToBag,       // overwrite the input bag's static TF with the edits (prompts)
-  kPinScene,             // pin/unpin the displayed frame as a preview scene tile
-  kConfirm,              // confirm the current prompt/selection
-  kQuit,                 // exit the interactive loop
-  kResize,               // terminal was resized (synthesised by read_key_event
-                         // from a SIGWINCH flag set by the signal_handler
-                         // module; never produced by classify_key)
-  kUnknown,              // unrecognized input; caller should ignore or beep
+  kNext,               // next message
+  kPrev,               // previous message
+  kFirst,              // jump to first
+  kLast,               // jump to last (may force a full scan in the caller)
+  kStepForward1s,      // jump to the next message at least one second ahead
+  kStepBackward1s,     // jump to the previous message at least one second behind
+  kStepForward10s,     // jump ~10 seconds ahead ('>')
+  kStepBackward10s,    // jump ~10 seconds behind ('<')
+  kScrollUp,           // scroll the current message's rendered body up by one line
+  kScrollDown,         // scroll the current message's rendered body down by one line
+  kScrollHead,         // jump to the top of the current message's body
+  kScrollTail,         // jump to the bottom of the current message's body
+  kSaveYaml,           // save current message body as YAML (walk command)
+  kToggleArrayExpand,  // toggle full-expansion of long primitive arrays (walk command)
+  kTogglePreview,      // toggle in-terminal image preview (walk command)
+  kToggleRectify,      // toggle rectify in image preview (walk command)
+  kToggleProjectPcd,   // toggle point-cloud projection overlay in image preview (walk command)
+  kSelectPcdTopic,     // choose a PointCloud2 topic for the projection overlay
+  kCyclePcdProperty,   // cycle point-cloud visualization property (walk command)
+  kCyclePcdScheme,     // cycle point-cloud color scheme (walk command)
+  kTogglePcdRange,     // toggle point-cloud value range auto/manual (walk command)
+  kPcdPointSizeUp,     // increase projected point size (walk command)
+  kPcdPointSizeDown,   // decrease projected point size (walk command)
+  kPcdAlphaUp,         // increase point overlay opacity (walk command)
+  kPcdAlphaDown,       // decrease point overlay opacity (walk command)
+  kHelp,               // show the key-help overlay (walk command)
+  kBack,               // back out one level (lone ESC): close the help,
+                       // leave the preview; inert at the top
+  kConfirm,            // confirm the current prompt/selection
+  kQuit,               // terminate the session outright (^C/^D; also
+                       // synthesized on EOF / read interruption). No view
+                       // may swallow it — it ends the session from anywhere
+  kQuitView,           // quit the current view ('q'/'Q'); bound only where a
+                       // view chooses to — today walk's YAML view alone, so
+                       // it is inert in the preview, pickers and overlays
+  kResize,             // terminal was resized (synthesised by read_key_event
+                       // from a SIGWINCH flag set by the signal_handler
+                       // module; never produced by classify_key)
+  kUnknown,            // unrecognized input; caller should ignore or beep
 };
 
 // Pure classifier for an already-captured byte sequence. Exposed so unit
@@ -87,15 +75,11 @@ enum class KeyEvent {
 //     the point-cloud overlay keys 'p' (toggle overlay), 't' (topic
 //     picker), 'f'/'c'/'r' (property / scheme / range), '='/'+' and '-'
 //     (point size), ']'/'[' (alpha) — all walk,
-//     'e'/'E' (extrinsic edit mode toggle / edge picker — walk), the edit
-//     nudges 'x'/'X', 'y'/'Y', 'z'/'Z' (translation up/down), 'l'/'L'
-//     (roll), 'n'/'N' (pitch), 'w'/'W' (yaw), 'm'/'M' (step size), '0'
-//     (reset edge), 'D' (dump edited edges as YAML — walk),
-//     'A' (apply the edited edges to the input bag's static TF — walk),
-//     'P' (pin/unpin the displayed frame as a preview scene — walk),
+//     '?' (show the key-help overlay — walk),
 //     Enter/Return (confirm the current prompt or selection),
-//     'q'/'Q' (quit), plus control
-//     chars (^C, ^D) and a lone ESC (0x1B) for quit
+//     a lone ESC (0x1B) to back out one level (kBack), 'q'/'Q' to quit the
+//     current view where a view binds it (kQuitView), and the control chars
+//     ^C / ^D to terminate the session outright (kQuit)
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"
 //     (Left -> prev), "ESC [ A" (Up -> scroll up), "ESC [ B" (Down ->
 //     scroll down), "ESC [ H" (Home -> scroll head), "ESC [ F" (End ->

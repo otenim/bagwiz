@@ -75,7 +75,7 @@ TEST(TileRenderKey, EveryCompositionInputChangesTheKey)
   // Rectify state changes the base image the overlay is drawn on.
   EXPECT_NE(base, tile_render_key(overlay_state(), true, 7, 128, region(), caps()));
 
-  // The generation covers what values cannot: TF edits and scan swaps.
+  // The generation covers what values cannot: scan swaps.
   EXPECT_NE(base, tile_render_key(overlay_state(), false, 8, 128, region(), caps()));
 
   // Every value-typed overlay knob invalidates on its own.
@@ -105,7 +105,7 @@ TEST(TileRenderKey, EveryCompositionInputChangesTheKey)
     EXPECT_NE(base, tile_render_key(pcd, false, 7, 128, region(), caps()));
   }
   // The resolved colour range: in auto mode a newly displayed cloud can
-  // stretch it, and every tile must recolour to stay comparable.
+  // stretch it, and the frame must recolour.
   {
     auto pcd = overlay_state();
     pcd.computed_max = 50.0;
@@ -117,7 +117,7 @@ TEST(TileRenderKey, ManualRangeUsesTheManualBounds)
 {
   // In manual mode the computed extent may keep drifting as clouds fold in,
   // but the picture is painted with the manual bounds — only those belong in
-  // the key, or every fold would needlessly invalidate all tiles.
+  // the key, or every fold would needlessly invalidate the frame.
   auto pcd = overlay_state();
   pcd.auto_range = false;
   pcd.manual_min = 1.0;
@@ -137,7 +137,7 @@ TEST(TileRenderKey, GeometryAndBackendChangeTheKey)
 {
   const TileRenderKey base = base_key();
 
-  // A moved or resized tile transmits different bytes at a different cursor
+  // A moved or resized frame transmits different bytes at a different cursor
   // position, so the cached payload cannot be replayed.
   {
     CellRegion moved = region();
@@ -165,19 +165,16 @@ TEST(TileRenderCache, MissesUntilStoredThenHits)
 {
   TileRenderCache cache;
   const TileRenderKey key = base_key();
-  EXPECT_EQ(cache.find(0, key), nullptr);
+  EXPECT_EQ(cache.find(key), nullptr);
 
   TileRenderEntry entry;
   entry.key = key;
   entry.payload = "\x1B[3;1H<escape bytes>";
-  entry.readings.residual_ns = 12'300'000LL;
-  cache.store(0, std::move(entry));
+  cache.store(std::move(entry));
 
-  const auto * hit = cache.find(0, key);
+  const auto * hit = cache.find(key);
   ASSERT_NE(hit, nullptr);
   EXPECT_EQ(hit->payload, "\x1B[3;1H<escape bytes>");
-  ASSERT_TRUE(hit->readings.residual_ns.has_value());
-  EXPECT_EQ(*hit->readings.residual_ns, 12'300'000LL);
 }
 
 TEST(TileRenderCache, KeyMismatchIsAMissAndStoreReplaces)
@@ -186,51 +183,20 @@ TEST(TileRenderCache, KeyMismatchIsAMissAndStoreReplaces)
   TileRenderEntry entry;
   entry.key = base_key();
   entry.payload = "old";
-  cache.store(1, entry);
+  cache.store(entry);
 
   // A stale key must never serve: the whole point of the key is that any
-  // composition change repaints the tile.
+  // composition change repaints the frame.
   TileRenderKey other = base_key();
   other.msg_index = 999;
-  EXPECT_EQ(cache.find(1, other), nullptr);
+  EXPECT_EQ(cache.find(other), nullptr);
 
   entry.key = other;
   entry.payload = "new";
-  cache.store(1, entry);
-  ASSERT_NE(cache.find(1, other), nullptr);
-  EXPECT_EQ(cache.find(1, other)->payload, "new");
-  EXPECT_EQ(cache.find(1, base_key()), nullptr);
-}
-
-TEST(TileRenderCache, SlotsAreIndependent)
-{
-  TileRenderCache cache;
-  TileRenderEntry entry;
-  entry.key = base_key();
-  entry.payload = "slot0";
-  cache.store(0, entry);
-
-  EXPECT_NE(cache.find(0, base_key()), nullptr);
-  EXPECT_EQ(cache.find(1, base_key()), nullptr);
-  EXPECT_EQ(cache.find(3, base_key()), nullptr);
-}
-
-TEST(TileRenderCache, TrimDropsSlotsAtAndAboveTheCount)
-{
-  TileRenderCache cache;
-  for (std::size_t slot = 0; slot < 4; ++slot) {
-    TileRenderEntry entry;
-    entry.key = base_key();
-    entry.payload = "p";
-    cache.store(slot, entry);
-  }
-  // An unpin shrinks the grid: the surviving slots keep their entries, the
-  // dropped ones release theirs.
-  cache.trim(2);
-  EXPECT_NE(cache.find(0, base_key()), nullptr);
-  EXPECT_NE(cache.find(1, base_key()), nullptr);
-  EXPECT_EQ(cache.find(2, base_key()), nullptr);
-  EXPECT_EQ(cache.find(3, base_key()), nullptr);
+  cache.store(entry);
+  ASSERT_NE(cache.find(other), nullptr);
+  EXPECT_EQ(cache.find(other)->payload, "new");
+  EXPECT_EQ(cache.find(base_key()), nullptr);
 }
 
 }  // namespace

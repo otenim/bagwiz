@@ -20,7 +20,6 @@
 #include <fmt/ostream.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <istream>
@@ -94,12 +93,12 @@ std::string_view pcd_scheme_name(core::pointcloud::ColorScheme s)
   return "?";
 }
 
-std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
+std::pair<PickerOutcome, std::vector<std::string>> PcdOverlayController::prompt_for_topics(
   core::tui::image::ImageBackend backend)
 {
   if (pcd_topics_.empty()) {
     status_ = "no PointCloud2 topics in bag";
-    return std::nullopt;
+    return {PickerOutcome::kCancelled, {}};
   }
 
   // Pre-check the topics that are currently active so the picker reflects
@@ -111,7 +110,7 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
   }
   std::size_t cursor = 0;
   bool done = false;
-  bool cancelled = false;
+  PickerOutcome outcome = PickerOutcome::kCancelled;
 
   while (!done) {
     core::tui::image::clear_image(std::cout, backend);
@@ -119,7 +118,7 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
     const auto term = core::tui::query_terminal_size();
     core::tui::draw_line(
       std::cout, 1,
-      "  Select PointCloud2 topics (Space toggle, Enter confirm, Esc/q cancel):", term.cols);
+      "  Select PointCloud2 topics (Space toggle, Enter confirm, Esc cancel):", term.cols);
     for (std::size_t i = 0; i < pcd_topics_.size(); ++i) {
       const std::string marker = (i == cursor) ? ">" : " ";
       const std::string box = checked[i] ? "[x]" : "[ ]";
@@ -151,20 +150,28 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
         break;
       case core::KeyEvent::kConfirm:
         done = true;
+        outcome = PickerOutcome::kConfirmed;
+        break;
+      case core::KeyEvent::kBack:
+        done = true;
         break;
       case core::KeyEvent::kQuit:
+        // Ctrl-C / Ctrl-D terminates the session from any screen, this
+        // prompt included; the preview propagates it to the pager.
         done = true;
-        cancelled = true;
+        outcome = PickerOutcome::kTerminate;
         break;
       case core::KeyEvent::kResize:
       default:
-        break;
+        break;  // 'q' (kQuitView) lands here: inert in the pickers
     }
   }
 
-  if (cancelled) {
-    status_ = "(topic selection cancelled)";
-    return std::nullopt;
+  if (outcome != PickerOutcome::kConfirmed) {
+    if (outcome == PickerOutcome::kCancelled) {
+      status_ = "(topic selection cancelled)";
+    }
+    return {outcome, {}};
   }
 
   std::vector<std::string> selected;
@@ -183,9 +190,9 @@ std::optional<std::vector<std::string>> PcdOverlayController::prompt_for_topics(
   };
   if (!pcd_.topics.empty() && sorted(selected) == sorted(pcd_.topics)) {
     status_ = "(topic selection unchanged)";
-    return std::nullopt;
+    return {PickerOutcome::kCancelled, {}};
   }
-  return selected;
+  return {PickerOutcome::kConfirmed, std::move(selected)};
 }
 
 PcdOverlayController::~PcdOverlayController()
@@ -274,15 +281,17 @@ PcdOverlayController::InitState PcdOverlayController::poll_initialize()
     return s;
   }
 
-  // Keep the cloud index rather than handing it straight to one fetcher set:
-  // every displayed tile builds its own fetchers from it (see ensure_slot).
+  // Keep the cloud index rather than handing it straight to the fetchers:
+  // they are built from it lazily on the first composition (see
+  // ensure_fetchers).
   pcd_index_.clear();
   pcd_index_.reserve(scan_result_->entries.size());
   for (std::size_t i = 0; i < scan_result_->entries.size(); ++i) {
     pcd_index_.push_back(
       OverlayTopicIndex{pcd_topics_selected_[i], std::move(scan_result_->entries[i])});
   }
-  slots_.clear();
+  fetchers_.clear();
+  ranged_record_ns_.clear();
   active_scan_ = std::move(scan_result_);
 
   pcd_.topics = pcd_topics_selected_;
@@ -293,79 +302,61 @@ PcdOverlayController::InitState PcdOverlayController::poll_initialize()
   pcd_.computed_min = range.first;
   pcd_.computed_max = range.second;
   pcd_.enabled = true;
-  pcd_.last_cloud_frames.assign(pcd_.topics.size(), {});
-  pcd_.last_match_ns.reset();
-  // The swap re-created the TF buffer from the bag, dropping any live
-  // extrinsic edits; write the edited edges back so the overlay keeps
-  // projecting with them.
-  apply_all_edits();
+  // The swap replaced the TF buffer and the fetchers, which is a composition
+  // change all by itself: invalidate the preview's cached render.
+  ++composition_generation_;
 
   state_.store(InitState::kIdle, std::memory_order_release);
   status_ = "pcd overlay ready";
   return s;
 }
 
-PcdOverlayController::OverlaySlot * PcdOverlayController::ensure_slot(std::size_t slot)
+bool PcdOverlayController::ensure_fetchers()
 {
-  if (pcd_index_.empty() || slot >= kMaxOverlaySlots) {
-    return nullptr;
+  if (pcd_index_.empty()) {
+    return false;
   }
-  if (slot >= slots_.size()) {
-    slots_.resize(slot + 1);
-  }
-  OverlaySlot & s = slots_[slot];
-  if (s.fetchers.size() != pcd_index_.size()) {
-    // First composition of this tile since the last load: give it its own
-    // fetchers over the same cloud index. The entries are copied (a few bytes
-    // per message) so each tile can cache a different cloud of the topic.
-    s.fetchers.clear();
-    s.fetchers.reserve(pcd_index_.size());
+  if (fetchers_.size() != pcd_index_.size()) {
+    // First composition since the last load: build the fetchers over the new
+    // cloud index. The entries are copied (a few bytes per message).
+    fetchers_.clear();
+    fetchers_.reserve(pcd_index_.size());
     for (const auto & topic_index : pcd_index_) {
-      s.fetchers.emplace_back(input_path_, topic_index.topic, topic_index.entries);
+      fetchers_.emplace_back(input_path_, topic_index.topic, topic_index.entries);
     }
-    s.ranged_record_ns.assign(s.fetchers.size(), std::nullopt);
+    ranged_record_ns_.assign(fetchers_.size(), std::nullopt);
   }
-  return &s;
+  return true;
 }
 
-OverlayFrameReadings PcdOverlayController::maybe_overlay(
-  std::size_t slot, core::image::PackedRaster * raster, std::int64_t record_stamp_ns,
+void PcdOverlayController::maybe_overlay(
+  core::image::PackedRaster * raster, std::int64_t record_stamp_ns,
   const std::optional<core::image::CameraInfo> & camera_info,
   const EnsureRectifyHelper & ensure_helper, bool rectify_enabled)
 {
-  OverlayFrameReadings readings;
-  // Only the live tile owns the state's readings: the info row and
-  // refresh_edit_candidates() must describe the cursor's frame, not whichever
-  // pinned tile was composed last.
-  const bool is_live = slot == kLiveOverlaySlot;
   if (raster == nullptr || !pcd_.enabled || pcd_.topics.empty() || active_scan_ == nullptr) {
-    return readings;
+    return;
   }
-  auto * fetch_slot = ensure_slot(slot);
-  if (fetch_slot == nullptr || fetch_slot->fetchers.empty()) {
-    return readings;
+  if (!ensure_fetchers() || fetchers_.empty()) {
+    return;
   }
-  auto & fetchers = fetch_slot->fetchers;
-  auto & ranged_record_ns = fetch_slot->ranged_record_ns;
-  if (is_live) {
-    // Past this point the overlay is live, so the info row will read the
-    // frame-match values below. Clear them up front: every remaining early
-    // return means nothing was matched this frame, and reporting a previous
-    // frame's clock or residual next to a projection error would be a lie.
-    pcd_.last_match_key = core::pointcloud::PointCloudMatchKey::kRecordTime;
-    pcd_.last_residual_ns.reset();
-  }
+  // Past this point the overlay is live, so the info row will read the
+  // frame-match values below. Clear them up front: every remaining early
+  // return means nothing was matched this frame, and reporting a previous
+  // frame's clock or residual next to a projection error would be a lie.
+  pcd_.last_match_key = core::pointcloud::PointCloudMatchKey::kRecordTime;
+  pcd_.last_residual_ns.reset();
 
   if (!camera_info.has_value()) {
     status_ = "pcd projection requires camera_info";
-    return readings;
+    return;
   }
 
   const auto & img = *raster;
   const auto * helper = ensure_helper(img.width, img.height);
   if (helper == nullptr) {
     status_ = "pcd projection requires camera_info";
-    return readings;
+    return;
   }
   const auto effective_ci = helper->effective_camera_info();
 
@@ -379,7 +370,7 @@ OverlayFrameReadings PcdOverlayController::maybe_overlay(
   std::optional<std::int64_t> worst_residual_ns;
   const auto magnitude = [](std::int64_t v) { return v < 0 ? -v : v; };
 
-  for (std::size_t i = 0; i < fetchers.size(); ++i) {
+  for (std::size_t i = 0; i < fetchers_.size(); ++i) {
     // Pair the frame with the point cloud nearest in the clock both sides
     // share (see core::pointcloud::choose_frame_match): capture time when the
     // frame carries a header.stamp and every message of this topic does too,
@@ -393,7 +384,7 @@ OverlayFrameReadings PcdOverlayController::maybe_overlay(
     const std::int64_t match_ns = match.target_ns;
 
     std::string error;
-    const auto * cloud = fetchers[i].fetch(match_ns, match.key, error);
+    const auto * cloud = fetchers_[i].fetch(match_ns, match.key, error);
     if (cloud == nullptr) {
       last_error = std::move(error);
       continue;
@@ -403,16 +394,6 @@ OverlayFrameReadings PcdOverlayController::maybe_overlay(
       !effective_key.has_value() ||
       match.key == core::pointcloud::PointCloudMatchKey::kRecordTime) {
       effective_key = match.key;
-    }
-    // Remember what the edit mode needs to derive its editable edges: the
-    // frame each topic's clouds live in and a TF time on the clock the
-    // overlay itself matched on. From the live tile only — the edit chains
-    // are resolved at the cursor frame's lookup time.
-    if (is_live) {
-      if (i < pcd_.last_cloud_frames.size()) {
-        pcd_.last_cloud_frames[i] = cloud->frame_id;
-      }
-      pcd_.last_match_ns = match_ns;
     }
     // The true capture-time residual, meaningful whichever clock matched:
     // how far the chosen cloud was actually taken from this frame. Undefined
@@ -426,14 +407,13 @@ OverlayFrameReadings PcdOverlayController::maybe_overlay(
     }
 
     // Fold newly displayed clouds into the running colour ranges (once per
-    // cloud per tile), then refresh the active property's auto range. This
-    // replaces the up-front full-bag min/max parse the overlay used to run at
-    // initialization. Pinned tiles fold in too, so the auto range spans every
-    // scene on screen and the tiles stay comparable to each other.
-    const std::int64_t cloud_record_ns = fetchers[i].cached_record_ns();
-    if (ranged_record_ns[i] != cloud_record_ns) {
+    // cloud), then refresh the active property's auto range. This replaces
+    // the up-front full-bag min/max parse the overlay used to run at
+    // initialization.
+    const std::int64_t cloud_record_ns = fetchers_[i].cached_record_ns();
+    if (ranged_record_ns_[i] != cloud_record_ns) {
       if (core::pointcloud::accumulate_property_ranges(*cloud, pcd_.ranges, error)) {
-        ranged_record_ns[i] = cloud_record_ns;
+        ranged_record_ns_[i] = cloud_record_ns;
         pcd_.has_intensity = pcd_.ranges.has_intensity;
         const auto range = pcd_.ranges.resolve(pcd_.property);
         pcd_.computed_min = range.first;
@@ -455,17 +435,14 @@ OverlayFrameReadings PcdOverlayController::maybe_overlay(
 
   // No fetch succeeded -> nothing was matched on any clock; report the safe
   // reading rather than leaving the previous frame's.
-  readings.residual_ns = worst_residual_ns;
-  if (is_live) {
-    pcd_.last_match_key = effective_key.value_or(core::pointcloud::PointCloudMatchKey::kRecordTime);
-    pcd_.last_residual_ns = readings.residual_ns;
-  }
+  pcd_.last_match_key = effective_key.value_or(core::pointcloud::PointCloudMatchKey::kRecordTime);
+  pcd_.last_residual_ns = worst_residual_ns;
 
   if (all_points.empty()) {
     if (!last_error.empty()) {
       status_ = std::move(last_error);
     }
-    return readings;
+    return;
   }
 
   const auto [vmin, vmax] = pcd_display_range(pcd_);
@@ -474,7 +451,6 @@ OverlayFrameReadings PcdOverlayController::maybe_overlay(
   if (!err.empty()) {
     status_ = err;
   }
-  return readings;
 }
 
 void PcdOverlayController::cycle_property()
@@ -533,134 +509,6 @@ void PcdOverlayController::cycle_scheme()
       pcd_.scheme = core::pointcloud::ColorScheme::kJet;
       break;
   }
-}
-
-bool PcdOverlayController::refresh_edit_candidates(const std::string & camera_frame)
-{
-  if (active_scan_ == nullptr) {
-    status_ = "edit: enable the pcd overlay first ([p])";
-    return false;
-  }
-  std::vector<std::string> cloud_frames;
-  for (const auto & frame : pcd_.last_cloud_frames) {
-    if (!frame.empty()) {
-      cloud_frames.push_back(frame);
-    }
-  }
-  if (cloud_frames.empty() || !pcd_.last_match_ns.has_value()) {
-    status_ = "edit: no cloud displayed yet";
-    return false;
-  }
-  const tf2::TimePoint time{std::chrono::nanoseconds(*pcd_.last_match_ns)};
-  auto fresh = collect_editable_edges(
-    active_scan_->tf_buffer, cloud_frames, camera_frame, time, active_scan_->static_transforms);
-  carry_over_edits(fresh, edit_.edges);
-  edit_.edges = std::move(fresh);
-  if (edit_.active >= edit_.edges.size()) {
-    edit_.active = 0;
-  }
-  if (edit_.edges.empty()) {
-    status_ = "edit: no static TF edge between the cloud and camera frames";
-    return false;
-  }
-  return true;
-}
-
-bool PcdOverlayController::prompt_for_edge(core::tui::image::ImageBackend backend)
-{
-  if (edit_.edges.empty()) {
-    return false;
-  }
-  std::size_t cursor = std::min(edit_.active, edit_.edges.size() - 1);
-  bool done = false;
-  bool cancelled = false;
-
-  while (!done) {
-    core::tui::image::clear_image(std::cout, backend);
-    std::cout << "\x1B[2J";
-    const auto term = core::tui::query_terminal_size();
-    core::tui::draw_line(
-      std::cout, 1,
-      "  Select the static TF edge to edit (Enter confirm, Esc/q cancel):", term.cols);
-    for (std::size_t i = 0; i < edit_.edges.size(); ++i) {
-      const std::string marker = (i == cursor) ? ">" : " ";
-      core::tui::draw_line(
-        std::cout, static_cast<int>(i) + 3,
-        fmt::format("  {} {}", marker, edge_label(edit_.edges[i])), term.cols);
-    }
-    std::cout.flush();
-
-    switch (core::read_key_event()) {
-      case core::KeyEvent::kScrollUp:
-        if (cursor > 0) {
-          --cursor;
-        }
-        break;
-      case core::KeyEvent::kScrollDown:
-        if (cursor + 1 < edit_.edges.size()) {
-          ++cursor;
-        }
-        break;
-      case core::KeyEvent::kFirst:
-        cursor = 0;
-        break;
-      case core::KeyEvent::kLast:
-        cursor = edit_.edges.size() - 1;
-        break;
-      case core::KeyEvent::kConfirm:
-        done = true;
-        break;
-      case core::KeyEvent::kQuit:
-        done = true;
-        cancelled = true;
-        break;
-      case core::KeyEvent::kResize:
-      default:
-        break;
-    }
-  }
-
-  if (cancelled) {
-    status_ = "(edge selection cancelled)";
-    return false;
-  }
-  edit_.active = cursor;
-  status_ = fmt::format("editing {}", edge_label(edit_.edges[edit_.active]));
-  return true;
-}
-
-void PcdOverlayController::retain_slots(std::size_t slot_count)
-{
-  if (slot_count < slots_.size()) {
-    slots_.resize(slot_count);
-  }
-}
-
-void PcdOverlayController::apply_active_edit()
-{
-  if (active_scan_ == nullptr || edit_.active >= edit_.edges.size()) {
-    return;
-  }
-  apply_edge_to_buffer(edit_.edges[edit_.active], active_scan_->tf_buffer);
-  // The buffer every tile projects through just changed; invalidate the
-  // preview's cached tile renders.
-  ++composition_generation_;
-}
-
-void PcdOverlayController::apply_all_edits()
-{
-  if (active_scan_ == nullptr) {
-    return;
-  }
-  for (const auto & edge : edit_.edges) {
-    if (is_edited(edge)) {
-      apply_edge_to_buffer(edge, active_scan_->tf_buffer);
-    }
-  }
-  // Bumped even when no edge was edited: this runs right after an
-  // initialization swap replaced the buffer and the fetchers, which is a
-  // composition change all by itself.
-  ++composition_generation_;
 }
 
 void PcdOverlayController::prompt_for_range(

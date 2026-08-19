@@ -88,7 +88,7 @@ std::string join(const std::vector<std::string> & lines)
 }
 
 constexpr bagwiz::core::tui::Size kWide{24, 300, 0, 0};   // nothing wraps
-constexpr bagwiz::core::tui::Size kNarrow{24, 80, 0, 0};  // the legend wraps
+constexpr bagwiz::core::tui::Size kNarrow{24, 80, 0, 0};  // the index row can wrap
 
 TEST(WalkBuildYamlFrame, HeaderCarriesTimestampAndSize)
 {
@@ -147,10 +147,14 @@ TEST(WalkBuildYamlFrame, FooterLayoutAndLegend)
   EXPECT_EQ(frame.footer[1], "  [0 / 2]  /topic  pkg/msg/Type");
   EXPECT_TRUE(frame.footer[3].empty());  // empty status renders a blank row
   const std::string legend = frame.footer[2];
-  EXPECT_NE(legend.find("[S] save as yaml"), std::string::npos) << legend;
-  EXPECT_NE(legend.find("[a] expand arrays"), std::string::npos) << legend;
+  EXPECT_NE(legend.find("[S] save"), std::string::npos) << legend;
+  EXPECT_NE(legend.find("[?] help"), std::string::npos) << legend;
   EXPECT_NE(legend.find("[q] quit"), std::string::npos) << legend;
   EXPECT_EQ(legend.find("[i] preview"), std::string::npos) << legend;
+  // The footer carries only the working set; the reference moved behind [?].
+  EXPECT_EQ(legend.find("expand arrays"), std::string::npos) << legend;
+  EXPECT_EQ(legend.find("10s"), std::string::npos) << legend;
+  EXPECT_EQ(legend.find("Home"), std::string::npos) << legend;
 }
 
 TEST(WalkBuildYamlFrame, NotExhaustedIndexRowGetsPlusSuffix)
@@ -198,6 +202,25 @@ TEST(WalkBuildYamlFrame, PreviewHintIsRainbowColored)
   EXPECT_EQ(join(without_preview.footer).find("\x1B["), std::string::npos);
 }
 
+TEST(WalkBuildHelpFrame, BodyCarriesTheReferenceLines)
+{
+  const std::vector<std::string> lines = {"Navigate", "  Space   next"};
+  const auto frame = bagwiz::commands::build_help_frame(kWide, lines);
+  EXPECT_EQ(frame.body, lines);
+  // The title names the overlay; the footer advertises how to leave it.
+  ASSERT_FALSE(frame.header.empty());
+  EXPECT_NE(frame.header[0].find("keys"), std::string::npos) << frame.header[0];
+  EXPECT_NE(join(frame.footer).find("[Esc] back"), std::string::npos);
+}
+
+TEST(WalkBuildHelpFrame, LongLinesWrapToTheTerminalWidth)
+{
+  const std::vector<std::string> lines = {std::string(100, 'x')};
+  const auto frame = bagwiz::commands::build_help_frame(kNarrow, lines);  // 80 cols
+  ASSERT_EQ(frame.body.size(), 2U);
+  EXPECT_EQ(frame.body[0].size(), 80U);
+}
+
 TEST(WalkBuildYamlFrame, ScrollHintAppearsWhenBodyOverflows)
 {
   std::string status;
@@ -238,7 +261,7 @@ TEST(WalkBuildYamlFrame, ScrollHintStaysConsistentWithWrappedFooter)
   StubDecoder decoder;
   decoder.field_count = 30;
 
-  // Narrow terminal: the legend wraps, shrinking the body window; the hint
+  // Narrow terminal: wrapped footer rows shrink the body window; the hint
   // must still describe exactly the rows left between header and footer.
   const auto frame =
     build_yaml_frame(0, kNarrow, cursor, decoder, false, "/topic", "pkg/msg/Type", status, false);

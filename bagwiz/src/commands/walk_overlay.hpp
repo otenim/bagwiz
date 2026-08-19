@@ -18,9 +18,7 @@
 #include "bagwiz/core/tui/image/terminal_image_caps.hpp"
 #include "bagwiz/core/tui/pager.hpp"
 #include "bagwiz/io/bag_io.hpp"
-#include "walk_edit.hpp"          // NOLINT(build/include_subdir) src-local shared header
 #include "walk_overlay_scan.hpp"  // NOLINT(build/include_subdir) src-local shared header
-#include "walk_pins.hpp"          // NOLINT(build/include_subdir) src-local shared header
 
 #include <atomic>
 #include <cstddef>
@@ -72,25 +70,15 @@ struct PcdOverlayState
   // axis (OverlayScanResult::header_stamps_present). A false entry pins that
   // topic to record-time matching.
   std::vector<bool> topic_header_stamps;
-  // What the last maybe_overlay() of the LIVE tile matched on, and how far the
-  // chosen cloud's capture time landed from that frame's. Only the live tile
-  // writes these: the info row and the edit-candidate derivation have to
-  // describe one determinate frame, not whichever pinned tile happened to be
-  // composed last (see kLiveOverlaySlot). Both are only ever read while
+  // What the last maybe_overlay() matched on, and how far the chosen cloud's
+  // capture time landed from the frame's. The info row reads these, so they
+  // describe the cursor's frame alone. Both are only ever read while
   // `enabled` — the preview shows them only then — so they cannot go stale
   // behind a disabled overlay. `last_residual_ns` is nullopt when either side
   // left its header.stamp unset, which makes the residual undefined.
   core::pointcloud::PointCloudMatchKey last_match_key =
     core::pointcloud::PointCloudMatchKey::kRecordTime;
   std::optional<std::int64_t> last_residual_ns;
-  // Parallel to `topics`: the frame_id of the last cloud each topic fetched
-  // for the live tile, empty until its first successful fetch. The extrinsic
-  // edit mode derives its editable edges from these frames.
-  std::vector<std::string> last_cloud_frames;
-  // TF-lookup time of the live tile's last successful cloud match. The edit
-  // mode resolves its chains at this time, so a dynamic link on the path is
-  // evaluated where the overlay evaluates it.
-  std::optional<std::int64_t> last_match_ns;
 };
 
 // Display names used by the preview info row.
@@ -102,9 +90,9 @@ struct PcdOverlayState
 [[nodiscard]] std::string_view pcd_match_clock_name(const PcdOverlayState & pcd);
 // The {min, max} bounds the overlay actually colours points with: the manual
 // bounds in manual mode, else the running auto extent. The single definition
-// of this rule — the projection paints with it and the preview's tile render
+// of this rule — the projection paints with it and the preview's render
 // cache keys on it, and the two must never drift apart or the cache would
-// replay stale-coloured tiles. Inline so the cache's standalone test target
+// replay a stale-coloured frame. Inline so the cache's standalone test target
 // needs no link against the controller's sources.
 [[nodiscard]] inline std::pair<double, double> pcd_display_range(const PcdOverlayState & pcd)
 {
@@ -114,23 +102,10 @@ struct PcdOverlayState
   return {pcd.manual_min, pcd.manual_max};
 }
 
-// The tile whose readings drive the info row, the Δ readout and the
-// edit-candidate derivation: the one showing the cursor's own frame. Pinned
-// scenes occupy slots 1..kMaxScenePins.
-inline constexpr std::size_t kLiveOverlaySlot = 0;
-inline constexpr std::size_t kMaxOverlaySlots = kMaxScenePins + 1;
-
-// What one maybe_overlay() call matched for the tile it drew on. Per-tile
-// rather than per-session state, so a pinned scene's caption can report its
-// own cloud pairing without disturbing the live tile's readout. The clock the
-// pairing used is not here: it is a property of the topic selection, so every
-// tile shares the one the info row already shows.
-struct OverlayFrameReadings
-{
-  // Capture-time gap between the displayed cloud and the frame; nullopt when
-  // either side left its header.stamp unset, which makes it undefined.
-  std::optional<std::int64_t> residual_ns;
-};
+// How an interactive picker ended: a changed selection was confirmed, the
+// user left without one (Esc, or a confirmation identical to the applied
+// selection), or asked to terminate the walk session (Ctrl-C / Ctrl-D).
+enum class PickerOutcome { kConfirmed, kCancelled, kTerminate };
 
 class PcdOverlayController
 {
@@ -171,11 +146,13 @@ public:
   [[nodiscard]] PcdOverlayState & state() noexcept { return pcd_; }
   [[nodiscard]] const PcdOverlayState & state() const noexcept { return pcd_; }
 
-  // Interactive checkbox picker over the candidate topics. Returns the
-  // selected topics, or std::nullopt when the user cancelled or confirmed an
-  // unchanged selection (both leave the current overlay untouched).
-  // `backend` selects the graphics-clear protocol for the prompt redraws.
-  [[nodiscard]] std::optional<std::vector<std::string>> prompt_for_topics(
+  // Interactive checkbox picker over the candidate topics. kConfirmed
+  // carries the newly selected topics; a confirmation identical to the
+  // applied selection reports kCancelled instead (both leave the current
+  // overlay untouched). kTerminate is Ctrl-C / Ctrl-D: the caller ends the
+  // walk session. 'q' is inert — cancel is Esc alone. `backend` selects
+  // the graphics-clear protocol for the prompt redraws.
+  [[nodiscard]] std::pair<PickerOutcome, std::vector<std::string>> prompt_for_topics(
     core::tui::image::ImageBackend backend);
 
   // Start the overlay initialization on a worker thread: one combined bag
@@ -206,16 +183,8 @@ public:
   // choose_frame_match both clocks, and the per-topic capture-time capability
   // decides which one pairs the frame with each cloud. `rectify_enabled`
   // selects projection onto the rectified vs raw image.
-  //
-  // `slot` names the tile being composed (kLiveOverlaySlot for the cursor's
-  // own frame, 1..kMaxScenePins for the pinned scenes). Each slot keeps its
-  // own fetchers, because a fetcher caches exactly one cloud and reloads it
-  // from the bag on a miss: sharing one set across tiles would re-read every
-  // cloud on every keypress. The returned readings describe this tile; only
-  // the live slot also writes them into the state for the info row and the
-  // edit-candidate derivation.
-  OverlayFrameReadings maybe_overlay(
-    std::size_t slot, core::image::PackedRaster * raster, std::int64_t record_stamp_ns,
+  void maybe_overlay(
+    core::image::PackedRaster * raster, std::int64_t record_stamp_ns,
     const std::optional<core::image::CameraInfo> & camera_info,
     const EnsureRectifyHelper & ensure_helper, bool rectify_enabled);
 
@@ -226,49 +195,10 @@ public:
   // [r]: switch to a manually prompted range, or back to auto.
   void prompt_for_range(core::tui::ScrollablePager & pager, core::tui::image::ImageBackend backend);
 
-  // Extrinsic edit mode (see walk_edit.hpp). The state lives here because
-  // its edits are written into the overlay's TF buffer, whose lifecycle this
-  // controller owns.
-  [[nodiscard]] ExtrinsicEditState & edit_state() noexcept { return edit_; }
-  [[nodiscard]] const ExtrinsicEditState & edit_state() const noexcept { return edit_; }
-
-  // The TF buffer behind the active overlay, or nullptr before the first
-  // successful initialization.
-  [[nodiscard]] tf2::BufferCore * tf_buffer() noexcept
-  {
-    return active_scan_ ? &active_scan_->tf_buffer : nullptr;
-  }
-
-  // The bag the overlay (and so the edit mode) reads; the YAML export names
-  // it in the file's header comment and default filename.
-  [[nodiscard]] const std::filesystem::path & input_path() const noexcept { return input_path_; }
-
-  // [e]/[E]: re-derive the editable candidates from the currently displayed
-  // cloud frames and `camera_frame`, carrying edited values over
-  // (walk_edit's carry_over_edits). Returns false — with `status` set — when
-  // no cloud has been displayed yet or no static edge lies on the chains.
-  bool refresh_edit_candidates(const std::string & camera_frame);
-
-  // Interactive single-select list over the candidates. Returns true when a
-  // row was confirmed (stored in edit_state().active); Esc/q cancels.
-  bool prompt_for_edge(core::tui::image::ImageBackend backend);
-
-  // Write the active / every edited edge into the live TF buffer, so the
-  // next projection composes with the edited values. apply_all_edits() runs
-  // after an initialization swap re-created the buffer from the bag.
-  void apply_active_edit();
-  void apply_all_edits();
-
-  // Drop the fetch state of slots at or above `slot_count`, releasing the
-  // point clouds they hold resident. The preview calls this when unpinning a
-  // scene shrinks the tile grid.
-  void retain_slots(std::size_t slot_count);
-
-  // Monotonic counter over the composition inputs that are not plain values:
-  // the TF buffer behind the projection (extrinsic edits write into it) and
+  // Monotonic counter over the composition input that is not a plain value:
   // the scan behind the fetchers (a topic re-selection swaps it). The
-  // preview's tile render cache keys on this, so a nudge repaints every tile
-  // while plain navigation replays the pinned ones (see walk_preview_cache).
+  // preview's render cache keys on this, so a re-selection repaints while a
+  // plain navigation replays the cached bytes (see walk_preview_cache).
   [[nodiscard]] std::uint64_t composition_generation() const noexcept
   {
     return composition_generation_;
@@ -280,28 +210,21 @@ private:
   std::vector<std::string> pcd_topics_;
   std::string & status_;
   PcdOverlayState pcd_;
-  ExtrinsicEditState edit_;
-  // Per-tile fetch state. One fetcher per selected topic, so each displayed
-  // tile holds its own cloud resident and a nudge re-projects from memory
-  // instead of re-reading the bag once per tile.
-  struct OverlaySlot
-  {
-    std::vector<core::pointcloud::PointCloudFetcher> fetchers;
-    // Parallel to `fetchers`: the bag record time of the last cloud of each
-    // one already folded into pcd_.ranges, so repeated display of the same
-    // cloud does not re-accumulate. Record time, not the cloud pointer: the
-    // fetcher's cache is an inline optional move-assigned in place, so every
-    // cloud it returns has the same address (see
-    // PointCloudFetcher::cached_record_ns). nullopt until the first fold.
-    std::vector<std::optional<std::int64_t>> ranged_record_ns;
-  };
-  // Grown on demand, indexed by slot; index 0 is the live tile. Cleared on an
-  // initialization swap, since the fetchers belong to the previous scan.
-  std::vector<OverlaySlot> slots_;
+  // Fetch state: one fetcher per selected topic, so the displayed frame
+  // holds its own cloud resident and a repaint re-projects from memory
+  // instead of re-reading the bag.
+  std::vector<core::pointcloud::PointCloudFetcher> fetchers_;
+  // Parallel to `fetchers_`: the bag record time of the last cloud of each
+  // one already folded into pcd_.ranges, so repeated display of the same
+  // cloud does not re-accumulate. Record time, not the cloud pointer: the
+  // fetcher's cache is an inline optional move-assigned in place, so every
+  // cloud it returns has the same address (see
+  // PointCloudFetcher::cached_record_ns). Empty until the fetchers are built.
+  std::vector<std::optional<std::int64_t>> ranged_record_ns_;
   // See composition_generation().
   std::uint64_t composition_generation_ = 0;
-  // Cloud index of the active scan, kept so a slot's fetchers can be built the
-  // first time that tile is composed. The topic name travels with its entries
+  // Cloud index of the active scan, kept so the fetchers can be built on the
+  // first composition. The topic name travels with its entries
   // rather than being read back from pcd_topics_selected_, which a *started*
   // load already overwrote — a load that then fails leaves the previous
   // overlay serving, and its fetchers must keep reading the previous topics.
@@ -313,10 +236,9 @@ private:
   };
   std::vector<OverlayTopicIndex> pcd_index_;
 
-  // The slot's fetch state, built from pcd_index_ on first use.
-  // Returns nullptr when the overlay is not initialized or `slot` is out of
-  // range.
-  [[nodiscard]] OverlaySlot * ensure_slot(std::size_t slot);
+  // Build the fetchers from pcd_index_ on first use. Returns false when the
+  // overlay is not initialized.
+  [[nodiscard]] bool ensure_fetchers();
 
   // Initialization worker state. Results are heap-allocated because
   // tf2::BufferCore is immovable: the worker writes scan_result_ while

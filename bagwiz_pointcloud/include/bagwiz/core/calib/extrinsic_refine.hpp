@@ -29,8 +29,8 @@ struct EdgeChain
   // static-transform-publisher schema: x, y, z (meters) then roll, pitch, yaw
   // (radians, tf2 fixed-axis convention). Kept as scalars rather than a Mat4
   // because the delta is ADDITIVE on them (see apply_edge_delta) — the same
-  // parametrization `bagwiz walk`'s extrinsic-edit mode nudges and
-  // `bagwiz tf static dump` writes.
+  // parametrization `bagwiz tf static dump` writes and
+  // `bagwiz tf static update` applies.
   std::array<double, 6> edge_bag{};
   Mat4 t_child_camoptical{};  // edited edge's child -> camera optical frame
 };
@@ -39,9 +39,9 @@ struct EdgeChain
 /// This is THE parametrization refine_extrinsic searches, so the reported
 /// "refined value" and the emitted YAML are the same function of the delta as
 /// the cost the optimizer minimized — they cannot describe different edges.
-/// Additive rather than a right-multiplied SE3 factor: it matches walk's edit
-/// mode, and on a non-commuting rotation (an optical-convention edge, say) the
-/// two differ by an axis swap.
+/// Additive rather than a right-multiplied SE3 factor: it matches the
+/// static-transform-publisher scalar schema, and on a non-commuting rotation
+/// (an optical-convention edge, say) the two differ by an axis swap.
 [[nodiscard]] std::array<double, 6> apply_edge_delta(
   const std::array<double, 6> & edge_bag, const std::array<double, 6> & delta);
 
