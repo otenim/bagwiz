@@ -106,7 +106,7 @@ TEST(WalkHelpFooters, PreviewFooterCarriesOnlyTheWorkingSet)
   // the view toggles.
   EXPECT_EQ(footer.find("next/prev"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[u] rectify"), std::string::npos) << footer;
-  EXPECT_NE(footer.find("[p] pcd"), std::string::npos) << footer;
+  EXPECT_NE(footer.find("[p] pcd overlay"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[?] help"), std::string::npos) << footer;
   EXPECT_TRUE(footer.ends_with("[Esc] back")) << footer;
 }
