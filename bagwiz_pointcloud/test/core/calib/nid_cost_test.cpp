@@ -9,6 +9,7 @@
 #include "bagwiz/core/calib/nid_cost.hpp"
 
 #include "bagwiz/core/calib/se3.hpp"
+#include "correlated_scene.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <gtest/gtest.h>
 
@@ -18,54 +19,6 @@
 #include <vector>
 
 namespace calib = bagwiz::core::calib;
-
-namespace
-{
-
-// A frontal wall of points at z=8 m with intensity stripes along x, and an
-// image rendered by splatting those very points: at the true pose the two
-// modalities are perfectly correlated.
-calib::CalibSample make_correlated_sample(const calib::CameraModel & cam, int bins)
-{
-  calib::CalibSample sample;
-  sample.t_world_trajframe = calib::identity_mat4();
-  sample.image.width = cam.width;
-  sample.image.height = cam.height;
-  sample.image.gray.assign(static_cast<std::size_t>(cam.width) * cam.height, 0);
-  for (int iy = -30; iy < 30; ++iy) {
-    for (int ix = -50; ix < 50; ++ix) {
-      const float x = 0.1F * static_cast<float>(ix);
-      const float y = 0.1F * static_cast<float>(iy);
-      const auto bin = static_cast<std::uint8_t>(((ix + 1000) / 4) % bins);
-      sample.points_world.push_back({x, y, 8.0F});
-      sample.intensity_bins.push_back(bin);
-      const double u = cam.k[0] * (x / 8.0) + cam.k[2];
-      const double v = cam.k[4] * (y / 8.0) + cam.k[5];
-      const auto gray = static_cast<std::uint8_t>(bin * (256 / bins) + (256 / bins) / 2);
-      for (int du = -3; du <= 3; ++du) {
-        for (int dv = -3; dv <= 3; ++dv) {
-          const auto px = static_cast<std::int64_t>(u) + du;
-          const auto py = static_cast<std::int64_t>(v) + dv;
-          if (px >= 0 && py >= 0 && px < cam.width && py < cam.height) {
-            sample.image.gray[static_cast<std::size_t>(py) * cam.width + px] = gray;
-          }
-        }
-      }
-    }
-  }
-  return sample;
-}
-
-calib::CameraModel test_camera()
-{
-  calib::CameraModel cam;
-  cam.k = {500.0, 0.0, 320.0, 0.0, 500.0, 240.0, 0.0, 0.0, 1.0};
-  cam.width = 640;
-  cam.height = 480;
-  return cam;
-}
-
-}  // namespace
 
 TEST(NidCostTest, AlignedPoseScoresLowerThanPerturbedPose)
 {
