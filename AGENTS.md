@@ -313,7 +313,33 @@ in-terminal progress bar, spinner, or similar progress UI.
   consistent across commands and the build depends on a single,
   well-tested implementation.
 
-### 4. Documentation, Comment & Help Consistency
+### 4. Interactive TUIs
+
+Applies to any bagwiz code that renders an interactive terminal UI —
+today the `walk` command's views (the YAML pager, the image preview,
+and their overlays and pickers) — and to any TUI added later.
+
+- Keep every TUI simple, at introduction and as it evolves. The
+  always-visible chrome (footer legends, info rows, status lines)
+  shows only the working set of the current mode, ideally one row on
+  a typical terminal; everything else belongs behind an on-demand
+  reference (walk's `?` overlay) or in a transient status message
+  that clears on the next action. When a new feature would widen the
+  persistent chrome, move its reference material behind `?` or drop
+  the hint rather than growing the footer.
+- Give each key one meaning and keep that meaning identical across
+  every command, view, and mode — a key must never do one thing in
+  one TUI surface and something else in another. The established
+  global bindings are: `?` opens the key reference, Esc backs out
+  one level (close the overlay, leave the mode, leave the view, quit
+  at the top), `q` and Ctrl-C / Ctrl-D quit the current view, and
+  `j`/`k` scroll. Never rebind one of these locally. When a view
+  needs a new action, assign an unused key in `classify_key()`
+  (`bagwiz_base/src/core/base/terminal_input.cpp`) — the single
+  source of key bindings — instead of overloading a taken key with a
+  context-dependent second meaning.
+
+### 5. Documentation, Comment & Help Consistency
 
 Applies whenever you change any bagwiz source code, regardless of
 which part of the repository the change touches.
@@ -365,7 +391,7 @@ which part of the repository the change touches.
   completion additionally with a live `bagwiz __complete <cword> ...`
   against a real bag.
 
-### 5. Module Layout
+### 6. Module Layout
 
 Applies to the C++ source tree: which package a new source file,
 header, or dependency belongs in, and which include/link directions
@@ -394,7 +420,7 @@ are allowed.
   really about the other package's own behavior, put the test there
   instead.
 
-### 6. Numerical Reproducibility
+### 7. Numerical Reproducibility
 
 Applies to any bagwiz code whose output is a number a user consumes —
 map points, trajectory poses, colors, weights, normals — and to the
@@ -447,7 +473,7 @@ tests that assert on those numbers.
   justifies it, so a later change that breaks the premise is visible
   in review.
 
-### 7. Benchmarking
+### 8. Benchmarking
 
 Applies whenever you measure the runtime performance of a bagwiz
 command — an existing one or one being added — whether through
