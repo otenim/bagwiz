@@ -131,7 +131,6 @@ add_library(bagwiz_slam
   src/core/slam/lidar_scan.cpp
   src/core/slam/map_colorizer.cpp
   src/core/slam/map_viewer_open.cpp
-  src/core/slam/point_cloud_io.cpp
   src/core/slam/propagation_radius.cpp
   src/core/slam/scan_image_pairer.cpp
   src/core/slam/scan_to_world.cpp
@@ -405,9 +404,6 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_slam_lidar_scan_test test/core/slam/lidar_scan_test.cpp)
   target_link_libraries(bagwiz_slam_lidar_scan_test bagwiz_slam)
-
-  ament_add_gtest(bagwiz_slam_point_cloud_io_test test/core/slam/point_cloud_io_test.cpp)
-  target_link_libraries(bagwiz_slam_point_cloud_io_test bagwiz_slam)
 
   ament_add_gtest(bagwiz_slam_map_colorizer_test test/core/slam/map_colorizer_test.cpp)
   target_link_libraries(bagwiz_slam_map_colorizer_test bagwiz_slam)

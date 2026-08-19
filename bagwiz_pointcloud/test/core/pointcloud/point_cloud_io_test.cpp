@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/core/slam/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
 
 #include <gtest/gtest.h>
 
@@ -21,7 +21,7 @@
 
 namespace
 {
-namespace slam = bagwiz::core::slam;
+namespace pointcloud = bagwiz::core::pointcloud;
 
 // Split a PCD stream into its ASCII header (through "DATA binary\n") and the
 // binary body that follows.
@@ -47,7 +47,7 @@ TEST(PointCloudIo, WritesXyzPcdHeaderAndBody)
 {
   const std::vector<std::array<float, 3>> points = {{1.0F, 2.0F, 3.0F}, {4.0F, 5.0F, 6.0F}};
   std::ostringstream os;
-  slam::write_pcd(os, points);
+  pointcloud::write_pcd(os, points);
   const auto [header, body] = split_pcd(os.str());
 
   EXPECT_NE(header.find("VERSION 0.7\n"), std::string::npos);
@@ -71,7 +71,7 @@ TEST(PointCloudIo, IncludesIntensityWhenSizesMatch)
   const std::vector<std::array<float, 3>> points = {{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
   const std::vector<float> intensities = {10.0F, 20.0F};
   std::ostringstream os;
-  slam::write_pcd(os, points, intensities);
+  pointcloud::write_pcd(os, points, intensities);
   const auto [header, body] = split_pcd(os.str());
 
   EXPECT_NE(header.find("FIELDS x y z intensity\n"), std::string::npos);
@@ -87,7 +87,7 @@ TEST(PointCloudIo, OmitsIntensityOnSizeMismatch)
   const std::vector<std::array<float, 3>> points = {{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
   const std::vector<float> intensities = {10.0F};  // wrong length
   std::ostringstream os;
-  slam::write_pcd(os, points, intensities);
+  pointcloud::write_pcd(os, points, intensities);
   const auto [header, body] = split_pcd(os.str());
 
   EXPECT_EQ(header.find("intensity"), std::string::npos);
@@ -97,7 +97,7 @@ TEST(PointCloudIo, OmitsIntensityOnSizeMismatch)
 TEST(PointCloudIo, EmptyCloudWritesZeroPoints)
 {
   std::ostringstream os;
-  slam::write_pcd(os, {});
+  pointcloud::write_pcd(os, {});
   const auto [header, body] = split_pcd(os.str());
   EXPECT_NE(header.find("WIDTH 0\n"), std::string::npos);
   EXPECT_NE(header.find("POINTS 0\n"), std::string::npos);
@@ -120,7 +120,7 @@ TEST(PointCloudIo, IncludesRgbWhenSizesMatch)
   const std::vector<std::array<float, 3>> points = {{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
   const std::vector<std::array<std::uint8_t, 3>> colors = {{255, 0, 128}, {1, 2, 3}};
   std::ostringstream os;
-  slam::write_pcd(os, points, {}, colors);
+  pointcloud::write_pcd(os, points, {}, colors);
   const auto [header, body] = split_pcd(os.str());
 
   EXPECT_NE(header.find("FIELDS x y z rgb\n"), std::string::npos);
@@ -140,7 +140,7 @@ TEST(PointCloudIo, IncludesIntensityAndRgbTogether)
   const std::vector<float> intensities = {10.0F, 20.0F};
   const std::vector<std::array<std::uint8_t, 3>> colors = {{9, 8, 7}, {6, 5, 4}};
   std::ostringstream os;
-  slam::write_pcd(os, points, intensities, colors);
+  pointcloud::write_pcd(os, points, intensities, colors);
   const auto [header, body] = split_pcd(os.str());
 
   EXPECT_NE(header.find("FIELDS x y z intensity rgb\n"), std::string::npos);
@@ -159,7 +159,7 @@ TEST(PointCloudIo, OmitsRgbOnSizeMismatch)
   const std::vector<std::array<float, 3>> points = {{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}};
   const std::vector<std::array<std::uint8_t, 3>> colors = {{9, 8, 7}};  // wrong length
   std::ostringstream os;
-  slam::write_pcd(os, points, {}, colors);
+  pointcloud::write_pcd(os, points, {}, colors);
   const auto [header, body] = split_pcd(os.str());
 
   EXPECT_EQ(header.find("rgb"), std::string::npos);
@@ -172,10 +172,10 @@ TEST(PointCloudIo, RoundTripsRgbThroughReadPcd)
   const std::vector<float> intensities = {10.0F, 20.0F};
   const std::vector<std::array<std::uint8_t, 3>> colors = {{255, 128, 0}, {0, 64, 255}};
   std::ostringstream os;
-  slam::write_pcd(os, points, intensities, colors);
+  pointcloud::write_pcd(os, points, intensities, colors);
 
   std::istringstream is(os.str());
-  const auto result = slam::read_pcd(is);
+  const auto result = pointcloud::read_pcd(is);
   ASSERT_TRUE(result.ok) << result.error;
   EXPECT_EQ(result.cloud.points, points);
   EXPECT_EQ(result.cloud.intensities, intensities);
@@ -187,10 +187,10 @@ TEST(PointCloudIo, RoundTripsRgbWithoutIntensity)
   const std::vector<std::array<float, 3>> points = {{1.0F, 2.0F, 3.0F}};
   const std::vector<std::array<std::uint8_t, 3>> colors = {{12, 34, 56}};
   std::ostringstream os;
-  slam::write_pcd(os, points, {}, colors);
+  pointcloud::write_pcd(os, points, {}, colors);
 
   std::istringstream is(os.str());
-  const auto result = slam::read_pcd(is);
+  const auto result = pointcloud::read_pcd(is);
   ASSERT_TRUE(result.ok) << result.error;
   EXPECT_EQ(result.cloud.points, points);
   EXPECT_TRUE(result.cloud.intensities.empty());

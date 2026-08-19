@@ -6,8 +6,8 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
 #include "bagwiz/core/slam/map_viewer.hpp"
-#include "bagwiz/core/slam/point_cloud_io.hpp"
 
 #include <gtest/gtest.h>
 #include <httplib.h>
@@ -296,7 +296,7 @@ TEST(MapViewerServerFlush, ServesCompleteMapOnlyAfterWriterCloses)
 
   std::ofstream out(path, std::ios::binary);
   ASSERT_TRUE(out.good());
-  slam::write_pcd(out, points, intensities);
+  bagwiz::core::pointcloud::write_pcd(out, points, intensities);
   ASSERT_TRUE(out.good());
 
   // Served while the writer's stream is still open: this is the buggy state, and

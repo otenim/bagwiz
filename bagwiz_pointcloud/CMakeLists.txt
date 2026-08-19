@@ -50,6 +50,7 @@ add_library(bagwiz_pointcloud
   src/core/pointcloud/normals.cpp
   src/core/pointcloud/outlier_removal.cpp
   src/core/pointcloud/overlay.cpp
+  src/core/pointcloud/point_cloud_io.cpp
   src/core/pointcloud/point_time.cpp
   src/core/pointcloud/pointcloud2.cpp
   src/core/pointcloud/projector.cpp
@@ -164,6 +165,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_pointcloud_outlier_removal_test test/core/pointcloud/outlier_removal_test.cpp)
   target_link_libraries(bagwiz_pointcloud_outlier_removal_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_pointcloud_point_cloud_io_test test/core/pointcloud/point_cloud_io_test.cpp)
+  target_link_libraries(bagwiz_pointcloud_point_cloud_io_test bagwiz_pointcloud)
 endif()
 
 ament_package()

@@ -8,7 +8,7 @@
 
 #include "map_slam_mapping.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
-#include "bagwiz/core/slam/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
 
 #include <gtest/gtest.h>
@@ -347,7 +347,7 @@ TEST_F(WriteMapOutputsTest, WritesTrajectoryAndMap)
   EXPECT_DOUBLE_EQ(read.poses[1].qw, 1.0);
 
   std::ifstream pcd_in(map_path, std::ios::binary);
-  const auto pcd = bagwiz::core::slam::read_pcd(pcd_in);
+  const auto pcd = bagwiz::core::pointcloud::read_pcd(pcd_in);
   ASSERT_TRUE(pcd.ok) << pcd.error;
   EXPECT_EQ(pcd.cloud.points.size(), 2U);
   EXPECT_EQ(pcd.cloud.intensities.size(), 2U);

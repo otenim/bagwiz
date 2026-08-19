@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/core/slam/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
 
 #include <array>
 #include <cstddef>
@@ -22,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-namespace bagwiz::core::slam
+namespace bagwiz::core::pointcloud
 {
 namespace
 {
@@ -267,4 +267,4 @@ PcdReadResult read_pcd(std::istream & is)
   return {true, std::move(cloud), {}};
 }
 
-}  // namespace bagwiz::core::slam
+}  // namespace bagwiz::core::pointcloud
