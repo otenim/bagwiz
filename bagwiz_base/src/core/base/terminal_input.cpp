@@ -98,9 +98,9 @@ KeyEvent classify_key(std::string_view bytes)
     const unsigned char c = static_cast<unsigned char>(bytes[0]);
     switch (c) {
       // A lone ESC backs out one level; the views decide what that means
-      // (close the help, leave the edit mode or the preview; inert at the
-      // top). ^C/^D terminate the session outright; 'q' is a separate event
-      // so a view can leave it unbound (only walk's YAML view quits on it).
+      // (close the help, leave the preview; inert at the top). ^C/^D
+      // terminate the session outright; 'q' is a separate event so a view
+      // can leave it unbound (only walk's YAML view quits on it).
       case 0x1B:  // lone ESC
         return KeyEvent::kBack;
       case 0x03:  // Ctrl-C
@@ -166,61 +166,6 @@ KeyEvent classify_key(std::string_view bytes)
         return KeyEvent::kPcdAlphaUp;
       case '[':
         return KeyEvent::kPcdAlphaDown;
-      // e/E mirror the p/t pcd pair: lowercase toggles the extrinsic edit
-      // mode, uppercase opens the picker choosing the static TF edge it
-      // nudges.
-      case 'e':
-        return KeyEvent::kToggleEditExtrinsic;
-      case 'E':
-        return KeyEvent::kSelectEditEdge;
-      // Nudges: lowercase steps the component up, uppercase down. The
-      // rotation letters come from inside the word (roLL, Nod, yaW) because
-      // r, p and y are already taken by other bindings.
-      case 'x':
-        return KeyEvent::kEditTransXUp;
-      case 'X':
-        return KeyEvent::kEditTransXDown;
-      case 'y':
-        return KeyEvent::kEditTransYUp;
-      case 'Y':
-        return KeyEvent::kEditTransYDown;
-      case 'z':
-        return KeyEvent::kEditTransZUp;
-      case 'Z':
-        return KeyEvent::kEditTransZDown;
-      case 'l':
-        return KeyEvent::kEditRollUp;
-      case 'L':
-        return KeyEvent::kEditRollDown;
-      case 'n':
-        return KeyEvent::kEditPitchUp;
-      case 'N':
-        return KeyEvent::kEditPitchDown;
-      case 'w':
-        return KeyEvent::kEditYawUp;
-      case 'W':
-        return KeyEvent::kEditYawDown;
-      case 'm':
-        return KeyEvent::kEditStepUp;
-      case 'M':
-        return KeyEvent::kEditStepDown;
-      case '0':
-        return KeyEvent::kEditReset;
-      // Shift-D rather than a bare 'd', for the same reason save is
-      // Shift-S: the export prompt takes over the screen, so one mistyped
-      // letter should not trigger it.
-      case 'D':
-        return KeyEvent::kEditDumpYaml;
-      // Shift-A for the same reason as Shift-S and Shift-D: applying
-      // rewrites the input bag in place, so a stray lowercase letter must
-      // not reach even the confirmation prompt.
-      case 'A':
-        return KeyEvent::kEditApplyToBag;
-      // Shift-P rather than a bare 'p', which toggles the pcd overlay: the
-      // two are used side by side in the same preview, so they cannot share
-      // a letter case.
-      case 'P':
-        return KeyEvent::kPinScene;
       case '?':
         return KeyEvent::kHelp;
       default:

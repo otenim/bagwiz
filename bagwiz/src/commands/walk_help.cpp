@@ -52,22 +52,11 @@ std::string yaml_footer_legend(bool preview_available)
   return legend;
 }
 
-std::string preview_footer_legend(bool pcd_topic_selected, bool edit_active)
+std::string preview_footer_legend()
 {
-  if (edit_active) {
-    // The nudge keys are the working set here; navigation and the overlay
-    // toggles keep working but live behind [?] while the mode is on.
-    return "  [x/y/z] move   [l/n/w] rotate   [m] step   [0] reset   [A] apply   [D] yaml"
-           "   [e] done   [?] help";
-  }
-  std::string legend = "  [u] rectify   [p] pcd   ";
-  if (pcd_topic_selected) {
-    // The edit mode and the scene pins judge a projection against the image,
-    // so their entry hints wait for an overlay topic like the keys do.
-    legend += "[e] edit   [P] pin   ";
-  }
-  legend += "[?] help   [Esc] back";
-  return legend;
+  // Space/b navigation is unlabeled here too — the working set starts at the
+  // view toggles.
+  return "  [u] rectify   [p] pcd   [?] help   [Esc] back";
 }
 
 std::vector<std::string> yaml_help_lines()
@@ -110,17 +99,8 @@ std::vector<std::string> preview_help_lines()
     "  f / c / r      cycle property / color scheme / value range",
     "  = / -          point size",
     "  ] / [          opacity",
-    "  P              pin / unpin the scene as a compare tile",
-    "Edit extrinsic ([e] enters; needs the overlay)",
-    "  x/X y/Y z/Z    nudge translation",
-    "  l/L n/N w/W    nudge roll / pitch / yaw",
-    "  m / M          step size",
-    "  0              reset the edge to the bag value",
-    "  E              choose the edited edge",
-    "  D              export the edits as static-TF YAML",
-    "  A              apply the edits to the input bag (asks first)",
     "Other",
-    "  Esc            close this help / back (edit mode -> preview)",
+    "  Esc            close this help / back to the YAML view",
     "  Ctrl-C / Ctrl-D  quit walk",
   };
 }

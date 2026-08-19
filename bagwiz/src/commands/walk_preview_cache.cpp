@@ -45,27 +45,17 @@ TileRenderKey tile_render_key(
   return key;
 }
 
-const TileRenderEntry * TileRenderCache::find(std::size_t slot, const TileRenderKey & key) const
+const TileRenderEntry * TileRenderCache::find(const TileRenderKey & key) const
 {
-  if (slot >= slots_.size() || !slots_[slot].has_value() || !(slots_[slot]->key == key)) {
+  if (!entry_.has_value() || !(entry_->key == key)) {
     return nullptr;
   }
-  return &*slots_[slot];
+  return &*entry_;
 }
 
-void TileRenderCache::store(std::size_t slot, TileRenderEntry entry)
+void TileRenderCache::store(TileRenderEntry entry)
 {
-  if (slot >= slots_.size()) {
-    slots_.resize(slot + 1);
-  }
-  slots_[slot] = std::move(entry);
-}
-
-void TileRenderCache::trim(std::size_t slot_count)
-{
-  if (slot_count < slots_.size()) {
-    slots_.resize(slot_count);
-  }
+  entry_ = std::move(entry);
 }
 
 }  // namespace bagwiz::commands

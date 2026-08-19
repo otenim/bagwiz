@@ -27,11 +27,8 @@ namespace bagwiz::commands
 // a graphics-capable terminal only.
 [[nodiscard]] std::string yaml_footer_legend(bool preview_available);
 
-// One-row footer of the image preview. A selected PointCloud2 topic adds
-// the [e]/[P] entries that need an overlay to be useful; the extrinsic edit
-// mode replaces the footer with its own working set instead of appending,
-// so the nudge keys are not buried among navigation hints.
-[[nodiscard]] std::string preview_footer_legend(bool pcd_topic_selected, bool edit_active);
+// One-row footer of the image preview.
+[[nodiscard]] std::string preview_footer_legend();
 
 // Full key reference of the YAML pager, one logical line per entry, grouped
 // by section. The caller wraps the lines to the terminal width.
