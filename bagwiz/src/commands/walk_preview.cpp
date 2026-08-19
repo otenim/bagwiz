@@ -309,7 +309,7 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
 
   // State badges only while a state is on; the settings themselves surface
   // transiently on the status row as their keys adjust them, so the
-  // persistent row stays one glanceable line.
+  // persistent row stays one compact line.
   if (rectify_enabled_) {
     info += fmt::format("   {}", hl("rect"));
   }

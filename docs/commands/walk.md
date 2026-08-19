@@ -196,7 +196,7 @@ Defaults on first enable are: property `distance`, scheme `viridis`, range `auto
 point size `2`, alpha `1.0`. Each adjustment key reports its new value
 transiently on the status row (`scheme: turbo`, `point size: 3`, ...), and the
 info row at the top of the preview (directly under the topic name) stays one
-glanceable line: `rect` and `pcd` badges while those states are on, the pin
+compact line: `rect` and `pcd` badges while those states are on, the pin
 count when scenes are pinned, and any transient status message.
 While the overlay is on the info row also carries `Δ`: the signed gap between
 the displayed cloud's capture time and the frame's — the residual
