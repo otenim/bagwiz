@@ -480,7 +480,7 @@ void ImagePreviewSession::render_help(std::ostream & out, core::tui::Size term)
 
   // The close hint is pinned to the bottom like the preview's own footer;
   // the reference scrolls in the region above it.
-  const std::vector<std::string> footer = core::tui::wrap_to_width("  [Esc] close", cols);
+  const std::vector<std::string> footer = core::tui::wrap_to_width("  [Esc] back", cols);
   const int footer_top = std::max(1, rows - static_cast<int>(footer.size()) + 1);
   const int body_rows = std::max(1, footer_top - 1);
 

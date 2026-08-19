@@ -210,7 +210,7 @@ TEST(WalkBuildHelpFrame, BodyCarriesTheReferenceLines)
   // The title names the overlay; the footer advertises how to leave it.
   ASSERT_FALSE(frame.header.empty());
   EXPECT_NE(frame.header[0].find("keys"), std::string::npos) << frame.header[0];
-  EXPECT_NE(join(frame.footer).find("[Esc] close"), std::string::npos);
+  EXPECT_NE(join(frame.footer).find("[Esc] back"), std::string::npos);
 }
 
 TEST(WalkBuildHelpFrame, LongLinesWrapToTheTerminalWidth)
