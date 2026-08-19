@@ -37,7 +37,10 @@ namespace bagwiz::commands
 // that `bagwiz tf static update` applies.
 struct TfStaticCalibrateArgs
 {
-  std::string input_path;      // -i,--input: bag path (file or directory)
+  // -i,--input: bag path (file or directory). A std::filesystem::path (not a
+  // string) because set_topic_input() binds the completion registry's topic
+  // slots to it — the same shape every other slot-declaring command uses.
+  std::filesystem::path input_path;
   std::string map_path;        // --map: dense map PCD from `map slam`
   std::string traj_path;       // --traj: TUM trajectory from `map slam`
   std::string traj_frame;      // --traj-frame: frame the trajectory poses express

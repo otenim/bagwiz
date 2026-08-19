@@ -262,7 +262,7 @@ std::string render_calibrate_summary(
     out += "\n";
   }
   out += fmt::format(
-    "apply with: bagwiz tf static update -i {} --yaml {}\n", args.input_path, yaml_path);
+    "apply with: bagwiz tf static update -i {} --yaml {}\n", args.input_path.string(), yaml_path);
   return out;
 }
 

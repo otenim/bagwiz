@@ -662,7 +662,7 @@ int run_tf_static_calibrate(const TfStaticCalibrateArgs & args)
 
   const std::string yaml = core::emit_static_tf_tree_yaml(
     std::span<const geometry_msgs::msg::TransformStamped>(&ts, 1),
-    args.input_path + " (bagwiz tf static calibrate)");
+    args.input_path.string() + " (bagwiz tf static calibrate)");
 
   const std::filesystem::path out_path =
     args.output_path.empty() ? std::filesystem::path(default_calibrate_output_path(args.input_path))

@@ -696,6 +696,10 @@ private:
     sub->add_option("-i,--input", static_calibrate_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
+    // -t/--topic and --cam-info are declared as topic slots (not plain
+    // options) so shell completion offers the bag's image / CameraInfo
+    // topics, exactly as `walk`'s equivalents do.
+    set_topic_input(*sub, static_calibrate_args_.input_path);
     sub
       ->add_option(
         "--map", static_calibrate_args_.map_path,
@@ -710,7 +714,9 @@ private:
         "--traj-frame", static_calibrate_args_.traj_frame,
         "Frame the trajectory poses express (matches `map slam --frame`)")
       ->required();
-    sub->add_option("-t,--topic", static_calibrate_args_.topic, "Image topic to calibrate against")
+    add_topic_option(
+      *sub, "-t,--topic", static_calibrate_args_.topic, "Image topic to calibrate against",
+      TopicSlotSpec{.allowed_types = kImageTopicTypes, .mode = TopicSelectorMode::kLiteral})
       ->required();
     sub
       ->add_option(
@@ -721,9 +727,10 @@ private:
       ->add_option(
         "--child", static_calibrate_args_.child_frame, "Child frame of the static edge to refine")
       ->required();
-    auto * cam_info_opt = sub->add_option(
-      "--cam-info", static_calibrate_args_.cam_info_topic,
-      "CameraInfo topic (auto-resolved from the image topic when omitted)");
+    auto * cam_info_opt = add_topic_option(
+      *sub, "--cam-info", static_calibrate_args_.cam_info_topic,
+      "CameraInfo topic (auto-resolved from the image topic when omitted)",
+      TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral});
     sub->add_option(
       "-o,--output", static_calibrate_args_.output_path,
       "Output YAML path (default: <bag>_tf_static_calib.yaml)");

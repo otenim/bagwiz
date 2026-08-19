@@ -1044,6 +1044,81 @@ TEST_F(CompletionTest, TfStaticDropFrameFlagListsStaticFrameIds)
     "base_link\nmap\nodom\n");
 }
 
+// `tf static calibrate --parent <TAB>` completes static frame ids like
+// `calc`'s --of/--ref: the edited edge must be carried by a static TF topic,
+// so a dynamic-only frame is never a valid answer.
+TEST_F(CompletionTest, TfStaticCalibrateParentFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/mixed.mcap",
+       "--parent"}),
+    "base_link\nmap\nodom\n");
+}
+
+// `--child <TAB>` shares the same static-only frame-id source as `--parent`.
+TEST_F(CompletionTest, TfStaticCalibrateChildFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/mixed.mcap",
+       "--child"}),
+    "base_link\nmap\nodom\n");
+}
+
+// `--traj-frame <TAB>` completes the same static frame set: the trajectory
+// frame must resolve through the static tree to the camera's optical frame.
+TEST_F(CompletionTest, TfStaticCalibrateTrajFrameFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/mixed.mcap",
+       "--traj-frame"}),
+    "base_link\nmap\nodom\n");
+}
+
+// `tf static calibrate -t <TAB>` completes the bag's image topics only (raw
+// and compressed) via the declared topic slot, like `walk -t` and
+// `map slam --color`.
+TEST_F(CompletionTest, TfStaticCalibrateTopicListsOnlyImageTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_image_topics_fixture(tmp_dir_ / "images.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/images.mcap",
+       "-t"}),
+    "/image\n/image/compressed\n");
+}
+
+// `tf static calibrate --cam-info <TAB>` completes CameraInfo topics only.
+TEST_F(CompletionTest, TfStaticCalibrateCamInfoListsOnlyCameraInfoTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "tf", "static", "calibrate", "-i", "~/cameras.mcap",
+       "--cam-info"}),
+    "/cam/camera_info\n");
+}
+
 // `tf static update -t <TAB>` completes from the bag's *tf_static topics only. The
 // flag homes newly added edges, and an edge written to a non-static TF topic is
 // invisible to every bagwiz static-TF reader (collect_static_tf skips it), so

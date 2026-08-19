@@ -835,12 +835,9 @@ std::vector<std::string> complete_traj(const CompletionRequest & request)
 
 // A `tf static` action whose only candidates are its own flags: at a `-` word
 // offer `flags` (plus the common help flags), anywhere else offer nothing so
-// the shell's default completion takes over. `calibrate`, `cp`, `dump`, and
-// `join` are all of this shape — none of their value slots carries bagwiz
-// candidates: `calibrate`'s all name bags, files, frames, or numeric
-// parameters (its `-t`/`--topic` is a plain required option, not a declared
-// topic slot, unlike `join`'s/`update`'s), and `cp`/`dump`/`join`'s name bags,
-// file paths, or (for `join`'s `--topic`) a topic being created.
+// the shell's default completion takes over. `cp`, `dump`, and `join` are all
+// of this shape — none of their value slots carries bagwiz candidates: they
+// name bags, file paths, or (for `join`'s `--topic`) a topic being created.
 std::vector<std::string> complete_tf_static_flags_only(
   const CompletionRequest & request, const std::string & current,
   std::initializer_list<std::string_view> flags)
@@ -863,6 +860,39 @@ std::vector<std::string> complete_tf_static_calc(
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
     if (previous == "--of" || previous == "--ref") {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
+    }
+  }
+  return {};
+}
+
+// `calibrate` surfaces its full flag set for any `-` word. Its
+// `--parent`/`--child` value slots complete from the bag's static
+// `*/tf_static` frame ids only — the edited edge must be carried by a static
+// TF topic, so a dynamic-only frame is never a valid answer — and
+// `--traj-frame` completes the same set, since the trajectory frame must be
+// resolvable through the static tree to the camera. `-t`/`--topic` and
+// `--cam-info` are declared topic slots (see configure_static_calibrate), so
+// try_topic_completion serves their values before this function is reached.
+std::vector<std::string> complete_tf_static_calibrate(
+  const CompletionRequest & request, const std::string & current)
+{
+  if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
+    return matching(
+      with_help({"--cam-info", "--child",     "--fix",        "--input",     "--json",
+                 "--map",      "--max-depth", "--max-rot",    "--max-trans", "--min-depth",
+                 "--nid-bins", "--output",    "--overwrite",  "--parent",    "--samples",
+                 "--topic",    "--traj",      "--traj-frame", "-i",          "-o",
+                 "-t",         "-w"}),
+      current);
+  }
+  if (request.cursor_word > 0) {
+    const auto & previous = request.words[request.cursor_word - 1];
+    if (previous == "--parent" || previous == "--child" || previous == "--traj-frame") {
       const auto bag_arg = find_input_bag(request);
       if (!bag_arg) {
         return {};
@@ -944,12 +974,7 @@ std::vector<std::string> complete_tf_static(
     return complete_tf_static_calc(request, current);
   }
   if (action == "calibrate") {
-    return complete_tf_static_flags_only(
-      request, current,
-      {"--cam-info",  "--child",   "--fix",       "--input",     "--json",     "--map",
-       "--max-depth", "--max-rot", "--max-trans", "--min-depth", "--nid-bins", "--output",
-       "--overwrite", "--parent",  "--samples",   "--topic",     "--traj",     "--traj-frame",
-       "-i",          "-o",        "-t",          "-w"});
+    return complete_tf_static_calibrate(request, current);
   }
   if (action == "cp") {
     return complete_tf_static_flags_only(
