@@ -34,9 +34,10 @@ jobs:
       # native binary with no pip distribution.
       - name: Install cppcheck
         timeout-minutes: 5
-        run: |
-          sudo apt-get update -o Acquire::Retries=3
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cppcheck
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: cppcheck
+          version: 1.0
 
       - name: Run pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
