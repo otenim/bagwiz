@@ -186,6 +186,7 @@ set(bagwiz_command_sources
   src/commands/walk_pins.cpp
   src/commands/walk_preview.cpp
   src/commands/walk_preview_cache.cpp
+  src/commands/walk_help.cpp
   src/commands/walk_preview_legend.cpp
   src/commands/walk_save.cpp
   src/commands/traj.cpp
@@ -707,6 +708,15 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_walk_preview_legend_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_walk_preview_legend_test ${bagwiz_test_libs} fmt::fmt)
+
+  # The footers and the '?' reference are pure strings split out of the two
+  # interactive views, so this test needs neither a pager nor a TTY.
+  ament_add_gtest(bagwiz_walk_help_test
+    test/commands/walk_help_test.cpp
+    src/commands/walk_help.cpp)
+  target_include_directories(bagwiz_walk_help_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_walk_help_test ${bagwiz_test_libs} fmt::fmt)
 
   # The pin registry and the tile geometry are pure, so this test needs no
   # bag, no TF and no terminal — only bagwiz_tui for the fit_image() the
