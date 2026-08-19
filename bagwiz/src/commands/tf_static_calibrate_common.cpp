@@ -243,8 +243,8 @@ std::string render_calibrate_summary(
   for (std::size_t axis = 0; axis < 6; ++axis) {
     if (result.observability[axis] == core::calib::AxisObservability::kDegenerate) {
       out += fmt::format(
-        "warning: {} is not observable from this data; its value is the bag's, consider --fix "
-        "{}\n",
+        "warning: {} is not observable from this data; the delta shown is unconstrained — "
+        "re-run with --fix {} to hold the bag value\n",
         kAxisNames[axis], kAxisNames[axis]);
       warned = true;
     }

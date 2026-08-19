@@ -142,6 +142,14 @@ RefineResult refine_extrinsic(
     minus[axis] -= h;
     const double c_plus = total_cost(samples, cam, chain, plus, params.nid, nullptr);
     const double c_minus = total_cost(samples, cam, chain, minus, params.nid, nullptr);
+    if (!std::isfinite(c_plus) || !std::isfinite(c_minus)) {
+      // One side of the probe projected too few points to score at all, so the
+      // second difference is meaningless (an infinite one would otherwise sail
+      // past kStrongCurvature and read as the best-determined axis there is).
+      // An axis this data cannot measure is degenerate, not strong.
+      result.observability[axis] = AxisObservability::kDegenerate;
+      continue;
+    }
     const double curvature = c_plus + c_minus - 2.0 * result.nid_after;
     result.observability[axis] = curvature > kStrongCurvature ? AxisObservability::kStrong
                                  : curvature > kWeakCurvature ? AxisObservability::kWeak

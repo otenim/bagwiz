@@ -958,9 +958,12 @@ mount value or an unconstrained axis cannot wander to an unrelated optimum.
 
 After refining, each of the six axes is probed independently around the
 optimum and reported as `strong`, `weak`, `degenerate`, or (for an axis named
-by `--fix`) `fixed`. `degenerate` means the sampled views could not pin that
-axis down at all — its reported delta is essentially whatever the optimizer's
-flat cost surface happened to land on, not a real correction — and a warning
+by `--fix`) `fixed`. The probe is a symmetric second difference of the mean
+NID along that one axis: a cost surface that curves sharply around the optimum
+reads `strong`, a flat one `degenerate`. `degenerate` means the sampled views
+could not pin that axis down at all — its reported delta is essentially
+whatever the optimizer's flat cost surface happened to land on, not a real
+correction, and emphatically not the bag's own value — and a warning
 recommends re-running with `--fix <axis>` to hold it at the bag's value
 outright, rather than trusting a delta the data never actually constrained.
 A single forward-looking, narrow-field-of-view (telephoto) camera commonly
@@ -968,6 +971,25 @@ cannot observe its own forward translation, and cannot tell lateral
 translation apart from yaw (both shift image content the same way from that
 vantage point), so those are the two common degenerate cases; a wider-angle
 or multi-view rig sees them better.
+
+**What the classification does not tell you.** It is a coarse screen, not a
+covariance estimate, and it is worth reading with three caveats in mind:
+
+- It probes one axis at a time, so it only detects _hard, single-axis_
+  degeneracies. A pairwise trade-off — the lateral-translation/yaw valley
+  above is the standard example — leaves both axes curving along their own
+  probe directions and so reads `strong` on both, even though only their
+  combination is determined.
+- Its thresholds are absolute constants calibrated against synthetic scenes,
+  not scaled to the scene, the sample count, or the NID's own noise floor. A
+  recording whose NID is flatter or noisier overall shifts every axis's
+  reading together.
+- Consequently, on real recordings all six axes can come back `strong` while a
+  span analysis over repeated runs (varying the samples, or sweeping one axis
+  and watching where the NID actually moves) shows several of them only weakly
+  determined. Treat `degenerate` as a reliable "definitely not observable" and
+  `strong` as no more than "not obviously unobservable"; for a number you are
+  going to ship, corroborate it against a second run over different samples.
 
 ```text
 tf static calibrate: truck_cabin_base_link -> top_front_narrow/camera_link
@@ -981,9 +1003,9 @@ yaw          0.000000       0.009481       0.009481  degenerate
 
 nid: 0.412887 -> 0.276541
 samples used: 8
-warning: x is not observable from this data; its value is the bag's, consider --fix x
-warning: y is not observable from this data; its value is the bag's, consider --fix y
-warning: yaw is not observable from this data; its value is the bag's, consider --fix yaw
+warning: x is not observable from this data; the delta shown is unconstrained — re-run with --fix x to hold the bag value
+warning: y is not observable from this data; the delta shown is unconstrained — re-run with --fix y to hold the bag value
+warning: yaw is not observable from this data; the delta shown is unconstrained — re-run with --fix yaw to hold the bag value
 
 apply with: bagwiz tf static update -i capture.mcap --yaml capture_tf_static_calib.yaml
 ```
