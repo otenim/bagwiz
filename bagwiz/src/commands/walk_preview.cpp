@@ -349,14 +349,12 @@ void ImagePreviewSession::render(std::ostream & out, core::tui::Size term)
     core::tui::draw_line(out, 1 + static_cast<int>(i), header_lines[i], cols);
   }
 
-  // Wrap the key legend the way the YAML footer does, so a narrow terminal
-  // shows every key on continuation lines instead of truncating the row. The
-  // wrapped legend is pinned to the bottom and the image region above shrinks
-  // to make room, mirroring how the YAML view derives its body height from
-  // the wrapped footer.
-  // The overlay adjustment keys are gated on the same condition the info row
-  // uses to show pcd state, so the legend and the state readout agree on when
-  // an overlay topic is in play.
+  // Wrap the key legend the way the YAML footer does, so a very narrow
+  // terminal shows every key on continuation lines instead of truncating the
+  // row. The wrapped legend is pinned to the bottom and the image region
+  // above shrinks to make room, mirroring how the YAML view derives its body
+  // height from the wrapped footer. The footer carries only the working set
+  // of the current mode — everything else lives in the '?' reference.
   const std::vector<std::string> legend_lines =
     core::tui::wrap_to_width(preview_footer_legend(!pcd.topics.empty(), edit.editing), cols);
   const int legend_top = std::max(1, rows - static_cast<int>(legend_lines.size()) + 1);

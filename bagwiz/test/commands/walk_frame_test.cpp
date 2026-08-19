@@ -88,7 +88,7 @@ std::string join(const std::vector<std::string> & lines)
 }
 
 constexpr bagwiz::core::tui::Size kWide{24, 300, 0, 0};   // nothing wraps
-constexpr bagwiz::core::tui::Size kNarrow{24, 80, 0, 0};  // the legend wraps
+constexpr bagwiz::core::tui::Size kNarrow{24, 80, 0, 0};  // the index row can wrap
 
 TEST(WalkBuildYamlFrame, HeaderCarriesTimestampAndSize)
 {
@@ -263,7 +263,7 @@ TEST(WalkBuildYamlFrame, ScrollHintStaysConsistentWithWrappedFooter)
   StubDecoder decoder;
   decoder.field_count = 30;
 
-  // Narrow terminal: the legend wraps, shrinking the body window; the hint
+  // Narrow terminal: wrapped footer rows shrink the body window; the hint
   // must still describe exactly the rows left between header and footer.
   const auto frame =
     build_yaml_frame(0, kNarrow, cursor, decoder, false, "/topic", "pkg/msg/Type", status, false);

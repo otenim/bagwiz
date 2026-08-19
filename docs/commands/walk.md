@@ -192,22 +192,22 @@ manual range at any time.
 | `P`             | Pin/unpin the displayed frame as an extra scene tile, so one projection can be judged against several scenes at once. See [Comparing several scenes at once](#comparing-several-scenes-at-once). |
 
 Defaults on first enable are: property `distance`, scheme `viridis`, range `auto`,
-point size `2`, alpha `1.0`. The info row at the top of the preview (directly
-under the topic name) shows the current property, scheme, range mode, point
-size, and alpha, alongside the rectify state, the pin count when scenes are
-pinned, and any transient status message.
-While the overlay is on it also reports how the current frame was paired:
-`match: header` for capture time, `match: record` when no capture time was
-available on either side, and `match: header->record` when a selected topic
-could not supply stamps and forced the whole frame down to record time. Next to
-it, `Δ` is the signed gap between the displayed cloud's capture time and the
-frame's — the residual misalignment, in milliseconds, of the worst-aligned
-selected topic (`n/a` when either side left its stamp unset). Values within
-roughly half a lidar period are as tight as the pairing can get; a `Δ` of
-several hundred milliseconds means the two sensors' stamps genuinely disagree.
-Once a topic is selected, the preview's key legend also lists these adjustment
-keys (`f`/`c`/`r`/`=`/`-`/`[`/`]`), the scene-pin key (`P`) and the
-extrinsic-edit entry (`e`) so they are discoverable without leaving the TUI.
+point size `2`, alpha `1.0`. Each adjustment key reports its new value
+transiently on the status row (`scheme: turbo`, `point size: 3`, ...), and the
+info row at the top of the preview (directly under the topic name) stays one
+glanceable line: `rect` and `pcd` badges while those states are on, the pin
+count when scenes are pinned, and any transient status message.
+While the overlay is on the info row also carries `Δ`: the signed gap between
+the displayed cloud's capture time and the frame's — the residual
+misalignment, in milliseconds, of the worst-aligned selected topic (`n/a`
+when either side left its stamp unset). Frames pair by capture time when both
+sides carry header stamps, falling back to record time otherwise. Values
+within roughly half a lidar period are as tight as the pairing can get; a `Δ`
+of several hundred milliseconds means the two sensors' stamps genuinely
+disagree.
+Once a topic is selected, the footer adds the `[e] edit` and `[P] pin`
+entries; the adjustment keys (`f`/`c`/`r`/`=`/`-`/`[`/`]`) stay live and are
+listed in the `?` reference.
 
 The overlay is applied to both the on-screen preview and the image saved by `S`.
 If no TF data is available, no CameraInfo was resolved, or the selected topic has
@@ -391,9 +391,12 @@ hint, the key legend, and a status row:
 
 ```text
   [<index> / <last>[+]]  <topic>  <type>    lines <X>-<Y> of <M>
-  [→/Space] next   [←/b] prev   ...   [q] quit
+  [Space/b] next/prev   [j/k] scroll   [S] save   [i] preview   [?] keys   [q] quit
   <status hint or blank>
 ```
+
+The legend advertises only the working set; every other binding stays
+live and is listed by the `?` overlay (see [Keys](#keys)).
 
 `<last>` is the index of the last message currently loaded in the cache
 (equivalently, the count of loaded messages minus one). The trailing `+`
@@ -401,6 +404,11 @@ after `<last>` means the bag has more messages after that index that have
 not been read into the cache yet (they get pulled in on demand).
 
 ## Keys
+
+The on-screen footer shows only the working set of the current mode —
+press `?` in either view for this full reference without leaving the
+terminal (scroll it with `j`/`k`; any other key closes it). In the
+preview's extrinsic edit mode the footer swaps to the nudge keys.
 
 | Key                                     | Action                                                                                                                                                                                                                          |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -436,6 +444,7 @@ not been read into the cache yet (they get pulled in on demand).
 | `D`                                     | Export the edited static TF edges as YAML (prompts for a path).                                                                                                                                                                 |
 | `A`                                     | Overwrite the input bag's static TF in place with the edited edges, after an explicit `yes` confirmation. See [Persisting the fix](#persisting-the-fix).                                                                        |
 | `P`                                     | Pin/unpin the displayed frame as an extra image-preview tile (needs a selected pcd topic), so several scenes are re-projected together. See [Comparing several scenes at once](#comparing-several-scenes-at-once).              |
+| `?`                                     | Toggle the key-help overlay (YAML view and image preview).                                                                                                                                                                      |
 | `q` / `Q` / `Esc` / `Ctrl-C` / `Ctrl-D` | Quit (in the image preview, returns to the YAML view).                                                                                                                                                                          |
 
 When the body is taller than the visible window, a `lines X-Y of N`
