@@ -9,6 +9,7 @@
 #include "bagwiz/core/calib/nelder_mead.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <numeric>
 #include <utility>
 #include <vector>
@@ -29,6 +30,7 @@ NelderMeadResult nelder_mead_minimize(
   const std::function<double(std::span<const double>)> & f, std::span<const double> x0,
   const NelderMeadParams & params)
 {
+  assert(params.init_step.size() == x0.size());
   const std::size_t n = x0.size();
   std::vector<Vertex> simplex;
   simplex.reserve(n + 1);
