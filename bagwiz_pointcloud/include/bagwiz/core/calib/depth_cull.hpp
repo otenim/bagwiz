@@ -16,12 +16,24 @@
 namespace bagwiz::core::calib
 {
 
-// Keep flags (1 = keep) parallel to the inputs. u/v are pixel coordinates
-// already verified in [0,width) x [0,height); depth is meters.
-// Preconditions: u.size() == v.size() == depth.size(); cell_px > 0.
-[[nodiscard]] std::vector<std::uint8_t> depth_cull_keep(
-  std::span<const float> u, std::span<const float> v, std::span<const float> depth,
-  std::uint32_t width, std::uint32_t height, std::uint32_t cell_px, float margin_m);
+// One projected map point: pixel coordinates u/v (already verified in
+// [0,width) x [0,height)) and depth in meters. `cell` is scratch space that
+// depth_cull_keep fills with the point's cell index on its first pass and
+// reuses on its second, so the cell is computed once per point instead of
+// twice.
+struct DepthCullPoint
+{
+  float u = 0.0F;
+  float v = 0.0F;
+  float depth = 0.0F;
+  std::uint32_t cell = 0;
+};
+
+// Writes keep flags (1 = keep) into keep_out, parallel to points.
+// Preconditions: points.size() == keep_out.size(); cell_px > 0.
+void depth_cull_keep(
+  std::span<DepthCullPoint> points, std::uint32_t width, std::uint32_t height,
+  std::uint32_t cell_px, float margin_m, std::span<std::uint8_t> keep_out);
 
 }  // namespace bagwiz::core::calib
 

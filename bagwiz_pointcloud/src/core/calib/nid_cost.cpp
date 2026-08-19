@@ -56,13 +56,9 @@ std::optional<double> nid_cost(
   const CalibSample & sample, const CameraModel & cam, const Mat4 & t_cam_world,
   const NidParams & params)
 {
-  std::vector<float> us;
-  std::vector<float> vs;
-  std::vector<float> depths;
+  std::vector<DepthCullPoint> points;
   std::vector<std::uint8_t> lidar_bins;
-  us.reserve(sample.points_world.size());
-  vs.reserve(sample.points_world.size());
-  depths.reserve(sample.points_world.size());
+  points.reserve(sample.points_world.size());
   lidar_bins.reserve(sample.points_world.size());
 
   for (std::size_t i = 0; i < sample.points_world.size(); ++i) {
@@ -85,30 +81,29 @@ std::optional<double> nid_cost(
       !(fv >= 0.0F && fv < static_cast<float>(cam.height))) {
       continue;
     }
-    us.push_back(fu);
-    vs.push_back(fv);
-    depths.push_back(fz);
+    points.push_back({fu, fv, fz, 0});
     lidar_bins.push_back(sample.intensity_bins[i]);
   }
-  if (us.size() < params.min_points) {
+  if (points.size() < params.min_points) {
     return std::nullopt;
   }
 
-  const auto keep = depth_cull_keep(
-    us, vs, depths, sample.image.width, sample.image.height, params.cull_cell_px,
-    params.cull_margin_m);
+  std::vector<std::uint8_t> keep(points.size());
+  depth_cull_keep(
+    points, sample.image.width, sample.image.height, params.cull_cell_px, params.cull_margin_m,
+    keep);
 
   const int bins = params.bins;
   std::vector<double> joint(static_cast<std::size_t>(bins) * bins, 0.0);
   std::vector<double> h_gray(bins, 0.0);
   std::vector<double> h_lidar(bins, 0.0);
   std::size_t count = 0;
-  for (std::size_t i = 0; i < us.size(); ++i) {
+  for (std::size_t i = 0; i < points.size(); ++i) {
     if (keep[i] == 0) {
       continue;
     }
-    const auto px = static_cast<std::uint32_t>(us[i]);
-    const auto py = static_cast<std::uint32_t>(vs[i]);
+    const auto px = static_cast<std::uint32_t>(points[i].u);
+    const auto py = static_cast<std::uint32_t>(points[i].v);
     const int gb =
       sample.image.gray[static_cast<std::size_t>(py) * sample.image.width + px] * bins / 256;
     const int lb = lidar_bins[i];
