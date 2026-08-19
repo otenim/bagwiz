@@ -916,7 +916,7 @@ TEST(FlagCompletionTest, TfStaticSubcommandListsEveryAction)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "tf", "static", ""}),
-    "calc\ncp\ndrop\ndump\njoin\nupdate\n");
+    "calc\ncalibrate\ncp\ndrop\ndump\njoin\nupdate\n");
 }
 
 // `tf static -` is the command-group slot; `--json` lives under `calc`, so only
@@ -934,6 +934,20 @@ TEST(FlagCompletionTest, TfStaticCalcDashListsStaticFlags)
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "calc", "-"}),
     "--help\n--input\n--json\n--of\n--ref\n-h\n-i\n");
+}
+
+// `tf static calibrate -` surfaces every one of the action's own flags
+// alongside the implicit help flags, sorted. None of its value slots (map,
+// trajectory, frames, or numeric parameters) carries bagwiz candidates, so
+// this is the whole story for `calibrate` completion — unlike `calc`/`drop`,
+// its `--parent`/`--child`/`--traj-frame` frame values are not offered.
+TEST(FlagCompletionTest, TfStaticCalibrateDashListsCalibrateFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "tf", "static", "calibrate", "-"}),
+    "--cam-info\n--child\n--fix\n--help\n--input\n--json\n--map\n--max-depth\n--max-rot\n"
+    "--max-trans\n--min-depth\n--nid-bins\n--output\n--overwrite\n--parent\n--samples\n--topic\n"
+    "--traj\n--traj-frame\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `tf static cp -` surfaces the copy action's flags (--output/-o, -w/--overwrite)

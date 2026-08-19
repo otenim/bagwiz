@@ -224,7 +224,9 @@ mode edits a preview-only copy of the TF tree — **nothing touches the bag
 until you explicitly apply**. The result can be exported as a YAML that
 [`bagwiz tf static update`](tf.md#bagwiz-tf-static-update) applies (`D`),
 or written straight into the input bag's static TF from inside the TUI
-(`A`, confirmation-guarded).
+(`A`, confirmation-guarded). For an automatic version of this workflow — same
+edge parametrization, optimized against a `map slam` map instead of nudged by
+eye — see [`bagwiz tf static calibrate`](tf.md#bagwiz-tf-static-calibrate).
 
 The editable candidates are the `(parent, child)` edges on the TF chains
 between each selected cloud topic's frame and the camera frame, resolved at
