@@ -38,12 +38,29 @@ inline constexpr double kStrongCurvatureFloor = 5e-5;
 inline constexpr double kProbeStepTrans = 0.02;              // m
 inline constexpr double kProbeStepRot = 0.2 * M_PI / 180.0;  // rad
 
-// How many standard errors the mean curvature must clear to count as
-// measured at all (degenerate boundary) resp. well-measured (strong/weak
-// boundary). With few samples the standard error is itself noisy, so the
-// floors above keep the old absolute behavior as the backstop.
-inline constexpr double kDegenerateSigma = 2.0;
-inline constexpr double kStrongSigma = 5.0;
+// The two verdict boundaries as confidence levels on the mean curvature
+// being positive: a direction counts as measured at all (not degenerate) at
+// 97.7% confidence — the normal two-sigma one-sided tail — and as strongly
+// measured at 99.9% confidence. The multiplier for a given sample count is
+// the Student-t quantile with pairs-1 degrees of freedom (see
+// *_sigma_multiplier below), so the stated confidence holds at --samples 8
+// and not only asymptotically. With no spread information (pairs < 2,
+// std_error == 0) the tests reduce to the absolute floors above.
+inline constexpr double kDegenerateConfidence = 0.97725;  // normal 2-sigma tail
+inline constexpr double kStrongConfidence = 0.999;
+
+// How many standard errors the mean curvature of `pairs` samples must clear
+// for the respective confidence level: the Student-t quantile with pairs-1
+// degrees of freedom, tabulated for pairs-1 <= 30 and clamped there (t_30 is
+// within 5% of the normal limit, and the stricter side is the safe one).
+[[nodiscard]] double degenerate_sigma_multiplier(int pairs);
+[[nodiscard]] double strong_sigma_multiplier(int pairs);
+
+// How clearly a direction must FAIL the measurement test before --fix auto
+// pins it: auto holds only directions whose mean curvature stays within this
+// many standard errors of zero (the absolute floor covering the no-spread
+// case), so a borderline reading never silently pins an axis.
+inline constexpr double kHoldSigma = 1.0;
 
 // A second-difference curvature measurement along one probe direction,
 // estimated per-sample and summarized as mean ± standard error across
@@ -68,6 +85,12 @@ struct CurvatureEstimate
 // absolute floor and stand out of its own noise band. With no spread
 // information (pairs < 2, std_error == 0) this reduces to the absolute floor.
 [[nodiscard]] bool curvature_significant(const CurvatureEstimate & est);
+
+// The --fix auto hold boundary, strictly inside the significance band: the
+// mean curvature must stay within kHoldSigma standard errors of zero (or
+// under the absolute floor). A borderline estimate between the two is
+// neither measured nor pinned — it is left free rather than silently held.
+[[nodiscard]] bool curvature_clearly_insignificant(const CurvatureEstimate & est);
 
 // Eigensystem of a small symmetric matrix: eigenvalues ascending, with the
 // matching orthonormal eigenvectors stored as COLUMNS (vectors[row][col]).

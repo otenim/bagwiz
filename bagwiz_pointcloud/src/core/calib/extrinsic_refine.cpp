@@ -264,7 +264,8 @@ AxisObservability classify_axis(const CurvatureEstimate & est)
   if (!curvature_significant(est)) {
     return AxisObservability::kDegenerate;
   }
-  return est.mean >= std::max(kStrongSigma * est.std_error, kStrongCurvatureFloor)
+  return est.mean >=
+             std::max(strong_sigma_multiplier(est.pairs) * est.std_error, kStrongCurvatureFloor)
            ? AxisObservability::kStrong
            : AxisObservability::kWeak;
 }
@@ -349,9 +350,10 @@ RefineResult refine_extrinsic(
   std::vector<double> u(basis.size(), 0.0);
   std::array<double, 6> delta{};
 
-  // Optimize, then (with --fix auto) analyze: unobservable eigen-directions
-  // are held at the bag value and the loop re-optimizes the rest. Every round
-  // holds at least one direction, so the loop terminates within six rounds.
+  // Optimize, then (with --fix auto) analyze: clearly unobservable
+  // eigen-directions are held at the bag value and the loop re-optimizes the
+  // rest. Every round holds at least one direction or exits, so the loop
+  // terminates within six rounds.
   for (int round = 0;; ++round) {
     const auto opt = optimize(ctx, basis, u);
     delta = compose_delta(basis, opt.x);
@@ -360,28 +362,29 @@ RefineResult refine_extrinsic(
     }
     const auto analysis = analyze(ctx, basis, opt.x);
 
+    // Hold only directions that are clearly unobservable (observability.hpp).
+    // A direction in the margin band between that and the significance cut
+    // stays free: a borderline reading must never silently pin an axis.
     std::vector<std::size_t> kept;
-    std::size_t degenerate = 0;
+    std::vector<std::size_t> hold;
     for (std::size_t j = 0; j < basis.size(); ++j) {
-      if (analysis.significant[j]) {
-        kept.push_back(j);
+      if (curvature_clearly_insignificant(analysis.curvature[j])) {
+        hold.push_back(j);
       } else {
-        ++degenerate;
+        kept.push_back(j);
       }
     }
-    if (degenerate == 0) {
+    if (hold.empty()) {
       break;
     }
-    // Record every degenerate direction as held at the bag value (delta-space
-    // display form, dominant axis positive).
-    for (std::size_t j = 0; j < basis.size(); ++j) {
-      if (!analysis.significant[j]) {
-        std::vector<double> dir(basis.size());
-        for (std::size_t i = 0; i < basis.size(); ++i) {
-          dir[i] = analysis.eigen.vectors[i][j];
-        }
-        result.auto_held.push_back(held_direction_of(basis, dir, analysis.curvature[j]));
+    // Record every held direction at the bag value (delta-space display form,
+    // dominant axis positive).
+    for (const std::size_t j : hold) {
+      std::vector<double> dir(basis.size());
+      for (std::size_t i = 0; i < basis.size(); ++i) {
+        dir[i] = analysis.eigen.vectors[i][j];
       }
+      result.auto_held.push_back(held_direction_of(basis, dir, analysis.curvature[j]));
     }
     if (kept.empty()) {
       if (round == 0) {

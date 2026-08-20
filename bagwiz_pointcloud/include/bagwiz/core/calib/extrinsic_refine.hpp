@@ -61,12 +61,14 @@ struct RefineParams
   double max_rot = 2.0 * M_PI / 180;  // trust region, radians
   int max_iterations = 256;
   // --fix auto (the default): after optimizing, directions of the cost
-  // landscape the samples cannot constrain — eigen-directions of the
-  // finite-difference Hessian whose paired curvature is not significant
-  // (observability.hpp) — are held at the bag value and the remaining
-  // directions are re-optimized. The held set is reported via
-  // RefineResult::auto_held. When false, every free axis is optimized and the
-  // observability classification is report-only.
+  // landscape the samples clearly cannot constrain — eigen-directions of the
+  // finite-difference Hessian whose paired curvature stays within kHoldSigma
+  // standard errors of zero (observability.hpp) — are held at the bag value
+  // and the remaining directions are re-optimized. Borderline directions
+  // (insignificant but not clearly so) are left free rather than pinned on a
+  // noisy reading. The held set is reported via RefineResult::auto_held. When
+  // false, every free axis is optimized and the observability classification
+  // is report-only.
   bool auto_fix = true;
 };
 

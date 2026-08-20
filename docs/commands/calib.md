@@ -172,27 +172,36 @@ reported as `strong`, `weak`, `degenerate`, or (for an axis named by `--fix`)
 that axis, estimated per sample: an axis's curvature is the mean of the
 per-sample second differences, and it counts as measured at all only when
 that mean both clears a small absolute floor and stands out of its own
-standard error across samples — `degenerate` otherwise, `strong` when it
-clears the wider 5-sigma band, `weak` in between. The per-sample pairing is
-what keeps the reading meaningful across scenes: a flat but quiet surface
-and a curved but noisy one do not classify the same. The `curv/se` column
-shows the number behind each verdict — the mean curvature in units of its
-own standard error — so a borderline label reads as the graded quantity it
-is rather than as categorical; `--json` carries the same evidence per axis
-as `curvature`, `std_error`, and their ratio.
+standard error across samples — 97.7% confidence it is positive (the normal
+two-sigma tail), `degenerate` otherwise, and `strong` at 99.9% confidence,
+`weak` in between. The multiplier is the Student-t quantile with samples−1
+degrees of freedom rather than the normal one, so the stated confidence
+holds at `--samples 8` and not only asymptotically (at 8 samples the two
+boundaries sit at 2.43 and 4.79 standard errors, converging on 2.0 and 3.1
+as the count grows). The per-sample pairing is what keeps the reading
+meaningful across scenes: a flat but quiet surface and a curved but noisy
+one do not classify the same. The `curv/se` column shows the number behind
+each verdict — the mean curvature in units of its own standard error — so a
+borderline label reads as the graded quantity it is rather than as
+categorical; `--json` carries the same evidence per axis as `curvature`,
+`std_error`, and their ratio.
 
 With the default `--fix auto`, the same measurement also runs on the
 eigen-directions of the full 6x6 curvature matrix rather than per axis, so a
 degenerate _combination_ — the classic forward-camera valley in which
 lateral translation and yaw shift the image the same way — is caught even
-though each of its axes curves on its own. Every unobservable direction is
-then held at the bag value (its delta component forced to zero) and the
-remaining directions are re-optimized, repeating until everything left is
-observable. The report lists each held direction as an axis mixture (`held
-at bag value (auto): 0.99y + 0.17yaw`), and `--json` echoes them under
-`held`. An axis-aligned held direction is exactly a `--fix <axis>` you did
-not have to write. When every direction of the edge is unobservable, the
-command fails instead of writing a YAML the data cannot justify.
+though each of its axes curves on its own. Every _clearly_ unobservable
+direction — mean curvature within one standard error of zero, strictly
+inside the significance band — is then held at the bag value (its delta
+component forced to zero) and the remaining directions are re-optimized,
+repeating until nothing clearly unobservable is left. A borderline
+direction, insignificant but not clearly so, is left free rather than
+pinned on a noisy reading. The report lists each held direction as an axis
+mixture (`held at bag value (auto): 0.99y + 0.17yaw`), and `--json` echoes
+them under `held`. An axis-aligned held direction is exactly a `--fix
+<axis>` you did not have to write. When every direction of the edge is
+unobservable, the command fails instead of writing a YAML the data cannot
+justify.
 
 **Under `--fix auto`, `degenerate` means held.** The table's axis probe and
 the auto-hold decision apply the same test along _different_ directions —
