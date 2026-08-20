@@ -271,6 +271,28 @@ AxisObservability classify_axis(const CurvatureEstimate & est)
 
 }  // namespace
 
+bool held_directions_cover_axis(std::span<const HeldDirection> held, std::size_t axis)
+{
+  for (const auto & h : held) {
+    // The physical-units axis mixture: each normalized component scaled by its
+    // probe step (the conversion the HeldDirection doc comment describes).
+    double component = 0.0;
+    double norm_sq = 0.0;
+    for (std::size_t i = 0; i < 6; ++i) {
+      const double step = i < 3 ? kProbeStepTrans : kProbeStepRot;
+      const double c = h.unit[i] * step;
+      norm_sq += c * c;
+      if (i == axis) {
+        component = c;
+      }
+    }
+    if (norm_sq > 0.0 && std::abs(component) >= 0.5 * std::sqrt(norm_sq)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::array<double, 6> apply_edge_delta(
   const std::array<double, 6> & edge_bag, const std::array<double, 6> & delta)
 {
@@ -413,7 +435,25 @@ RefineResult refine_extrinsic(
     const auto est = paired_curvature(
       center, sample_costs(samples, cam, chain, plus, params.nid),
       sample_costs(samples, cam, chain, minus, params.nid));
+    result.curvature[axis] = est;
     result.observability[axis] = classify_axis(est);
+  }
+
+  // Under --fix auto the degenerate label means "the auto-hold took this
+  // content": an axis that fails its own significance test without a held
+  // direction covering it is reported weak instead — the axis probe and the
+  // eigen-direction analysis are different statistics over different
+  // directions, so a borderline axis can fail its own test while every
+  // eigen-direction passes. The curvature estimates above keep the borderline
+  // reading visible; the label just no longer contradicts the held set.
+  if (params.auto_fix) {
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      if (
+        result.observability[axis] == AxisObservability::kDegenerate &&
+        !held_directions_cover_axis(result.auto_held, axis)) {
+        result.observability[axis] = AxisObservability::kWeak;
+      }
+    }
   }
 
   result.ok = true;

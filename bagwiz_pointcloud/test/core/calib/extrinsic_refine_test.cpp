@@ -33,6 +33,44 @@ calib::RefineParams test_params()
 }
 }  // namespace
 
+TEST(ExtrinsicRefineTest, HeldDirectionsCoverAxisUsesPhysicalShares)
+{
+  EXPECT_FALSE(calib::held_directions_cover_axis({}, 1));
+
+  calib::HeldDirection y_held;
+  y_held.unit = {0, 1, 0, 0, 0, 0};
+  const std::vector<calib::HeldDirection> just_y{y_held};
+  EXPECT_TRUE(calib::held_directions_cover_axis(just_y, 1));
+  EXPECT_FALSE(calib::held_directions_cover_axis(just_y, 0));
+
+  // 0.71y + 0.71yaw in the probe-step-normalized coordinates: after the step
+  // rescaling (0.02 m vs 0.2 deg) the physical mixture is ~0.99y + 0.17yaw,
+  // which covers y (>= half the weight) but not yaw.
+  calib::HeldDirection mixed;
+  const double s = std::sqrt(0.5);
+  mixed.unit = {0, s, 0, 0, 0, s};
+  const std::vector<calib::HeldDirection> just_mixed{mixed};
+  EXPECT_TRUE(calib::held_directions_cover_axis(just_mixed, 1));
+  EXPECT_FALSE(calib::held_directions_cover_axis(just_mixed, 5));
+
+  // Half the weight is the cutoff: a direction with a 0.51 physical share on
+  // x covers it, one with 0.49 does not.
+  const auto share_direction = [](double x_share) {
+    calib::HeldDirection h;
+    const double z_share = std::sqrt(1.0 - x_share * x_share);
+    const double cx = x_share / calib::kProbeStepTrans;
+    const double cz = z_share / calib::kProbeStepTrans;
+    const double n = std::sqrt(cx * cx + cz * cz);
+    h.unit = {cx / n, 0, cz / n, 0, 0, 0};
+    return h;
+  };
+  const auto above = share_direction(0.51);
+  const auto below = share_direction(0.49);
+  EXPECT_TRUE(calib::held_directions_cover_axis({&above, 1}, 0));
+  EXPECT_FALSE(calib::held_directions_cover_axis({&below, 1}, 0));
+  EXPECT_TRUE(calib::held_directions_cover_axis({&below, 1}, 2));
+}
+
 TEST(ExtrinsicRefineTest, RecoversInjectedYawError)
 {
   const auto cam = test_camera();
@@ -70,6 +108,8 @@ TEST(ExtrinsicRefineTest, FixedAxisDoesNotMove)
   ASSERT_TRUE(result.ok) << result.error;
   EXPECT_EQ(result.delta[5], 0.0);
   EXPECT_EQ(result.observability[5], calib::AxisObservability::kFixed);
+  // A fixed axis is never probed: its curvature estimate stays the default.
+  EXPECT_EQ(result.curvature[5].pairs, 0);
 }
 
 TEST(ExtrinsicRefineTest, FlatSceneReportsDegenerateVerticalAxis)
@@ -90,6 +130,15 @@ TEST(ExtrinsicRefineTest, FlatSceneReportsDegenerateVerticalAxis)
   EXPECT_EQ(result.observability[1], calib::AxisObservability::kDegenerate);
   EXPECT_NE(result.observability[0], calib::AxisObservability::kDegenerate);
   EXPECT_TRUE(result.auto_held.empty());
+  // The curvature evidence rides along for every probed axis: one sample, one
+  // pair per axis — and the fixed-axis test above shows the fixed axis keeps
+  // the default (unprobed) estimate.
+  EXPECT_EQ(result.curvature[0].pairs, 1);
+  EXPECT_EQ(result.curvature[1].pairs, 1);
+  // The flat axis's curvature sits under the absolute floor while the
+  // observable one's clears it: the numbers behind the two verdicts.
+  EXPECT_LT(result.curvature[1].mean, calib::kDegenerateCurvatureFloor);
+  EXPECT_GT(result.curvature[0].mean, calib::kDegenerateCurvatureFloor);
 }
 
 TEST(ExtrinsicRefineTest, AutoFixHoldsDegenerateAxisAtBagValue)
@@ -130,6 +179,11 @@ TEST(ExtrinsicRefineTest, AutoFixHoldsDegenerateAxisAtBagValue)
   EXPECT_TRUE(y_held) << "expected a held direction dominated by the y axis";
   // The x axis stays free: its observability is reported, not held.
   EXPECT_NE(result.observability[0], calib::AxisObservability::kDegenerate);
+  // Under --fix auto a degenerate label is only emitted for content the hold
+  // actually took: y is covered by the y-dominated held direction, so it keeps
+  // the degenerate label rather than being downgraded to weak.
+  EXPECT_EQ(result.observability[1], calib::AxisObservability::kDegenerate);
+  EXPECT_TRUE(calib::held_directions_cover_axis(result.auto_held, 1));
 }
 
 TEST(ExtrinsicRefineTest, AllPointsOutOfViewFailsCleanly)

@@ -59,6 +59,14 @@ bagwiz::core::calib::RefineResult sample_result()
   result.observability = {AxisObservability::kStrong,     AxisObservability::kWeak,
                           AxisObservability::kDegenerate, AxisObservability::kStrong,
                           AxisObservability::kFixed,      AxisObservability::kStrong};
+  // The curvature evidence behind each verdict: a quiet strong axis, a
+  // borderline one at 1.71 standard errors, one measured from a single pair
+  // (no spread, so its ratio renders "inf"), and nothing for the fixed axis.
+  result.curvature[0] = {1e-3, 2e-4, 8};
+  result.curvature[1] = {8e-4, 3e-4, 8};
+  result.curvature[2] = {8.9e-4, 5.2e-4, 8};
+  result.curvature[3] = {2e-3, 2e-4, 8};
+  result.curvature[5] = {5e-4, 0.0, 1};
   return result;
 }
 
@@ -69,6 +77,7 @@ struct AxisRow
   double before = 0.0;
   double after = 0.0;
   double delta = 0.0;
+  std::string curv_se;
   std::string observability;
 };
 
@@ -83,7 +92,7 @@ AxisRow parse_summary_row(const std::string & summary, const std::string & axis)
     if (!(fields >> name) || name != axis) {
       continue;
     }
-    if (fields >> row.before >> row.after >> row.delta >> row.observability) {
+    if (fields >> row.before >> row.after >> row.delta >> row.curv_se >> row.observability) {
       return row;
     }
   }
@@ -242,15 +251,23 @@ TEST(CalibCamLidarCommonTest, RenderCalibrateSummaryIsAdditivePerAxis)
   EXPECT_EQ(parse_summary_row(summary, "z").observability, "degenerate");
   EXPECT_EQ(parse_summary_row(summary, "pitch").observability, "fixed");
 
+  // The curv/se column carries the mean/standard-error ratio the verdict was
+  // decided by: a graded number instead of the bare label — quiet strong
+  // (5.00), borderline (1.71), unbounded with a single pair (inf), and "-"
+  // for the fixed axis that was never probed.
+  EXPECT_EQ(parse_summary_row(summary, "x").curv_se, "5.00");
+  EXPECT_EQ(parse_summary_row(summary, "z").curv_se, "1.71");
+  EXPECT_EQ(parse_summary_row(summary, "yaw").curv_se, "inf");
+  EXPECT_EQ(parse_summary_row(summary, "pitch").curv_se, "-");
+
   // The degenerate axis warns that its delta is still in the output and was
-  // NOT held at the bag's value, which is what --fix would give. These are the
-  // default (--fix auto) args and nothing was held, so it is the auto wording;
-  // the --fix none wording has its own test.
+  // NOT held at the bag's value, which is what --fix would give. Nothing was
+  // held, so z is uncovered and warns with the one (mode-independent)
+  // wording.
   EXPECT_NE(
     summary.find(
-      "warning: z reads degenerate on its own probe, but no direction --fix auto could hold "
-      "covers it; the delta shown is weakly constrained, not held — re-run with --fix z to "
-      "pin it"),
+      "warning: z is not observable from this data; the delta shown is unconstrained — re-run "
+      "with --fix z to hold the bag value"),
     std::string::npos)
     << summary;
   // Only the degenerate axis warns.
@@ -266,7 +283,12 @@ TEST(CalibCamLidarCommonTest, RenderCalibrateSummaryIsAdditivePerAxis)
 TEST(CalibCamLidarCommonTest, RenderCalibrateJsonIsAdditivePerAxis)
 {
   const auto args = valid_args();
-  const auto result = sample_result();
+  auto result = sample_result();
+  // json_axis_field parses doubles, so give the fixed axis and the
+  // zero-spread one probed values here; the null forms have their own test
+  // below.
+  result.curvature[4] = {5e-4, 1e-4, 8};
+  result.curvature[5] = {5e-4, 1e-4, 1};
   const std::string json = commands::render_calibrate_json(args, result, kEdgeBefore);
 
   ASSERT_FALSE(json.empty());
@@ -290,6 +312,19 @@ TEST(CalibCamLidarCommonTest, RenderCalibrateJsonIsAdditivePerAxis)
     EXPECT_DOUBLE_EQ(delta[axis], result.delta[axis]) << "axis " << axis;
     EXPECT_DOUBLE_EQ(after[axis], kEdgeBefore[axis] + result.delta[axis]) << "axis " << axis;
   }
+  // The curvature evidence rides along per axis: mean and standard error as
+  // measured, the ratio as mean/std_error.
+  const auto curvature = json_axis_field(json, "curvature");
+  const auto std_error = json_axis_field(json, "std_error");
+  const auto ratio = json_axis_field(json, "curvature_ratio");
+  for (std::size_t axis = 0; axis < 6; ++axis) {
+    EXPECT_DOUBLE_EQ(curvature[axis], result.curvature[axis].mean) << "axis " << axis;
+    EXPECT_DOUBLE_EQ(std_error[axis], result.curvature[axis].std_error) << "axis " << axis;
+    if (result.curvature[axis].std_error > 0.0) {
+      EXPECT_DOUBLE_EQ(ratio[axis], result.curvature[axis].mean / result.curvature[axis].std_error)
+        << "axis " << axis;
+    }
+  }
   EXPECT_NE(json.find("\"parent\": \"cabin\""), std::string::npos) << json;
   EXPECT_NE(json.find("\"child\": \"cam_link\""), std::string::npos) << json;
   EXPECT_NE(json.find("\"samples\": 7"), std::string::npos) << json;
@@ -297,6 +332,24 @@ TEST(CalibCamLidarCommonTest, RenderCalibrateJsonIsAdditivePerAxis)
   EXPECT_NE(json.find("\"nid_after\": 0.25"), std::string::npos) << json;
   EXPECT_NE(json.find("\"observability\": \"degenerate\""), std::string::npos) << json;
   EXPECT_NE(json.find("\"observability\": \"fixed\""), std::string::npos) << json;
+}
+
+TEST(CalibCamLidarCommonTest, RenderCalibrateJsonEmitsNullCurvatureForUnprobedAxis)
+{
+  // sample_result's fixed pitch was never probed (pairs == 0), and its yaw
+  // estimate has no spread (a single pair): nulls, not invented numbers.
+  const std::string json =
+    commands::render_calibrate_json(valid_args(), sample_result(), kEdgeBefore);
+  const auto count = [&json](const std::string & needle) {
+    std::size_t n = 0;
+    for (std::size_t pos = 0; (pos = json.find(needle, pos)) != std::string::npos; ++n, ++pos) {
+    }
+    return n;
+  };
+  EXPECT_EQ(count("\"curvature\": null"), 1U) << json;
+  EXPECT_EQ(count("\"std_error\": null"), 1U) << json;
+  // The fixed axis and the zero-spread one.
+  EXPECT_EQ(count("\"curvature_ratio\": null"), 2U) << json;
 }
 
 TEST(CalibCamLidarCommonTest, RenderCalibrateJsonEscapesFrameNames)
@@ -333,14 +386,13 @@ TEST(CalibCamLidarCommonTest, RenderSummaryListsHeldDirections)
   EXPECT_NE(summary.find("held at bag value (auto): 0.99y + 0.17yaw"), std::string::npos)
     << summary;
   EXPECT_EQ(summary.find("warning: y "), std::string::npos) << summary;
-  // z is degenerate and uncovered under the default --fix auto: the warning
-  // must describe what actually happened (the axis probe and the auto-hold
-  // decision look along different directions) instead of the pre-auto
-  // "unconstrained" claim, which would also be telling the user to run the
-  // --fix auto that is already running.
-  EXPECT_NE(summary.find("warning: z reads degenerate on its own probe"), std::string::npos)
+  // z is degenerate and uncovered: the warning is the single mode-independent
+  // wording. Under --fix auto the refine itself can no longer produce an
+  // uncovered degenerate axis (it reports weak instead), so there is no
+  // auto-specific wording anymore.
+  EXPECT_NE(summary.find("warning: z is not observable from this data"), std::string::npos)
     << summary;
-  EXPECT_EQ(summary.find("warning: z is not observable"), std::string::npos) << summary;
+  EXPECT_EQ(summary.find("reads degenerate on its own probe"), std::string::npos) << summary;
 }
 
 TEST(CalibCamLidarCommonTest, RenderSummaryWarnsUnconstrainedWithFixNone)
