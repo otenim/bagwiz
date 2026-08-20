@@ -143,3 +143,47 @@ TEST(ObservabilityTest, CurvatureSignificanceUsesNoiseAndFloor)
   noisy.mean = 1e-2;  // 10x the standard error
   EXPECT_TRUE(calib::curvature_significant(noisy));
 }
+
+TEST(ObservabilityTest, SignificanceMultiplierIsStudentTAtSmallSamples)
+{
+  // At 8 samples (df 7) the multiplier is the t quantile 2.43, not the
+  // normal 2.0: a reading at 2.2 standard errors does not count as measured.
+  calib::CurvatureEstimate borderline;
+  borderline.mean = 2.2e-3;
+  borderline.std_error = 1e-3;
+  borderline.pairs = 8;
+  EXPECT_FALSE(calib::curvature_significant(borderline));
+  // The same ratio at 31 samples (df 30, multiplier 2.09) does.
+  borderline.pairs = 31;
+  EXPECT_TRUE(calib::curvature_significant(borderline));
+  // The multiplier relaxes toward the normal limit as the sample count grows.
+  EXPECT_GT(calib::degenerate_sigma_multiplier(2), calib::degenerate_sigma_multiplier(8));
+  EXPECT_NEAR(calib::degenerate_sigma_multiplier(8), 2.4288, 1e-3);
+  EXPECT_NEAR(calib::degenerate_sigma_multiplier(31), 2.0868, 1e-3);
+  EXPECT_NEAR(calib::strong_sigma_multiplier(8), 4.7853, 1e-3);
+}
+
+TEST(ObservabilityTest, ClearlyInsignificantIsStrictlyInsideTheSignificanceBand)
+{
+  calib::CurvatureEstimate est;
+  est.pairs = 8;
+  est.std_error = 1e-3;
+  est.mean = 0.5e-3;  // 0.5 standard errors: clearly unobservable, auto may hold it
+  EXPECT_TRUE(calib::curvature_clearly_insignificant(est));
+  est.mean = 1.5e-3;  // the margin band: neither measured nor held
+  EXPECT_FALSE(calib::curvature_clearly_insignificant(est));
+  est.mean = 5e-3;  // measured
+  EXPECT_FALSE(calib::curvature_clearly_insignificant(est));
+  // The no-spread case reduces to the absolute floor, as the significance
+  // test does: a below-floor curvature with one pair is clearly unobservable.
+  est.pairs = 1;
+  est.std_error = 0.0;
+  est.mean = calib::kDegenerateCurvatureFloor * 0.5;
+  EXPECT_TRUE(calib::curvature_clearly_insignificant(est));
+  est.mean = calib::kDegenerateCurvatureFloor * 2.0;
+  EXPECT_FALSE(calib::curvature_clearly_insignificant(est));
+  // No data at all is neither.
+  est.pairs = 0;
+  est.mean = 0.0;
+  EXPECT_FALSE(calib::curvature_clearly_insignificant(est));
+}

@@ -9,6 +9,7 @@
 #include "bagwiz/core/calib/observability.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -49,10 +50,51 @@ CurvatureEstimate paired_curvature(
   return est;
 }
 
+namespace
+{
+// Student-t quantiles at the two boundary confidences, indexed by degrees of
+// freedom 1..30. Computed offline by Simpson integration of the t pdf plus
+// bisection, cross-checked against textbook values (t_1,0.975 = 12.706,
+// t_7,0.975 = 2.365, t_30,0.975 = 2.042).
+constexpr std::array<double, 30> kDegenerateSigmaByDf = {
+  13.967730, 4.526537, 3.306822, 2.869309, 2.648649, 2.516524, 2.428805, 2.366416,
+  2.319806,  2.283678, 2.254863, 2.231348, 2.211798, 2.195288, 2.181163, 2.168940,
+  2.158260,  2.148849, 2.140494, 2.133025, 2.126311, 2.120240, 2.114727, 2.109696,
+  2.105088,  2.100851, 2.096942, 2.093325, 2.089968, 2.086844};
+constexpr std::array<double, 30> kStrongSigmaByDf = {
+  318.308839, 22.327125, 10.214532, 7.173182, 5.893430, 5.207626, 4.785290, 4.500791,
+  4.296806,   4.143700,  4.024701,  3.929633, 3.851982, 3.787390, 3.732834, 3.686155,
+  3.645767,   3.610485,  3.579400,  3.551808, 3.527154, 3.504992, 3.484964, 3.466777,
+  3.450189,   3.434997,  3.421034,  3.408155, 3.396240, 3.385185};
+
+[[nodiscard]] double table_multiplier(const std::array<double, 30> & table, int pairs)
+{
+  const int df = std::clamp(pairs - 1, 1, 30);
+  return table[static_cast<std::size_t>(df - 1)];
+}
+}  // namespace
+
+double degenerate_sigma_multiplier(int pairs)
+{
+  return table_multiplier(kDegenerateSigmaByDf, pairs);
+}
+
+double strong_sigma_multiplier(int pairs)
+{
+  return table_multiplier(kStrongSigmaByDf, pairs);
+}
+
 bool curvature_significant(const CurvatureEstimate & est)
 {
-  return est.pairs > 0 &&
-         est.mean > std::max(kDegenerateSigma * est.std_error, kDegenerateCurvatureFloor);
+  return est.pairs > 0 && est.mean > std::max(
+                                       degenerate_sigma_multiplier(est.pairs) * est.std_error,
+                                       kDegenerateCurvatureFloor);
+}
+
+bool curvature_clearly_insignificant(const CurvatureEstimate & est)
+{
+  return est.pairs > 0 && !curvature_significant(est) &&
+         est.mean < std::max(kHoldSigma * est.std_error, kDegenerateCurvatureFloor);
 }
 
 Eigensystem jacobi_eigen(const std::vector<std::vector<double>> & sym)
