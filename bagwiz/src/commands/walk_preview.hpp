@@ -112,11 +112,10 @@ public:
     const std::string & camera_info_error);
 
   // How the preview key loop ended: the user backed out to the YAML view
-  // (Esc or q), or asked to terminate the whole walk session (Ctrl-C /
-  // Ctrl-D).
+  // (q), or asked to terminate the whole walk session (Ctrl-C / Ctrl-D).
   enum class Exit { kBack, kTerminate };
 
-  // The preview key loop: navigation keys re-decode and re-render; Esc or q
+  // The preview key loop: navigation keys re-decode and re-render; q
   // returns to the YAML view, which the pager then repaints; Ctrl-C /
   // Ctrl-D exit with Exit::kTerminate so the caller can end walk.
   Exit run();
@@ -178,8 +177,8 @@ private:
   const std::string & camera_info_error_;
 
   bool rectify_enabled_ = false;
-  // '?' overlay state: while shown, the scroll keys move the reference, Esc
-  // or q closes it, and every other key is swallowed — except Ctrl-C /
+  // '?' overlay state: while shown, the scroll keys move the reference, q
+  // closes it, and every other key is swallowed — except Ctrl-C /
   // Ctrl-D, which terminate the session (see run()). Reset when the preview
   // session ends so re-entering starts on the image.
   bool show_help_ = false;

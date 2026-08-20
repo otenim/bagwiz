@@ -85,8 +85,8 @@ image preview that decodes the current message and draws the real image
 in the terminal instead of the YAML byte array. Navigation stays live
 in the preview — `→`/`Space` (next), `←`/`b` (prev), `.` (+1s), `,` (-1s), `>`
 (+10s), `<` (-10s), `g` (first), `G` (last) re-decode and re-render the new
-frame — and the view redraws on resize. Press `Esc` or `q` to return to the
-YAML view (`Ctrl-C` / `Ctrl-D` quit walk outright, as on every screen).
+frame — and the view redraws on resize. Press `q` to return to the YAML view
+(`Ctrl-C` / `Ctrl-D` quit walk outright, as on every screen).
 
 - **Supported encodings mirror `bagwiz generate video`:** raw
   `sensor_msgs/msg/Image` in `bgr8`/`rgb8`, and `sensor_msgs/msg/CompressedImage`
@@ -280,7 +280,7 @@ not been read into the cache yet (they get pulled in on demand).
 
 The on-screen footer shows only the working set of the current mode —
 press `?` in either view for this full reference without leaving the
-terminal (scroll it with `j`/`k`; `Esc` or `q` closes it).
+terminal (scroll it with `j`/`k`; `q` closes it).
 
 | Key                 | Action                                                                                                                                                                                                                          |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -307,9 +307,9 @@ terminal (scroll it with `j`/`k`; `Esc` or `q` closes it).
 | `r`                 | Toggle auto/manual value range for the overlay.                                                                                                                                                                                 |
 | `=` / `+` / `-`     | Increase / decrease overlay point size.                                                                                                                                                                                         |
 | `]` / `[`           | Increase / decrease overlay alpha.                                                                                                                                                                                              |
-| `?`                 | Open the key-help overlay (YAML view and image preview). While it is open, `Esc` or `q` closes it, `j`/`k` scroll it, and every other key is ignored (`Ctrl-C` / `Ctrl-D` still quit walk).                                     |
-| `Esc`               | Back out one level: close the help overlay, leave the preview. Absorbed at the YAML view — quitting walk is `q` / `Ctrl-C` / `Ctrl-D`.                                                                                          |
-| `q` / `Q`           | Quit walk from the YAML view. In the image preview and the help overlay, `q` instead backs out one level, same as `Esc`, so mashing `q` eventually quits walk. Inert in the point-cloud topic picker.                           |
+| `?`                 | Open the key-help overlay (YAML view and image preview). While it is open, `q` closes it, `j`/`k` scroll it, and every other key is ignored (`Ctrl-C` / `Ctrl-D` still quit walk).                                              |
+| `Esc`               | Inert in the YAML view, the image preview, and the help overlay; cancels the point-cloud topic picker. Quitting walk is `q` / `Ctrl-C` / `Ctrl-D`.                                                                              |
+| `q` / `Q`           | Quit walk from the YAML view. In the image preview and the help overlay, `q` instead backs out one level, so mashing `q` eventually quits walk. Inert in the point-cloud topic picker.                                          |
 | `Ctrl-C` / `Ctrl-D` | Quit walk immediately, from any screen — the image preview, a picker, or a help overlay included.                                                                                                                               |
 
 When the body is taller than the visible window, a `lines X-Y of N`

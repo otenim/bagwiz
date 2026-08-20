@@ -376,14 +376,16 @@ and their overlays and pickers) — and to any TUI added later.
 - Give each key one meaning and keep that meaning identical across
   every command, view, and mode — a key must never do one thing in
   one TUI surface and something else in another. The established
-  global bindings are: `?` opens the key reference, Esc backs out
-  one level (close the overlay, leave the mode, leave the view;
-  absorbed at the top so it cannot end the session),
+  global bindings are: `?` opens the key reference, `q` backs out
+  one level (close the overlay, leave the view; at the top level,
+  where there is nothing left to leave, it quits the session — so
+  mashing `q` walks all the way out of any screen),
   Ctrl-C / Ctrl-D terminate the session outright — from any screen,
   overlays and pickers included — and `j`/`k` scroll. Never rebind
-  one of these locally. `q` is not a global binding: walk binds it
-  only in the YAML view, where it quits walk; every other screen
-  leaves it unbound (inert). When a view
+  one of these locally. Esc carries no global binding: the views
+  leave it inert (absorbed, so a reflexive press cannot end the
+  session), and only a transient prompt that needs a cancel —
+  walk's point-cloud topic picker — binds it locally. When a view
   needs a new action, assign an unused key in `classify_key()`
   (`bagwiz_base/src/core/base/terminal_input.cpp`) — the single
   source of key bindings — instead of overloading a taken key with a

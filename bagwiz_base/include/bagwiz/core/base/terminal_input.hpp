@@ -47,17 +47,18 @@ enum class KeyEvent {
   kPcdAlphaUp,         // increase point overlay opacity (walk command)
   kPcdAlphaDown,       // decrease point overlay opacity (walk command)
   kHelp,               // show the key-help overlay (walk command)
-  kBack,               // back out one level (lone ESC): close the help,
-                       // leave the preview; inert at the top
+  kBack,               // lone ESC. No walk view binds it as back: the views
+                       // absorb it so a reflexive press does nothing, and
+                       // only a transient prompt — the point-cloud topic
+                       // picker — binds it, as cancel
   kConfirm,            // confirm the current prompt/selection
   kQuit,               // terminate the session outright (^C/^D; also
                        // synthesized on EOF / read interruption). No view
                        // may swallow it — it ends the session from anywhere
-  kQuitView,           // quit the current view ('q'/'Q'); bound only where a
-                       // view chooses to — today walk's YAML view quits
-                       // outright on it, while the preview and the help
-                       // overlays instead back out one level, same as kBack,
-                       // so repeated presses walk all the way out
+  kQuitView,           // back out one level ('q'/'Q'): close the help, leave
+                       // the preview; at walk's top-level YAML view, where
+                       // there is nothing left to leave, it quits walk
+                       // outright — so repeated presses walk all the way out
   kResize,             // terminal was resized (synthesised by read_key_event
                        // from a SIGWINCH flag set by the signal_handler
                        // module; never produced by classify_key)
@@ -79,9 +80,10 @@ enum class KeyEvent {
 //     (point size), ']'/'[' (alpha) — all walk,
 //     '?' (show the key-help overlay — walk),
 //     Enter/Return (confirm the current prompt or selection),
-//     a lone ESC (0x1B) to back out one level (kBack), 'q'/'Q' to quit the
-//     current view where a view binds it (kQuitView), and the control chars
-//     ^C / ^D to terminate the session outright (kQuit)
+//     a lone ESC (0x1B) (kBack — no global binding; absorbed by walk's
+//     views, cancel in its point-cloud topic picker), 'q'/'Q' to back out
+//     one level or quit the top-level view (kQuitView), and the control
+//     chars ^C / ^D to terminate the session outright (kQuit)
 //   * three-byte ANSI sequences "ESC [ C" (Right -> next), "ESC [ D"
 //     (Left -> prev), "ESC [ A" (Up -> scroll up), "ESC [ B" (Down ->
 //     scroll down), "ESC [ H" (Home -> scroll head), "ESC [ F" (End ->
