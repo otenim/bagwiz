@@ -175,7 +175,11 @@ that mean both clears a small absolute floor and stands out of its own
 standard error across samples — `degenerate` otherwise, `strong` when it
 clears the wider 5-sigma band, `weak` in between. The per-sample pairing is
 what keeps the reading meaningful across scenes: a flat but quiet surface
-and a curved but noisy one do not classify the same.
+and a curved but noisy one do not classify the same. The `curv/se` column
+shows the number behind each verdict — the mean curvature in units of its
+own standard error — so a borderline label reads as the graded quantity it
+is rather than as categorical; `--json` carries the same evidence per axis
+as `curvature`, `std_error`, and their ratio.
 
 With the default `--fix auto`, the same measurement also runs on the
 eigen-directions of the full 6x6 curvature matrix rather than per axis, so a
@@ -190,26 +194,19 @@ at bag value (auto): 0.99y + 0.17yaw`), and `--json` echoes them under
 not have to write. When every direction of the edge is unobservable, the
 command fails instead of writing a YAML the data cannot justify.
 
-**A degenerate axis is not necessarily a held one.** The table's verdict and
+**Under `--fix auto`, `degenerate` means held.** The table's axis probe and
 the auto-hold decision apply the same test along _different_ directions —
 the six raw axes in the table, the six eigen-directions of the curvature
-matrix for the holding — so they can disagree, and on real recordings they
-routinely do. An axis's curvature is a weighted average of the
-eigen-directions' and so can never be the smaller number, but each direction
-carries its own sample noise, and it is the noise that usually decides.
-An axis that reads `degenerate` with nothing held for it says so explicitly:
-
-```text
-warning: x reads degenerate on its own probe, but no direction --fix auto could hold covers it; the delta shown is weakly constrained, not held — re-run with --fix x to pin it
-```
-
-Take that as "this axis is the shakiest of the six, and its delta is still in
-the output" — `--fix x` is the way to pin it to the bag value if you want it
-pinned.
+matrix for the holding — and because each direction carries its own sample
+noise, a borderline axis can fail its own probe while every eigen-direction
+passes. Such an axis is reported `weak`, with its `curv/se` ratio left
+visible, rather than `degenerate`: under `auto` the `degenerate` label is
+reserved for axes whose content a held direction covers, so the label can
+never contradict the held set below the table.
 
 `--fix none` switches all of this off: every free axis is optimized, the
-classification is report-only, and a degenerate axis gets the pre-auto
-warning recommending a manual `--fix <axis>` re-run.
+classification is report-only, and a degenerate axis warns that its delta is
+unconstrained, recommending a manual `--fix <axis>` re-run.
 
 **What the classification does not tell you.**
 
@@ -227,31 +224,35 @@ warning recommending a manual `--fix <axis>` re-run.
   its own. `degenerate` then means "the samples do not agree well enough to
   call this measured", not "the cost surface is flat here". Since that
   standard error is itself estimated from `--samples` numbers, a verdict
-  sitting near the boundary can flip between runs; raise `--samples` before
-  reading much into one.
+  sitting near the boundary can flip between runs: read the `curv/se` ratio
+  before reading much into the label, and raise `--samples` when a decision
+  rides on it.
 
 ```text
 calib cam-lidar: truck_cabin_base_link -> top_front_narrow/camera_link
-axis        bag value  refined value          delta  observability
-x            0.180000       0.180000       0.000000  degenerate
-y           -0.050000      -0.050000       0.000000  degenerate
-z            1.420000       1.447213       0.027213  strong
-roll         0.000000      -0.008421      -0.008421  strong
-pitch        0.000000       0.014732       0.014732  strong
-yaw          0.000000       0.009481       0.009481  degenerate
+axis        bag value  refined value          delta  curv/se  observability
+x            0.180000       0.180000       0.000000     1.83  degenerate
+y           -0.050000      -0.050000       0.000000     1.90  degenerate
+z            1.420000       1.447213       0.027213    12.40  strong
+roll         0.000000      -0.008421      -0.008421     9.85  strong
+pitch        0.000000       0.014732       0.014732     7.31  strong
+yaw          0.000000       0.009481       0.009481     1.72  weak
 
 nid: 0.412887 -> 0.276541
 samples used: 8
 held at bag value (auto): 1.00x
 held at bag value (auto): 1.00y
-warning: yaw reads degenerate on its own probe, but no direction --fix auto could hold covers it; the delta shown is weakly constrained, not held — re-run with --fix yaw to pin it
 
 apply with: bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 ```
 
 Rotations in the human table are shown in degrees; `--json` reports the same
 `before`/`after`/`delta` per axis in radians instead, alongside the `parent`,
-`child`, `nid_before`, `nid_after`, `samples`, and `held` fields.
+`child`, `nid_before`, `nid_after`, `samples`, and `held` fields. Each axis
+also carries its curvature evidence: `curvature` and `std_error` as measured,
+`curvature_ratio` as their quotient — `null` for an axis that was never
+probed (a `--fix`-named one), the ratio additionally `null` when the estimate
+has no spread.
 
 ### Failures
 

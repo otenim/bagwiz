@@ -615,14 +615,29 @@ std::string held_direction_text(const core::calib::HeldDirection & held)
   return out;
 }
 
+// The per-axis curvature evidence as a short string: mean/std_error, the
+// ratio the significance test is decided by. "-" when the axis was not
+// probed (fixed), "inf" when the estimate has no spread (a single sample
+// pair — the ratio is then unbounded).
+std::string curvature_ratio_text(const core::calib::CurvatureEstimate & est)
+{
+  if (est.pairs == 0) {
+    return "-";
+  }
+  if (est.std_error == 0.0) {
+    return "inf";
+  }
+  return fmt::format("{:.2f}", est.mean / est.std_error);
+}
+
 std::string render_calibrate_summary(
   const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before, const std::string & yaml_path)
 {
   std::string out = fmt::format("calib cam-lidar: {} -> {}\n", args.parent_frame, args.child_frame);
   out += fmt::format(
-    "{:<6} {:>14} {:>14} {:>14}  {}\n", "axis", "bag value", "refined value", "delta",
-    "observability");
+    "{:<6} {:>14} {:>14} {:>14} {:>8}  {}\n", "axis", "bag value", "refined value", "delta",
+    "curv/se", "observability");
   const auto edge_after = core::calib::apply_edge_delta(edge_before, result.delta);
   for (std::size_t axis = 0; axis < 6; ++axis) {
     const double unit_scale = is_rotation_axis(axis) ? kRadToDeg : 1.0;
@@ -630,7 +645,8 @@ std::string render_calibrate_summary(
     const double delta = result.delta[axis] * unit_scale;
     const double after = edge_after[axis] * unit_scale;
     out += fmt::format(
-      "{:<6} {:>14.6f} {:>14.6f} {:>14.6f}  {}\n", kAxisNames[axis], before, after, delta,
+      "{:<6} {:>14.6f} {:>14.6f} {:>14.6f} {:>8}  {}\n", kAxisNames[axis], before, after, delta,
+      curvature_ratio_text(result.curvature[axis]),
       axis_observability_name(result.observability[axis]));
   }
   out += fmt::format("\nnid: {} -> {}\n", result.nid_before, result.nid_after);
@@ -643,34 +659,25 @@ std::string render_calibrate_summary(
     out += fmt::format("held at bag value (auto): {}\n", held_direction_text(held));
   }
 
-  // Under --fix auto the axis probe and the auto-hold decision look along
-  // different directions — raw axes here, Hessian eigen-directions there — so
-  // an axis can read degenerate with nothing held for it. That is not the
-  // "unconstrained delta" the pre-auto warning describes, and telling the user
-  // to run the --fix auto is already running would be nonsense, so the two
-  // modes say different things.
-  const bool auto_fix = parse_fix_spec(args.fix_axes).first.auto_fix;
+  // A degenerate axis warns that its delta is still in the output and was NOT
+  // held at the bag's value, which is what --fix would give. An axis dominated
+  // by a held direction needs no warning: the held line above already says its
+  // content is the bag value. Under --fix auto every degenerate axis is
+  // covered by construction (the label is only emitted for held content), so
+  // this is the --fix none / manual-axes case.
   bool warned = false;
   for (std::size_t axis = 0; axis < 6; ++axis) {
     if (result.observability[axis] == core::calib::AxisObservability::kDegenerate) {
-      // An axis dominated by a held direction needs no warning: the held line
-      // above already says its content is the bag value, exactly what --fix
-      // would have pinned it to.
       const bool covered = std::any_of(
         held_components.begin(), held_components.end(),
         [axis](const std::array<double, 6> & comp) { return std::abs(comp[axis]) >= 0.5; });
       if (covered) {
         continue;
       }
-      out += auto_fix ? fmt::format(
-                          "warning: {} reads degenerate on its own probe, but no direction "
-                          "--fix auto could hold covers it; the delta shown is weakly "
-                          "constrained, not held — re-run with --fix {} to pin it\n",
-                          kAxisNames[axis], kAxisNames[axis])
-                      : fmt::format(
-                          "warning: {} is not observable from this data; the delta shown is "
-                          "unconstrained — re-run with --fix {} to hold the bag value\n",
-                          kAxisNames[axis], kAxisNames[axis]);
+      out += fmt::format(
+        "warning: {} is not observable from this data; the delta shown is "
+        "unconstrained — re-run with --fix {} to hold the bag value\n",
+        kAxisNames[axis], kAxisNames[axis]);
       warned = true;
     }
   }
@@ -702,6 +709,21 @@ std::string render_calibrate_json(
     out += fmt::format("      \"before\": {},\n", before);
     out += fmt::format("      \"after\": {},\n", after);
     out += fmt::format("      \"delta\": {},\n", delta);
+    // The paired-curvature evidence behind the verdict (observability.hpp);
+    // null when the axis was not probed (fixed), the ratio additionally null
+    // when the estimate has no spread.
+    const auto & est = result.curvature[axis];
+    if (est.pairs > 0) {
+      out += fmt::format("      \"curvature\": {},\n", est.mean);
+      out += fmt::format("      \"std_error\": {},\n", est.std_error);
+      out += fmt::format(
+        "      \"curvature_ratio\": {},\n",
+        est.std_error > 0.0 ? fmt::format("{}", est.mean / est.std_error) : "null");
+    } else {
+      out += "      \"curvature\": null,\n";
+      out += "      \"std_error\": null,\n";
+      out += "      \"curvature_ratio\": null,\n";
+    }
     out += fmt::format(
       "      \"observability\": \"{}\"\n", axis_observability_name(result.observability[axis]));
     out += fmt::format("    }}{}\n", axis + 1 < 6 ? "," : "");

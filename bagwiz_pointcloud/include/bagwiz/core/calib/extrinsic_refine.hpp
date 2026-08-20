@@ -10,10 +10,12 @@
 #define BAGWIZ__CORE__CALIB__EXTRINSIC_REFINE_HPP_
 
 #include "bagwiz/core/calib/nid_cost.hpp"
+#include "bagwiz/core/calib/observability.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <span>
 #include <string>
 #include <vector>
@@ -92,12 +94,32 @@ struct RefineResult
   std::array<double, 6> delta{};  // x,y,z,roll,pitch,yaw on the edge
   double nid_before = 0.0;
   double nid_after = 0.0;
+  // Per-axis verdict at the final optimum. With RefineParams::auto_fix a
+  // kDegenerate label means the auto-hold took that axis's content: an axis
+  // whose own probe fails significance while no held direction covers it (see
+  // held_directions_cover_axis) is reported kWeak instead, so the label can
+  // never contradict the held set. The axis probe and the eigen-direction
+  // analysis are different statistics over different directions, so a
+  // borderline axis can fail its own test while every eigen-direction passes;
+  // the curvature evidence below keeps that visible. Without auto_fix the
+  // label is the raw verdict of the axis's own significance test.
   std::array<AxisObservability, 6> observability{};
+  // The paired-curvature measurement behind each axis's verdict, at the final
+  // optimum. Fixed axes keep the default (pairs == 0).
+  std::array<CurvatureEstimate, 6> curvature{};
   // Directions held at the bag value by --fix auto, in the order they were
   // held; empty when auto_fix is off or every direction was observable.
   std::vector<HeldDirection> auto_held;
   int samples_used = 0;
 };
+
+/// True when some held direction's physical-units axis mixture carries at
+/// least half its weight on `axis` — i.e. the axis's degenerate reading is
+/// already accounted for by the held set. The mixture rescales each
+/// normalized component by its axis's probe step, the same conversion the
+/// CLI's held-direction display uses.
+[[nodiscard]] bool held_directions_cover_axis(
+  std::span<const HeldDirection> held, std::size_t axis);
 
 /// Two-pass Nelder-Mead refinement of the free axes of `chain`'s edited edge,
 /// minimizing mean NID cost over `samples`, followed by a per-axis
