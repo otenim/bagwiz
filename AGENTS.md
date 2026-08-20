@@ -289,6 +289,30 @@ code that is not part of the CLI itself.
   reasoning in that subcommand's help text so users do not have
   to infer it from the signature.
 
+- Name a topic-valued flag for the direction it points. A flag whose
+  value names a topic the command creates or writes into is `--as`,
+  long-form only: `tf static join`, `traj join`, and `pcd concat` all
+  take their write target that way. A flag whose value selects topics
+  the bag already carries is `-t`/`--topic`, or `-t`/`--topics` when
+  it takes several, whenever it is that subcommand's general topic
+  operand (`traj dump`, `tf tree`, `topic drop` / `keep`, `cam-info`,
+  `walk`, `generate video`, `calib cam-lidar`); a selector that fills
+  a named role instead keeps that role's name (`--pcd`, `--pose`,
+  `--twist`, `--cam-info`, `--color`), which already reads as
+  selecting rather than creating. One shared `-t` cannot say which
+  direction a slot points, which left write targets reading like
+  filters: `traj join --traj t.tum --as /slam/tf` says the topic is
+  being brought into existence, where `-t /slam/tf` did not.
+  Two shapes stay outside the split. A subcommand that renames or
+  copies one topic to another takes the matched pair `--src` /
+  `--dst` (`topic rename`), the flag-form expression of the
+  source-before-destination ordering above — `--as` has no
+  counterpart to pair with `--src`, so splitting the pair would cost
+  more than it gains. A flag that edits topics the bag already
+  carries and names a topic only when the bag lacks one keeps
+  `-t`/`--topic` (`tf static update`), because its value is a
+  selector first and a new name only incidentally.
+
 - Name a pair of TF frame ids that names a rigid transform `--of`
   and `--ref`: `--of` is the frame of the object whose pose is
   resolved, `--ref` is the reference frame the pose is expressed
