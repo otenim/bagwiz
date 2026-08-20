@@ -8,17 +8,25 @@
 
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/pointcloud2.hpp"
+
+#include <geometry_msgs/msg/transform.hpp>
+
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace commands = bagwiz::commands;
+namespace pc = bagwiz::core::pointcloud;
 
 namespace
 {
@@ -26,10 +34,9 @@ commands::CalibCamLidarArgs valid_args()
 {
   commands::CalibCamLidarArgs args;
   args.input_path = "in.db3";
-  args.map_path = "map.pcd";
-  args.traj_path = "traj.tum";
-  args.traj_frame = "base_link";
-  args.topic = "/cam/image_raw/compressed";
+  args.pcd_topic = "/lidar/points";
+  args.pose_topic = "/odom";
+  args.cam_topic = "/cam/image_raw/compressed";
   args.parent_frame = "cabin";
   args.child_frame = "cam_link";
   return args;
@@ -123,16 +130,47 @@ TEST(CalibCamLidarCommonTest, RejectsTooFewSamplesAndBadDepthWindow)
   EXPECT_NE(commands::validate_calibrate_flags(args), "");
 }
 
-TEST(CalibCamLidarCommonTest, ParseFixedAxes)
+TEST(CalibCamLidarCommonTest, ParseFixSpec)
 {
-  const auto [flags, err] = commands::parse_fixed_axes("x,yaw");
-  EXPECT_EQ(err, "");
-  EXPECT_TRUE(flags[0]);
-  EXPECT_FALSE(flags[1]);
-  EXPECT_TRUE(flags[5]);
-  EXPECT_NE(commands::parse_fixed_axes("x,bogus").second, "");
-  EXPECT_NE(commands::parse_fixed_axes("x,y,z,roll,pitch,yaw").second, "");
-  EXPECT_EQ(commands::parse_fixed_axes("").second, "");
+  {
+    // Empty (the default) means auto: no manual axes, auto-fix on.
+    const auto [spec, err] = commands::parse_fix_spec("");
+    EXPECT_EQ(err, "");
+    EXPECT_TRUE(spec.auto_fix);
+    EXPECT_FALSE(spec.fixed[0]);
+    EXPECT_FALSE(spec.fixed[5]);
+  }
+  {
+    const auto [spec, err] = commands::parse_fix_spec("auto");
+    EXPECT_EQ(err, "");
+    EXPECT_TRUE(spec.auto_fix);
+  }
+  {
+    const auto [spec, err] = commands::parse_fix_spec("none");
+    EXPECT_EQ(err, "");
+    EXPECT_FALSE(spec.auto_fix);
+    EXPECT_FALSE(spec.fixed[0]);
+  }
+  {
+    // A manual axis list replaces the default auto.
+    const auto [spec, err] = commands::parse_fix_spec("x,yaw");
+    EXPECT_EQ(err, "");
+    EXPECT_FALSE(spec.auto_fix);
+    EXPECT_TRUE(spec.fixed[0]);
+    EXPECT_FALSE(spec.fixed[1]);
+    EXPECT_TRUE(spec.fixed[5]);
+  }
+  {
+    // auto composes with manual axes.
+    const auto [spec, err] = commands::parse_fix_spec("auto,x");
+    EXPECT_EQ(err, "");
+    EXPECT_TRUE(spec.auto_fix);
+    EXPECT_TRUE(spec.fixed[0]);
+  }
+  EXPECT_NE(commands::parse_fix_spec("x,bogus").second, "");
+  EXPECT_NE(commands::parse_fix_spec("x,y,z,roll,pitch,yaw").second, "");
+  EXPECT_NE(commands::parse_fix_spec("none,x").second, "");
+  EXPECT_NE(commands::parse_fix_spec("auto,none").second, "");
 }
 
 TEST(CalibCamLidarCommonTest, PickSampleIndicesRespectsMarginAndSpread)
@@ -204,16 +242,19 @@ TEST(CalibCamLidarCommonTest, RenderCalibrateSummaryIsAdditivePerAxis)
   EXPECT_EQ(parse_summary_row(summary, "z").observability, "degenerate");
   EXPECT_EQ(parse_summary_row(summary, "pitch").observability, "fixed");
 
-  // The degenerate axis warns that its delta is unconstrained — it is NOT the
-  // bag's value, which is what --fix would give.
+  // The degenerate axis warns that its delta is still in the output and was
+  // NOT held at the bag's value, which is what --fix would give. These are the
+  // default (--fix auto) args and nothing was held, so it is the auto wording;
+  // the --fix none wording has its own test.
   EXPECT_NE(
     summary.find(
-      "warning: z is not observable from this data; the delta shown is unconstrained — re-run "
-      "with --fix z to hold the bag value"),
+      "warning: z reads degenerate on its own probe, but no direction --fix auto could hold "
+      "covers it; the delta shown is weakly constrained, not held — re-run with --fix z to "
+      "pin it"),
     std::string::npos)
     << summary;
   // Only the degenerate axis warns.
-  EXPECT_EQ(summary.find("warning: x is not"), std::string::npos) << summary;
+  EXPECT_EQ(summary.find("warning: x "), std::string::npos) << summary;
   EXPECT_NE(
     summary.find("apply with: bagwiz tf static update -i in.db3 --yaml /tmp/out.yaml"),
     std::string::npos)
@@ -264,6 +305,79 @@ TEST(CalibCamLidarCommonTest, RenderCalibrateJsonEscapesFrameNames)
   args.parent_frame = "ca\"b\\in";
   const std::string json = commands::render_calibrate_json(args, sample_result(), kEdgeBefore);
   EXPECT_NE(json.find("\"parent\": \"ca\\\"b\\\\in\""), std::string::npos) << json;
+}
+
+TEST(CalibCamLidarCommonTest, RenderSummaryListsHeldDirections)
+{
+  const auto args = valid_args();
+  auto result = sample_result();
+  bagwiz::core::calib::HeldDirection y_held;
+  y_held.unit = {0, 1, 0, 0, 0, 0};
+  y_held.curvature = 1e-7;
+  y_held.std_error = 5e-8;
+  result.auto_held.push_back(y_held);
+  bagwiz::core::calib::HeldDirection mixed;
+  const double s = std::sqrt(0.5);
+  mixed.unit = {0, s, 0, 0, 0, s};  // 0.71y + 0.71yaw in the normalized coordinates
+  result.auto_held.push_back(mixed);
+  // y reads degenerate here so the warning-suppression path is exercised: it
+  // is covered by the y-dominated held direction, so no warning may appear
+  // for it, while the uncovered degenerate z keeps its warning.
+  result.observability[1] = bagwiz::core::calib::AxisObservability::kDegenerate;
+
+  const std::string summary =
+    commands::render_calibrate_summary(args, result, kEdgeBefore, "/tmp/out.yaml");
+  EXPECT_NE(summary.find("held at bag value (auto): 1.00y"), std::string::npos) << summary;
+  // The mixed direction renders in physical units: 0.71 * 0.02 m of y against
+  // 0.71 * 0.0035 rad of yaw — dominant y with a small yaw share.
+  EXPECT_NE(summary.find("held at bag value (auto): 0.99y + 0.17yaw"), std::string::npos)
+    << summary;
+  EXPECT_EQ(summary.find("warning: y "), std::string::npos) << summary;
+  // z is degenerate and uncovered under the default --fix auto: the warning
+  // must describe what actually happened (the axis probe and the auto-hold
+  // decision look along different directions) instead of the pre-auto
+  // "unconstrained" claim, which would also be telling the user to run the
+  // --fix auto that is already running.
+  EXPECT_NE(summary.find("warning: z reads degenerate on its own probe"), std::string::npos)
+    << summary;
+  EXPECT_EQ(summary.find("warning: z is not observable"), std::string::npos) << summary;
+}
+
+TEST(CalibCamLidarCommonTest, RenderSummaryWarnsUnconstrainedWithFixNone)
+{
+  // With auto off, a degenerate axis really is an unconstrained delta nobody
+  // held, so the warning keeps the pre-auto wording and its --fix advice.
+  auto args = valid_args();
+  args.fix_axes = "none";
+  auto result = sample_result();
+  result.observability[1] = bagwiz::core::calib::AxisObservability::kDegenerate;
+
+  const std::string summary =
+    commands::render_calibrate_summary(args, result, kEdgeBefore, "/tmp/out.yaml");
+  EXPECT_NE(summary.find("warning: y is not observable from this data"), std::string::npos)
+    << summary;
+  EXPECT_NE(summary.find("re-run with --fix y to hold the bag value"), std::string::npos)
+    << summary;
+  EXPECT_EQ(summary.find("reads degenerate on its own probe"), std::string::npos) << summary;
+  EXPECT_EQ(summary.find("held at bag value"), std::string::npos) << summary;
+}
+
+TEST(CalibCamLidarCommonTest, RenderJsonListsHeldDirections)
+{
+  auto result = sample_result();
+  const std::string empty_json = commands::render_calibrate_json(valid_args(), result, kEdgeBefore);
+  EXPECT_NE(empty_json.find("\"held\": []"), std::string::npos) << empty_json;
+
+  bagwiz::core::calib::HeldDirection y_held;
+  y_held.unit = {0, 1, 0, 0, 0, 0};
+  y_held.curvature = 1e-7;
+  y_held.std_error = 5e-8;
+  result.auto_held.push_back(y_held);
+  const std::string json = commands::render_calibrate_json(valid_args(), result, kEdgeBefore);
+  EXPECT_NE(json.find("\"held\": ["), std::string::npos) << json;
+  EXPECT_NE(json.find("\"direction\": {\"y\": 1}"), std::string::npos) << json;
+  EXPECT_EQ(json.find(",\n  ]"), std::string::npos) << "trailing comma:\n" << json;
+  EXPECT_EQ(json.find(",\n    }"), std::string::npos) << "trailing comma:\n" << json;
 }
 
 TEST(CalibCamLidarCommonTest, PoseGateSplitsOnTranslation)
@@ -340,4 +454,345 @@ TEST(CalibCamLidarCommonTest, ValidateRejectsNegativeKeyframeThresholds)
   args.keyframe_dist = 1.0;
   args.keyframe_rot_deg = 10.0;
   EXPECT_EQ(commands::validate_calibrate_flags(args), "");
+}
+
+TEST(CalibCamLidarCommonTest, ValidateRejectsEmptyOfOrRefFrame)
+{
+  auto args = valid_args();
+  args.of_frame.clear();
+  EXPECT_NE(commands::validate_calibrate_flags(args), "");
+  args = valid_args();
+  args.ref_frame.clear();
+  EXPECT_NE(commands::validate_calibrate_flags(args), "");
+}
+
+// ---- MapAccumulator ---------------------------------------------------------
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorCollapsesPointsSharingAVoxel)
+{
+  // Four points inside one 0.5 m voxel collapse to their centroid, carrying
+  // the mean intensity — the driving platform re-measuring one surface must
+  // not cost the map four points.
+  commands::MapAccumulator acc{0.5};
+  EXPECT_TRUE(acc.add({1.0F, 1.0F, 1.0F}, 0.2F));
+  EXPECT_TRUE(acc.add({1.2F, 1.0F, 1.0F}, 0.4F));
+  EXPECT_TRUE(acc.add({1.0F, 1.4F, 1.0F}, 0.6F));
+  EXPECT_TRUE(acc.add({1.2F, 1.4F, 1.4F}, 0.8F));
+  EXPECT_EQ(acc.size(), 1U);
+  const auto map = acc.finish();
+  ASSERT_EQ(map.points.size(), 1U);
+  EXPECT_FLOAT_EQ(map.points[0][0], 1.1F);
+  EXPECT_FLOAT_EQ(map.points[0][1], 1.2F);
+  EXPECT_FLOAT_EQ(map.points[0][2], 1.1F);
+  ASSERT_EQ(map.intensities.size(), 1U);
+  EXPECT_FLOAT_EQ(map.intensities[0], 0.5F);
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorSeparatesVoxelsAcrossZero)
+{
+  // Quantization must FLOOR, not truncate toward zero: -0.05 and +0.05 are
+  // one 0.1 m voxel apart, and truncation would merge them (and every other
+  // pair straddling an axis) into one.
+  commands::MapAccumulator acc{0.1};
+  EXPECT_TRUE(acc.add({-0.05F, 0.0F, 0.0F}, 1.0F));
+  EXPECT_TRUE(acc.add({0.05F, 0.0F, 0.0F}, 1.0F));
+  EXPECT_EQ(acc.size(), 2U);
+  const auto map = acc.finish();
+  ASSERT_EQ(map.points.size(), 2U);
+  // Sorted by voxel index, so the negative one comes first.
+  EXPECT_LT(map.points[0][0], 0.0F);
+  EXPECT_GT(map.points[1][0], 0.0F);
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorDisabledKeepsEveryPointVerbatim)
+{
+  // Size 0 is the opt-out: no collapsing, no reordering, no centroid rounding.
+  commands::MapAccumulator acc{0.0};
+  EXPECT_TRUE(acc.add({1.0F, 1.0F, 1.0F}, 0.25F));
+  EXPECT_TRUE(acc.add({1.0F, 1.0F, 1.0F}, 0.75F));
+  EXPECT_EQ(acc.size(), 2U);
+  const auto map = acc.finish();
+  ASSERT_EQ(map.points.size(), 2U);
+  EXPECT_FLOAT_EQ(map.intensities[0], 0.25F);
+  EXPECT_FLOAT_EQ(map.intensities[1], 0.75F);
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorOutputDoesNotDependOnInsertionOrder)
+{
+  // The emitted map is sorted by voxel index, so the same set of points gives
+  // byte-identical output whatever order the bag delivered them in — the hash
+  // container's own iteration order must never reach the map.
+  const std::vector<std::array<float, 3>> pts{
+    {5.0F, 0.0F, 0.0F}, {-3.0F, 2.0F, 1.0F}, {0.0F, 0.0F, 0.0F}, {1.0F, -7.0F, 4.0F}};
+  commands::MapAccumulator forward{0.5};
+  for (const auto & p : pts) {
+    EXPECT_TRUE(forward.add(p, 0.5F));
+  }
+  commands::MapAccumulator backward{0.5};
+  for (auto it = pts.rbegin(); it != pts.rend(); ++it) {
+    EXPECT_TRUE(backward.add(*it, 0.5F));
+  }
+  const auto a = forward.finish();
+  const auto b = backward.finish();
+  ASSERT_EQ(a.points.size(), pts.size());
+  ASSERT_EQ(b.points.size(), pts.size());
+  for (std::size_t i = 0; i < a.points.size(); ++i) {
+    EXPECT_EQ(a.points[i], b.points[i]) << i;
+  }
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorRejectsUnquantizablePoint)
+{
+  // A coordinate too large to index a voxel is as unusable as a NaN: refused
+  // here rather than overflowing the index and landing in a wrong voxel.
+  commands::MapAccumulator acc{0.1};
+  EXPECT_FALSE(acc.add({1e30F, 0.0F, 0.0F}, 1.0F));
+  EXPECT_TRUE(acc.empty());
+}
+
+// ---- accumulate_cloud_into_map ----------------------------------------------
+
+// Two poses at 0 s and 10 s translating along +x at `v_mps`, so the
+// interpolated T_ref_of at stamp t seconds is the translation (v*t, 0, 0).
+std::vector<bagwiz::core::TrajectoryPose> moving_trajectory(double v_mps)
+{
+  std::vector<bagwiz::core::TrajectoryPose> poses(2);
+  poses[0].timestamp_ns = 0;
+  poses[0].qw = 1.0;
+  poses[1].timestamp_ns = 10'000'000'000LL;
+  poses[1].tx = v_mps * 10.0;
+  poses[1].qw = 1.0;
+  return poses;
+}
+
+geometry_msgs::msg::Transform translation_transform(double tx, double ty, double tz)
+{
+  geometry_msgs::msg::Transform t;
+  t.translation.x = tx;
+  t.translation.y = ty;
+  t.translation.z = tz;
+  t.rotation.w = 1.0;
+  return t;
+}
+
+// x/y/z/intensity as 4x float32 (point_step 16). `pts`: {x, y, z, intensity}.
+pc::PointCloud2 make_cloud_xyzi(
+  const std::vector<std::array<float, 4>> & pts, std::int64_t stamp_ns)
+{
+  pc::PointCloud2 c;
+  c.timestamp_ns = stamp_ns;
+  c.frame_id = "lidar";
+  c.height = 1;
+  c.width = static_cast<std::uint32_t>(pts.size());
+  c.point_step = 16;
+  c.row_step = c.point_step * c.width;
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat32, 1},
+    {"y", 4, pc::PointFieldType::kFloat32, 1},
+    {"z", 8, pc::PointFieldType::kFloat32, 1},
+    {"intensity", 12, pc::PointFieldType::kFloat32, 1},
+  };
+  c.data.resize(static_cast<std::size_t>(c.point_step) * c.width);
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    std::memcpy(c.data.data() + i * c.point_step, pts[i].data(), sizeof(float) * 4);
+  }
+  return c;
+}
+
+// x/y/z/intensity/t as 5x float32 (point_step 20). `pts`: {x, y, z, intensity,
+// t_seconds} with t relative to the cloud's header stamp.
+pc::PointCloud2 make_cloud_xyzit(
+  const std::vector<std::array<float, 5>> & pts, std::int64_t stamp_ns)
+{
+  pc::PointCloud2 c;
+  c.timestamp_ns = stamp_ns;
+  c.frame_id = "lidar";
+  c.height = 1;
+  c.width = static_cast<std::uint32_t>(pts.size());
+  c.point_step = 20;
+  c.row_step = c.point_step * c.width;
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat32, 1},  {"y", 4, pc::PointFieldType::kFloat32, 1},
+    {"z", 8, pc::PointFieldType::kFloat32, 1},  {"intensity", 12, pc::PointFieldType::kFloat32, 1},
+    {"t", 16, pc::PointFieldType::kFloat32, 1},
+  };
+  c.data.resize(static_cast<std::size_t>(c.point_step) * c.width);
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    std::memcpy(c.data.data() + i * c.point_step, pts[i].data(), sizeof(float) * 5);
+  }
+  return c;
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudAppendsPointsWithIntensities)
+{
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.25F}, {4.0F, 5.0F, 6.0F, 0.75F}}, 5'000'000'000LL),
+    trajectory, std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 2U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 1.0F);
+  EXPECT_FLOAT_EQ(out.points[0][1], 2.0F);
+  EXPECT_FLOAT_EQ(out.points[0][2], 3.0F);
+  ASSERT_EQ(out.intensities.size(), 2U);
+  EXPECT_FLOAT_EQ(out.intensities[0], 0.25F);
+  EXPECT_FLOAT_EQ(out.intensities[1], 0.75F);
+  EXPECT_EQ(stats.clouds_read, 1U);
+  EXPECT_EQ(stats.points_added, 2U);
+  EXPECT_EQ(stats.clouds_deskewed, 0U);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudVoxelizesRepeatedSweeps)
+{
+  // The real reason the grid exists: a stationary platform re-measuring one
+  // surface. Two sweeps of the same three points must leave three map points,
+  // not six — while points_added still counts everything that was read, so
+  // the log can show the gap.
+  commands::MapAccumulator map{0.5};
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  const std::vector<std::array<float, 4>> sweep{
+    {1.0F, 0.0F, 0.0F, 0.2F}, {1.1F, 0.0F, 0.0F, 0.4F}, {9.0F, 0.0F, 0.0F, 1.0F}};
+  for (int i = 0; i < 2; ++i) {
+    const auto error = commands::accumulate_cloud_into_map(
+      map, make_cloud_xyzi(sweep, 5'000'000'000LL), trajectory, std::nullopt, stats);
+    EXPECT_FALSE(error.has_value()) << *error;
+  }
+  EXPECT_EQ(stats.points_added, 6U);
+  const auto out = map.finish();
+  // (1.0, 1.1) share the [1.0, 1.5) voxel; 9.0 is its own.
+  ASSERT_EQ(out.points.size(), 2U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 1.05F);
+  EXPECT_FLOAT_EQ(out.points[1][0], 9.0F);
+  ASSERT_EQ(out.intensities.size(), 2U);
+  EXPECT_FLOAT_EQ(out.intensities[0], 0.3F);  // mean of 0.2 and 0.4, twice over
+  EXPECT_FLOAT_EQ(out.intensities[1], 1.0F);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudAppliesPoseAndExtrinsic)
+{
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
+  commands::MapAccumulationStats stats;
+  // T_ref_of(5 s) = (5, 0, 0); the extrinsic lifts the cloud frame by +1 in y,
+  // so (1, 2, 3) in the cloud lands at (6, 3, 3) in the ref frame.
+  const auto trajectory = moving_trajectory(1.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL), trajectory,
+    translation_transform(0.0, 1.0, 0.0), stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 1U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 6.0F);
+  EXPECT_FLOAT_EQ(out.points[0][1], 3.0F);
+  EXPECT_FLOAT_EQ(out.points[0][2], 3.0F);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudRejectsCloudWithoutIntensity)
+{
+  pc::PointCloud2 c;
+  c.timestamp_ns = 5'000'000'000LL;
+  c.frame_id = "lidar";
+  c.height = 1;
+  c.width = 1;
+  c.point_step = 12;
+  c.row_step = c.point_step;
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat32, 1},
+    {"y", 4, pc::PointFieldType::kFloat32, 1},
+    {"z", 8, pc::PointFieldType::kFloat32, 1},
+  };
+  c.data.resize(c.point_step);
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  EXPECT_TRUE(
+    commands::accumulate_cloud_into_map(map, c, trajectory, std::nullopt, stats).has_value());
+  const auto out = map.finish();
+  EXPECT_TRUE(out.points.empty());
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudSkipsStampOutsideTrajectorySpan)
+{
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);  // spans 0..10 s
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 20'000'000'000LL), trajectory, std::nullopt,
+    stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  EXPECT_TRUE(out.points.empty());
+  EXPECT_EQ(stats.clouds_skipped_out_of_span, 1U);
+  EXPECT_EQ(stats.points_added, 0U);
+}
+
+// A cloud whose per-point times are all one value (e.g. the all-zero field
+// `pcd undistort` leaves behind) carries no sweep motion, so it must be
+// accumulated as-is — deskewing it would be a no-op that only rewrites bytes.
+TEST(CalibCamLidarCommonTest, AccumulateCloudDoesNotDeskewUniformTimeField)
+{
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(1.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzit({{0.0F, 0.0F, 0.0F, 0.5F, 0.0F}}, 5'000'000'000LL), trajectory,
+    std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 1U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 5.0F);  // placed at the header stamp, un-deskewed
+  EXPECT_EQ(stats.clouds_deskewed, 0U);
+}
+
+// A non-uniform per-point time field means a real sweep: deskew each point to
+// the header stamp before the ref-frame placement, so the point captured 0.5 s
+// into the sweep lands at the pose of 5.5 s, not 5 s.
+TEST(CalibCamLidarCommonTest, AccumulateCloudDeskewsVaryingTimeField)
+{
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(1.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map,
+    make_cloud_xyzit(
+      {{0.0F, 0.0F, 0.0F, 0.5F, 0.5F}, {0.0F, 0.0F, 0.0F, 0.25F, 0.0F}}, 5'000'000'000LL),
+    trajectory, std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 2U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 5.5F);
+  EXPECT_FLOAT_EQ(out.points[1][0], 5.0F);
+  EXPECT_EQ(stats.clouds_deskewed, 1U);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudDropsNonFinitePoints)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map, make_cloud_xyzi({{nan, 0.0F, 0.0F, 0.5F}, {1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL),
+    trajectory, std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 1U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 1.0F);
+  EXPECT_EQ(stats.points_dropped_nonfinite, 1U);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudRejectsBigEndianCloud)
+{
+  auto c = make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL);
+  c.is_bigendian = true;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  EXPECT_TRUE(
+    commands::accumulate_cloud_into_map(map, c, trajectory, std::nullopt, stats).has_value());
+  const auto out = map.finish();
+  EXPECT_TRUE(out.points.empty());
 }

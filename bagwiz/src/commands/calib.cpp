@@ -26,9 +26,9 @@ constexpr const char * kLogger = "bagwiz.cmd.calib";
 // `bagwiz calib` is a command group for sensor-extrinsic calibration tools.
 // Its actions are:
 //   cam-lidar  - Refine one static-TF edge on a camera's chain by registering
-//                a LiDAR map (from `bagwiz map slam`) against the bag's images
-//                (NID). Writes a static-TF-tree YAML that `bagwiz tf static
-//                update` applies.
+//                the bag's LiDAR clouds (accumulated through the bag's pose
+//                topic) against the bag's images (NID). Writes a
+//                static-TF-tree YAML that `bagwiz tf static update` applies.
 class CalibCommand : public Command
 {
 public:
@@ -67,33 +67,38 @@ private:
     auto * sub = app.add_subcommand(
       "cam-lidar",
       "Refine one static-TF edge on a camera's chain by registering the bag's "
-      "LiDAR map against its images (NID). Needs a prior `bagwiz map slam` run's "
-      "map.pcd and traj.tum; writes a YAML that `tf static update` applies.");
+      "LiDAR clouds against its images (NID). The clouds are accumulated into a "
+      "map through the bag's own pose topic; writes a YAML that `tf static "
+      "update` applies.");
     sub->add_option("-i,--input", cam_lidar_args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
-    // -t/--topic and --cam-info are declared as topic slots (not plain
-    // options) so shell completion offers the bag's image / CameraInfo
-    // topics, exactly as `walk`'s equivalents do.
+    // --pcd, --pose, --cam, and --cam-info are declared as topic slots (not
+    // plain options) so shell completion offers the bag's topics of each
+    // accepted type, exactly as `walk`'s equivalents do.
     set_topic_input(*sub, cam_lidar_args_.input_path);
-    sub
-      ->add_option(
-        "--map", cam_lidar_args_.map_path,
-        "Dense map PCD from `map slam` (needs an intensity field)")
-      ->required()
-      ->check(CLI::ExistingFile);
-    sub->add_option("--traj", cam_lidar_args_.traj_path, "TUM trajectory from `map slam`")
-      ->required()
-      ->check(CLI::ExistingFile);
-    sub
-      ->add_option(
-        "--traj-frame", cam_lidar_args_.traj_frame,
-        "Frame the trajectory poses express (matches `map slam --frame`)")
+    add_topic_option(
+      *sub, "--pcd", cam_lidar_args_.pcd_topic,
+      "PointCloud2 topic to accumulate into the calibration map (needs an intensity field)",
+      TopicSlotSpec{.allowed_types = kPointCloud2Type, .mode = TopicSelectorMode::kLiteral})
       ->required();
     add_topic_option(
-      *sub, "-t,--topic", cam_lidar_args_.topic, "Image topic to calibrate against",
+      *sub, "--pose", cam_lidar_args_.pose_topic,
+      "Self-position topic (TFMessage / Odometry / PoseStamped / "
+      "PoseWithCovarianceStamped) the map and the image samples are placed by",
+      TopicSlotSpec{.allowed_types = kUndistortPoseTopicTypes, .mode = TopicSelectorMode::kLiteral})
+      ->required();
+    add_topic_option(
+      *sub, "--cam", cam_lidar_args_.cam_topic, "Image topic to calibrate against",
       TopicSlotSpec{.allowed_types = kImageTopicTypes, .mode = TopicSelectorMode::kLiteral})
       ->required();
+    sub->add_option(
+      "--of", cam_lidar_args_.of_frame,
+      "Frame the --pose trajectory tracks; anchors the static TF chain to the camera and the "
+      "per-cloud extrinsic (default: base_link)");
+    sub->add_option(
+      "--ref", cam_lidar_args_.ref_frame,
+      "Frame the --pose trajectory is expressed in; the map is accumulated in it (default: map)");
     sub
       ->add_option(
         "--parent", cam_lidar_args_.parent_frame, "Parent frame of the static edge to refine")
@@ -113,7 +118,9 @@ private:
       "--samples", cam_lidar_args_.samples, "Image samples to use (default 8, min 3)");
     sub->add_option(
       "--fix", cam_lidar_args_.fix_axes,
-      "Comma list of axes to hold at the bag value (x,y,z,roll,pitch,yaw)");
+      "Comma list of axes to hold at the bag value (x,y,z,roll,pitch,yaw), plus 'auto' (also "
+      "hold every direction the data cannot constrain) and 'none' (hold nothing). A manual "
+      "list alone switches auto off (default: auto)");
     sub->add_option(
       "--max-trans", cam_lidar_args_.max_trans,
       "Trust region: max translation delta in meters (default 0.2)");
@@ -135,6 +142,10 @@ private:
     sub->add_option(
       "--max-depth", cam_lidar_args_.max_depth,
       "Farthest projected point depth in meters (default 150)");
+    sub->add_option(
+      "--voxel", cam_lidar_args_.voxel_size,
+      "Voxel edge the accumulated map is downsampled onto, in meters "
+      "(default 0.1; 0 keeps every point of every cloud)");
     sub->add_flag("--json", cam_lidar_args_.json, "Emit the stdout summary as JSON");
     sub->add_flag(
       "-w,--overwrite", cam_lidar_args_.overwrite, "Replace an existing -o/--output path");

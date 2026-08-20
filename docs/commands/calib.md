@@ -2,93 +2,120 @@
 
 Sensor-extrinsic calibration tools.
 
-| Subcommand                             | What it does                                                                                                                                               |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`cam-lidar`](#bagwiz-calib-cam-lidar) | Refine one static-TF edge on a camera's chain by registering the bag's LiDAR map (from `map slam`) against its images; writes YAML for `tf static update`. |
+| Subcommand                             | What it does                                                                                                                                |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`cam-lidar`](#bagwiz-calib-cam-lidar) | Refine one static-TF edge on a camera's chain by registering the bag's LiDAR clouds against its images; writes YAML for `tf static update`. |
 
 ---
 
 ## `bagwiz calib cam-lidar`
 
 Automatically refines one static-TF edge on a camera's chain by registering
-the bag's dense LiDAR map (from a prior
-[`bagwiz map slam`](map.md#bagwiz-map-slam) run) against the bag's own
-images, minimizing the normalized information distance (NID) between
-projected map intensity and image intensity. The refined edge is written as a
-[`static dump`](tf.md#bagwiz-tf-static-dump)-schema YAML that
-[`static update`](tf.md#bagwiz-tf-static-update) applies; `--input` itself is only
-ever read, never modified.
+the bag's LiDAR point clouds against the bag's own images, minimizing the
+normalized information distance (NID) between projected cloud intensity and
+image intensity. Everything is read from the one bag: the clouds are
+accumulated into a map through the bag's own self-position topic, and the
+image samples are placed by the same trajectory. The refined edge is written
+as a [`static dump`](tf.md#bagwiz-tf-static-dump)-schema YAML that
+[`static update`](tf.md#bagwiz-tf-static-update) applies; `--input` itself is
+only ever read, never modified.
 
 ### Usage
 
 ```text
-bagwiz calib cam-lidar -i <input> --map <map.pcd> --traj <traj.tum> \
-  --traj-frame <frame> -t|--topic <topic> --parent <frame> --child <frame> \
+bagwiz calib cam-lidar -i <input> --pcd <topic> --pose <topic> --cam <topic> \
+  [--of <frame>] [--ref <frame>] --parent <frame> --child <frame> \
   [--cam-info <topic>] [-o <output>] [--samples <n>] [--fix <axes>] \
   [--keyframe-dist <m>] [--keyframe-rot <deg>] \
   [--max-trans <m>] [--max-rot <deg>] [--nid-bins <n>] [--min-depth <m>] \
-  [--max-depth <m>] [--json] [-w|--overwrite]
+  [--max-depth <m>] [--voxel <m>] [--json] [-w|--overwrite]
 ```
 
 ### Example
 
 ```bash
-# 1. Build a map + trajectory of the bag, in the frame the edited edge's
-#    chain starts from.
-bagwiz map slam -i capture.mcap --pcd /sensing/lidar/concatenated/pointcloud \
-  -o out/ --frame base_link
-
-# 2. Refine the camera mount edge against that map.
-bagwiz calib cam-lidar -i capture.mcap --map out/map.pcd --traj out/traj.tum \
-  --traj-frame base_link -t /sensing/camera/camera1/image_raw/compressed \
+# 1. Refine the camera mount edge against the bag's own LiDAR and pose topics.
+bagwiz calib cam-lidar -i capture.mcap \
+  --pcd /sensing/lidar/concatenated/pointcloud \
+  --pose /localization/pose \
+  --cam /sensing/camera/camera1/image_raw/compressed \
   --parent truck_cabin_base_link --child top_front_narrow/camera_link
 
-# 3. Apply the refined edge back into the bag's static TF.
+# 2. Apply the refined edge back into the bag's static TF.
 bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 ```
 
 ### Options
 
-| Flag                    | Description                                                                                                                                                                                                                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                                                                                                                                                 |
-| `--map <path>`          | **Required.** Dense map PCD from `map slam` — needs an `intensity` field, which NID compares against image gray. Long-form only.                                                                                                                                                                      |
-| `--traj <path>`         | **Required.** TUM trajectory from `map slam`. Long-form only.                                                                                                                                                                                                                                         |
-| `--traj-frame <frame>`  | **Required.** Frame the trajectory poses express — must be the same `--frame` `map slam` was run with. Long-form only.                                                                                                                                                                                |
-| `-t`, `--topic <topic>` | **Required.** Image topic to calibrate against. Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name, not a glob.                                                                                                         |
-| `--parent <frame>`      | **Required.** Parent frame of the static edge to refine. Long-form only.                                                                                                                                                                                                                              |
-| `--child <frame>`       | **Required.** Child frame of the static edge to refine. Long-form only.                                                                                                                                                                                                                               |
-| `--cam-info <topic>`    | CameraInfo topic. When omitted, resolved from `-t`/`--topic` using the same auto-resolution rules as [`generate video`'s `--cam-info`](generate.md#bagwiz-generate-video). A literal topic name, not a glob. Long-form only.                                                                          |
-| `-o`, `--output <path>` | Output YAML path. Default: `<input>`'s filename stem plus `_calib_cam_lidar.yaml`, written in the current working directory (not necessarily beside `--input`).                                                                                                                                       |
-| `--samples <n>`         | Image samples to pick, evenly spread across the trajectory span (or across keyframe intervals — see `--keyframe-dist`). Default `8`, minimum `3`. Long-form only.                                                                                                                                     |
-| `--keyframe-dist <m>`   | Pose-gated keyframe sampling: a new keyframe interval opens each time the interpolated pose moves this many meters, samples spread over the intervals instead of over time, and each picked interval contributes its sharpest frame. `0` (the default) keeps plain even time spacing. Long-form only. |
-| `--keyframe-rot <deg>`  | Rotation half of the keyframe gate: an interval also opens after this much rotation from the interval's first frame, so a platform turning in place keeps contributing new viewpoints. `0` (the default) disables the rotation test. Long-form only.                                                  |
-| `--fix <axes>`          | Comma list of axes to hold at the bag's value instead of optimizing (`x,y,z,roll,pitch,yaw`, any subset). Fixing all six is rejected — nothing would be left to refine. Long-form only.                                                                                                               |
-| `--max-trans <m>`       | Trust region: max translation delta from the bag's value, in meters. Default `0.2`. Long-form only.                                                                                                                                                                                                   |
-| `--max-rot <deg>`       | Trust region: max rotation delta from the bag's value, in degrees. Default `2.0`. Long-form only.                                                                                                                                                                                                     |
-| `--nid-bins <n>`        | NID intensity/gray histogram bins, `4`–`256`. Default `16`. Long-form only.                                                                                                                                                                                                                           |
-| `--min-depth <m>`       | Nearest projected map-point depth kept, in meters. Default `2`. Long-form only.                                                                                                                                                                                                                       |
-| `--max-depth <m>`       | Farthest projected map-point depth kept, in meters. Default `150`. Long-form only.                                                                                                                                                                                                                    |
-| `--json`                | Emit the stdout summary as JSON instead of the human table. The YAML is written either way. Long-form only.                                                                                                                                                                                           |
-| `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path.                                                                                                                                                                                                                                                             |
+| Flag                    | Description                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`).                                                                                                                                                                                                                      |
+| `--pcd <topic>`         | **Required.** PointCloud2 topic accumulated into the calibration map — needs an `intensity` field, which NID compares against image gray. A literal topic name, not a glob. Long-form only.                                                                                                                |
+| `--pose <topic>`        | **Required.** Self-position topic the map and the image samples are placed by. Supported types: `tf2_msgs/msg/TFMessage`, `nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped`, `geometry_msgs/msg/PoseWithCovarianceStamped` (the same set [`pcd undistort --pose`](pcd.md) accepts). Long-form only. |
+| `--cam <topic>`         | **Required.** Image topic to calibrate against. Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name, not a glob. Long-form only.                                                                                              |
+| `--of <frame>`          | Frame the `--pose` trajectory tracks. Anchors the static-TF chain to the camera's optical frame and each cloud's extrinsic. Default `base_link`. Long-form only.                                                                                                                                           |
+| `--ref <frame>`         | Frame the `--pose` trajectory is expressed in; the map is accumulated in it. Default `map`. Long-form only.                                                                                                                                                                                                |
+| `--parent <frame>`      | **Required.** Parent frame of the static edge to refine. Long-form only.                                                                                                                                                                                                                                   |
+| `--child <frame>`       | **Required.** Child frame of the static edge to refine. Long-form only.                                                                                                                                                                                                                                    |
+| `--cam-info <topic>`    | CameraInfo topic. When omitted, resolved from `--cam` using the same auto-resolution rules as [`generate video`'s `--cam-info`](generate.md#bagwiz-generate-video). A literal topic name, not a glob. Long-form only.                                                                                      |
+| `-o`, `--output <path>` | Output YAML path. Default: `<input>`'s filename stem plus `_calib_cam_lidar.yaml`, written in the current working directory (not necessarily beside `--input`).                                                                                                                                            |
+| `--samples <n>`         | Image samples to pick, evenly spread across the trajectory span (or across keyframe intervals — see `--keyframe-dist`). Default `8`, minimum `3`. Long-form only.                                                                                                                                          |
+| `--keyframe-dist <m>`   | Pose-gated keyframe sampling: a new keyframe interval opens each time the interpolated pose moves this many meters, samples spread over the intervals instead of over time, and each picked interval contributes its sharpest frame. `0` (the default) keeps plain even time spacing. Long-form only.      |
+| `--keyframe-rot <deg>`  | Rotation half of the keyframe gate: an interval also opens after this much rotation from the interval's first frame, so a platform turning in place keeps contributing new viewpoints. `0` (the default) disables the rotation test. Long-form only.                                                       |
+| `--fix <axes>`          | Comma list: axes to hold at the bag value (`x,y,z,roll,pitch,yaw`), plus `auto` — also hold every direction the data cannot constrain — and `none` — hold nothing. A manual axis list alone switches `auto` off; fixing all six is rejected. Default `auto`. Long-form only.                               |
+| `--max-trans <m>`       | Trust region: max translation delta from the bag's value, in meters. Default `0.2`. Long-form only.                                                                                                                                                                                                        |
+| `--max-rot <deg>`       | Trust region: max rotation delta from the bag's value, in degrees. Default `2.0`. Long-form only.                                                                                                                                                                                                          |
+| `--nid-bins <n>`        | NID intensity/gray histogram bins, `4`–`256`. Default `16`. Long-form only.                                                                                                                                                                                                                                |
+| `--min-depth <m>`       | Nearest projected map-point depth kept, in meters. Default `2`. Long-form only.                                                                                                                                                                                                                            |
+| `--max-depth <m>`       | Farthest projected map-point depth kept, in meters. Default `150`. Long-form only.                                                                                                                                                                                                                         |
+| `--voxel <m>`           | Edge length of the grid the accumulated map is collapsed onto, in meters. Default `0.1`; `0` keeps every point of every cloud. See [How the map is built](#how-the-map-is-built). Long-form only.                                                                                                          |
+| `--json`                | Emit the stdout summary as JSON instead of the human table. The YAML is written either way. Long-form only.                                                                                                                                                                                                |
+| `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path.                                                                                                                                                                                                                                                                  |
 
-### The map/trajectory handshake
+### How the map is built
 
-`--map` and `--traj` are `map slam`'s own outputs (`map.pcd` and `traj.tum`
-under its `-o` root) — run `map slam` over this bag first. Two constraints tie
-them back to it:
+The trajectory is the pose of `--of` expressed in `--ref`, sampled from the
+`--pose` topic exactly as [`pcd undistort`](pcd.md) builds it: a TFMessage
+topic's `--of` → `--ref` path is replayed and sampled, while an Odometry /
+PoseStamped / PoseWithCovarianceStamped topic contributes its own poses,
+bridged into `--ref` (and an Odometry child frame into `--of`) through the
+bag's static TF when the frames differ.
 
-- `--traj-frame` must be the exact frame `map slam --frame` used. The
-  trajectory's poses are expressed in that frame, and `cam-lidar` needs to
-  know which frame that is to resolve the static-TF chain from it to the
-  image topic's camera-optical frame.
-- `--map` must carry an `intensity` field, since NID compares projected map
-  intensity against image gray; `map slam`'s own output has it, but a
-  hand-built or re-processed PCD without one is rejected before any refining
-  starts.
+Every cloud on the `--pcd` topic is then placed into that frame as
+`T_ref_of(header.stamp) * T_of_cloud`, the extrinsic coming from the bag's
+static TF, and accumulated into a single map. Three behaviors are worth
+knowing:
+
+- A cloud whose per-point time field is usable **and not uniform** holds a
+  real sweep, so it is deskewed to its own `header.stamp` first (the same
+  deskew `pcd undistort` applies). A uniform field — all zeros, or the
+  constant field a cloud carries after `pcd undistort` rewrote it — means no
+  sweep motion and the cloud is accumulated as-is.
+- A cloud stamped outside the trajectory's time span is skipped (with a
+  warning count), never clamped to an endpoint pose — clamping would smear
+  the map.
+- The topic must carry an `intensity` field, since NID compares projected
+  cloud intensity against image gray; a topic without one is rejected before
+  any refining starts.
+
+Points are collapsed onto a voxel grid as they arrive — one point per
+occupied voxel, at the centroid of everything that landed in it and carrying
+their mean intensity — so the map costs memory in proportion to the
+**surface** it covers rather than to the number of points recorded. This
+matters because a driving platform re-measures the same surface once per
+sweep, hundreds of times over a bag, and NID reads the map as a statistical
+sample of (intensity, gray) pairs that those duplicates do not enrich. The
+run logs both counts, e.g. `Map: 2100000 point(s) on a 0.100 m voxel grid
+from 118 cloud(s) ... (37223852 point(s) read, 0 deskewed)`.
+
+`--voxel 0` turns the grid off and keeps every point of every cloud, at the
+memory and per-iteration cost the raw density implies — worth it only for a
+short recording, or a `--pcd` topic that is already a sparse or
+pre-downsampled map. The emitted map is ordered by voxel index either way, so
+two runs over the same clouds build the same map.
 
 `--parent`/`--child` must name an edge that is both on the resolved chain
-from `--traj-frame` to the camera's optical frame, and recorded directly on a
+from `--of` to the camera's optical frame, and recorded directly on a
 static TF topic (e.g. `/tf_static`) — an edge only reachable through dynamic
 `/tf` is not something `static update` can rewrite later, so `cam-lidar`
 rejects it up front.
@@ -134,49 +161,80 @@ therefore the same arithmetic, `before + delta` per axis, and cannot describe
 different edges. `--fix <axis>` holds an axis by forcing its delta to zero,
 which leaves the bag's own scalar for that axis in the output verbatim even
 when the edge's rotation does not commute (an optical-convention mount, say).
+The default `--fix auto` generalizes this from axes to directions — see the
+next section.
 
-### Observability report
+### Observability report and automatic holding
 
-After refining, each of the six axes is probed independently around the
-optimum and reported as `strong`, `weak`, `degenerate`, or (for an axis named
-by `--fix`) `fixed`. The probe is a symmetric second difference of the mean
-NID along that one axis: a cost surface that curves sharply around the optimum
-reads `strong`, a flat one `degenerate`. `degenerate` means the sampled views
-could not pin that axis down at all — its reported delta is essentially
-whatever the optimizer's flat cost surface happened to land on, not a real
-correction, and emphatically not the bag's own value — and a warning
-recommends re-running with `--fix <axis>` to hold it at the bag's value
-outright, rather than trusting a delta the data never actually constrained.
-A single forward-looking, narrow-field-of-view (telephoto) camera commonly
-cannot observe its own forward translation, and cannot tell lateral
-translation apart from yaw (both shift image content the same way from that
-vantage point), so those are the two common degenerate cases; a wider-angle
-or multi-view rig sees them better.
+After refining, each of the six axes is probed around the optimum and
+reported as `strong`, `weak`, `degenerate`, or (for an axis named by `--fix`)
+`fixed`. The probe is a symmetric second difference of the mean NID along
+that axis, estimated per sample: an axis's curvature is the mean of the
+per-sample second differences, and it counts as measured at all only when
+that mean both clears a small absolute floor and stands out of its own
+standard error across samples — `degenerate` otherwise, `strong` when it
+clears the wider 5-sigma band, `weak` in between. The per-sample pairing is
+what keeps the reading meaningful across scenes: a flat but quiet surface
+and a curved but noisy one do not classify the same.
 
-**What the classification does not tell you.** It is a coarse screen, not a
-covariance estimate, and it is worth reading with three caveats in mind:
+With the default `--fix auto`, the same measurement also runs on the
+eigen-directions of the full 6x6 curvature matrix rather than per axis, so a
+degenerate _combination_ — the classic forward-camera valley in which
+lateral translation and yaw shift the image the same way — is caught even
+though each of its axes curves on its own. Every unobservable direction is
+then held at the bag value (its delta component forced to zero) and the
+remaining directions are re-optimized, repeating until everything left is
+observable. The report lists each held direction as an axis mixture (`held
+at bag value (auto): 0.99y + 0.17yaw`), and `--json` echoes them under
+`held`. An axis-aligned held direction is exactly a `--fix <axis>` you did
+not have to write. When every direction of the edge is unobservable, the
+command fails instead of writing a YAML the data cannot justify.
 
-- It probes one axis at a time, so it only detects _hard, single-axis_
-  degeneracies. A pairwise trade-off — the lateral-translation/yaw valley
-  above is the standard example — leaves both axes curving along their own
-  probe directions and so reads `strong` on both, even though only their
-  combination is determined.
-- Its thresholds are absolute constants calibrated against synthetic scenes,
-  not scaled to the scene, the sample count, or the NID's own noise floor. A
-  recording whose NID is flatter or noisier overall shifts every axis's
-  reading together.
-- Consequently, on real recordings all six axes can come back `strong` while a
-  span analysis over repeated runs (varying the samples, or sweeping one axis
-  and watching where the NID actually moves) shows several of them only weakly
-  determined. Treat `degenerate` as a reliable "definitely not observable" and
-  `strong` as no more than "not obviously unobservable"; for a number you are
-  going to ship, corroborate it against a second run over different samples.
+**A degenerate axis is not necessarily a held one.** The table's verdict and
+the auto-hold decision apply the same test along _different_ directions —
+the six raw axes in the table, the six eigen-directions of the curvature
+matrix for the holding — so they can disagree, and on real recordings they
+routinely do. An axis's curvature is a weighted average of the
+eigen-directions' and so can never be the smaller number, but each direction
+carries its own sample noise, and it is the noise that usually decides.
+An axis that reads `degenerate` with nothing held for it says so explicitly:
+
+```text
+warning: x reads degenerate on its own probe, but no direction --fix auto could hold covers it; the delta shown is weakly constrained, not held — re-run with --fix x to pin it
+```
+
+Take that as "this axis is the shakiest of the six, and its delta is still in
+the output" — `--fix x` is the way to pin it to the bag value if you want it
+pinned.
+
+`--fix none` switches all of this off: every free axis is optimized, the
+classification is report-only, and a degenerate axis gets the pre-auto
+warning recommending a manual `--fix <axis>` re-run.
+
+**What the classification does not tell you.**
+
+- It is a local probe at the found optimum, not a global guarantee. If the
+  search settles into a wrong but locally curved basin (a projectively
+  near-degenerate scene can do that to any 6-axis run), every direction
+  reads `strong` there while the result is simply off. Auto-holding removes
+  flat directions; it does not rescue the search from a bad basin.
+- It is a screening scale, not a covariance estimate. Treat `degenerate` as
+  a reliable "definitely not observable" and `strong` as no more than "not
+  obviously unobservable"; for a number you are going to ship, corroborate
+  it against a second run over different samples.
+- On a real recording the absolute floor is usually inert — every direction
+  curves far above it — and the standard-error test decides every verdict on
+  its own. `degenerate` then means "the samples do not agree well enough to
+  call this measured", not "the cost surface is flat here". Since that
+  standard error is itself estimated from `--samples` numbers, a verdict
+  sitting near the boundary can flip between runs; raise `--samples` before
+  reading much into one.
 
 ```text
 calib cam-lidar: truck_cabin_base_link -> top_front_narrow/camera_link
 axis        bag value  refined value          delta  observability
-x            0.180000       0.183214       0.003214  degenerate
-y           -0.050000      -0.047850       0.002150  degenerate
+x            0.180000       0.180000       0.000000  degenerate
+y           -0.050000      -0.050000       0.000000  degenerate
 z            1.420000       1.447213       0.027213  strong
 roll         0.000000      -0.008421      -0.008421  strong
 pitch        0.000000       0.014732       0.014732  strong
@@ -184,29 +242,34 @@ yaw          0.000000       0.009481       0.009481  degenerate
 
 nid: 0.412887 -> 0.276541
 samples used: 8
-warning: x is not observable from this data; the delta shown is unconstrained — re-run with --fix x to hold the bag value
-warning: y is not observable from this data; the delta shown is unconstrained — re-run with --fix y to hold the bag value
-warning: yaw is not observable from this data; the delta shown is unconstrained — re-run with --fix yaw to hold the bag value
+held at bag value (auto): 1.00x
+held at bag value (auto): 1.00y
+warning: yaw reads degenerate on its own probe, but no direction --fix auto could hold covers it; the delta shown is weakly constrained, not held — re-run with --fix yaw to pin it
 
 apply with: bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 ```
 
 Rotations in the human table are shown in degrees; `--json` reports the same
 `before`/`after`/`delta` per axis in radians instead, alongside the `parent`,
-`child`, `nid_before`, `nid_after`, and `samples` fields.
+`child`, `nid_before`, `nid_after`, `samples`, and `held` fields.
 
 ### Failures
 
 Beyond the codes in [Exit status](#exit-status) below, exit `1` covers: an
-invalid flag combination (`--samples` under 3, `--fix` naming an unknown axis
-or all six, a non-positive `--max-trans`/`--max-rot`/`--min-depth`, `--nid-bins`
-outside `4`–`256`, or `--max-depth` at or below `--min-depth`), an unreadable
-or intensity-less `--map`, a `--traj` with fewer than two poses, a missing or
-wrong-typed `-t`/`--topic` or an unresolvable CameraInfo, a `--parent`/`--child`
-edge that is not on the static chain (or not directly on a static topic), too
-few usable image samples surviving the trajectory-span and pre-cull filtering,
-or a refinement failure (e.g. no sample projects enough map points at the
-initial estimate).
+invalid flag combination (`--samples` under 3, `--fix` naming an unknown token,
+combining `none` with other tokens, or naming all six axes, a non-positive `--max-trans`/`--max-rot`/`--min-depth`, `--nid-bins`
+outside `4`–`256`, `--max-depth` at or below `--min-depth`, an empty
+`--of`/`--ref`, or a negative `--keyframe-dist`/`--keyframe-rot`), a missing or
+wrong-typed `--pcd`/`--pose`/`--cam` topic, a `--pcd` topic without an
+`intensity` field, an unparseable or big-endian cloud, a `--pcd`/`--cam`
+topic with no messages, every cloud falling outside the trajectory span, a
+pose topic yielding fewer than two poses, an unresolvable
+CameraInfo, a cloud frame with no static-TF path from `--of`, a
+`--parent`/`--child` edge that is not on the static chain (or not directly on
+a static topic), too few usable image samples surviving the trajectory-span
+and pre-cull filtering, or a refinement failure (e.g. no sample projects
+enough map points at the initial estimate, or no direction of the edge is
+observable at all).
 
 ## Exit status
 

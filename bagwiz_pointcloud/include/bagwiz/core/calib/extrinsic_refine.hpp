@@ -16,6 +16,7 @@
 #include <cmath>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace bagwiz::core::calib
 {
@@ -57,6 +58,29 @@ struct RefineParams
   double max_trans = 0.2;             // trust region, meters
   double max_rot = 2.0 * M_PI / 180;  // trust region, radians
   int max_iterations = 256;
+  // --fix auto (the default): after optimizing, directions of the cost
+  // landscape the samples cannot constrain — eigen-directions of the
+  // finite-difference Hessian whose paired curvature is not significant
+  // (observability.hpp) — are held at the bag value and the remaining
+  // directions are re-optimized. The held set is reported via
+  // RefineResult::auto_held. When false, every free axis is optimized and the
+  // observability classification is report-only.
+  bool auto_fix = true;
+};
+
+// One direction of the 6-axis delta space held at the bag value by --fix
+// auto: a unit vector in probe-step-normalized coordinates (axis i scaled by
+// kProbeStepTrans / kProbeStepRot — the coordinates the Hessian analysis and
+// the curvature floors work in), i.e. THE exact direction whose delta content
+// was zeroed: sum_i (delta_i / step_i) * unit_i == 0. To render it as an axis
+// mixture in physical units, scale component i by step_i and renormalize.
+// `curvature`/`std_error` are the paired-curvature measurement that judged
+// the direction unobservable.
+struct HeldDirection
+{
+  std::array<double, 6> unit{};
+  double curvature = 0.0;
+  double std_error = 0.0;
 };
 
 struct RefineResult
@@ -69,12 +93,18 @@ struct RefineResult
   double nid_before = 0.0;
   double nid_after = 0.0;
   std::array<AxisObservability, 6> observability{};
+  // Directions held at the bag value by --fix auto, in the order they were
+  // held; empty when auto_fix is off or every direction was observable.
+  std::vector<HeldDirection> auto_held;
   int samples_used = 0;
 };
 
 /// Two-pass Nelder-Mead refinement of the free axes of `chain`'s edited edge,
 /// minimizing mean NID cost over `samples`, followed by a per-axis
-/// observability probe around the optimum.
+/// observability probe around the optimum (significance-tested paired
+/// curvature; see observability.hpp). With RefineParams::auto_fix the probe
+/// runs on the full Hessian's eigen-directions instead, unobservable
+/// directions are held at the bag value, and the rest are re-optimized.
 [[nodiscard]] RefineResult refine_extrinsic(
   std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,
   const RefineParams & params);

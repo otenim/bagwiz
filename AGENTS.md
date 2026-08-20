@@ -296,10 +296,14 @@ code that is not part of the CLI itself.
   the bag already carries is `-t`/`--topic`, or `-t`/`--topics` when
   it takes several, whenever it is that subcommand's general topic
   operand (`traj dump`, `tf tree`, `topic drop` / `keep`, `cam-info`,
-  `walk`, `generate video`, `calib cam-lidar`); a selector that fills
-  a named role instead keeps that role's name (`--pcd`, `--pose`,
+  `walk`, `generate video`); a selector that fills a named role
+  instead keeps that role's name (`--pcd`, `--pose`, `--cam`,
   `--twist`, `--cam-info`, `--color`), which already reads as
-  selecting rather than creating. One shared `-t` cannot say which
+  selecting rather than creating. A subcommand can have no general
+  operand at all: `calib cam-lidar` reads three topics that each fill
+  a role (`--pcd`, `--pose`, `--cam`), so none of them is "the"
+  topic and a bare `-t` would only be ambiguous. One shared `-t`
+  cannot say which
   direction a slot points, which left write targets reading like
   filters: `traj join --traj t.tum --as /slam/tf` says the topic is
   being brought into existence, where `-t /slam/tf` did not.

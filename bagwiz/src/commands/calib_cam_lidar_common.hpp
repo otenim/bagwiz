@@ -12,7 +12,11 @@
 #include "bagwiz/core/calib/extrinsic_refine.hpp"
 #include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/se3.hpp"
+#include "bagwiz/core/pointcloud/point_cloud_io.hpp"
+#include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
+
+#include <geometry_msgs/msg/transform.hpp>
 
 #include <array>
 #include <cstddef>
@@ -21,31 +25,36 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 // Internals of `bagwiz calib cam-lidar`, split out so the flag validation,
-// sample picking, trajectory interpolation, and report rendering can be
-// unit-tested without a bag or a real refinement run. Pure over the args, no
-// bag access. CLI-internal: this header lives with the command sources and is
-// not installed.
+// sample picking, trajectory interpolation, map accumulation, and report
+// rendering can be unit-tested without a bag or a real refinement run. Pure
+// over the args, no bag access. CLI-internal: this header lives with the
+// command sources and is not installed.
 namespace bagwiz::commands
 {
 
 // Parsed arguments for `bagwiz calib cam-lidar`. Refines one static-TF edge on
-// a camera's chain by registering the bag's LiDAR map (from a prior `bagwiz map
-// slam` run) against the bag's images via NID, and writes a YAML that `bagwiz
-// tf static update` applies.
+// a camera's chain by registering the bag's LiDAR clouds (accumulated into a
+// map through the bag's own pose topic) against the bag's images via NID, and
+// writes a YAML that `bagwiz tf static update` applies.
 struct CalibCamLidarArgs
 {
   // -i,--input: bag path (file or directory). A std::filesystem::path (not a
   // string) because set_topic_input() binds the completion registry's topic
   // slots to it — the same shape every other slot-declaring command uses.
   std::filesystem::path input_path;
-  std::string map_path;        // --map: dense map PCD from `map slam`
-  std::string traj_path;       // --traj: TUM trajectory from `map slam`
-  std::string traj_frame;      // --traj-frame: frame the trajectory poses express
-  std::string topic;           // -t,--topic: image topic to calibrate against
+  std::string pcd_topic;   // --pcd: PointCloud2 topic accumulated into the map
+  std::string pose_topic;  // --pose: self-position topic (same types as `pcd undistort --pose`)
+  std::string cam_topic;   // --cam: image topic to calibrate against
+  // --of / --ref: the trajectory expresses the pose of --of in the --ref frame
+  // (the same pair and defaults as `pcd undistort`). --of anchors the static
+  // TF chain to the camera's optical frame and the per-cloud extrinsic.
+  std::string of_frame = "base_link";
+  std::string ref_frame = "map";
   std::string parent_frame;    // --parent: parent frame of the edited static edge
   std::string child_frame;     // --child: child frame of the edited static edge
   std::string cam_info_topic;  // --cam-info; empty = auto-resolve from the image topic
@@ -56,12 +65,17 @@ struct CalibCamLidarArgs
   std::string
     output_path;    // -o,--output; empty = default name (see default_calib_cam_lidar_output_path)
   int samples = 8;  // --samples; image samples to use (min 3)
-  std::string fix_axes;      // --fix; raw csv of axes to hold at the bag value
+  // --fix; raw csv of axes to hold at the bag value, plus `auto` (default:
+  // also hold every direction the data cannot constrain) and `none`.
+  std::string fix_axes = "auto";
   double max_trans = 0.2;    // --max-trans; trust region, meters
   double max_rot_deg = 2.0;  // --max-rot; trust region, degrees
   int nid_bins = 16;         // --nid-bins; NID histogram bins
   double min_depth = 2.0;    // --min-depth; nearest projected point depth, meters
   double max_depth = 150.0;  // --max-depth; farthest projected point depth, meters
+  // --voxel; edge length of the grid the accumulated map is collapsed onto,
+  // meters. 0 keeps every point of every cloud (see MapAccumulator).
+  double voxel_size = 0.1;
   // --keyframe-dist / --keyframe-rot: pose-gated keyframe sampling. When
   // either is > 0, eligible images are partitioned into gate intervals (a new
   // interval opens once the interpolated pose moved >= keyframe_dist meters
@@ -82,13 +96,23 @@ struct CalibCamLidarArgs
 // any bag work.
 [[nodiscard]] std::string validate_calibrate_flags(const CalibCamLidarArgs & args);
 
-// Parse --fix's comma-separated axis list (x, y, z, roll, pitch, yaw) into a
-// per-axis "hold at the bag value" flag array in that fixed order. An empty
-// csv fixes nothing (all false). An unknown token, or a csv that fixes all
-// six axes (nothing left to optimize), is reported as an error message in the
-// second member; the first member is only meaningful when that message is
-// empty.
-[[nodiscard]] std::pair<std::array<bool, 6>, std::string> parse_fixed_axes(const std::string & csv);
+// The parsed --fix value: the axes held at the bag value no matter what,
+// plus whether directions the data cannot constrain are held automatically
+// (`auto`, the default). See parse_fix_spec.
+struct FixSpec
+{
+  std::array<bool, 6> fixed{};
+  bool auto_fix = true;
+};
+
+// Parse --fix's comma-separated list. Tokens: the six axis names (x, y, z,
+// roll, pitch, yaw) plus `auto` and `none`. An empty csv means `auto` (the
+// CLI default). A manual axis list alone switches auto off; `auto` composes
+// with manual axes; `none` must stand alone (nothing held — the pre-auto
+// behavior). Errors (returned in the second member; the first member is only
+// meaningful when it is empty): an unknown token, `none` combined with other
+// tokens, or a csv fixing all six axes (nothing left to optimize).
+[[nodiscard]] std::pair<FixSpec, std::string> parse_fix_spec(const std::string & csv);
 
 // Pick up to `samples` image-stamp indices into `image_stamps_ns` (sorted
 // ascending), evenly spread inside the trajectory span shrunk by `margin_ns`
@@ -150,6 +174,100 @@ struct CalibCamLidarArgs
 [[nodiscard]] std::optional<core::calib::Mat4> interpolate_trajectory(
   std::span<const core::TrajectoryPose> poses, std::int64_t stamp_ns);
 
+// Running tallies of the --pcd accumulation pass (one call per cloud on the
+// topic), surfaced as the run path's end-of-pass info/warning lines.
+struct MapAccumulationStats
+{
+  std::uint64_t clouds_read = 0;                 // clouds offered to the pass
+  std::uint64_t clouds_skipped_out_of_span = 0;  // header.stamp outside the trajectory span
+  std::uint64_t clouds_deskewed = 0;             // clouds deskewed before accumulation
+  std::uint64_t points_added = 0;
+  std::uint64_t points_dropped_nonfinite = 0;
+  // Points the deskew clamped to a trajectory endpoint (their own stamp fell
+  // outside the trajectory span) — deskewed against a pose at a different
+  // time than their own, so never silent.
+  std::uint64_t points_clamped_out_of_span = 0;
+};
+
+// The calibration map under construction: points are collapsed onto a voxel
+// grid as they arrive, one running centroid and mean intensity per occupied
+// voxel, so the map costs memory in proportion to the SURFACE it covers
+// rather than to the number of points recorded. That matters because a
+// driving platform re-measures the same surface once per sweep — hundreds of
+// times over a bag — and NID reads the map as a statistical sample of
+// (intensity, gray) pairs, which those duplicates do not enrich. A voxel size
+// of 0 turns the grid off and keeps every point verbatim, in arrival order.
+class MapAccumulator
+{
+public:
+  explicit MapAccumulator(double voxel_size) : voxel_size_(voxel_size) {}
+
+  // Adds one point already expressed in the --ref frame. False when the
+  // coordinates cannot be quantized — a magnitude no voxel index can hold is
+  // as unusable as a NaN, and the caller counts it the same way — which
+  // cannot happen with the grid off.
+  bool add(const std::array<float, 3> & point, float intensity);
+
+  // Occupied voxels so far (points so far, with the grid off).
+  [[nodiscard]] std::size_t size() const;
+  [[nodiscard]] bool empty() const { return size() == 0; }
+
+  // Materializes the map and empties the accumulator (one-shot): one point per
+  // occupied voxel, at its centroid and carrying its mean intensity, ordered
+  // by voxel index so the same points give the same map whatever order the
+  // bag delivered them in. With the grid off, the points as they were added.
+  [[nodiscard]] core::pointcloud::PcdCloud finish();
+
+private:
+  struct VoxelKey
+  {
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::int32_t z = 0;
+    bool operator==(const VoxelKey & other) const = default;
+  };
+  struct VoxelKeyHash
+  {
+    std::size_t operator()(const VoxelKey & key) const;
+  };
+  // Running sums, in double because a voxel far from the origin accumulates
+  // hundreds of large coordinates and a float sum would lose centimeters.
+  struct VoxelAccum
+  {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+    double intensity = 0.0;
+    std::uint32_t count = 0;
+  };
+
+  double voxel_size_;
+  core::pointcloud::PcdCloud raw_;  // grid off
+  std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash> voxels_;
+};
+
+// Append one --pcd cloud to the accumulated map, expressed in the
+// trajectory's --ref frame: each point is placed by
+// T_ref_of(header.stamp) * T_of_cloud, where `trajectory` carries T_ref_of
+// (sorted ascending) and `t_of_cloud` is the cloud frame's static extrinsic
+// into the --of frame (nullopt = the cloud frame already is --of). A cloud
+// whose per-point time field is usable AND non-uniform is deskewed to its
+// header stamp first (deskew_pointcloud2 with the same trajectory and
+// extrinsic); a uniform field — all zeros, or the t_ref-constant field `pcd
+// undistort` leaves behind — means no sweep motion and the cloud is
+// accumulated as-is. A cloud whose header.stamp falls outside the trajectory
+// span is skipped (counted, not an error: clamping it to an endpoint pose
+// would smear the map), and non-finite points are dropped (counted).
+//
+// Returns an error message only for an unusable cloud: no intensity field
+// (NID needs it), an unreadable field layout, big-endian point data, an
+// unusable static extrinsic, or a deskew failure. The caller reports it
+// against the topic and aborts.
+[[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
+  MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
+  std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats);
+
 // Default `-o/--output` path when omitted: "<input stem>_calib_cam_lidar.yaml"
 // in the current working directory.
 [[nodiscard]] std::string default_calib_cam_lidar_output_path(const std::filesystem::path & input);
@@ -172,27 +290,26 @@ struct CalibCamLidarArgs
 // instead of a JSON library — this command's only JSON output, so pulling one
 // in isn't worth it). Rotation axes are left in radians (the edge's native
 // unit, same as `edge_before` / RefineResult::delta) rather than converted to
-// degrees, unlike render_calibrate_summary's human table.
-//
-// Deviates from the brief's `render_calibrate_json(result, edge_before)`
-// signature: producing the required "parent"/"child" fields needs the edge's
-// frame names, which only `args` carries, so `args` is threaded through here
-// too (matching render_calibrate_summary's first parameter). Flagged for
-// Task 8/9 — see the Task 7 report.
+// degrees, unlike render_calibrate_summary's human table. The signature takes
+// `args` (not just the result) because the "parent"/"child" fields name the
+// edited edge's frames, which only `args` carries — the same threading
+// render_calibrate_summary uses.
 [[nodiscard]] std::string render_calibrate_json(
   const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
   const std::array<double, 6> & edge_before);
 
-// Entry point for `bagwiz calib cam-lidar`'s run path: loads the map PCD and
-// TUM trajectory, resolves the image's CameraInfo and the static-TF chain from
-// --traj-frame to the camera's optical frame, samples images spread across the
-// trajectory span, refines the --parent/--child edge via
+// Entry point for `bagwiz calib cam-lidar`'s run path: builds the --of -> --ref
+// trajectory from the --pose topic, accumulates the --pcd topic's clouds into
+// a map in the --ref frame, resolves the image's CameraInfo and the static-TF
+// chain from --of to the camera's optical frame, samples images spread across
+// the trajectory span, refines the --parent/--child edge via
 // core::calib::refine_extrinsic, and writes the result as a static-TF-tree
 // YAML that `bagwiz tf static update` applies. Returns 0 on success, 1 on any
-// error (bad flag combination, unreadable map/trajectory, missing/wrong-typed
-// image or CameraInfo topic, an unresolvable or off-chain edge, too few usable
-// image samples, or a refinement failure), with messages through the same
-// logging pattern run_tf_static_dump uses. Defined in calib_cam_lidar.cpp.
+// error (bad flag combination, missing/wrong-typed --pcd/--pose/--cam or
+// CameraInfo topic, a --pcd topic without an intensity field, an unresolvable
+// or off-chain edge, too few usable image samples, or a refinement failure),
+// with messages through the same logging pattern run_tf_static_dump uses.
+// Defined in calib_cam_lidar.cpp.
 int run_calib_cam_lidar(const CalibCamLidarArgs & args);
 
 }  // namespace bagwiz::commands

@@ -233,6 +233,27 @@ TEST(CompletionSlotWiring, PcdConcatAndUndistort)
   expect_slot(slot_for(undistort_slots, "pcd"), TopicSelectorMode::kGlob, pcd_types);
 }
 
+TEST(CompletionSlotWiring, CalibCamLidar)
+{
+  auto * cmd = command_named("calib");
+  ASSERT_NE(cmd, nullptr);
+  CLI::App app{"calib"};
+  cmd->configure(app);
+
+  auto * cam_lidar = app.get_subcommand_no_throw("cam-lidar");
+  ASSERT_NE(cam_lidar, nullptr);
+  const auto slots = topic_slots_of(*cam_lidar);
+  expect_slot(
+    slot_for(slots, "pcd"), TopicSelectorMode::kLiteral, bagwiz::commands::kPointCloud2Type);
+  expect_slot(
+    slot_for(slots, "pose"), TopicSelectorMode::kLiteral,
+    bagwiz::commands::kUndistortPoseTopicTypes);
+  expect_slot(
+    slot_for(slots, "cam"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
+  expect_slot(
+    slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, bagwiz::commands::kCameraInfoType);
+}
+
 TEST(CompletionSlotWiring, Trim)
 {
   auto * cmd = command_named("trim");

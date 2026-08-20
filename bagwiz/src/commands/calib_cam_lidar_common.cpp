@@ -8,10 +8,17 @@
 
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
+#include "bagwiz/core/calib/observability.hpp"
+#include "bagwiz/core/pointcloud/deskew.hpp"
+#include "bagwiz/core/pointcloud/point_time.hpp"
+
 #include <fmt/core.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -46,6 +53,68 @@ const char * axis_observability_name(core::calib::AxisObservability observabilit
   return "unknown";  // unreachable; keeps -Wreturn-type / cppcheck happy
 }
 
+// Read one point's field as a float regardless of its declared datatype.
+// `offset` must be in bounds for the cloud's point_step (callers check via the
+// field table). Little-endian point data only — accumulate_cloud_into_map
+// rejects big-endian clouds before reading anything.
+float read_cloud_field(
+  const core::pointcloud::PointCloud2 & cloud, std::size_t point_idx, std::uint32_t offset,
+  core::pointcloud::PointFieldType type)
+{
+  const std::byte * base = cloud.data.data() + point_idx * cloud.point_step + offset;
+  switch (type) {
+    case core::pointcloud::PointFieldType::kFloat32: {
+      float v;
+      std::memcpy(&v, base, sizeof(v));
+      return v;
+    }
+    case core::pointcloud::PointFieldType::kFloat64: {
+      double v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kInt8: {
+      std::int8_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kUint8: {
+      std::uint8_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kInt16: {
+      std::int16_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kUint16: {
+      std::uint16_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kInt32: {
+      std::int32_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+    case core::pointcloud::PointFieldType::kUint32: {
+      std::uint32_t v;
+      std::memcpy(&v, base, sizeof(v));
+      return static_cast<float>(v);
+    }
+  }
+  return 0.0F;  // unreachable; keeps -Wreturn-type / cppcheck happy
+}
+
+// The field's declared offset+size fits inside point_step (and its count is 1,
+// so the readback below sees one value per point).
+bool field_readable(const core::pointcloud::PointField & field, std::uint32_t point_step)
+{
+  return field.count == 1 &&
+         field.offset + core::pointcloud::datatype_size(field.datatype) <= point_step;
+}
+
 // Minimal JSON string escaping for frame names, which come straight from CLI
 // arguments (untrusted input): quotes, backslashes, and control characters
 // that would otherwise break the hand-built JSON.
@@ -75,6 +144,9 @@ std::string json_escape(const std::string & s)
 
 std::string validate_calibrate_flags(const CalibCamLidarArgs & args)
 {
+  if (args.of_frame.empty() || args.ref_frame.empty()) {
+    return "--of and --ref must be non-empty";
+  }
   if (args.samples < 3) {
     return "--samples must be at least 3 (6-DOF needs multiple viewpoints)";
   }
@@ -87,38 +159,57 @@ std::string validate_calibrate_flags(const CalibCamLidarArgs & args)
   if (args.min_depth <= 0.0 || args.max_depth <= args.min_depth) {
     return "--min-depth must be positive and below --max-depth";
   }
+  if (args.voxel_size < 0.0) {
+    return "--voxel must be non-negative (0 keeps every point)";
+  }
   if (args.keyframe_dist < 0.0 || args.keyframe_rot_deg < 0.0) {
     return "--keyframe-dist and --keyframe-rot must be non-negative (0 disables the gate)";
   }
-  return parse_fixed_axes(args.fix_axes).second;
+  return parse_fix_spec(args.fix_axes).second;
 }
 
-std::pair<std::array<bool, 6>, std::string> parse_fixed_axes(const std::string & csv)
+std::pair<FixSpec, std::string> parse_fix_spec(const std::string & csv)
 {
-  std::array<bool, 6> flags{};
+  FixSpec spec;
+  spec.auto_fix = false;
   if (csv.empty()) {
-    return {flags, ""};
+    spec.auto_fix = true;
+    return {spec, ""};
   }
+  bool saw_auto = false;
+  bool saw_none = false;
+  std::size_t axis_count = 0;
   std::size_t begin = 0;
   while (begin <= csv.size()) {
     const std::size_t comma = csv.find(',', begin);
     const std::string token =
       csv.substr(begin, comma == std::string::npos ? std::string::npos : comma - begin);
-    const auto it = std::find(kAxisNames.begin(), kAxisNames.end(), token);
-    if (it == kAxisNames.end()) {
-      return {flags, "--fix: unknown axis '" + token + "' (expected x,y,z,roll,pitch,yaw)"};
+    if (token == "auto") {
+      saw_auto = true;
+    } else if (token == "none") {
+      saw_none = true;
+    } else {
+      const auto it = std::find(kAxisNames.begin(), kAxisNames.end(), token);
+      if (it == kAxisNames.end()) {
+        return {
+          spec, "--fix: unknown token '" + token + "' (expected x,y,z,roll,pitch,yaw,auto,none)"};
+      }
+      spec.fixed[static_cast<std::size_t>(it - kAxisNames.begin())] = true;
+      ++axis_count;
     }
-    flags[static_cast<std::size_t>(it - kAxisNames.begin())] = true;
     if (comma == std::string::npos) {
       break;
     }
     begin = comma + 1;
   }
-  const bool all_fixed = std::all_of(flags.begin(), flags.end(), [](bool b) { return b; });
-  if (all_fixed) {
-    return {flags, "--fix: fixing all six axes leaves nothing to optimize"};
+  if (saw_none && (saw_auto || axis_count > 0)) {
+    return {spec, "--fix: 'none' cannot be combined with other tokens"};
   }
-  return {flags, ""};
+  if (axis_count == 6) {
+    return {spec, "--fix: fixing all six axes leaves nothing to optimize"};
+  }
+  spec.auto_fix = saw_auto;
+  return {spec, ""};
 }
 
 std::vector<std::size_t> eligible_sample_indices(
@@ -283,9 +374,245 @@ std::optional<core::calib::Mat4> interpolate_trajectory(
     q[1], q[2], q[3]);
 }
 
+std::size_t MapAccumulator::VoxelKeyHash::operator()(const VoxelKey & key) const
+{
+  // Boost-style combine of the three indices: neighbouring voxels differ by 1
+  // on one axis, which the golden-ratio constant and the shifts spread across
+  // buckets instead of leaving them adjacent.
+  std::size_t seed = 0;
+  for (const std::int32_t v : {key.x, key.y, key.z}) {
+    seed ^= std::hash<std::int32_t>{}(v) + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+  }
+  return seed;
+}
+
+bool MapAccumulator::add(const std::array<float, 3> & point, float intensity)
+{
+  if (voxel_size_ <= 0.0) {
+    raw_.points.push_back(point);
+    raw_.intensities.push_back(intensity);
+    return true;
+  }
+  // Floor, never truncate: truncation folds -0.5..0 onto the same index as
+  // 0..0.5, merging every pair of voxels that straddles an axis.
+  const double qx = std::floor(static_cast<double>(point[0]) / voxel_size_);
+  const double qy = std::floor(static_cast<double>(point[1]) / voxel_size_);
+  const double qz = std::floor(static_cast<double>(point[2]) / voxel_size_);
+  constexpr double kMinIndex = -2147483648.0;
+  constexpr double kMaxIndex = 2147483647.0;
+  const auto representable = [](double q) { return q >= kMinIndex && q <= kMaxIndex; };
+  if (!representable(qx) || !representable(qy) || !representable(qz)) {
+    return false;
+  }
+  auto & accum = voxels_[VoxelKey{
+    static_cast<std::int32_t>(qx), static_cast<std::int32_t>(qy), static_cast<std::int32_t>(qz)}];
+  accum.x += point[0];
+  accum.y += point[1];
+  accum.z += point[2];
+  accum.intensity += intensity;
+  ++accum.count;
+  return true;
+}
+
+std::size_t MapAccumulator::size() const
+{
+  return voxel_size_ <= 0.0 ? raw_.points.size() : voxels_.size();
+}
+
+core::pointcloud::PcdCloud MapAccumulator::finish()
+{
+  if (voxel_size_ <= 0.0) {
+    return std::move(raw_);
+  }
+  // Sorted by voxel index so the hash container's iteration order — which is
+  // an implementation detail, not a property of the bag — never reaches the
+  // map. Two runs over the same clouds must produce the same map.
+  std::vector<std::pair<VoxelKey, VoxelAccum>> ordered(voxels_.begin(), voxels_.end());
+  voxels_.clear();
+  std::sort(ordered.begin(), ordered.end(), [](const auto & a, const auto & b) {
+    if (a.first.x != b.first.x) {
+      return a.first.x < b.first.x;
+    }
+    if (a.first.y != b.first.y) {
+      return a.first.y < b.first.y;
+    }
+    return a.first.z < b.first.z;
+  });
+
+  core::pointcloud::PcdCloud out;
+  out.points.reserve(ordered.size());
+  out.intensities.reserve(ordered.size());
+  for (const auto & [key, accum] : ordered) {
+    const double n = accum.count;
+    out.points.push_back(
+      {static_cast<float>(accum.x / n), static_cast<float>(accum.y / n),
+       static_cast<float>(accum.z / n)});
+    out.intensities.push_back(static_cast<float>(accum.intensity / n));
+  }
+  return out;
+}
+
+std::optional<std::string> accumulate_cloud_into_map(
+  MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
+  std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats)
+{
+  ++stats.clouds_read;
+
+  // The field layout, captured by value up front: deskew below replaces the
+  // cloud (field table preserved), which would dangle pointers into the old
+  // one. intensity is mandatory (NID needs it); x/y/z must be readable.
+  struct FieldRef
+  {
+    std::uint32_t offset;
+    core::pointcloud::PointFieldType type;
+  };
+  const auto field_ref = [&cloud](const std::string & name) -> std::optional<FieldRef> {
+    for (const auto & f : cloud.fields) {
+      if (f.name == name && field_readable(f, cloud.point_step)) {
+        return FieldRef{f.offset, f.datatype};
+      }
+    }
+    return std::nullopt;
+  };
+  if (cloud.is_bigendian) {
+    return std::string("big-endian point data is not supported");
+  }
+  const auto fx = field_ref("x");
+  const auto fy = field_ref("y");
+  const auto fz = field_ref("z");
+  const auto fi = field_ref("intensity");
+  if (!fx.has_value() || !fy.has_value() || !fz.has_value()) {
+    return std::string("no readable x/y/z fields");
+  }
+  if (!fi.has_value()) {
+    return std::string("no intensity field; NID needs lidar intensity");
+  }
+  const std::size_t n = static_cast<std::size_t>(cloud.height) * cloud.width;
+  if (cloud.data.size() < n * cloud.point_step) {
+    return std::string("inconsistent point layout (data smaller than height*width*point_step)");
+  }
+
+  // The cloud's placement pose (and deskew reference stamp). A cloud outside
+  // the trajectory span is skipped: clamping it to an endpoint pose would
+  // smear the map.
+  const std::int64_t stamp_ns = cloud.timestamp_ns;
+  const auto t_ref_of = interpolate_trajectory(trajectory, stamp_ns);
+  if (!t_ref_of.has_value()) {
+    ++stats.clouds_skipped_out_of_span;
+    return std::nullopt;
+  }
+
+  // T_of_cloud as a Mat4 (identity when the cloud frame already is --of).
+  core::calib::Mat4 t_of_cloud_mat = core::calib::identity_mat4();
+  if (t_of_cloud.has_value()) {
+    const auto m = mat4_from_quat(
+      t_of_cloud->translation.x, t_of_cloud->translation.y, t_of_cloud->translation.z,
+      t_of_cloud->rotation.x, t_of_cloud->rotation.y, t_of_cloud->rotation.z,
+      t_of_cloud->rotation.w);
+    if (!m.has_value()) {
+      return std::string("the cloud frame's static extrinsic is not a usable transform");
+    }
+    t_of_cloud_mat = *m;
+  }
+
+  // Deskew gate: a usable per-point time field whose values are not all one
+  // stamp. An all-zero relative field, or the t_ref-constant field an
+  // already-undistorted cloud carries, has a zero span — no sweep motion to
+  // undo, so the cloud is accumulated as-is.
+  if (const auto time_field = core::pointcloud::find_point_time_field(cloud.fields);
+      time_field.has_value()) {
+    const auto span = core::pointcloud::absolute_point_time_span_ns(cloud, *time_field, stamp_ns);
+    if (span.has_value() && span->max_ns > span->min_ns) {
+      auto deskewed =
+        core::pointcloud::deskew_pointcloud2(std::move(cloud), stamp_ns, trajectory, t_of_cloud);
+      if (!deskewed.ok()) {
+        return deskewed.error;
+      }
+      cloud = std::move(*deskewed.cloud);
+      ++stats.clouds_deskewed;
+      stats.points_clamped_out_of_span += deskewed.points_out_of_span;
+    }
+  }
+
+  const core::calib::Mat4 t_ref_cloud = core::calib::mat4_multiply(*t_ref_of, t_of_cloud_mat);
+  for (std::size_t i = 0; i < n; ++i) {
+    const float x = read_cloud_field(cloud, i, fx->offset, fx->type);
+    const float y = read_cloud_field(cloud, i, fy->offset, fy->type);
+    const float z = read_cloud_field(cloud, i, fz->offset, fz->type);
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+      ++stats.points_dropped_nonfinite;
+      continue;
+    }
+    const auto p = core::calib::transform_point(t_ref_cloud, {x, y, z});
+    const std::array<float, 3> point{
+      static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])};
+    // A point too far out to index a voxel is garbage the map cannot place;
+    // counted with the non-finite drops rather than folded into a wrong voxel.
+    if (!map.add(point, read_cloud_field(cloud, i, fi->offset, fi->type))) {
+      ++stats.points_dropped_nonfinite;
+      continue;
+    }
+    ++stats.points_added;
+  }
+  return std::nullopt;
+}
+
 std::string default_calib_cam_lidar_output_path(const std::filesystem::path & input)
 {
   return input.stem().string() + "_calib_cam_lidar.yaml";
+}
+
+// The physical-units axis mixture of a held direction: each normalized
+// component scaled by its axis's probe step and renormalized, so the report
+// reads as "this combination of the edge's actual axes" (0.99y + 0.17yaw).
+// Dominant component positive (the core already sign-normalizes; this is the
+// same convention after the step scaling).
+std::array<double, 6> held_display_components(const core::calib::HeldDirection & held)
+{
+  std::array<double, 6> comp;
+  double norm = 0.0;
+  for (std::size_t i = 0; i < 6; ++i) {
+    const double step = i < 3 ? core::calib::kProbeStepTrans : core::calib::kProbeStepRot;
+    comp[i] = held.unit[i] * step;
+    norm += comp[i] * comp[i];
+  }
+  norm = std::sqrt(norm);
+  std::size_t dominant = 0;
+  for (std::size_t i = 0; i < 6; ++i) {
+    comp[i] /= norm;
+    if (std::abs(comp[i]) > std::abs(comp[dominant])) {
+      dominant = i;
+    }
+  }
+  if (comp[dominant] < 0.0) {
+    for (auto & c : comp) {
+      c = -c;
+    }
+  }
+  return comp;
+}
+
+// "0.99y - 0.17yaw": the axis mixture of a held direction, components below
+// 0.005 dropped.
+std::string held_direction_text(const core::calib::HeldDirection & held)
+{
+  const auto comp = held_display_components(held);
+  std::string out;
+  bool first = true;
+  for (std::size_t i = 0; i < 6; ++i) {
+    if (std::abs(comp[i]) < 0.005) {
+      continue;
+    }
+    if (first) {
+      out += fmt::format("{:.2f}{}", comp[i], kAxisNames[i]);
+      first = false;
+    } else {
+      out += comp[i] < 0.0 ? " - " : " + ";
+      out += fmt::format("{:.2f}{}", std::abs(comp[i]), kAxisNames[i]);
+    }
+  }
+  return out;
 }
 
 std::string render_calibrate_summary(
@@ -309,13 +636,41 @@ std::string render_calibrate_summary(
   out += fmt::format("\nnid: {} -> {}\n", result.nid_before, result.nid_after);
   out += fmt::format("samples used: {}\n", result.samples_used);
 
+  std::vector<std::array<double, 6>> held_components;
+  held_components.reserve(result.auto_held.size());
+  for (const auto & held : result.auto_held) {
+    held_components.push_back(held_display_components(held));
+    out += fmt::format("held at bag value (auto): {}\n", held_direction_text(held));
+  }
+
+  // Under --fix auto the axis probe and the auto-hold decision look along
+  // different directions — raw axes here, Hessian eigen-directions there — so
+  // an axis can read degenerate with nothing held for it. That is not the
+  // "unconstrained delta" the pre-auto warning describes, and telling the user
+  // to run the --fix auto is already running would be nonsense, so the two
+  // modes say different things.
+  const bool auto_fix = parse_fix_spec(args.fix_axes).first.auto_fix;
   bool warned = false;
   for (std::size_t axis = 0; axis < 6; ++axis) {
     if (result.observability[axis] == core::calib::AxisObservability::kDegenerate) {
-      out += fmt::format(
-        "warning: {} is not observable from this data; the delta shown is unconstrained — "
-        "re-run with --fix {} to hold the bag value\n",
-        kAxisNames[axis], kAxisNames[axis]);
+      // An axis dominated by a held direction needs no warning: the held line
+      // above already says its content is the bag value, exactly what --fix
+      // would have pinned it to.
+      const bool covered = std::any_of(
+        held_components.begin(), held_components.end(),
+        [axis](const std::array<double, 6> & comp) { return std::abs(comp[axis]) >= 0.5; });
+      if (covered) {
+        continue;
+      }
+      out += auto_fix ? fmt::format(
+                          "warning: {} reads degenerate on its own probe, but no direction "
+                          "--fix auto could hold covers it; the delta shown is weakly "
+                          "constrained, not held — re-run with --fix {} to pin it\n",
+                          kAxisNames[axis], kAxisNames[axis])
+                      : fmt::format(
+                          "warning: {} is not observable from this data; the delta shown is "
+                          "unconstrained — re-run with --fix {} to hold the bag value\n",
+                          kAxisNames[axis], kAxisNames[axis]);
       warned = true;
     }
   }
@@ -351,7 +706,35 @@ std::string render_calibrate_json(
       "      \"observability\": \"{}\"\n", axis_observability_name(result.observability[axis]));
     out += fmt::format("    }}{}\n", axis + 1 < 6 ? "," : "");
   }
-  out += "  }\n";
+  out += "  },\n";
+  // The --fix auto held set: each direction as its physical-units axis
+  // mixture (components under 0.005 dropped, dominant positive) plus the
+  // paired-curvature measurement that judged it unobservable.
+  out += "  \"held\": [";
+  if (result.auto_held.empty()) {
+    out += "]\n";
+  } else {
+    out += "\n";
+    for (std::size_t i = 0; i < result.auto_held.size(); ++i) {
+      const auto & held = result.auto_held[i];
+      const auto comp = held_display_components(held);
+      out += "    {\n";
+      out += "      \"direction\": {";
+      bool first = true;
+      for (std::size_t axis = 0; axis < 6; ++axis) {
+        if (std::abs(comp[axis]) < 0.005) {
+          continue;
+        }
+        out += fmt::format("{}\"{}\": {}", first ? "" : ", ", kAxisNames[axis], comp[axis]);
+        first = false;
+      }
+      out += "},\n";
+      out += fmt::format("      \"curvature\": {},\n", held.curvature);
+      out += fmt::format("      \"std_error\": {}\n", held.std_error);
+      out += fmt::format("    }}{}\n", i + 1 < result.auto_held.size() ? "," : "");
+    }
+    out += "  ]\n";
+  }
   out += "}";
   return out;
 }

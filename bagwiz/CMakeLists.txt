@@ -463,9 +463,10 @@ if(BUILD_TESTING)
   target_link_libraries(bagwiz_tf_static_dump_test ${bagwiz_test_libs} fmt::fmt yaml-cpp)
 
   # Pure helpers for `calib cam-lidar` (validation, sample picking, trajectory
-  # interpolation, report rendering) — no bag access, so this links
-  # bagwiz_tf/bagwiz_pointcloud (via bagwiz_test_libs) for core::TrajectoryPose
-  # / core::calib::Mat4 / core::calib::RefineResult but no reader/writer setup.
+  # interpolation, map accumulation, report rendering) — no bag access, so this
+  # links bagwiz_tf/bagwiz_pointcloud (via bagwiz_test_libs) for
+  # core::TrajectoryPose / core::calib::Mat4 / core::calib::RefineResult /
+  # core::pointcloud::deskew_pointcloud2 but no reader/writer setup.
   ament_add_gtest(bagwiz_calib_cam_lidar_common_test
     test/commands/calib_cam_lidar_common_test.cpp
     src/commands/calib_cam_lidar_common.cpp)
@@ -473,19 +474,25 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_calib_cam_lidar_common_test ${bagwiz_test_libs} fmt::fmt)
 
-  # The full run path: synthetic map.pcd + traj.tum + an MCAP bag (hand-CDR'd
-  # /cam/image_raw + /cam/camera_info via bagwiz_msg's cdr_walker::CdrWriter,
-  # plus a real /tf_static message via core::serialize_tf_message, mirroring
-  # tf_static_update_test's bag builder) drive run_calib_cam_lidar end-to-end.
-  # yaml-cpp is linked so the test can parse the written YAML back
-  # (core::parse_static_tf_tree_yaml) to check the recovered edge.
+  # The full run path: one synthetic MCAP bag (hand-CDR'd /cam/image_raw +
+  # /cam/camera_info via bagwiz_msg's cdr_walker::CdrWriter, a real /tf_static
+  # message via core::serialize_tf_message, the --pcd PointCloud2 topic via
+  # core::pointcloud::serialize_pointcloud2, and the --pose PoseStamped topic
+  # via the introspection typesupport, mirroring pcd_undistort_common_test's
+  # bag builder) drives run_calib_cam_lidar end-to-end. calib_cam_lidar.cpp
+  # reuses pcd_undistort_common.cpp's trajectory builder, so that source is
+  # compiled in too. yaml-cpp is linked so the test can parse the written YAML
+  # back (core::parse_static_tf_tree_yaml) to check the recovered edge.
   ament_add_gtest(bagwiz_calib_cam_lidar_test
     test/commands/calib_cam_lidar_test.cpp
     src/commands/calib_cam_lidar.cpp
-    src/commands/calib_cam_lidar_common.cpp)
+    src/commands/calib_cam_lidar_common.cpp
+    src/commands/pcd_undistort_common.cpp)
   target_include_directories(bagwiz_calib_cam_lidar_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
-  target_link_libraries(bagwiz_calib_cam_lidar_test ${bagwiz_test_libs} fmt::fmt yaml-cpp)
+  target_link_libraries(
+    bagwiz_calib_cam_lidar_test ${bagwiz_test_libs} fmt::fmt yaml-cpp
+    ${geometry_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
 
   # pcd.cpp carries the PcdCommand registrar + CLI11 wiring for both `pcd
   # concat` and `pcd undistort` together, so proving pcd.cpp's own

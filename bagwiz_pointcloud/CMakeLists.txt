@@ -43,6 +43,7 @@ add_library(bagwiz_pointcloud
   src/core/calib/nelder_mead.cpp
   src/core/calib/depth_cull.cpp
   src/core/calib/nid_cost.cpp
+  src/core/calib/observability.cpp
   src/core/calib/extrinsic_refine.cpp
   src/core/pointcloud/cloud_concat.cpp
   src/core/pointcloud/cloud_transform.cpp
@@ -188,6 +189,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_calib_extrinsic_refine_test test/core/calib/extrinsic_refine_test.cpp)
   target_link_libraries(bagwiz_calib_extrinsic_refine_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_observability_test test/core/calib/observability_test.cpp)
+  target_link_libraries(bagwiz_calib_observability_test bagwiz_pointcloud)
 endif()
 
 ament_package()

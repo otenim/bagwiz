@@ -993,17 +993,21 @@ std::vector<std::string> complete_tf(const CompletionRequest & request)
 
 // `calib` is a command group for sensor-extrinsic calibration. Its only
 // subcommand is `cam-lidar`. At the subcommand slot (word 1) the only candidate
-// is `cam-lidar`. `-t/--topic` (image topics) and `--cam-info` (CameraInfo
-// topics) are declared topic slots, so try_topic_completion handles their
-// values before this function is reached. Here we surface `cam-lidar`'s flags
-// for any `-` word, and complete `--parent` / `--child` / `--traj-frame`
-// values from the bag's static-TF frame ids.
+// is `cam-lidar`. `--pcd` (PointCloud2 topics), `--pose` (pose topics),
+// `--cam` (image topics), and `--cam-info` (CameraInfo topics) are declared
+// topic slots, so try_topic_completion handles their values before this
+// function is reached. Here we surface `cam-lidar`'s flags for any `-` word,
+// complete `--parent` / `--child` values from the bag's static-TF frame ids,
+// and complete `--of` / `--ref` from its full frame-id set (like `pcd
+// undistort`'s frame pair).
 //
-//   cam-lidar: `calib`(0) `cam-lidar`(1) -i|--input <bag> --map <pcd> --traj <tum>
-//              --traj-frame <frame> -t|--topic <topic> --parent <frame> --child <frame>
-//              [--cam-info <topic>] [-o <out>] [--samples <n>] [--fix <axes>]
-//              [--keyframe-dist <m>] [--keyframe-rot <deg>] [--max-trans <m>] [--max-rot <deg>]
-//              [--nid-bins <n>] [--min-depth <m>] [--max-depth <m>] [--json] [-w|--overwrite]
+//   cam-lidar: `calib`(0) `cam-lidar`(1) -i|--input <bag> --pcd <topic>
+//              --pose <topic> --cam <topic> [--of <frame>] [--ref <frame>]
+//              --parent <frame> --child <frame> [--cam-info <topic>] [-o <out>]
+//              [--samples <n>] [--fix <axes>] [--keyframe-dist <m>]
+//              [--keyframe-rot <deg>] [--max-trans <m>] [--max-rot <deg>]
+//              [--nid-bins <n>] [--min-depth <m>] [--max-depth <m>]
+//              [--voxel <m>] [--json] [-w|--overwrite]
 std::vector<std::string> complete_calib(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1024,41 +1028,50 @@ std::vector<std::string> complete_calib(const CompletionRequest & request)
 
   if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
     return matching(
-      with_help({"--cam-info",
-                 "--child",
-                 "--fix",
-                 "--input",
-                 "--json",
-                 "--keyframe-dist",
-                 "--keyframe-rot",
-                 "--map",
-                 "--max-depth",
-                 "--max-rot",
-                 "--max-trans",
-                 "--min-depth",
-                 "--nid-bins",
-                 "--output",
-                 "--overwrite",
-                 "--parent",
-                 "--samples",
-                 "--topic",
-                 "--traj",
-                 "--traj-frame",
-                 "-i",
-                 "-o",
-                 "-t",
-                 "-w"}),
+      with_help(
+        {"--cam",
+         "--cam-info",
+         "--child",
+         "--fix",
+         "--input",
+         "--json",
+         "--keyframe-dist",
+         "--keyframe-rot",
+         "--max-depth",
+         "--max-rot",
+         "--max-trans",
+         "--min-depth",
+         "--nid-bins",
+         "--of",
+         "--output",
+         "--overwrite",
+         "--parent",
+         "--pcd",
+         "--pose",
+         "--ref",
+         "--samples",
+         "--voxel",
+         "-i",
+         "-o",
+         "-w"}),
       current);
   }
 
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
-    if (previous == "--parent" || previous == "--child" || previous == "--traj-frame") {
+    if (previous == "--parent" || previous == "--child") {
       const auto bag_arg = find_input_bag(request);
       if (!bag_arg) {
         return {};
       }
       return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
+    }
+    if (previous == "--of" || previous == "--ref") {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      return complete_frame_id_value(*bag_arg, current);
     }
   }
   return {};
