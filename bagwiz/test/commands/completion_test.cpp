@@ -804,8 +804,8 @@ TEST(FlagCompletionTest, TrimDashListsTrimFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "trim", "-"}),
-    "--align\n--both\n--duration\n--end\n--help\n--input\n--output\n--overwrite\n--stamp\n--"
-    "start\n-h\n-i\n-o\n-w\n");
+    "--align\n--both\n--duration\n--end\n--help\n--input\n--keep\n--output\n--overwrite\n"
+    "--stamp\n--start\n-h\n-i\n-o\n-w\n");
 }
 
 // The value of `--stamp` completes to its two clock choices.
@@ -826,6 +826,19 @@ TEST_F(CompletionTest, TrimAlignCompletesAtEveryValue)
   EXPECT_EQ(
     run_completion(
       {"bagwiz", "__complete", "7", "bagwiz", "trim", "-i", "~/fixture.mcap", "--align", "/foo"}),
+    "/bar\n/foo\n");
+}
+
+// --keep is a topic slot like --align, so it completes the bag's topics at
+// every one of its variadic values.
+TEST_F(CompletionTest, TrimKeepCompletesAtEveryValue)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_mcap_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "trim", "-i", "~/fixture.mcap", "--keep", "/foo"}),
     "/bar\n/foo\n");
 }
 

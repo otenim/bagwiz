@@ -313,8 +313,10 @@ int execute_trim_pass(
   // fully inside the window are copied byte-for-byte, preserving the input's
   // chunk compression, and only boundary-straddling chunks are re-encoded.
   // Falls back to the decoded stream copy below whenever the input, the
-  // target, or the edit is ineligible.
-  if (!use_header_stamp) {
+  // target, or the edit is ineligible — including any --keep selection, since
+  // a chunk lying wholly outside the window can still carry messages of an
+  // exempt topic and so cannot be skipped wholesale.
+  if (!use_header_stamp && args.keep.empty()) {
     core::PassthroughEdit edit;
     edit.start_ns = abs_start_ns;
     edit.end_ns = abs_end_ns;
@@ -355,10 +357,20 @@ int execute_trim_pass(
     }
   }
 
-  core::MessagePredicate keep;
-  if (use_header_stamp) {
-    keep = [&](const io::RawMessage & raw) {
-      const auto clock = message_clock_ns(raw, true, headered);
+  // Topics --keep exempts from the window: every message on one is copied
+  // whatever the window resolved to. A non-empty set forces the per-message
+  // decision even under --stamp recv, because the storage-index pushdown below
+  // would drop an exempt topic's out-of-window messages before any predicate
+  // could spare them.
+  const std::unordered_set<std::string> exempt(args.keep.begin(), args.keep.end());
+
+  core::MessagePredicate keep_message;
+  if (use_header_stamp || !exempt.empty()) {
+    keep_message = [&](const io::RawMessage & raw) {
+      if (exempt.count(raw.topic->name) != 0) {
+        return true;
+      }
+      const auto clock = message_clock_ns(raw, use_header_stamp, headered);
       return clock >= abs_start_ns && (!abs_end_ns || clock < *abs_end_ns);
     };
   } else {
@@ -372,7 +384,7 @@ int execute_trim_pass(
   try {
     const std::unordered_set<std::string> none;
     counts = core::bag_copy_filtered(
-      *reader, *writer, none, "trim", core::pipeline::BackendKind::Pipelined, keep);
+      *reader, *writer, none, "trim", core::pipeline::BackendKind::Pipelined, keep_message);
   } catch (const std::exception & e) {
     BAGWIZ_LOG_ERROR(kLogger, "Stream copy from %s failed: %s", args.input_path.c_str(), e.what());
     return 1;
@@ -387,9 +399,13 @@ int execute_trim_pass(
   }
   const std::string window_end =
     abs_end_ns ? core::format_timestamp(*abs_end_ns) : std::string("bag end");
+  const std::string exempt_note =
+    exempt.empty() ? std::string()
+                   : " (" + std::to_string(exempt.size()) + " topic(s) kept whole by --keep)";
   BAGWIZ_LOG_INFO(
-    kLogger, "trim: copied %" PRIu64 " message(s) across %zu topic(s); window %s .. %s.",
-    counts.copied, declared, core::format_timestamp(abs_start_ns).c_str(), window_end.c_str());
+    kLogger, "trim: copied %" PRIu64 " message(s) across %zu topic(s); window %s .. %s%s.",
+    counts.copied, declared, core::format_timestamp(abs_start_ns).c_str(), window_end.c_str(),
+    exempt_note.c_str());
   return 0;
 }
 
@@ -660,7 +676,8 @@ int run_trim(const TrimArgs & args)
 
 // `bagwiz trim` cuts a bag down to a time window given as time offsets from the
 // bag start, as message counts (`msg`), or as the common time span of selected
-// topics (`--align`).
+// topics (`--align`). `--keep` exempts topics from that window without moving
+// it: their messages are copied in full while every other topic is trimmed.
 class TrimCommand : public Command
 {
 public:
@@ -695,6 +712,12 @@ public:
       app, "--align", args_.align,
       "Trim to the common time span of these topics (latest first message to earliest last "
       "message, both included). Literal names or '*' globs.",
+      TopicSlotSpec{.require_present = true});
+    add_topic_option(
+      app, "--keep", args_.keep,
+      "Topics exempt from the window: every message on them is copied whatever the window is, "
+      "while every other topic is still trimmed. Not a filter — unlike `topic keep`, the other "
+      "topics stay in the output. Literal names or '*' globs.",
       TopicSlotSpec{.require_present = true});
     app
       .add_option(

@@ -31,6 +31,10 @@ bagwiz trim -i drive.mcap --both 5s -o drive_inner.mcap
 # Keep messages 101..1000 (skip the first 100, end after the 1000th).
 bagwiz trim -i drive.mcap --start 100msg --end 1000msg -o drive_head.mcap
 
+# Cut to 5..90s, but let /tf_static and every /diagnostics topic through whole.
+bagwiz trim -i drive.mcap --start 5s --end 90s \
+  --keep /tf_static '/diagnostics/*' -o drive_cut.mcap
+
 # Keep only the span where the lidar topic has data (its first to its last message, both included).
 bagwiz trim -i drive.db3 --align /sensing/lidar/concatenated/pointcloud -o aligned.db3
 
@@ -43,20 +47,23 @@ filename pattern before bagwiz sees it.
 
 ## Options
 
-| Flag                    | Description                                                                                                                                                                                                                                                                |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                                                                   |
-| `--start <bound>`       | Window start: an offset from the bag start (e.g. `5s`, `500ms`) or a message count (`100msg` skips the first 100 messages). Default: bag start.                                                                                                                            |
-| `--end <bound>`         | Window end, exclusive: an offset from the bag start (e.g. `90s`) or a message count (`500msg` keeps the first 500 messages). Default: bag end.                                                                                                                             |
-| `--duration <len>`      | Window length measured from the window start (e.g. `30s`). Time only — no `msg`. Mutually exclusive with `--end`.                                                                                                                                                          |
-| `--both <bound>`        | Trim this much from both the bag start and the bag end: a time offset (`5s`) or a message count (`50msg`). Mutually exclusive with `--start`, `--end`, and `--duration`.                                                                                                   |
-| `--align <topics>...`   | Trim to the common time span of these topics — from their latest first message to their earliest last message, both included. Topic selector(s): a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Mutually exclusive with the offset flags. |
-| `--stamp <clock>`       | Reference clock for the window: `header` (default — `header.stamp`, with per-message fallback to receive time) or `recv` (record time). See Reference clock below.                                                                                                         |
-| `-o`, `--output <p>`    | Write the result to a new bag instead of rewriting `<input>` in place.                                                                                                                                                                                                     |
-| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                                                                                      |
+| Flag                    | Description                                                                                                                                                                                                                                                                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                                                                                                                            |
+| `--start <bound>`       | Window start: an offset from the bag start (e.g. `5s`, `500ms`) or a message count (`100msg` skips the first 100 messages). Default: bag start.                                                                                                                                                                                     |
+| `--end <bound>`         | Window end, exclusive: an offset from the bag start (e.g. `90s`) or a message count (`500msg` keeps the first 500 messages). Default: bag end.                                                                                                                                                                                      |
+| `--duration <len>`      | Window length measured from the window start (e.g. `30s`). Time only — no `msg`. Mutually exclusive with `--end`.                                                                                                                                                                                                                   |
+| `--both <bound>`        | Trim this much from both the bag start and the bag end: a time offset (`5s`) or a message count (`50msg`). Mutually exclusive with `--start`, `--end`, and `--duration`.                                                                                                                                                            |
+| `--align <topics>...`   | Trim to the common time span of these topics — from their latest first message to their earliest last message, both included. Topic selector(s): a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Mutually exclusive with the offset flags.                                                          |
+| `--keep <topics>...`    | Topics exempt from the window: every message on them is copied whatever the window resolved to, while every other topic is still trimmed. Topic selector(s): a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Not a topic filter — see [Exempting topics](#exempting-topics---keep). Long-form only. |
+| `--stamp <clock>`       | Reference clock for the window: `header` (default — `header.stamp`, with per-message fallback to receive time) or `recv` (record time). See Reference clock below.                                                                                                                                                                  |
+| `-o`, `--output <p>`    | Write the result to a new bag instead of rewriting `<input>` in place.                                                                                                                                                                                                                                                              |
+| `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                                                                                                                                               |
 
 At least one of `--start`, `--end`, `--duration`, `--both`, or `--align` must be
 given — a windowless trim would be a plain copy, which is `cp -r`'s job.
+`--keep` does not count: it says which topics the window spares, not what the
+window is.
 
 ## Time window semantics
 
@@ -107,6 +114,37 @@ given — a windowless trim would be a plain copy, which is `cp -r`'s job.
   written; bad offsets or an out-of-range start fail the run and leave the
   input untouched.
 
+## Exempting topics (`--keep`)
+
+`--keep` names topics the window does not apply to: every message on a selected
+topic is copied whatever the window resolved to, while every other topic is
+trimmed exactly as it would be without the flag. Use it for the low-rate
+context a cut bag still needs in full — `/tf_static`, diagnostics, vehicle
+info, calibration — where the messages that matter were published once, long
+before the window opens.
+
+- **It is not a topic filter.** Unlike [`topic keep`](topic.md#bagwiz-topic-keep),
+  which keeps the selected topics and drops every other topic, `trim --keep`
+  drops nothing: the non-exempt topics stay in the output, cut to the window.
+- **It does not move the window.** `--align`'s span and the `msg` counts are
+  still resolved over every message in the bag, exempt topics included, so
+  adding `--keep` to a run never changes which messages the _other_ topics
+  keep. It is also not a window of its own — `--keep` without `--start`,
+  `--end`, `--duration`, `--both`, or `--align` is the windowless trim the
+  command rejects.
+- **It composes with `--align`.** Aligning to one topic while exempting another
+  is the ordinary case; exempting a topic that `--align` also selects is
+  allowed too (the topic still anchors the window, then survives it whole).
+- Selectors follow the [topic selector](topic.md#topic-selectors) rules, the
+  same as `--align`: a literal name or a `*` glob, repeatable. A selector that
+  matches no topic stops the run.
+- The run's summary line reports how many topics were exempted.
+
+The cost is speed: because a message's fate now depends on its topic, `--keep`
+gives up both of the fast paths described below — the `--stamp recv`
+storage-index pushdown and the MCAP chunk pass-through — and streams the whole
+bag through the decoded pipeline. See [Chunk pass-through](#chunk-pass-through).
+
 ## Reference clock
 
 By default every time comparison — the offset anchor, `--align`'s first/last
@@ -128,7 +166,10 @@ even when pipeline latency pushed its record time outside it.
   time and get the indexed fast path — the time range is pushed down into the
   storage layer (MCAP chunk index / SQLite `WHERE`), so out-of-range data is
   skipped rather than read and discarded. This is right for bags without
-  headers, or when the record order is what matters.
+  headers, or when the record order is what matters. `--keep` suppresses that
+  pushdown even under `--stamp recv`: the storage layer would drop an exempt
+  topic's out-of-window messages before anything could spare them, so the
+  window becomes a per-message decision there too.
 
 ## In-place vs `-o`
 
@@ -142,7 +183,8 @@ output, inherits the input bag's storage backend.
 
 Trim removes messages, never topics: every topic declaration is copied
 verbatim, so a topic whose messages all fall outside the window is still
-declared (with zero messages) in the output. A window that contains no
+declared (with zero messages) in the output — or keeps all of them, when
+[`--keep`](#exempting-topics---keep) exempts it from the window. A window that contains no
 messages at all still produces a valid, empty bag, after a warning. Embedded
 message schemas are preserved so MCAP outputs stay self-describing.
 
@@ -152,9 +194,11 @@ Under `--stamp recv`, when both the input and the output are MCAP, chunks
 fully inside the window are copied byte-for-byte, preserving the input's
 chunk compression; only chunks straddling a window boundary are re-encoded
 (with the same codec). When this fast path cannot apply — `--stamp header`,
-non-MCAP storage, multi-shard inputs, and a few other layouts — the bag is
-re-encoded and the output MCAP is written with `compression=none`;
-re-compress afterwards with `ros2 bag convert` if needed.
+any `--keep` selection, non-MCAP storage, multi-shard inputs, and a few other
+layouts — the bag is re-encoded and the output MCAP is written with
+`compression=none`; re-compress afterwards with `ros2 bag convert` if needed.
+`--keep` is excluded because a chunk lying wholly outside the window can still
+carry messages of an exempt topic, so it cannot be skipped wholesale.
 
 ## Exit status
 
