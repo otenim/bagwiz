@@ -557,6 +557,13 @@ std::string render_calibrate_summary(
     out += fmt::format("held at bag value (auto): {}\n", held_direction_text(held));
   }
 
+  // Under --fix auto the axis probe and the auto-hold decision look along
+  // different directions — raw axes here, Hessian eigen-directions there — so
+  // an axis can read degenerate with nothing held for it. That is not the
+  // "unconstrained delta" the pre-auto warning describes, and telling the user
+  // to run the --fix auto is already running would be nonsense, so the two
+  // modes say different things.
+  const bool auto_fix = parse_fix_spec(args.fix_axes).first.auto_fix;
   bool warned = false;
   for (std::size_t axis = 0; axis < 6; ++axis) {
     if (result.observability[axis] == core::calib::AxisObservability::kDegenerate) {
@@ -569,10 +576,15 @@ std::string render_calibrate_summary(
       if (covered) {
         continue;
       }
-      out += fmt::format(
-        "warning: {} is not observable from this data; the delta shown is unconstrained — "
-        "re-run with --fix {} to hold the bag value\n",
-        kAxisNames[axis], kAxisNames[axis]);
+      out += auto_fix ? fmt::format(
+                          "warning: {} reads degenerate on its own probe, but no direction "
+                          "--fix auto could hold covers it; the delta shown is weakly "
+                          "constrained, not held — re-run with --fix {} to pin it\n",
+                          kAxisNames[axis], kAxisNames[axis])
+                      : fmt::format(
+                          "warning: {} is not observable from this data; the delta shown is "
+                          "unconstrained — re-run with --fix {} to hold the bag value\n",
+                          kAxisNames[axis], kAxisNames[axis]);
       warned = true;
     }
   }

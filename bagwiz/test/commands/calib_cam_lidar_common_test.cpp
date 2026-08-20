@@ -242,16 +242,19 @@ TEST(CalibCamLidarCommonTest, RenderCalibrateSummaryIsAdditivePerAxis)
   EXPECT_EQ(parse_summary_row(summary, "z").observability, "degenerate");
   EXPECT_EQ(parse_summary_row(summary, "pitch").observability, "fixed");
 
-  // The degenerate axis warns that its delta is unconstrained — it is NOT the
-  // bag's value, which is what --fix would give.
+  // The degenerate axis warns that its delta is still in the output and was
+  // NOT held at the bag's value, which is what --fix would give. These are the
+  // default (--fix auto) args and nothing was held, so it is the auto wording;
+  // the --fix none wording has its own test.
   EXPECT_NE(
     summary.find(
-      "warning: z is not observable from this data; the delta shown is unconstrained — re-run "
-      "with --fix z to hold the bag value"),
+      "warning: z reads degenerate on its own probe, but no direction --fix auto could hold "
+      "covers it; the delta shown is weakly constrained, not held — re-run with --fix z to "
+      "pin it"),
     std::string::npos)
     << summary;
   // Only the degenerate axis warns.
-  EXPECT_EQ(summary.find("warning: x is not"), std::string::npos) << summary;
+  EXPECT_EQ(summary.find("warning: x "), std::string::npos) << summary;
   EXPECT_NE(
     summary.find("apply with: bagwiz tf static update -i in.db3 --yaml /tmp/out.yaml"),
     std::string::npos)
@@ -329,8 +332,34 @@ TEST(CalibCamLidarCommonTest, RenderSummaryListsHeldDirections)
   // 0.71 * 0.0035 rad of yaw — dominant y with a small yaw share.
   EXPECT_NE(summary.find("held at bag value (auto): 0.99y + 0.17yaw"), std::string::npos)
     << summary;
-  EXPECT_EQ(summary.find("warning: y is not observable"), std::string::npos) << summary;
-  EXPECT_NE(summary.find("warning: z is not observable"), std::string::npos) << summary;
+  EXPECT_EQ(summary.find("warning: y "), std::string::npos) << summary;
+  // z is degenerate and uncovered under the default --fix auto: the warning
+  // must describe what actually happened (the axis probe and the auto-hold
+  // decision look along different directions) instead of the pre-auto
+  // "unconstrained" claim, which would also be telling the user to run the
+  // --fix auto that is already running.
+  EXPECT_NE(summary.find("warning: z reads degenerate on its own probe"), std::string::npos)
+    << summary;
+  EXPECT_EQ(summary.find("warning: z is not observable"), std::string::npos) << summary;
+}
+
+TEST(CalibCamLidarCommonTest, RenderSummaryWarnsUnconstrainedWithFixNone)
+{
+  // With auto off, a degenerate axis really is an unconstrained delta nobody
+  // held, so the warning keeps the pre-auto wording and its --fix advice.
+  auto args = valid_args();
+  args.fix_axes = "none";
+  auto result = sample_result();
+  result.observability[1] = bagwiz::core::calib::AxisObservability::kDegenerate;
+
+  const std::string summary =
+    commands::render_calibrate_summary(args, result, kEdgeBefore, "/tmp/out.yaml");
+  EXPECT_NE(summary.find("warning: y is not observable from this data"), std::string::npos)
+    << summary;
+  EXPECT_NE(summary.find("re-run with --fix y to hold the bag value"), std::string::npos)
+    << summary;
+  EXPECT_EQ(summary.find("reads degenerate on its own probe"), std::string::npos) << summary;
+  EXPECT_EQ(summary.find("held at bag value"), std::string::npos) << summary;
 }
 
 TEST(CalibCamLidarCommonTest, RenderJsonListsHeldDirections)

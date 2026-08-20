@@ -177,9 +177,26 @@ at bag value (auto): 0.99y + 0.17yaw`), and `--json` echoes them under
 not have to write. When every direction of the edge is unobservable, the
 command fails instead of writing a YAML the data cannot justify.
 
+**A degenerate axis is not necessarily a held one.** The table's verdict and
+the auto-hold decision apply the same test along _different_ directions —
+the six raw axes in the table, the six eigen-directions of the curvature
+matrix for the holding — so they can disagree, and on real recordings they
+routinely do. An axis's curvature is a weighted average of the
+eigen-directions' and so can never be the smaller number, but each direction
+carries its own sample noise, and it is the noise that usually decides.
+An axis that reads `degenerate` with nothing held for it says so explicitly:
+
+```text
+warning: x reads degenerate on its own probe, but no direction --fix auto could hold covers it; the delta shown is weakly constrained, not held — re-run with --fix x to pin it
+```
+
+Take that as "this axis is the shakiest of the six, and its delta is still in
+the output" — `--fix x` is the way to pin it to the bag value if you want it
+pinned.
+
 `--fix none` switches all of this off: every free axis is optimized, the
-classification is report-only, and a degenerate axis gets a warning
-recommending a manual `--fix <axis>` re-run.
+classification is report-only, and a degenerate axis gets the pre-auto
+warning recommending a manual `--fix <axis>` re-run.
 
 **What the classification does not tell you.**
 
@@ -192,6 +209,13 @@ recommending a manual `--fix <axis>` re-run.
   a reliable "definitely not observable" and `strong` as no more than "not
   obviously unobservable"; for a number you are going to ship, corroborate
   it against a second run over different samples.
+- On a real recording the absolute floor is usually inert — every direction
+  curves far above it — and the standard-error test decides every verdict on
+  its own. `degenerate` then means "the samples do not agree well enough to
+  call this measured", not "the cost surface is flat here". Since that
+  standard error is itself estimated from `--samples` numbers, a verdict
+  sitting near the boundary can flip between runs; raise `--samples` before
+  reading much into one.
 
 ```text
 calib cam-lidar: truck_cabin_base_link -> top_front_narrow/camera_link
@@ -207,7 +231,7 @@ nid: 0.412887 -> 0.276541
 samples used: 8
 held at bag value (auto): 1.00x
 held at bag value (auto): 1.00y
-warning: yaw is not observable from this data; the delta shown is unconstrained — re-run with --fix yaw to hold the bag value
+warning: yaw reads degenerate on its own probe, but no direction --fix auto could hold covers it; the delta shown is weakly constrained, not held — re-run with --fix yaw to pin it
 
 apply with: bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 ```
