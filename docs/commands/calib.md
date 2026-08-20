@@ -83,9 +83,18 @@ bag's static TF when the frames differ.
 
 Every cloud on the `--pcd` topic is then placed into that frame as
 `T_ref_of(header.stamp) * T_of_cloud`, the extrinsic coming from the bag's
-static TF, and accumulated into a single map. Three behaviors are worth
+static TF, and accumulated into a single map. Four behaviors are worth
 knowing:
 
+- The map covers only what the picked image samples can look at: a point
+  that falls outside every sample's view (the union of the sample frusta,
+  padded like the per-sample pre-cull and widened for distortion) is dropped
+  as it arrives, so neither the voxel grid nor memory pays for the rest of
+  the scene. For a narrow camera against a 360° lidar this is most of the
+  recording; the log reports the culled count. The cull is a superset
+  filter: the exact per-sample projection predicate still runs at candidate
+  assembly, and the NID bins are equalized over those candidates (see
+  [Method](#method)), so it does not move the calibration.
 - A cloud whose per-point time field is usable **and not uniform** holds a
   real sweep, so it is deskewed to its own `header.stamp` first (the same
   deskew `pcd undistort` applies). A uniform field — all zeros, or the
@@ -147,7 +156,11 @@ image's `header.stamp` (falling back to the message's bag record time when
 unset, warning once for the whole run rather than per image), projects the
 map's points into the camera through the current extrinsic estimate, and
 scores the alignment as the NID between the projected points' intensity
-histogram and the image's grayscale patch — lower is better. A two-pass
+histogram and the image's grayscale patch — lower is better. The intensity
+axis of the joint histogram is histogram-equalized over the union of all
+samples' projected candidate points, so the binning is decided by exactly
+what NID scores and does not move with the map's coverage (the frustum cull
+above, the voxel size, or where the map came from). A two-pass
 Nelder-Mead search over the free axes (everything not named by `--fix`)
 minimizes the mean NID across all samples, confined to the trust region
 around the edge's bag value (`--max-trans`, `--max-rot`), so a bad initial

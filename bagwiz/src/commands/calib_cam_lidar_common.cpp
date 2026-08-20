@@ -452,10 +452,27 @@ core::pointcloud::PcdCloud MapAccumulator::finish()
   return out;
 }
 
+bool point_in_any_view(const std::array<double, 3> & p, std::span<const SampleViewFrustum> views)
+{
+  for (const auto & v : views) {
+    const auto pc = core::calib::transform_point(v.t_cam_ref, p);
+    if (pc[2] < v.lo_depth || pc[2] > v.hi_depth) {
+      continue;
+    }
+    const double xn = pc[0] / pc[2];
+    const double yn = pc[1] / pc[2];
+    if (xn >= v.lo_xn && xn <= v.hi_xn && yn >= v.lo_yn && yn <= v.hi_yn) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::optional<std::string> accumulate_cloud_into_map(
   MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
   std::span<const core::TrajectoryPose> trajectory,
-  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats)
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats,
+  std::span<const SampleViewFrustum> views)
 {
   ++stats.clouds_read;
 
@@ -545,6 +562,12 @@ std::optional<std::string> accumulate_cloud_into_map(
       continue;
     }
     const auto p = core::calib::transform_point(t_ref_cloud, {x, y, z});
+    // A point no sample's view can ever contain is dropped here rather than
+    // carried through the voxel grid and discarded at candidate assembly.
+    if (!views.empty() && !point_in_any_view(p, views)) {
+      ++stats.points_culled_out_of_view;
+      continue;
+    }
     const std::array<float, 3> point{
       static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])};
     // A point too far out to index a voxel is garbage the map cannot place;
