@@ -902,9 +902,51 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   }
 
   // 3. Trajectory from the --pose topic (T_ref_of, sorted).
-  const auto poses = build_trajectory(args, *pose_ti);
+  auto poses = build_trajectory(args, *pose_ti);
   if (!poses.has_value()) {
     return 1;
+  }
+
+  // 3b. --skip-start / --skip-end: trim the trajectory to the bag's time
+  // extent minus the skipped durations. Everything downstream keys off the
+  // trajectory span — image-sample eligibility, the per-cloud span check, and
+  // deskew clamping — so this one trim excludes the skipped ranges from the
+  // whole estimation. The first/last surviving pose can sit up to one pose
+  // period inside the window, so a sliver of the requested window at each end
+  // is treated as out-of-span; consistent with the existing out-of-span skip.
+  const auto skip_ns = parse_skip_durations(args).first;  // validated in step 1
+  if (skip_ns[0] > 0 || skip_ns[1] > 0) {
+    const auto extent = reader->compute_time_extent();
+    if (!extent.has_data) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "--skip-start/--skip-end need the bag's time extent, which '%s' does not provide.",
+        args.input_path.c_str());
+      return 1;
+    }
+    const std::int64_t window_lo = extent.start_ns + skip_ns[0];
+    const std::int64_t window_hi = extent.end_ns - skip_ns[1];
+    if (window_lo >= window_hi) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "--skip-start plus --skip-end cover the whole bag (bag duration %.3f s).",
+        static_cast<double>(extent.end_ns - extent.start_ns) / 1e9);
+      return 1;
+    }
+    std::erase_if(*poses, [&](const core::TrajectoryPose & p) {
+      return p.timestamp_ns < window_lo || p.timestamp_ns > window_hi;
+    });
+    if (poses->size() < 2) {
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "--skip-start/--skip-end leave fewer than 2 trajectory pose(s) inside the window; cannot "
+        "interpolate.");
+      return 1;
+    }
+    BAGWIZ_LOG_INFO(
+      kLogger,
+      "Skipping [bag start, bag start + %.3f s) and (bag end - %.3f s, bag end]: trajectory "
+      "trimmed to %zu pose(s) spanning %.3f s.",
+      static_cast<double>(skip_ns[0]) / 1e9, static_cast<double>(skip_ns[1]) / 1e9, poses->size(),
+      static_cast<double>(poses->back().timestamp_ns - poses->front().timestamp_ns) / 1e9);
   }
 
   // 4. Static TF chain around the edited edge, off a static-only buffer the

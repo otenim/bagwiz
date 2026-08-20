@@ -146,6 +146,14 @@ private:
       "--voxel", cam_lidar_args_.voxel_size,
       "Voxel edge the accumulated map is downsampled onto, in meters "
       "(default 0.1; 0 keeps every point of every cloud)");
+    sub->add_option(
+      "--skip-start", cam_lidar_args_.skip_start,
+      "Exclude this duration from the bag's start from the estimation "
+      "(e.g. 30s; a unit suffix is required: ns/us/ms/s)");
+    sub->add_option(
+      "--skip-end", cam_lidar_args_.skip_end,
+      "Exclude this duration from the bag's end from the estimation "
+      "(e.g. 10s; a unit suffix is required: ns/us/ms/s)");
     sub->add_flag("--json", cam_lidar_args_.json, "Emit the stdout summary as JSON");
     sub->add_flag(
       "-w,--overwrite", cam_lidar_args_.overwrite, "Replace an existing -o/--output path");

@@ -1007,7 +1007,8 @@ std::vector<std::string> complete_tf(const CompletionRequest & request)
 //              [--samples <n>] [--fix <axes>] [--keyframe-dist <m>]
 //              [--keyframe-rot <deg>] [--max-trans <m>] [--max-rot <deg>]
 //              [--nid-bins <n>] [--min-depth <m>] [--max-depth <m>]
-//              [--voxel <m>] [--json] [-w|--overwrite]
+//              [--voxel <m>] [--skip-start <dur>] [--skip-end <dur>]
+//              [--json] [-w|--overwrite]
 std::vector<std::string> complete_calib(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1050,6 +1051,8 @@ std::vector<std::string> complete_calib(const CompletionRequest & request)
          "--pose",
          "--ref",
          "--samples",
+         "--skip-end",
+         "--skip-start",
          "--voxel",
          "-i",
          "-o",
