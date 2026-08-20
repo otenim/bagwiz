@@ -305,9 +305,11 @@ TEST_F(GenerateVideoCommonTest, ValidateOutputPathRejectsCollisionWithoutOverwri
 {
   const auto out = tmp_dir_ / "out.avi";
   write_file(out, "old");
+  // The early refusal and finalize's late one now share one message, produced
+  // by core::check_output_path_free / core::prepare_output_path.
   EXPECT_EQ(
     validate_video_output_path(out, false),
-    "output '" + out.string() + "' already exists; pass -w/--overwrite to replace it.");
+    "output path '" + out.string() + "' already exists; pass -w/--overwrite to replace it");
 }
 
 TEST_F(GenerateVideoCommonTest, ValidateOutputPathAcceptsCollisionWithOverwrite)

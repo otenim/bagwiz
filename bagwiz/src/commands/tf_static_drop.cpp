@@ -9,6 +9,7 @@
 #include "bagwiz/commands/tf_static_drop.hpp"
 
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/base/str_utils.hpp"
 #include "bagwiz/core/tf/tf_static_collect.hpp"
 #include "tf_static_inject.hpp"  // NOLINT(build/include_subdir) src-local shared header
@@ -144,6 +145,16 @@ int run_tf_static_drop(
   for (const auto & frame : frames) {
     if (frame.empty()) {
       BAGWIZ_LOG_ERROR(kLogger, "Every --frame argument must be a non-empty frame id.");
+      return 1;
+    }
+  }
+
+  // Claim -o before reading the tree. The check is non-destructive (the
+  // dispatch below removes the existing entry), so a collision costs one stat
+  // instead of a whole-topic static TF read.
+  if (output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*output_path, overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
       return 1;
     }
   }

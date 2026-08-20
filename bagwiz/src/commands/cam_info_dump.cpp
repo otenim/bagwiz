@@ -52,6 +52,16 @@ constexpr const char * kCameraInfoType = "sensor_msgs/msg/CameraInfo";
 
 int run_cam_info_dump(const CamInfoDumpArgs & args)
 {
+  // Refuse an occupied -o path before reading anything. This check removes
+  // nothing, so the "claim only once the run is certain" rule below still
+  // holds; it only moves the collision verdict ahead of the read.
+  if (args.output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*args.output_path, args.overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
+  }
+
   auto reader = io::open_read_or_log(args.input_path, kLogger);
   if (!reader) {
     return 1;

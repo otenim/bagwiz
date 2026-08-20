@@ -519,7 +519,7 @@ private:
       return 1;
     }
 
-    if (!write_tum_file(args.output_path, lookup.poses, kLogger)) {
+    if (!write_tum_file(args.output_path, lookup.poses, args.overwrite, kLogger)) {
       return 1;
     }
 
@@ -682,7 +682,7 @@ private:
       return 1;
     }
 
-    if (!write_tum_file(args.output_path, poses, kLogger)) {
+    if (!write_tum_file(args.output_path, poses, args.overwrite, kLogger)) {
       return 1;
     }
 
@@ -700,7 +700,11 @@ private:
     }
     dump_args_.format = std::move(resolved_format);
 
-    if (const auto r = core::prepare_output_path(dump_args_.output_path, dump_args_.overwrite);
+    // Refuse an occupied output path before opening the bag. The check removes
+    // nothing; write_tum_file() claims the path for real once there are poses
+    // to write, so a missing topic or an unresolvable lookup can no longer
+    // delete the user's file under -w/--overwrite.
+    if (const auto r = core::check_output_path_free(dump_args_.output_path, dump_args_.overwrite);
         !r.ok) {
       BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
       return 1;
@@ -995,20 +999,29 @@ private:
       }
     }
 
-    // 2. Resolve the trajectory format.
+    // 2. Claim -o before reading the trajectory file. The check is
+    //    non-destructive (the dispatch in step 4 removes the existing entry).
+    if (args.output_path.has_value()) {
+      if (const auto r = core::check_output_path_free(*args.output_path, args.overwrite); !r.ok) {
+        BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+        return 1;
+      }
+    }
+
+    // 3. Resolve the trajectory format.
     std::string resolved_format;
     if (!resolve_join_format(args.format, args.traj_path, resolved_format)) {
       return 1;
     }
 
-    // 3. Read the trajectory into TransformStamped[] + stamp[].
+    // 4. Read the trajectory into TransformStamped[] + stamp[].
     std::vector<geometry_msgs::msg::TransformStamped> transforms;
     std::vector<std::int64_t> stamps_ns;
     if (!load_trajectory_as_transforms(args, resolved_format, transforms, stamps_ns)) {
       return 1;
     }
 
-    // 4. -o vs in-place dispatch, shared with the other rewrite-style
+    // 5. -o vs in-place dispatch, shared with the other rewrite-style
     //    commands: -o writes a fresh bag (format/layout resolved from the
     //    output path's extension) and leaves <input> untouched; otherwise
     //    <input> is rewritten atomically via a sibling tmp, preserving its

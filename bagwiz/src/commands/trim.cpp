@@ -16,6 +16,7 @@
 #include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/duration_parse.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/base/str_utils.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
@@ -500,7 +501,17 @@ int run_trim(const TrimArgs & args)
     return 1;
   }
 
-  // 1. Resolve the window to absolute bounds up front so an out-of-range or
+  // 1. Claim -o before the window scan. The check is non-destructive (the
+  //    existing entry is removed by the dispatch in step 3), so it runs here
+  //    rather than after a full clock scan of the input.
+  if (args.output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*args.output_path, args.overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
+  }
+
+  // 2. Resolve the window to absolute bounds up front so an out-of-range or
   //    unmatched window fails before any writer (or in-place tmp) is created.
   //    The reader is scoped: the bounds are snapshotted and the input released
   //    before the rewrite pass reopens it.
@@ -657,7 +668,7 @@ int run_trim(const TrimArgs & args)
     }
   }
 
-  // 2. -o vs in-place dispatch, shared with the other rewrite-style commands:
+  // 3. -o vs in-place dispatch, shared with the other rewrite-style commands:
   //    -o writes a new bag and leaves <input> untouched; otherwise <input> is
   //    rewritten atomically via a sibling tmp, preserving its storage format
   //    and layout.

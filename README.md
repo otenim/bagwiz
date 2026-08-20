@@ -135,6 +135,14 @@ name; some flags only accept a literal. See
 [Topic selectors](docs/commands/topic.md#topic-selectors) for the shared
 rules and each command's page for which flags accept a glob.
 
+Every subcommand that writes to an `-o`/`--output` path shares one clobber
+rule: an existing path stops the run unless `-w`/`--overwrite` is passed. The
+collision is reported before the input bag is read, so a wrong `-o` costs a
+single stat rather than a full pass over the bag — or, for
+[`bagwiz calib cam-lidar`](docs/commands/calib.md), a full refinement. Under
+`-w` the existing path is removed only when the command is ready to write, so
+a run that fails partway leaves it intact.
+
 ## Environment variables
 
 bagwiz reads a handful of **optional** environment variables to override

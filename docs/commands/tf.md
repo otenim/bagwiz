@@ -443,9 +443,10 @@ bagwiz tf static dump -i capture.mcap > tf_static.yaml
 | `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path. Without it, an existing path aborts the run. |
 
 Without `-o` the YAML is written to stdout and every diagnostic to stderr, so
-`bagwiz tf static dump -i <bag> > tf_static.yaml` is pipe-clean. The output path
-is claimed only after the read succeeds, so a bag with no static TF cannot
-destroy an existing `-o` file under `-w`/`--overwrite`.
+`bagwiz tf static dump -i <bag> > tf_static.yaml` is pipe-clean. An occupied
+`-o` path without `-w`/`--overwrite` is refused before the bag is read. Under
+`-w` the path is claimed only after the read succeeds, so a bag with no static
+TF cannot destroy an existing `-o` file.
 
 ### Rotation convention
 

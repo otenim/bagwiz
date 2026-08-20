@@ -160,7 +160,11 @@ private:
       return 1;
     }
 
-    if (const auto r = core::prepare_output_path(args.output_path, args.overwrite); !r.ok) {
+    // Refuse an occupied output path before opening the input. The check
+    // removes nothing, so the repack rejection below can still bail without
+    // having destroyed the user's file; prepare_output_path() does the removal
+    // once the run is committed to writing.
+    if (const auto r = core::check_output_path_free(args.output_path, args.overwrite); !r.ok) {
       BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
       return 1;
     }
@@ -190,6 +194,13 @@ private:
           fmt_name);
         return 1;
       }
+    }
+
+    // The run is committed now: claim the output path for real, clearing any
+    // pre-existing entry under -w/--overwrite.
+    if (const auto r = core::prepare_output_path(args.output_path, args.overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
     }
 
     io::CreateOptions copts;

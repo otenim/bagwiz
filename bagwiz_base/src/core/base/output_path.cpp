@@ -15,9 +15,16 @@
 namespace bagwiz::core
 {
 
-PrepareOutputResult prepare_output_path(const std::filesystem::path & path, bool overwrite)
+namespace
+{
+
+// Shared probe behind both entry points. `occupied` reports whether something
+// is already at `path`, and is meaningful only when the returned result is ok.
+PrepareOutputResult probe_output_path(
+  const std::filesystem::path & path, bool overwrite, bool & occupied)
 {
   PrepareOutputResult result;
+  occupied = false;
 
   // symlink_status (rather than status) so we treat a dangling symlink as
   // "something is there" — overwriting it should replace the symlink, not
@@ -35,23 +42,42 @@ PrepareOutputResult prepare_output_path(const std::filesystem::path & path, bool
     return result;
   }
 
+  occupied = true;
   if (!overwrite) {
     result.error =
       "output path '" + path.string() + "' already exists; pass -w/--overwrite to replace it";
     return result;
   }
+  result.ok = true;
+  return result;
+}
 
-  // overwrite=true: nuke the existing entry so the writer starts from a
+}  // namespace
+
+PrepareOutputResult check_output_path_free(const std::filesystem::path & path, bool overwrite)
+{
+  bool occupied = false;
+  return probe_output_path(path, overwrite, occupied);
+}
+
+PrepareOutputResult prepare_output_path(const std::filesystem::path & path, bool overwrite)
+{
+  bool occupied = false;
+  PrepareOutputResult result = probe_output_path(path, overwrite, occupied);
+  if (!result.ok || !occupied) {
+    return result;
+  }
+
+  // occupied && overwrite: nuke the existing entry so the writer starts from a
   // clean slot. remove_all handles both single files and directory trees,
   // and returns the count without throwing when given a std::error_code.
   std::error_code rm_ec;
   std::filesystem::remove_all(path, rm_ec);
   if (rm_ec) {
+    result.ok = false;
     result.error = "could not remove existing output path '" + path.string() +
                    "' for -w/--overwrite: " + rm_ec.message();
-    return result;
   }
-  result.ok = true;
   return result;
 }
 

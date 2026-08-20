@@ -10,6 +10,7 @@
 
 #include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/base/str_utils.hpp"
 #include "bagwiz/core/tf/tf_static_collect.hpp"
 #include "bagwiz/core/tf/tf_static_tree_yaml.hpp"
@@ -58,7 +59,16 @@ int run_tf_static_join(
       topic.c_str());
   }
 
-  // 1. Read the publisher config. Strict by design: this is a hand-edited file,
+  // 1. Claim -o before reading the config. The check is non-destructive (the
+  //    dispatch in step 3 removes the existing entry).
+  if (output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*output_path, overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
+  }
+
+  // 2. Read the publisher config. Strict by design: this is a hand-edited file,
   //    where a silently-ignored key becomes a silently-wrong sensor pose.
   const auto parsed = core::parse_static_tf_tree_yaml(yaml_path);
   if (!parsed.ok()) {
@@ -81,7 +91,7 @@ int run_tf_static_join(
   topics.push_back({topic, *parsed.transforms});
   const auto transform_count = static_cast<std::uint64_t>(topics.front().transforms.size());
 
-  // 2. -o vs in-place dispatch, shared with the other rewrite-style commands:
+  // 3. -o vs in-place dispatch, shared with the other rewrite-style commands:
   //    -o writes a fresh bag (format/layout resolved from the output path's
   //    extension) and leaves <input> untouched; otherwise <input> is rewritten
   //    atomically via a sibling tmp, preserving its storage identity.

@@ -10,6 +10,7 @@
 
 #include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/tf/tf_static_collect.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "tf_static_inject.hpp"  // NOLINT(build/include_subdir) src-local shared header
@@ -33,7 +34,17 @@ int run_tf_static_cp(
   const std::filesystem::path & src_path, const std::filesystem::path & dst_path,
   const std::optional<std::filesystem::path> & output_path, bool force, bool overwrite)
 {
-  // 1. Gather the static TF topics + transforms from the source bag.
+  // 1. Claim -o before reading <src>. The check is non-destructive (the
+  //    dispatch in step 3 removes the existing entry), so a collision costs
+  //    one stat instead of a whole-topic static TF read.
+  if (output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*output_path, overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
+  }
+
+  // 2. Gather the static TF topics + transforms from the source bag.
   std::vector<core::StaticTopicTransforms> src_topics;
   try {
     // Whole-topic: a copy must carry every edge the source declares, including
@@ -52,7 +63,7 @@ int run_tf_static_cp(
     return 1;
   }
 
-  // 2. -o vs in-place dispatch, shared with the other rewrite-style commands:
+  // 3. -o vs in-place dispatch, shared with the other rewrite-style commands:
   //    -o writes a fresh bag (format/layout resolved from the output path's
   //    extension) and leaves <dst> untouched; otherwise <dst> is rewritten
   //    atomically via a sibling tmp, preserving its storage identity. The
