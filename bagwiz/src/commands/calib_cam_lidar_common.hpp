@@ -183,11 +183,38 @@ struct MapAccumulationStats
   std::uint64_t clouds_deskewed = 0;             // clouds deskewed before accumulation
   std::uint64_t points_added = 0;
   std::uint64_t points_dropped_nonfinite = 0;
+  // Points dropped because no image sample's view can ever contain them (only
+  // counted when the caller passes a view set to cull against).
+  std::uint64_t points_culled_out_of_view = 0;
   // Points the deskew clamped to a trajectory endpoint (their own stamp fell
   // outside the trajectory span) — deskewed against a pose at a different
   // time than their own, so never silent.
   std::uint64_t points_clamped_out_of_span = 0;
 };
+
+// One sample's camera view in the form the map accumulation culls against:
+// the camera optical frame's pose in the --ref frame, the depth window, and
+// the normalized-image (x/z, y/z) bounds of the pixel rectangle, padded like
+// the per-sample pre-cull and widened so distortion cannot push a kept point
+// outside them. A point outside every sample's view can never be projected
+// by any NID evaluation, so dropping it before voxelization is safe — but
+// note this is a superset filter: the exact per-sample predicate (with the
+// real distortion model) still runs later, at candidate assembly.
+struct SampleViewFrustum
+{
+  core::calib::Mat4 t_cam_ref{};  // --ref frame -> camera optical frame
+  double lo_xn = 0.0;             // normalized x/z bounds of the padded image rect
+  double hi_xn = 0.0;
+  double lo_yn = 0.0;
+  double hi_yn = 0.0;
+  double lo_depth = 0.0;  // the --min-depth/--max-depth window, in meters
+  double hi_depth = 0.0;
+};
+
+// True when the --ref-frame point `p` falls inside any of the given sample
+// views. With an empty view set, everything is inside (the cull is off).
+[[nodiscard]] bool point_in_any_view(
+  const std::array<double, 3> & p, std::span<const SampleViewFrustum> views);
 
 // The calibration map under construction: points are collapsed onto a voxel
 // grid as they arrive, one running centroid and mean intensity per occupied
@@ -263,10 +290,16 @@ private:
 // (NID needs it), an unreadable field layout, big-endian point data, an
 // unusable static extrinsic, or a deskew failure. The caller reports it
 // against the topic and aborts.
+//
+// `views` is the frustum union of the image samples the map is built for: a
+// placed point outside every view is dropped (counted in
+// MapAccumulationStats::points_culled_out_of_view), since no NID evaluation
+// could ever project it. The default empty span disables the cull.
 [[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
   MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
   std::span<const core::TrajectoryPose> trajectory,
-  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats);
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats,
+  std::span<const SampleViewFrustum> views = {});
 
 // Default `-o/--output` path when omitted: "<input stem>_calib_cam_lidar.yaml"
 // in the current working directory.

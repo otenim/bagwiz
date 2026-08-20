@@ -357,11 +357,13 @@ std::optional<core::calib::EdgeChain> resolve_edge_chain(
 // cloud is placed by T_ref_of(header.stamp) * T_of_cloud (the extrinsic from
 // the static TF tree, cached per distinct cloud frame); clouds with a real
 // sweep (a usable, non-uniform per-point time field) are deskewed to their
-// header stamp first. The map needs intensity for NID — a cloud without it is
-// a hard error, as is an unparseable message.
+// header stamp first. Points outside every sample's view (the `views`
+// frustum union) are dropped as they go, so the grid only ever holds what
+// the samples can look at. The map needs intensity for NID — a cloud
+// without it is a hard error, as is an unparseable message.
 std::optional<core::pointcloud::PcdCloud> accumulate_map(
   const CalibCamLidarArgs & args, std::span<const core::TrajectoryPose> poses,
-  const tf2::BufferCore & static_buffer)
+  const tf2::BufferCore & static_buffer, std::span<const SampleViewFrustum> views)
 {
   auto reader = io::open_read_or_log(args.input_path, kLogger);
   if (!reader) {
@@ -404,8 +406,8 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
           }
         }
       }
-      if (const auto err =
-            accumulate_cloud_into_map(map, std::move(*parsed.cloud), poses, ext_it->second, stats);
+      if (const auto err = accumulate_cloud_into_map(
+            map, std::move(*parsed.cloud), poses, ext_it->second, stats, views);
           err.has_value()) {
         BAGWIZ_LOG_ERROR(kLogger, "Topic '%s': %s.", args.pcd_topic.c_str(), err->c_str());
         return std::nullopt;
@@ -447,6 +449,13 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
     BAGWIZ_LOG_WARN(
       kLogger, "Dropped %" PRIu64 " non-finite point(s) from the accumulated map.",
       stats.points_dropped_nonfinite);
+  }
+  if (stats.points_culled_out_of_view > 0) {
+    BAGWIZ_LOG_INFO(
+      kLogger,
+      "Culled %" PRIu64
+      " point(s) no image sample can see; the map covers the union of the sample views only.",
+      stats.points_culled_out_of_view);
   }
   // Both counts, because the gap between them is the whole point of the grid:
   // a driving platform re-measures each surface once per sweep, and the map
@@ -714,13 +723,16 @@ int precull_pad_px(
 
 // Project `cloud`'s points through `t_cam_world` (the initial, delta=0
 // estimate) and keep the ones that land within the depth window and a
-// pad_px-widened pixel bound, pairing each kept point with its bin from
-// `full_bins` (computed once over the whole map before this loop, so every
-// sample buckets against the same histogram).
+// pad_px-widened pixel bound, appending each kept point's raw intensity to
+// `candidate_intensities` (parallel to sample.points_world). The intensities
+// of ALL samples' candidates are later histogram-equalized as one union, so
+// the NID bins are decided by exactly the points NID scores — not by the
+// map's coverage, which the frustum cull, the voxel size, or the map source
+// would otherwise leak into the binning.
 void fill_precull_candidates(
-  const core::pointcloud::PcdCloud & cloud, std::span<const std::uint8_t> full_bins,
-  const core::calib::CameraModel & cam, const core::calib::Mat4 & t_cam_world, double min_depth,
-  double max_depth, int pad_px, core::calib::CalibSample & sample)
+  const core::pointcloud::PcdCloud & cloud, const core::calib::CameraModel & cam,
+  const core::calib::Mat4 & t_cam_world, double min_depth, double max_depth, int pad_px,
+  core::calib::CalibSample & sample, std::vector<float> & candidate_intensities)
 {
   const double lo_u = -static_cast<double>(pad_px);
   const double lo_v = -static_cast<double>(pad_px);
@@ -741,26 +753,69 @@ void fill_precull_candidates(
       continue;
     }
     sample.points_world.push_back(p);
-    sample.intensity_bins.push_back(full_bins[i]);
+    candidate_intensities.push_back(cloud.intensities[i]);
   }
+}
+
+// The frustum union the map accumulation culls against: one view per decoded
+// sample, in the --ref frame. The bounds are the pinhole projection of the
+// precull-padded pixel rectangle, widened by a fixed margin so that a point
+// the distortion model pushes INTO the padded rect is still kept — the cull
+// must be a superset of the exact per-sample predicate, and a few extra
+// points only cost memory. Samples whose stamp falls outside the
+// trajectory get no view; assemble_samples drops them anyway.
+std::vector<SampleViewFrustum> build_sample_frusta(
+  const CalibCamLidarArgs & args, std::span<const DecodedSample> decoded,
+  std::span<const core::TrajectoryPose> poses, const core::calib::CameraModel & cam,
+  const core::calib::Mat4 & t_trajframe_cam0)
+{
+  const double max_rot_rad = args.max_rot_deg * M_PI / 180.0;
+  const int pad_px = precull_pad_px(cam, max_rot_rad, args.max_trans, args.min_depth);
+  const auto widen = [](double lo, double hi) {
+    const double mid = 0.5 * (lo + hi);
+    const double half = 0.5 * (hi - lo) * 1.1 + 0.02;
+    return std::pair{mid - half, mid + half};
+  };
+  const auto [lo_xn, hi_xn] = widen(
+    (-static_cast<double>(pad_px) - cam.k[2]) / cam.k[0],
+    (static_cast<double>(cam.width) + pad_px - cam.k[2]) / cam.k[0]);
+  const auto [lo_yn, hi_yn] = widen(
+    (-static_cast<double>(pad_px) - cam.k[5]) / cam.k[4],
+    (static_cast<double>(cam.height) + pad_px - cam.k[5]) / cam.k[4]);
+
+  std::vector<SampleViewFrustum> views;
+  views.reserve(decoded.size());
+  for (const auto & d : decoded) {
+    const auto pose = interpolate_trajectory(poses, d.stamp_ns);
+    if (!pose.has_value()) {
+      continue;
+    }
+    SampleViewFrustum v;
+    v.t_cam_ref = core::calib::rigid_inverse(core::calib::mat4_multiply(*pose, t_trajframe_cam0));
+    v.lo_xn = lo_xn;
+    v.hi_xn = hi_xn;
+    v.lo_yn = lo_yn;
+    v.hi_yn = hi_yn;
+    v.lo_depth = args.min_depth;
+    v.hi_depth = args.max_depth;
+    views.push_back(v);
+  }
+  return views;
 }
 
 std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
   const CalibCamLidarArgs & args, std::span<const DecodedSample> decoded,
   std::span<const core::TrajectoryPose> poses, const core::pointcloud::PcdCloud & cloud,
-  const core::calib::CameraModel & cam, const core::calib::EdgeChain & chain)
+  const core::calib::CameraModel & cam, const core::calib::Mat4 & t_trajframe_cam0)
 {
-  const auto full_bins = core::calib::equalize_intensity_bins(cloud.intensities, args.nid_bins);
   const double max_rot_rad = args.max_rot_deg * M_PI / 180.0;
   const int pad_px = precull_pad_px(cam, max_rot_rad, args.max_trans, args.min_depth);
-  const core::calib::Mat4 t_trajframe_cam0 = core::calib::mat4_multiply(
-    chain.t_trajframe_parent,
-    core::calib::mat4_multiply(
-      core::calib::edge_transform(chain.edge_bag, {}), chain.t_child_camoptical));
   const core::calib::NidParams default_nid;
 
   std::vector<core::calib::CalibSample> samples;
   samples.reserve(decoded.size());
+  std::vector<float> candidate_intensities;  // union over samples, in sample order
+  std::vector<std::size_t> sample_sizes;
   for (const auto & d : decoded) {
     if (d.gray.width != cam.width || d.gray.height != cam.height) {
       BAGWIZ_LOG_WARN(
@@ -782,15 +837,19 @@ std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
     core::calib::CalibSample sample;
     sample.image = d.gray;
     sample.t_world_trajframe = *pose;
+    const std::size_t scratch_before = candidate_intensities.size();
     fill_precull_candidates(
-      cloud, full_bins, cam, t_cam_world0, args.min_depth, args.max_depth, pad_px, sample);
+      cloud, cam, t_cam_world0, args.min_depth, args.max_depth, pad_px, sample,
+      candidate_intensities);
     if (sample.points_world.size() < default_nid.min_points) {
       BAGWIZ_LOG_WARN(
         kLogger,
         "Dropping sample at %" PRId64 " ns: only %zu candidate map point(s) project into view.",
         d.stamp_ns, sample.points_world.size());
+      candidate_intensities.resize(scratch_before);
       continue;
     }
+    sample_sizes.push_back(sample.points_world.size());
     samples.push_back(std::move(sample));
   }
   if (samples.size() < 3) {
@@ -800,6 +859,18 @@ std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
       "--of, the TF chain, and --min-depth/--max-depth.",
       samples.size(), decoded.size());
     return std::nullopt;
+  }
+  // Histogram-equalize the union of candidate intensities: the NID bins are
+  // decided by exactly the points NID scores, so the binning cannot drift
+  // with the map's coverage (frustum culling, the voxel size, or the map
+  // source) — only with what the samples actually look at.
+  const auto bins = core::calib::equalize_intensity_bins(candidate_intensities, args.nid_bins);
+  std::size_t pos = 0;
+  for (std::size_t s = 0; s < samples.size(); ++s) {
+    samples[s].intensity_bins.assign(
+      bins.begin() + static_cast<std::ptrdiff_t>(pos),
+      bins.begin() + static_cast<std::ptrdiff_t>(pos + sample_sizes[s]));
+    pos += sample_sizes[s];
   }
   return samples;
 }
@@ -849,14 +920,10 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
     return 1;
   }
 
-  // 5. Map: accumulate the --pcd topic's clouds into the --ref frame.
-  const auto cloud = accumulate_map(args, *poses, static_buffer);
-  if (!cloud.has_value()) {
-    return 1;
-  }
-
-  // 6. Cheap stamp scan + sample picking (reuses `reader`; no next() has run
-  // on it yet, so set_filter here is still legal).
+  // 5. Cheap stamp scan + sample picking (reuses `reader`; no next() has run
+  // on it yet, so set_filter here is still legal). Ahead of the map pass:
+  // picking needs only image stamps and the trajectory, and the picks decide
+  // which part of the scene the map must cover at all.
   const auto stamps = scan_image_stamps(args, *reader);
   if (!stamps.has_value()) {
     return 1;
@@ -897,7 +964,7 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
     return 1;
   }
 
-  // 7. Decode only the picked messages + build the camera model from the
+  // 6. Decode only the picked messages + build the camera model from the
   // first one. In gated mode every interval's candidates are decoded and the
   // sharpest one per interval survives.
   auto decoded = decode_picked_samples(args, picks, *stamps);
@@ -923,8 +990,23 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   cam.width = first.gray.width;
   cam.height = first.gray.height;
 
+  // The initial (delta=0) camera pose chain, shared by the frustum cull below
+  // and the candidate assembly.
+  const core::calib::Mat4 t_trajframe_cam0 = core::calib::mat4_multiply(
+    chain->t_trajframe_parent,
+    core::calib::mat4_multiply(
+      core::calib::edge_transform(chain->edge_bag, {}), chain->t_child_camoptical));
+
+  // 7. Map: accumulate the --pcd topic's clouds into the --ref frame,
+  // dropping points no picked sample can see as they arrive.
+  const auto frusta = build_sample_frusta(args, *decoded, *poses, cam, t_trajframe_cam0);
+  const auto cloud = accumulate_map(args, *poses, static_buffer, frusta);
+  if (!cloud.has_value()) {
+    return 1;
+  }
+
   // 8. Pre-cull candidates from the map and assemble the per-sample structs.
-  const auto samples = assemble_samples(args, *decoded, *poses, *cloud, cam, *chain);
+  const auto samples = assemble_samples(args, *decoded, *poses, *cloud, cam, t_trajframe_cam0);
   if (!samples.has_value()) {
     return 1;
   }

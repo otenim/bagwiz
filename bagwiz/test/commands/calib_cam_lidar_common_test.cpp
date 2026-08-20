@@ -802,6 +802,68 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudDoesNotDeskewUniformTimeField)
 // A non-uniform per-point time field means a real sweep: deskew each point to
 // the header stamp before the ref-frame placement, so the point captured 0.5 s
 // into the sweep lands at the pose of 5.5 s, not 5 s.
+TEST(CalibCamLidarCommonTest, AccumulateCloudCullsPointsOutsideEverySampleView)
+{
+  // One view: the camera at the identity pose looking down +z, depth window
+  // [1, 10] m, normalized bounds |xn|,|yn| <= 1. Points behind the camera,
+  // beyond the window, or outside the cone are culled before voxelization.
+  commands::MapAccumulator map{0.0};
+  commands::MapAccumulationStats stats;
+  commands::SampleViewFrustum view;
+  view.t_cam_ref = bagwiz::core::calib::identity_mat4();
+  view.lo_xn = view.lo_yn = -1.0;
+  view.hi_xn = view.hi_yn = 1.0;
+  view.lo_depth = 1.0;
+  view.hi_depth = 10.0;
+  const std::vector<commands::SampleViewFrustum> views{view};
+  const auto trajectory = moving_trajectory(0.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map,
+    make_cloud_xyzi(
+      {{5.0F, 0.0F, 0.0F, 0.5F},    // beside the camera: z == 0, outside the window
+       {0.0F, 0.0F, 20.0F, 0.5F},   // beyond the window
+       {0.0F, 0.0F, 5.0F, 0.5F},    // in view
+       {4.0F, 0.0F, 2.0F, 0.5F},    // |x/z| = 2: outside the cone
+       {0.5F, -0.5F, 4.0F, 0.5F}},  // in view
+      5'000'000'000LL),
+    trajectory, std::nullopt, stats, views);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  EXPECT_EQ(out.points.size(), 2U);
+  EXPECT_EQ(stats.points_added, 2U);
+  EXPECT_EQ(stats.points_culled_out_of_view, 3U);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudKeepsPointVisibleInAnySingleView)
+{
+  // A second view looking down -z (pitched by pi, flipping the optical axis)
+  // rescues a point the first view cannot see: the cull is a union, not an
+  // intersection.
+  commands::MapAccumulator map{0.0};
+  commands::MapAccumulationStats stats;
+  commands::SampleViewFrustum view;
+  view.lo_xn = view.lo_yn = -1.0;
+  view.hi_xn = view.hi_yn = 1.0;
+  view.lo_depth = 1.0;
+  view.hi_depth = 10.0;
+  view.t_cam_ref = bagwiz::core::calib::identity_mat4();
+  auto back_view = view;
+  back_view.t_cam_ref = bagwiz::core::calib::make_transform({0, 0, 0}, {0, M_PI, 0});
+  const std::vector<commands::SampleViewFrustum> views{view, back_view};
+  const auto trajectory = moving_trajectory(0.0);
+  const auto error = commands::accumulate_cloud_into_map(
+    map,
+    make_cloud_xyzi(
+      {{0.0F, 0.0F, -5.0F, 0.5F},  // behind view 1, in front of view 2
+       {5.0F, 0.0F, 0.0F, 0.5F}},  // in neither
+      5'000'000'000LL),
+    trajectory, std::nullopt, stats, views);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  EXPECT_EQ(out.points.size(), 1U);
+  EXPECT_EQ(stats.points_culled_out_of_view, 1U);
+}
+
 TEST(CalibCamLidarCommonTest, AccumulateCloudDeskewsVaryingTimeField)
 {
   commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
