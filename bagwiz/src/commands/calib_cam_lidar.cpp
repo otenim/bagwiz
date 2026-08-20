@@ -762,8 +762,8 @@ void fill_precull_candidates(
 // precull-padded pixel rectangle, widened by a fixed margin so that a point
 // the distortion model pushes INTO the padded rect is still kept — the cull
 // must be a superset of the exact per-sample predicate, and a few extra
-// points only cost memory. Samples with no interpolable pose get no view;
-// assemble_samples drops them anyway.
+// points only cost memory. Samples whose stamp falls outside the
+// trajectory get no view; assemble_samples drops them anyway.
 std::vector<SampleViewFrustum> build_sample_frusta(
   const CalibCamLidarArgs & args, std::span<const DecodedSample> decoded,
   std::span<const core::TrajectoryPose> poses, const core::calib::CameraModel & cam,
