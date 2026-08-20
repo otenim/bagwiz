@@ -43,6 +43,15 @@ struct TrimArgs
   // message to their earliest last message, both boundary messages included.
   // Mutually exclusive with the offset flags above.
   std::vector<std::string> align;
+  // Topic selectors (literal names or '*' globs, as in `align` above) exempt
+  // from the window: every message on a selected topic is copied whatever the
+  // window resolved to, while every other topic is still trimmed. NOT a topic
+  // filter — unlike `bagwiz topic keep`, the non-exempt topics stay in the
+  // output. Does not move the window: `align`'s span and the `msg` counts are
+  // still resolved over every message in the bag. A non-empty selection makes
+  // the window a per-message decision, so it also declines the chunk
+  // pass-through and the storage-index pushdown (see run_trim).
+  std::vector<std::string> keep;
   // Reference clock for the window: "header" (default) evaluates bounds and
   // the per-message keep decision on header.stamp, falling back to receive
   // time for messages without a usable stamp (headerless type, stamp == 0, or

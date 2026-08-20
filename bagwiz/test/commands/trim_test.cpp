@@ -447,6 +447,207 @@ TEST_F(TrimTest, AlignDisjointTopicsFail)
   EXPECT_EQ(bagwiz::commands::run_trim(args), 1);
 }
 
+// --keep exempts a topic from the window: every one of its messages is copied
+// whatever the window resolved to, while every other topic is still trimmed.
+// Unlike `topic keep`, it is not a filter — the non-exempt topics stay in the
+// output, cut as usual.
+TEST_F(TrimTest, KeepTopicSurvivesOutsideWindow)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto out_path = tmp_dir_ / "out";
+
+  bagwiz::commands::TrimArgs args;
+  args.input_path = in_path;
+  args.start = "2s";
+  args.keep = {"/slow"};
+  args.output_path = out_path;
+
+  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
+
+  const auto out = collect(out_path);
+  // /fast is trimmed exactly as StartOnlyToOutput leaves it; /slow is exempt,
+  // so its t0+0.5s message survives even though the window starts at t0+2s.
+  EXPECT_EQ(
+    out.at("/fast"),
+    (std::vector<std::int64_t>{kT0 + 2 * kSecond, kT0 + 3 * kSecond, kT0 + 4 * kSecond}));
+  EXPECT_EQ(
+    out.at("/slow"),
+    (std::vector<std::int64_t>{kT0 + kSecond / 2, kT0 + 2 * kSecond + kSecond / 2}));
+}
+
+// Under --stamp recv the window normally rides in the reader's ReadFilter, so
+// the storage layer never yields out-of-range rows. --keep has to suppress
+// that pushdown, or the exempt topic's out-of-window messages would be gone
+// before any predicate could spare them.
+TEST_F(TrimTest, KeepUnderRecvStampSuppressesTheIndexPushdown)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto out_path = tmp_dir_ / "out";
+
+  bagwiz::commands::TrimArgs args;
+  args.input_path = in_path;
+  args.start = "2s";
+  args.stamp = "recv";
+  args.keep = {"/slow"};
+  args.output_path = out_path;
+
+  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
+
+  const auto out = collect(out_path);
+  EXPECT_EQ(
+    out.at("/fast"),
+    (std::vector<std::int64_t>{kT0 + 2 * kSecond, kT0 + 3 * kSecond, kT0 + 4 * kSecond}));
+  EXPECT_EQ(
+    out.at("/slow"),
+    (std::vector<std::int64_t>{kT0 + kSecond / 2, kT0 + 2 * kSecond + kSecond / 2}));
+}
+
+// The SQLite backend pushes the window down as a WHERE clause rather than a
+// chunk index, so it needs the same suppression as the MCAP path above.
+TEST_F(TrimTest, KeepUnderRecvStampSuppressesTheSqlite3Pushdown)
+{
+  const auto in_path = tmp_dir_ / "input.db3";
+  {
+    auto writer = bagwiz::io::open_write(in_path, sqlite3_file_opts());
+    write_fixture_messages(*writer);
+    writer->close();
+  }
+  const auto out_path = tmp_dir_ / "out.db3";
+
+  bagwiz::commands::TrimArgs args;
+  args.input_path = in_path;
+  args.start = "2s";
+  args.stamp = "recv";
+  args.keep = {"/slow"};
+  args.output_path = out_path;
+
+  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
+
+  const auto out = collect(out_path);
+  EXPECT_EQ(
+    out.at("/fast"),
+    (std::vector<std::int64_t>{kT0 + 2 * kSecond, kT0 + 3 * kSecond, kT0 + 4 * kSecond}));
+  EXPECT_EQ(
+    out.at("/slow"),
+    (std::vector<std::int64_t>{kT0 + kSecond / 2, kT0 + 2 * kSecond + kSecond / 2}));
+}
+
+// A chunk lying entirely outside the window can still carry messages of an
+// exempt topic, so --keep must decline the chunk pass-through and take the
+// decoded pipeline — which is what the forced-pipeline reference proves here,
+// along with the compression the declined fast path no longer preserves.
+TEST_F(TrimTest, KeepDeclinesThePassthroughAndMatchesThePipeline)
+{
+  const auto in_path = tmp_dir_ / "input_zstd";
+  {
+    auto opts = mcap_dir_opts();
+    opts.mcap_compression = "zstd";
+    auto writer = bagwiz::io::open_write(in_path, opts);
+    const std::vector<std::byte> big(2048, std::byte{0x42});
+    const std::span<const std::byte> big_view(big.data(), big.size());
+    writer->declare_topic(make_topic("/fast", "std_msgs/msg/String"));
+    writer->declare_topic(make_topic("/slow", "std_msgs/msg/String"));
+    for (int i = 0; i <= 4; ++i) {
+      writer->write("/fast", kT0 + i * kSecond, big_view);
+    }
+    writer->write("/slow", kT0 + kSecond / 2, big_view);
+    writer->write("/slow", kT0 + 2 * kSecond + kSecond / 2, big_view);
+    writer->close();
+  }
+
+  bagwiz::commands::TrimArgs args;
+  args.input_path = in_path;
+  args.start = "2s";
+  args.stamp = "recv";
+  args.keep = {"/slow"};
+
+  ::setenv("BAGWIZ_PASSTHROUGH", "off", 1);
+  args.output_path = tmp_dir_ / "ref";
+  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
+  ::unsetenv("BAGWIZ_PASSTHROUGH");
+  args.output_path = tmp_dir_ / "out";
+  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
+
+  EXPECT_EQ(collect(tmp_dir_ / "ref"), collect(tmp_dir_ / "out"));
+  EXPECT_EQ(
+    collect(tmp_dir_ / "out").at("/slow"),
+    (std::vector<std::int64_t>{kT0 + kSecond / 2, kT0 + 2 * kSecond + kSecond / 2}));
+
+  // With the fast path declined, --keep leaves the same uncompressed output
+  // the decoded pipeline always writes — unlike the pass-through, which keeps
+  // the input's zstd chunks (PassthroughMatchesPipelineAndPreservesCompression).
+  EXPECT_EQ(
+    bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml").compression_format, "none");
+}
+
+// --keep is not a window input: exempting topics without saying what to cut is
+// still the windowless trim the command rejects.
+TEST_F(TrimTest, KeepWithoutAWindowFails)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  bagwiz::commands::TrimArgs args;
+  args.input_path = in_path;
+  args.keep = {"/slow"};
+  args.output_path = tmp_dir_ / "out";
+
+  EXPECT_EQ(bagwiz::commands::run_trim(args), 1);
+}
+
+// --keep changes which messages survive, never where the window sits: a `msg`
+// count still ranks every message in the bag, exempt topics included.
+TEST_F(TrimTest, KeepDoesNotShiftAMsgCountWindow)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  // Clock order: /fast t0, /slow t0+0.5s, /fast t0+1s, ... — so 2msg resolves
+  // the start to t0+1s only while /slow's message is counted. Dropping exempt
+  // topics from the ranking would land on t0+2s and cut /fast one further.
+  bagwiz::commands::TrimArgs args;
+  args.input_path = in_path;
+  args.start = "2msg";
+  args.output_path = tmp_dir_ / "control";
+  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
+
+  args.keep = {"/slow"};
+  args.output_path = tmp_dir_ / "out";
+  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
+
+  const auto control = collect(tmp_dir_ / "control");
+  const auto out = collect(tmp_dir_ / "out");
+  EXPECT_EQ(
+    control.at("/fast"),
+    (std::vector<std::int64_t>{
+      kT0 + kSecond, kT0 + 2 * kSecond, kT0 + 3 * kSecond, kT0 + 4 * kSecond}));
+  EXPECT_EQ(out.at("/fast"), control.at("/fast"));
+  EXPECT_EQ(
+    out.at("/slow"),
+    (std::vector<std::int64_t>{kT0 + kSecond / 2, kT0 + 2 * kSecond + kSecond / 2}));
+}
+
+// --align resolves the window, --keep exempts a topic from it: the two compose
+// rather than conflict.
+TEST_F(TrimTest, KeepComposesWithAlign)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto out_path = tmp_dir_ / "out";
+
+  bagwiz::commands::TrimArgs args;
+  args.input_path = in_path;
+  args.align = {"/slow"};  // window [t0+0.5s, t0+2.5s], both bounds inclusive
+  args.keep = {"/fast"};
+  args.output_path = out_path;
+
+  ASSERT_EQ(bagwiz::commands::run_trim(args), 0);
+
+  // AlignToSingleTopic leaves /fast at {t0+1s, t0+2s}; exempting it keeps all five.
+  const auto out = collect(out_path);
+  EXPECT_EQ(out.at("/fast").size(), 5U);
+  EXPECT_EQ(
+    out.at("/slow"),
+    (std::vector<std::int64_t>{kT0 + kSecond / 2, kT0 + 2 * kSecond + kSecond / 2}));
+}
+
 TEST_F(TrimTest, EndPastBagEndWarnsAndSucceeds)
 {
   const auto in_path = build_input(tmp_dir_);
@@ -1049,9 +1250,10 @@ TEST_F(TrimTest, PassthroughMatchesPipelineAndPreservesCompression)
 // Exercises the real TrimCommand::configure() — reached through the
 // process-wide command registry that its BAGWIZ_REGISTER_COMMAND registrar
 // populates — rather than a hand-mirrored copy of its wiring. Deleting
-// `.require_present = true` from trim.cpp's --align declaration fails this
-// test directly; it does not rest on a manual CLI run staying correct.
-TEST(TrimCliWiring, AlignFlagRequiresPresence)
+// `.require_present = true` from trim.cpp's --align or --keep declaration
+// fails this test directly; it does not rest on a manual CLI run staying
+// correct.
+TEST(TrimCliWiring, TopicFlagsRequirePresence)
 {
   bagwiz::commands::Command * trim_cmd = nullptr;
   for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
@@ -1066,8 +1268,14 @@ TEST(TrimCliWiring, AlignFlagRequiresPresence)
   trim_cmd->configure(app);
 
   const auto slots = bagwiz::commands::topic_slots_of(app);
-  ASSERT_EQ(slots.size(), 1U);  // just --align
-  EXPECT_TRUE(slots[0].spec.require_present);
+  ASSERT_EQ(slots.size(), 2U);  // --align and --keep
+  std::map<std::string, bool> require_present;
+  for (const auto & slot : slots) {
+    ASSERT_NE(slot.option, nullptr);
+    require_present[slot.option->get_name()] = slot.spec.require_present;
+  }
+  EXPECT_TRUE(require_present.at("--align"));
+  EXPECT_TRUE(require_present.at("--keep"));
 }
 
 }  // namespace

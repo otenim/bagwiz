@@ -1323,21 +1323,22 @@ std::vector<std::string> complete_ls(const CompletionRequest & request)
 
 // `trim -i|--input <bag>` copies only the messages inside a time window. All
 // its flags are surfaced for any `-` word; <input> is a path that falls through
-// to the shell's file completion. `--align`'s value is a declared topic slot
-// (any type, every value in its run — it is variadic), so try_topic_completion
-// handles it before this function is reached; `--stamp` completes its two
-// clock choices.
+// to the shell's file completion. `--align`'s and `--keep`'s values are
+// declared topic slots (any type, every value in their run — both are
+// variadic), so try_topic_completion handles them before this function is
+// reached; `--stamp` completes its two clock choices.
 //
 //   trim: `trim`(0) -i|--input <bag>
 //         {[--start <off>] [--end <off>|--duration <len>] | --both <off> |
-//          --align <topics>...} [--stamp header|recv] [-o <out>] [-w]
+//          --align <topics>...} [--keep <topics>...] [--stamp header|recv]
+//         [-o <out>] [-w]
 std::vector<std::string> complete_trim(const CompletionRequest & request)
 {
   const auto current = current_word(request);
   if (current.starts_with("-")) {
     return matching(
       with_help(
-        {"--align", "--both", "--duration", "--end", "--input", "--output", "--overwrite",
+        {"--align", "--both", "--duration", "--end", "--input", "--keep", "--output", "--overwrite",
          "--stamp", "--start", "-i", "-o", "-w"}),
       current);
   }
