@@ -8,6 +8,7 @@
 
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
+#include "bagwiz/core/base/duration_parse.hpp"
 #include "bagwiz/core/calib/observability.hpp"
 #include "bagwiz/core/pointcloud/deskew.hpp"
 #include "bagwiz/core/pointcloud/point_time.hpp"
@@ -165,7 +166,37 @@ std::string validate_calibrate_flags(const CalibCamLidarArgs & args)
   if (args.keyframe_dist < 0.0 || args.keyframe_rot_deg < 0.0) {
     return "--keyframe-dist and --keyframe-rot must be non-negative (0 disables the gate)";
   }
+  if (const auto err = parse_skip_durations(args).second; !err.empty()) {
+    return err;
+  }
   return parse_fix_spec(args.fix_axes).second;
+}
+
+std::pair<std::array<std::int64_t, 2>, std::string> parse_skip_durations(
+  const CalibCamLidarArgs & args)
+{
+  std::array<std::int64_t, 2> out{0, 0};
+  const std::array<std::pair<const std::string *, const char *>, 2> flags{
+    {{&args.skip_start, "--skip-start"}, {&args.skip_end, "--skip-end"}}};
+  for (std::size_t i = 0; i < flags.size(); ++i) {
+    const auto & [value, name] = flags[i];
+    if (value->empty()) {
+      continue;
+    }
+    // The same grammar as `trim --start/--end`: the unit suffix is mandatory,
+    // so a bare number is a parse failure rather than a guess.
+    const auto ns = core::parse_duration_ns(*value, core::DurationUnitPolicy::RequireUnit);
+    if (!ns.has_value()) {
+      return {
+        out, std::string(name) + ": '" + *value +
+               "' is not a duration (expected e.g. 30s, 500ms; a unit suffix is required)"};
+    }
+    if (*ns < 0) {
+      return {out, std::string(name) + " must be non-negative"};
+    }
+    out[i] = *ns;
+  }
+  return {out, ""};
 }
 
 std::pair<FixSpec, std::string> parse_fix_spec(const std::string & csv)

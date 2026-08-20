@@ -85,6 +85,13 @@ struct CalibCamLidarArgs
   // (the default) keeps the plain even-time-spacing behavior.
   double keyframe_dist = 0.0;
   double keyframe_rot_deg = 0.0;
+  // --skip-start / --skip-end: raw duration strings (the same grammar as
+  // `trim --start/--end` — a unit suffix is mandatory, e.g. "30s", "1.5s").
+  // Empty = disabled. Each excludes that duration, measured from the bag's
+  // time extent (its start / its end), from the estimation; see
+  // parse_skip_durations.
+  std::string skip_start;
+  std::string skip_end;
   bool json = false;       // --json; emit the stdout summary as JSON
   bool overwrite = false;  // -w,--overwrite; replace an existing -o/--output path
 };
@@ -113,6 +120,19 @@ struct FixSpec
 // meaningful when it is empty): an unknown token, `none` combined with other
 // tokens, or a csv fixing all six axes (nothing left to optimize).
 [[nodiscard]] std::pair<FixSpec, std::string> parse_fix_spec(const std::string & csv);
+
+// The parsed --skip-start / --skip-end values, in nanoseconds, as
+// {skip_start_ns, skip_end_ns} (0 for a flag that was omitted). Each is a
+// duration measured from the bag's time extent: the run path excludes
+// [bag_start, bag_start + skip_start_ns) and (bag_end - skip_end_ns, bag_end]
+// from the estimation by trimming the --pose trajectory to what lies between
+// them, which every downstream consumer (image-sample eligibility, the cloud
+// span check, deskew clamping) already keys off. Errors (returned in the
+// second member; the first member is only meaningful when it is empty): a
+// value that fails the `trim --start/--end` duration grammar (a unit suffix
+// is mandatory) or a negative duration.
+[[nodiscard]] std::pair<std::array<std::int64_t, 2>, std::string> parse_skip_durations(
+  const CalibCamLidarArgs & args);
 
 // Pick up to `samples` image-stamp indices into `image_stamps_ns` (sorted
 // ascending), evenly spread inside the trajectory span shrunk by `margin_ns`
@@ -340,7 +360,9 @@ private:
 // YAML that `bagwiz tf static update` applies. Returns 0 on success, 1 on any
 // error (bad flag combination, missing/wrong-typed --pcd/--pose/--cam or
 // CameraInfo topic, a --pcd topic without an intensity field, an unresolvable
-// or off-chain edge, too few usable image samples, or a refinement failure),
+// or off-chain edge, --skip-start/--skip-end covering the whole bag or leaving
+// fewer than two trajectory poses, too few usable image samples, or a
+// refinement failure),
 // with messages through the same logging pattern run_tf_static_dump uses.
 // Defined in calib_cam_lidar.cpp.
 int run_calib_cam_lidar(const CalibCamLidarArgs & args);

@@ -333,6 +333,10 @@ struct FixtureBagOptions
   std::int64_t cloud_stamp_ns = 20'000'000'000LL;
   std::int64_t pose_t0_ns = 10'000'000'000LL;
   std::int64_t pose_t1_ns = 50'000'000'000LL;
+  // Extra identity poses between the two span endpoints (empty by default).
+  // The --skip-start/--skip-end tests need interior poses so trimming the
+  // endpoints still leaves an interpolatable trajectory.
+  std::vector<std::int64_t> mid_pose_stamps_ns;
   bool cloud_with_intensity = true;
   bool cloud_with_time_field = false;
 };
@@ -380,7 +384,11 @@ void write_fixture_bag(
   writer->write(
     kPcdTopic, opts.cloud_stamp_ns, std::span<const std::byte>(cloud_cdr.data(), cloud_cdr.size()));
 
-  for (const std::int64_t stamp_ns : {opts.pose_t0_ns, opts.pose_t1_ns}) {
+  std::vector<std::int64_t> pose_stamps_ns{opts.pose_t0_ns};
+  pose_stamps_ns.insert(
+    pose_stamps_ns.end(), opts.mid_pose_stamps_ns.begin(), opts.mid_pose_stamps_ns.end());
+  pose_stamps_ns.push_back(opts.pose_t1_ns);
+  for (const std::int64_t stamp_ns : pose_stamps_ns) {
     geometry_msgs::msg::PoseStamped pose;
     pose.header.frame_id = kRefFrame;
     pose.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
@@ -632,6 +640,73 @@ TEST_F(CalibCamLidarTest, RecoversInjectedYawIntoYaml)
   constexpr double kWeakAxisToleranceRad = 0.75 * M_PI / 180.0;
   EXPECT_NEAR(rpy.roll, 0.0, kWeakAxisToleranceRad);
   EXPECT_NEAR(rpy.pitch, 0.0, kWeakAxisToleranceRad);
+}
+
+// --skip-start/--skip-end end to end: the skipped ranges are measured from
+// the bag's time extent ([0, 50] s here), so 12 s/8 s trims the 10 s and 50 s
+// endpoint poses and shrinks the trajectory span to [20, 40] s — and the run
+// still recovers the injected yaw from what remains inside the window.
+TEST_F(CalibCamLidarTest, SkipStartEndShrinkTheTrajectorySpan)
+{
+  const auto scene = build_scene();
+  constexpr double kInjectedYawRad = 1.0 * M_PI / 180.0;
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(kInjectedYawRad)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  opts.mid_pose_stamps_ns = {20'000'000'000LL, 30'000'000'000LL, 40'000'000'000LL};
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.fix_axes = "x,y,z";
+  args.skip_start = "12s";
+  args.skip_end = "8s";
+
+  ::testing::internal::CaptureStderr();
+  const int rc = run_calib_cam_lidar(args);
+  const std::string logs = ::testing::internal::GetCapturedStderr();
+  ASSERT_EQ(rc, 0) << logs;
+  ASSERT_TRUE(std::filesystem::exists(args.output_path));
+  // The trim must actually have engaged and shrunk the span to [20, 40] s
+  // (20.000 s wide), not silently passed the full trajectory through.
+  EXPECT_NE(logs.find("Skipping"), std::string::npos) << logs;
+  EXPECT_NE(logs.find("spanning 20.000 s"), std::string::npos) << logs;
+
+  const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
+  ASSERT_TRUE(parsed.ok()) << parsed.error;
+  const auto rpy = bagwiz::core::quaternion_to_rpy(parsed.transforms->front().transform.rotation);
+  EXPECT_NEAR(rpy.yaw, 0.0, 0.15 * M_PI / 180.0);
+}
+
+TEST_F(CalibCamLidarTest, RejectsSkipsCoveringTheWholeBag)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  // The bag spans [0, 50] s; 30 s + 30 s covers it and more.
+  args.skip_start = "30s";
+  args.skip_end = "30s";
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+}
+
+TEST_F(CalibCamLidarTest, RejectsSkipsLeavingTooFewPoses)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  // The window [0, 45] s trims the 50 s endpoint pose, leaving only the 10 s
+  // one — too few to interpolate.
+  args.skip_end = "5s";
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
 }
 
 // The all-zero "t" field a cloud carries after `pcd undistort` rewrote it:

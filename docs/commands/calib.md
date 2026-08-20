@@ -28,7 +28,8 @@ bagwiz calib cam-lidar -i <input> --pcd <topic> --pose <topic> --cam <topic> \
   [--cam-info <topic>] [-o <output>] [--samples <n>] [--fix <axes>] \
   [--keyframe-dist <m>] [--keyframe-rot <deg>] \
   [--max-trans <m>] [--max-rot <deg>] [--nid-bins <n>] [--min-depth <m>] \
-  [--max-depth <m>] [--voxel <m>] [--json] [-w|--overwrite]
+  [--max-depth <m>] [--voxel <m>] [--skip-start <dur>] [--skip-end <dur>] \
+  [--json] [-w|--overwrite]
 ```
 
 ### Example
@@ -69,6 +70,8 @@ bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 | `--min-depth <m>`       | Nearest projected map-point depth kept, in meters. Default `2`. Long-form only.                                                                                                                                                                                                                            |
 | `--max-depth <m>`       | Farthest projected map-point depth kept, in meters. Default `150`. Long-form only.                                                                                                                                                                                                                         |
 | `--voxel <m>`           | Edge length of the grid the accumulated map is collapsed onto, in meters. Default `0.1`; `0` keeps every point of every cloud. See [How the map is built](#how-the-map-is-built). Long-form only.                                                                                                          |
+| `--skip-start <dur>`    | Exclude this duration, measured from the bag's start, from the estimation (e.g. `30s`; a unit suffix is required: `ns`/`us`/`ms`/`s`). See [Sample selection](#sample-selection). Long-form only.                                                                                                          |
+| `--skip-end <dur>`      | Exclude this duration, measured from the bag's end, from the estimation. Same duration grammar as `--skip-start`. Long-form only.                                                                                                                                                                          |
 | `--json`                | Emit the stdout summary as JSON instead of the human table. The YAML is written either way. Long-form only.                                                                                                                                                                                                |
 | `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path.                                                                                                                                                                                                                                                                  |
 
@@ -130,6 +133,14 @@ static TF topic (e.g. `/tf_static`) — an edge only reachable through dynamic
 rejects it up front.
 
 ### Sample selection
+
+`--skip-start` / `--skip-end` first shrink what "the trajectory's time span"
+means below: each drops the poses lying inside its skipped range — measured
+from the bag's start / end, not from the pose topic's own span — and the map
+accumulation, the sample eligibility, and the deskew clamping all follow the
+trimmed span, so clouds and images in the skipped ranges never enter the
+estimation. Skips that together cover the whole bag, or that leave fewer than
+two trajectory poses, are rejected.
 
 By default samples are spread evenly over the trajectory's **time** span
 (minus a 3 s margin at each end so every pick can be interpolated). Even time
@@ -282,11 +293,13 @@ Beyond the codes in [Exit status](#exit-status) below, exit `1` covers: an
 invalid flag combination (`--samples` under 3, `--fix` naming an unknown token,
 combining `none` with other tokens, or naming all six axes, a non-positive `--max-trans`/`--max-rot`/`--min-depth`, `--nid-bins`
 outside `4`–`256`, `--max-depth` at or below `--min-depth`, an empty
-`--of`/`--ref`, or a negative `--keyframe-dist`/`--keyframe-rot`), a missing or
+`--of`/`--ref`, or a negative `--keyframe-dist`/`--keyframe-rot`, or an
+unparseable or negative `--skip-start`/`--skip-end`), a missing or
 wrong-typed `--pcd`/`--pose`/`--cam` topic, a `--pcd` topic without an
 `intensity` field, an unparseable or big-endian cloud, a `--pcd`/`--cam`
 topic with no messages, every cloud falling outside the trajectory span, a
-pose topic yielding fewer than two poses, an unresolvable
+pose topic yielding fewer than two poses, skips that cover the whole bag or
+leave fewer than two trajectory poses inside the window, an unresolvable
 CameraInfo, a cloud frame with no static-TF path from `--of`, a
 `--parent`/`--child` edge that is not on the static chain (or not directly on
 a static topic), too few usable image samples surviving the trajectory-span

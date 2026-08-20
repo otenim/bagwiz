@@ -182,6 +182,55 @@ TEST(CalibCamLidarCommonTest, ParseFixSpec)
   EXPECT_NE(commands::parse_fix_spec("auto,none").second, "");
 }
 
+TEST(CalibCamLidarCommonTest, ParseSkipDurations)
+{
+  {
+    // Both omitted (the default): disabled, zero.
+    const auto [ns, err] = commands::parse_skip_durations(valid_args());
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(ns[0], 0);
+    EXPECT_EQ(ns[1], 0);
+  }
+  {
+    auto args = valid_args();
+    args.skip_start = "30s";
+    args.skip_end = "1.5s";
+    const auto [ns, err] = commands::parse_skip_durations(args);
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(ns[0], 30'000'000'000LL);
+    EXPECT_EQ(ns[1], 1'500'000'000LL);
+  }
+  {
+    auto args = valid_args();
+    args.skip_start = "500ms";
+    const auto [ns, err] = commands::parse_skip_durations(args);
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(ns[0], 500'000'000LL);
+    EXPECT_EQ(ns[1], 0);
+  }
+  {
+    // A unit suffix is mandatory (the `trim --start/--end` grammar): a bare
+    // number is a parse failure, not a guess.
+    auto args = valid_args();
+    args.skip_start = "30";
+    EXPECT_NE(commands::parse_skip_durations(args).second, "");
+    args = valid_args();
+    args.skip_start = "30x";
+    EXPECT_NE(commands::parse_skip_durations(args).second, "");
+  }
+  {
+    auto args = valid_args();
+    args.skip_end = "-5s";
+    EXPECT_NE(commands::parse_skip_durations(args).second, "");
+  }
+  {
+    // A bad skip value also fails cross-field validation.
+    auto args = valid_args();
+    args.skip_start = "bogus";
+    EXPECT_NE(commands::validate_calibrate_flags(args), "");
+  }
+}
+
 TEST(CalibCamLidarCommonTest, PickSampleIndicesRespectsMarginAndSpread)
 {
   std::vector<std::int64_t> stamps;
