@@ -97,10 +97,11 @@ KeyEvent classify_key(std::string_view bytes)
   if (bytes.size() == 1) {
     const unsigned char c = static_cast<unsigned char>(bytes[0]);
     switch (c) {
-      // A lone ESC backs out one level; the views decide what that means
-      // (close the help, leave the preview; inert at the top). ^C/^D
-      // terminate the session outright; 'q' is a separate event so a view
-      // can leave it unbound (only walk's YAML view quits on it).
+      // A lone ESC is kBack, which no walk view binds as back: the views
+      // absorb it so a reflexive press does nothing (only the point-cloud
+      // topic picker binds it, as cancel). ^C/^D terminate the session
+      // outright; 'q' backs out one level (close the help, leave the
+      // preview) and quits walk at the top-level YAML view.
       case 0x1B:  // lone ESC
         return KeyEvent::kBack;
       case 0x03:  // Ctrl-C
