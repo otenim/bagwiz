@@ -8,12 +8,17 @@
 
 #include "bagwiz/core/tui/image/terminal_image_caps.hpp"
 
+#include "bagwiz/core/base/logging.hpp"
+
 #include <poll.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -66,7 +71,62 @@ bool da1_advertises_sixel(std::string_view reply) noexcept
     pos = sep + 1;
   }
 }
+
+// True when `value` names a non-empty environment value. A variable that is
+// exported but empty carries no information, so it reads as absent.
+bool has_value(const char * value) noexcept
+{
+  return value != nullptr && *value != '\0';
+}
 }  // namespace
+
+bool session_is_remote(const char * ssh_connection, const char * ssh_tty) noexcept
+{
+  return has_value(ssh_connection) || has_value(ssh_tty);
+}
+
+std::optional<TransferOverride> parse_transfer_override(const char * value) noexcept
+{
+  if (!has_value(value)) {
+    return TransferOverride::kAuto;
+  }
+  std::string lowered(value);
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  if (lowered == "auto") {
+    return TransferOverride::kAuto;
+  }
+  if (lowered == "raw") {
+    return TransferOverride::kRawRgb;
+  }
+  if (lowered == "png") {
+    return TransferOverride::kPng;
+  }
+  return std::nullopt;
+}
+
+ImageTransfer preferred_transfer(
+  ImageBackend backend, bool remote, TransferOverride override_value) noexcept
+{
+  // Only Kitty can be handed anything but raw pixels, so the whole policy
+  // collapses for the other backends before the override is even consulted.
+  if (backend != ImageBackend::kKitty) {
+    return ImageTransfer::kRawRgb;
+  }
+  switch (override_value) {
+    case TransferOverride::kRawRgb:
+      return ImageTransfer::kRawRgb;
+    case TransferOverride::kPng:
+      return ImageTransfer::kPng;
+    case TransferOverride::kAuto:
+    default:
+      // PNG costs ~80 ms of deflate per 1.5 Mpx frame to save roughly half the
+      // wire bytes: worth it below ~39 MB/s of throughput, which every ssh link
+      // is and no local pty is.
+      return remote ? ImageTransfer::kPng : ImageTransfer::kRawRgb;
+  }
+}
 
 CellPixels cell_pixels(Size term) noexcept
 {
@@ -146,6 +206,20 @@ TerminalImageCaps detect_terminal_image_caps(std::ostream & out, int in_fd, Size
   }
 
   caps.backend = classify_query_reply(reply);
+
+  // Transfer format last, so it can depend on the backend just detected. The
+  // environment is read here — the single impure step — while the policy it
+  // feeds stays in the pure helpers above.
+  const char * const raw_override = std::getenv("BAGWIZ_WALK_PREVIEW_TRANSFER");
+  const auto override_value = parse_transfer_override(raw_override);
+  if (!override_value.has_value()) {
+    BAGWIZ_LOG_WARN(
+      "bagwiz.tui.image", "ignoring BAGWIZ_WALK_PREVIEW_TRANSFER='%s': expected auto, raw, or png",
+      raw_override);
+  }
+  caps.transfer = preferred_transfer(
+    caps.backend, session_is_remote(std::getenv("SSH_CONNECTION"), std::getenv("SSH_TTY")),
+    override_value.value_or(TransferOverride::kAuto));
   return caps;
 }
 

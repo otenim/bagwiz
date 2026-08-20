@@ -29,6 +29,7 @@ using bagwiz::commands::TileRenderEntry;
 using bagwiz::commands::TileRenderKey;
 using bagwiz::core::tui::image::CellRegion;
 using bagwiz::core::tui::image::ImageBackend;
+using bagwiz::core::tui::image::ImageTransfer;
 using bagwiz::core::tui::image::TerminalImageCaps;
 
 PcdOverlayState overlay_state()
@@ -157,6 +158,14 @@ TEST(TileRenderKey, GeometryAndBackendChangeTheKey)
   {
     auto c = caps();
     c.backend = ImageBackend::kSixel;
+    EXPECT_NE(base, tile_render_key(overlay_state(), false, 7, 128, region(), c));
+  }
+  {
+    // Raw RGB and PNG frame the same picture as different escape bytes, so a
+    // replay across a transfer switch would emit a payload framed for the
+    // other format.
+    auto c = caps();
+    c.transfer = ImageTransfer::kPng;
     EXPECT_NE(base, tile_render_key(overlay_state(), false, 7, 128, region(), c));
   }
 }

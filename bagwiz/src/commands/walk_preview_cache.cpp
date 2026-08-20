@@ -42,6 +42,7 @@ TileRenderKey tile_render_key(
   key.cell_width = caps.cell.width;
   key.cell_height = caps.cell.height;
   key.backend = caps.backend;
+  key.transfer = caps.transfer;
   return key;
 }
 

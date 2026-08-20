@@ -26,6 +26,11 @@ using bagwiz::core::tui::image::cell_pixels;
 using bagwiz::core::tui::image::classify_query_reply;
 using bagwiz::core::tui::image::detect_terminal_image_caps;
 using bagwiz::core::tui::image::ImageBackend;
+using bagwiz::core::tui::image::ImageTransfer;
+using bagwiz::core::tui::image::parse_transfer_override;
+using bagwiz::core::tui::image::preferred_transfer;
+using bagwiz::core::tui::image::session_is_remote;
+using bagwiz::core::tui::image::TransferOverride;
 
 // A Kitty-capable terminal answers the graphics query with an APC `;OK`, then
 // the DA1 reply; a non-Kitty terminal answers only DA1.
@@ -168,6 +173,80 @@ TEST(TerminalImageCapsTest, ClassifySixelAsFirstOrLastParam)
 TEST(TerminalImageCapsTest, DetectSixelViaPipe)
 {
   EXPECT_EQ(probe_with_reply(kDa1Sixel, term_80x24()), ImageBackend::kSixel);
+}
+
+// --- transfer format policy (pure) -------------------------------------------
+
+TEST(TerminalImageCapsTest, SessionIsRemoteOnlyWhenAnSshVariableCarriesAValue)
+{
+  EXPECT_FALSE(session_is_remote(nullptr, nullptr));
+  EXPECT_TRUE(session_is_remote("10.0.0.1 51234 10.0.0.2 22", nullptr));
+  EXPECT_TRUE(session_is_remote(nullptr, "/dev/pts/3"));
+  EXPECT_TRUE(session_is_remote("10.0.0.1 51234 10.0.0.2 22", "/dev/pts/3"));
+}
+
+TEST(TerminalImageCapsTest, SessionIsRemoteIgnoresExportedButEmptyVariables)
+{
+  // `export SSH_TTY=` leaves the name defined with an empty value; sshd always
+  // sets a non-empty one, so an empty value must not read as a remote session.
+  EXPECT_FALSE(session_is_remote("", ""));
+  EXPECT_FALSE(session_is_remote("", nullptr));
+}
+
+TEST(TerminalImageCapsTest, ParseTransferOverrideAcceptsTheDocumentedValues)
+{
+  EXPECT_EQ(parse_transfer_override("auto"), TransferOverride::kAuto);
+  EXPECT_EQ(parse_transfer_override("raw"), TransferOverride::kRawRgb);
+  EXPECT_EQ(parse_transfer_override("png"), TransferOverride::kPng);
+}
+
+TEST(TerminalImageCapsTest, ParseTransferOverrideIsCaseInsensitive)
+{
+  // Matches BAGWIZ_LOG_LEVEL, the other documented walk env var.
+  EXPECT_EQ(parse_transfer_override("PNG"), TransferOverride::kPng);
+  EXPECT_EQ(parse_transfer_override("Raw"), TransferOverride::kRawRgb);
+}
+
+TEST(TerminalImageCapsTest, ParseTransferOverrideTreatsUnsetAndEmptyAsAuto)
+{
+  EXPECT_EQ(parse_transfer_override(nullptr), TransferOverride::kAuto);
+  EXPECT_EQ(parse_transfer_override(""), TransferOverride::kAuto);
+}
+
+TEST(TerminalImageCapsTest, ParseTransferOverrideRejectsAnUnrecognisedValue)
+{
+  // nullopt (not kAuto) so the caller can warn instead of silently ignoring a
+  // typo that would otherwise look like it took effect.
+  EXPECT_FALSE(parse_transfer_override("pnq").has_value());
+  EXPECT_FALSE(parse_transfer_override("true").has_value());
+}
+
+TEST(TerminalImageCapsTest, PreferredTransferPicksPngOnlyForARemoteKittySession)
+{
+  EXPECT_EQ(
+    preferred_transfer(ImageBackend::kKitty, true, TransferOverride::kAuto), ImageTransfer::kPng);
+  EXPECT_EQ(
+    preferred_transfer(ImageBackend::kKitty, false, TransferOverride::kAuto),
+    ImageTransfer::kRawRgb);
+}
+
+TEST(TerminalImageCapsTest, PreferredTransferLetsTheOverrideWinOverTheSshHeuristic)
+{
+  EXPECT_EQ(
+    preferred_transfer(ImageBackend::kKitty, false, TransferOverride::kPng), ImageTransfer::kPng);
+  EXPECT_EQ(
+    preferred_transfer(ImageBackend::kKitty, true, TransferOverride::kRawRgb),
+    ImageTransfer::kRawRgb);
+}
+
+TEST(TerminalImageCapsTest, PreferredTransferIsAlwaysRawForSixel)
+{
+  // Sixel has no format negotiation, so neither the heuristic nor an explicit
+  // override may hand it a PNG it cannot decode.
+  for (const auto ov : {TransferOverride::kAuto, TransferOverride::kPng}) {
+    EXPECT_EQ(preferred_transfer(ImageBackend::kSixel, true, ov), ImageTransfer::kRawRgb);
+    EXPECT_EQ(preferred_transfer(ImageBackend::kNone, true, ov), ImageTransfer::kRawRgb);
+  }
 }
 
 }  // namespace

@@ -12,6 +12,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
+#include <libavutil/opt.h>
 #include <libavutil/pixfmt.h>
 }
 
@@ -104,6 +105,20 @@ EncodePngResult encode_png(const PackedRaster & raster)
   // PNG is a single intra frame; the time base is unused for a still image but
   // libav requires a non-zero value.
   ctx.codec->time_base = AVRational{1, 1};
+  // libav defaults to `pred=none`, which hands deflate the raw rows and leaves
+  // most of PNG's compression on the table — on photographic frames that is
+  // ~1.55x versus ~2.1x, and on smooth gradients the unfiltered output is
+  // larger than the input. `mixed` picks a filter per row. Level 1 rather than
+  // the default 6 because the filtering does most of the work: measured on a
+  // 4K camera frame, level 1 is both smaller and faster than the old default
+  // (9.8 MB / 411 ms against 14.4 MB / 657 ms), while level 6 costs 3x the CPU
+  // for a further 10%. Both callers — walk's `S` save and its remote preview
+  // transfer — want small and fast, so neither setting is parameterized.
+  ctx.codec->compression_level = 1;
+  if (int ret = av_opt_set(ctx.codec->priv_data, "pred", "mixed", 0); ret < 0) {
+    result.error = "could not enable PNG prediction filtering: " + av_err(ret);
+    return result;
+  }
   if (int ret = avcodec_open2(ctx.codec, encoder, nullptr); ret < 0) {
     result.error = "could not open encoder: " + av_err(ret);
     return result;
