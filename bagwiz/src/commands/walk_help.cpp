@@ -56,7 +56,7 @@ std::string preview_footer_legend()
 {
   // Space/b navigation is unlabeled here too — the working set starts at the
   // view toggles.
-  return "  [u] rectify   [p] pcd overlay   [?] help   [Esc] back";
+  return "  [u] rectify   [p] pcd overlay   [?] help   [Esc/q] back";
 }
 
 std::vector<std::string> yaml_help_lines()
@@ -76,7 +76,7 @@ std::vector<std::string> yaml_help_lines()
     "  i              open the image preview (image topics only)",
     "Other",
     "  S              save the message as YAML",
-    "  Esc            close this help",
+    "  Esc / q        close this help",
     "  q              quit walk (Ctrl-C / Ctrl-D work too)",
   };
 }
@@ -100,7 +100,7 @@ std::vector<std::string> preview_help_lines()
     "  = / -          point size",
     "  ] / [          opacity",
     "Other",
-    "  Esc            close this help / back to the YAML view",
+    "  Esc / q        close this help / back to the YAML view",
     "  Ctrl-C / Ctrl-D  quit walk",
   };
 }

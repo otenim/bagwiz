@@ -54,8 +54,10 @@ enum class KeyEvent {
                        // synthesized on EOF / read interruption). No view
                        // may swallow it — it ends the session from anywhere
   kQuitView,           // quit the current view ('q'/'Q'); bound only where a
-                       // view chooses to — today walk's YAML view alone, so
-                       // it is inert in the preview, pickers and overlays
+                       // view chooses to — today walk's YAML view quits
+                       // outright on it, while the preview and the help
+                       // overlays instead back out one level, same as kBack,
+                       // so repeated presses walk all the way out
   kResize,             // terminal was resized (synthesised by read_key_event
                        // from a SIGWINCH flag set by the signal_handler
                        // module; never produced by classify_key)

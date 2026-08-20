@@ -108,7 +108,7 @@ TEST(WalkHelpFooters, PreviewFooterCarriesOnlyTheWorkingSet)
   EXPECT_NE(footer.find("[u] rectify"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[p] pcd overlay"), std::string::npos) << footer;
   EXPECT_NE(footer.find("[?] help"), std::string::npos) << footer;
-  EXPECT_TRUE(footer.ends_with("[Esc] back")) << footer;
+  EXPECT_TRUE(footer.ends_with("[Esc/q] back")) << footer;
 }
 
 TEST(WalkHelpFooters, PreviewFooterFitsOneRowOfAModestTerminal)
@@ -147,34 +147,33 @@ TEST(WalkHelpReference, HelpIsGroupedBySection)
   EXPECT_NE(preview_help.find("PCD overlay"), std::string::npos);
 }
 
-TEST(WalkHelpReference, HelpAdvertisesEscAsItsOnlyCloseKey)
+TEST(WalkHelpReference, HelpAdvertisesEscAndQAsItsCloseKeys)
 {
-  // Esc alone closes the reference ('?' only opens it), so the card must
-  // say so and must not advertise '?' as a second close key.
+  // Esc or q closes the reference ('?' only opens it), so the card must say
+  // so and must not advertise '?' as a third close key.
   for (const auto & help : {flatten(yaml_help_lines()), flatten(preview_help_lines())}) {
-    EXPECT_NE(help.find("Esc"), std::string::npos) << help;
+    EXPECT_NE(help.find("Esc / q"), std::string::npos) << help;
     EXPECT_NE(help.find("close this help"), std::string::npos) << help;
     EXPECT_EQ(help.find("? / Esc"), std::string::npos) << help;
   }
 }
 
-TEST(WalkHelpFooters, BackIsEscInThePreviewFooter)
+TEST(WalkHelpFooters, BackIsEscOrQInThePreviewFooter)
 {
-  // q quits from the YAML view; going back a level is Esc, so the preview
-  // footer advertises [Esc] back and leaves q to the '?' reference.
-  EXPECT_EQ(preview_footer_legend().find("[q]"), std::string::npos);
+  // Mashing q should be able to walk all the way out of the preview: the
+  // footer advertises [Esc/q] back rather than Esc alone.
+  EXPECT_NE(preview_footer_legend().find("[Esc/q] back"), std::string::npos);
 }
 
 TEST(WalkHelpReference, HelpListsTheLeaveKeys)
 {
-  // The YAML view quits walk on q, so its reference lists q. The preview
-  // goes back a level on Esc, quits walk on Ctrl-C / Ctrl-D and leaves q
-  // inert — its reference must say exactly that and not advertise q.
+  // The YAML view quits walk on q outside the help overlay, so its
+  // reference lists a standalone q. The preview goes back a level on Esc
+  // or q and quits walk only on Ctrl-C / Ctrl-D.
   EXPECT_NE(flatten(yaml_help_lines()).find("  q "), std::string::npos);
   const std::string preview_help = flatten(preview_help_lines());
-  EXPECT_NE(preview_help.find("  Esc "), std::string::npos);
+  EXPECT_NE(preview_help.find("Esc / q"), std::string::npos);
   EXPECT_NE(preview_help.find("Ctrl-C / Ctrl-D"), std::string::npos);
-  EXPECT_EQ(preview_help.find("  q "), std::string::npos);
 }
 
 }  // namespace

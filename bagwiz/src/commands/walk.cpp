@@ -72,10 +72,10 @@ constexpr const char * kLogger = "bagwiz.cmd.walk";
 //   a             : toggle full-expansion of long primitive arrays
 //   i             : toggle in-terminal image preview (image topics on a
 //                   Kitty/Sixel-capable terminal; absent otherwise)
-//   Esc           : back out one level — close the help, leave the
-//                   preview; absorbed at the YAML view
-//   q / Q         : quit walk (bound in the YAML view only; inert in the
-//                   preview, the pickers and the help overlays)
+//   Esc / q / Q   : back out one level — close the help, leave the
+//                   preview; at the plain YAML view, q / Q instead quit
+//                   walk outright (Esc is absorbed there), so mashing q
+//                   walks all the way out of any screen
 //   Ctrl-C / Ctrl-D : terminate walk outright, from any screen
 // Inside the image preview u/p/t (rectify, pcd overlay, topic picker) and
 // the overlay adjusters f/c/r/=/-/]/[ apply.
@@ -215,18 +215,19 @@ public:
     auto on_nav = [&](core::tui::NavKey nav) -> core::tui::AppKeyResult {
       status.clear();
       if (show_help) {
-        // The overlay accepts only its own keys: Esc closes it, resize
-        // repaints it, the scroll keys (handled inside the pager) move it,
-        // and every other key — q included — is swallowed so a reference
-        // lookup can neither act behind the card nor end the session.
-        // (Ctrl-C / Ctrl-D never reaches this callback: the pager exits on
-        // kTerminate before offering the key here.)
+        // The overlay accepts only its own keys: Esc or q closes it (q
+        // closes the help instead of quitting walk while it is open),
+        // resize repaints it, the scroll keys (handled inside the pager)
+        // move it, and every other key is swallowed so a reference lookup
+        // cannot act behind the card. (Ctrl-C / Ctrl-D never reaches this
+        // callback: the pager exits on kTerminate before offering the key
+        // here.)
         switch (nav) {
           case core::tui::NavKey::kBack:
+          case core::tui::NavKey::kQuit:  // 'q': close the help, don't quit
             close_help();
             return core::tui::AppKeyResult::kHandled;
           case core::tui::NavKey::kResize:
-          case core::tui::NavKey::kQuit:  // kHandled keeps the pager alive
             return core::tui::AppKeyResult::kHandled;
           default:
             return core::tui::AppKeyResult::kIgnored;
@@ -293,8 +294,9 @@ public:
         return core::tui::AppKeyResult::kHandled;
       }
       if (show_help) {
-        // Same swallow rule as the navigation keys above: Esc alone leaves
-        // the reference ('?' only opens it).
+        // Same swallow rule as the navigation keys above: only Esc or q
+        // leaves the reference ('?' only opens it), and that is handled by
+        // on_nav, not here.
         return core::tui::AppKeyResult::kIgnored;
       }
       switch (ev) {

@@ -158,7 +158,7 @@ core::tui::Frame build_help_frame(core::tui::Size term, const std::vector<std::s
     append_wrapped(frame.body, line, cols);
   }
   frame.footer.emplace_back();  // blank separator
-  append_wrapped(frame.footer, "  [Esc] back", cols);
+  append_wrapped(frame.footer, "  [Esc/q] back", cols);
   return frame;
 }
 
