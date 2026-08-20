@@ -935,7 +935,7 @@ TEST(FlagCompletionTest, CalibCamLidarDashListsCamLidarFlags)
     "--cam\n--cam-info\n--child\n--fix\n--help\n--input\n--json\n--keyframe-dist\n--keyframe-rot\n"
     "--max-depth\n--max-rot\n"
     "--max-trans\n--min-depth\n--nid-bins\n--of\n--output\n--overwrite\n--parent\n--pcd\n--pose\n"
-    "--ref\n--samples\n-h\n-i\n-o\n-w\n");
+    "--ref\n--samples\n--voxel\n-h\n-i\n-o\n-w\n");
 }
 
 // `calib cam-lidar --parent <TAB>` completes static frame ids: the edited edge

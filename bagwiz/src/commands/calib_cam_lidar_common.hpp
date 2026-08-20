@@ -25,6 +25,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -72,6 +73,9 @@ struct CalibCamLidarArgs
   int nid_bins = 16;         // --nid-bins; NID histogram bins
   double min_depth = 2.0;    // --min-depth; nearest projected point depth, meters
   double max_depth = 150.0;  // --max-depth; farthest projected point depth, meters
+  // --voxel; edge length of the grid the accumulated map is collapsed onto,
+  // meters. 0 keeps every point of every cloud (see MapAccumulator).
+  double voxel_size = 0.1;
   // --keyframe-dist / --keyframe-rot: pose-gated keyframe sampling. When
   // either is > 0, eligible images are partitioned into gate intervals (a new
   // interval opens once the interpolated pose moved >= keyframe_dist meters
@@ -185,6 +189,63 @@ struct MapAccumulationStats
   std::uint64_t points_clamped_out_of_span = 0;
 };
 
+// The calibration map under construction: points are collapsed onto a voxel
+// grid as they arrive, one running centroid and mean intensity per occupied
+// voxel, so the map costs memory in proportion to the SURFACE it covers
+// rather than to the number of points recorded. That matters because a
+// driving platform re-measures the same surface once per sweep — hundreds of
+// times over a bag — and NID reads the map as a statistical sample of
+// (intensity, gray) pairs, which those duplicates do not enrich. A voxel size
+// of 0 turns the grid off and keeps every point verbatim, in arrival order.
+class MapAccumulator
+{
+public:
+  explicit MapAccumulator(double voxel_size) : voxel_size_(voxel_size) {}
+
+  // Adds one point already expressed in the --ref frame. False when the
+  // coordinates cannot be quantized — a magnitude no voxel index can hold is
+  // as unusable as a NaN, and the caller counts it the same way — which
+  // cannot happen with the grid off.
+  bool add(const std::array<float, 3> & point, float intensity);
+
+  // Occupied voxels so far (points so far, with the grid off).
+  [[nodiscard]] std::size_t size() const;
+  [[nodiscard]] bool empty() const { return size() == 0; }
+
+  // Materializes the map and empties the accumulator (one-shot): one point per
+  // occupied voxel, at its centroid and carrying its mean intensity, ordered
+  // by voxel index so the same points give the same map whatever order the
+  // bag delivered them in. With the grid off, the points as they were added.
+  [[nodiscard]] core::pointcloud::PcdCloud finish();
+
+private:
+  struct VoxelKey
+  {
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::int32_t z = 0;
+    bool operator==(const VoxelKey & other) const = default;
+  };
+  struct VoxelKeyHash
+  {
+    std::size_t operator()(const VoxelKey & key) const;
+  };
+  // Running sums, in double because a voxel far from the origin accumulates
+  // hundreds of large coordinates and a float sum would lose centimeters.
+  struct VoxelAccum
+  {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+    double intensity = 0.0;
+    std::uint32_t count = 0;
+  };
+
+  double voxel_size_;
+  core::pointcloud::PcdCloud raw_;  // grid off
+  std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash> voxels_;
+};
+
 // Append one --pcd cloud to the accumulated map, expressed in the
 // trajectory's --ref frame: each point is placed by
 // T_ref_of(header.stamp) * T_of_cloud, where `trajectory` carries T_ref_of
@@ -203,7 +264,7 @@ struct MapAccumulationStats
 // unusable static extrinsic, or a deskew failure. The caller reports it
 // against the topic and aborts.
 [[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
-  core::pointcloud::PcdCloud & map, core::pointcloud::PointCloud2 cloud,
+  MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
   std::span<const core::TrajectoryPose> trajectory,
   const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats);
 

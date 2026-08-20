@@ -142,6 +142,10 @@ private:
     sub->add_option(
       "--max-depth", cam_lidar_args_.max_depth,
       "Farthest projected point depth in meters (default 150)");
+    sub->add_option(
+      "--voxel", cam_lidar_args_.voxel_size,
+      "Voxel edge the accumulated map is downsampled onto, in meters "
+      "(default 0.1; 0 keeps every point of every cloud)");
     sub->add_flag("--json", cam_lidar_args_.json, "Emit the stdout summary as JSON");
     sub->add_flag(
       "-w,--overwrite", cam_lidar_args_.overwrite, "Replace an existing -o/--output path");

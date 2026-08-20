@@ -371,7 +371,7 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
   filter.topics = {args.pcd_topic};
   reader->set_filter(filter);
 
-  core::pointcloud::PcdCloud map;
+  MapAccumulator map{args.voxel_size};
   MapAccumulationStats stats;
   std::unordered_map<std::string, std::optional<geometry_msgs::msg::Transform>> extrinsic_by_frame;
   io::RawMessage raw;
@@ -420,7 +420,7 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
     BAGWIZ_LOG_ERROR(kLogger, "Topic '%s' carries no messages.", args.pcd_topic.c_str());
     return std::nullopt;
   }
-  if (map.points.empty()) {
+  if (map.empty()) {
     BAGWIZ_LOG_ERROR(
       kLogger,
       "No usable map points: all %" PRIu64
@@ -448,10 +448,22 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
       kLogger, "Dropped %" PRIu64 " non-finite point(s) from the accumulated map.",
       stats.points_dropped_nonfinite);
   }
-  BAGWIZ_LOG_INFO(
-    kLogger, "Map: %zu point(s) from %" PRIu64 " cloud(s) on '%s' (%" PRIu64 " deskewed).",
-    map.points.size(), stats.clouds_read, args.pcd_topic.c_str(), stats.clouds_deskewed);
-  return map;
+  // Both counts, because the gap between them is the whole point of the grid:
+  // a driving platform re-measures each surface once per sweep, and the map
+  // keeps one point per voxel out of all of them.
+  if (args.voxel_size > 0.0) {
+    BAGWIZ_LOG_INFO(
+      kLogger,
+      "Map: %zu point(s) on a %.3f m voxel grid from %" PRIu64 " cloud(s) on '%s' (%" PRIu64
+      " point(s) read, %" PRIu64 " deskewed).",
+      map.size(), args.voxel_size, stats.clouds_read, args.pcd_topic.c_str(), stats.points_added,
+      stats.clouds_deskewed);
+  } else {
+    BAGWIZ_LOG_INFO(
+      kLogger, "Map: %zu point(s) from %" PRIu64 " cloud(s) on '%s' (%" PRIu64 " deskewed).",
+      map.size(), stats.clouds_read, args.pcd_topic.c_str(), stats.clouds_deskewed);
+  }
+  return map.finish();
 }
 
 // ---- phase 6: cheap stamp scan ---------------------------------------------

@@ -440,6 +440,12 @@ CalibCamLidarArgs base_args(const std::filesystem::path & tmp_dir)
   args.max_rot_deg = 2.0;
   args.min_depth = 1.0;
   args.max_depth = 50.0;
+  // The scene is a single synthetic sweep of 1800 points with no repeated
+  // measurements — the redundancy the default voxel grid exists to collapse is
+  // not there, so the grid could only thin the correlation signal these tests
+  // recover an injected error from. VoxelGridSurvivesTheRunPath covers the
+  // grid end to end instead.
+  args.voxel_size = 0.0;
   return args;
 }
 
@@ -651,6 +657,35 @@ TEST_F(CalibCamLidarTest, AcceptsCloudWithUniformTimeField)
   ASSERT_TRUE(parsed.ok()) << parsed.error;
   const auto rpy = bagwiz::core::quaternion_to_rpy(parsed.transforms->front().transform.rotation);
   EXPECT_NEAR(rpy.yaw, 0.0, 0.15 * M_PI / 180.0);
+}
+
+// --voxel end to end: the grid must reach the accumulated map (not just the
+// unit-tested accumulator), collapse it, and still leave a map the run can
+// calibrate against. base_args turns the grid off for every other run-path
+// test, so this is the one that walks the voxel path.
+TEST_F(CalibCamLidarTest, VoxelGridSurvivesTheRunPath)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.voxel_size = 0.1;
+
+  ::testing::internal::CaptureStderr();
+  const int rc = run_calib_cam_lidar(args);
+  const std::string logs = ::testing::internal::GetCapturedStderr();
+  ASSERT_EQ(rc, 0) << logs;
+  EXPECT_TRUE(std::filesystem::exists(args.output_path));
+  // The log discloses both counts, and the grid must actually have collapsed
+  // something: fewer map points than the 1800 the sweep carried.
+  EXPECT_NE(logs.find("voxel grid"), std::string::npos) << logs;
+  EXPECT_NE(logs.find("(1800 point(s) read"), std::string::npos) << logs;
+  const std::size_t on_grid = logs.find("Map: ");
+  ASSERT_NE(on_grid, std::string::npos) << logs;
+  EXPECT_LT(std::stoul(logs.substr(on_grid + 5)), 1800U) << logs;
 }
 
 // The DEFAULT --fix (auto) end to end: on the ramp-wall scene, sliding the

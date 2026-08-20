@@ -466,6 +466,90 @@ TEST(CalibCamLidarCommonTest, ValidateRejectsEmptyOfOrRefFrame)
   EXPECT_NE(commands::validate_calibrate_flags(args), "");
 }
 
+// ---- MapAccumulator ---------------------------------------------------------
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorCollapsesPointsSharingAVoxel)
+{
+  // Four points inside one 0.5 m voxel collapse to their centroid, carrying
+  // the mean intensity — the driving platform re-measuring one surface must
+  // not cost the map four points.
+  commands::MapAccumulator acc{0.5};
+  EXPECT_TRUE(acc.add({1.0F, 1.0F, 1.0F}, 0.2F));
+  EXPECT_TRUE(acc.add({1.2F, 1.0F, 1.0F}, 0.4F));
+  EXPECT_TRUE(acc.add({1.0F, 1.4F, 1.0F}, 0.6F));
+  EXPECT_TRUE(acc.add({1.2F, 1.4F, 1.4F}, 0.8F));
+  EXPECT_EQ(acc.size(), 1U);
+  const auto map = acc.finish();
+  ASSERT_EQ(map.points.size(), 1U);
+  EXPECT_FLOAT_EQ(map.points[0][0], 1.1F);
+  EXPECT_FLOAT_EQ(map.points[0][1], 1.2F);
+  EXPECT_FLOAT_EQ(map.points[0][2], 1.1F);
+  ASSERT_EQ(map.intensities.size(), 1U);
+  EXPECT_FLOAT_EQ(map.intensities[0], 0.5F);
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorSeparatesVoxelsAcrossZero)
+{
+  // Quantization must FLOOR, not truncate toward zero: -0.05 and +0.05 are
+  // one 0.1 m voxel apart, and truncation would merge them (and every other
+  // pair straddling an axis) into one.
+  commands::MapAccumulator acc{0.1};
+  EXPECT_TRUE(acc.add({-0.05F, 0.0F, 0.0F}, 1.0F));
+  EXPECT_TRUE(acc.add({0.05F, 0.0F, 0.0F}, 1.0F));
+  EXPECT_EQ(acc.size(), 2U);
+  const auto map = acc.finish();
+  ASSERT_EQ(map.points.size(), 2U);
+  // Sorted by voxel index, so the negative one comes first.
+  EXPECT_LT(map.points[0][0], 0.0F);
+  EXPECT_GT(map.points[1][0], 0.0F);
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorDisabledKeepsEveryPointVerbatim)
+{
+  // Size 0 is the opt-out: no collapsing, no reordering, no centroid rounding.
+  commands::MapAccumulator acc{0.0};
+  EXPECT_TRUE(acc.add({1.0F, 1.0F, 1.0F}, 0.25F));
+  EXPECT_TRUE(acc.add({1.0F, 1.0F, 1.0F}, 0.75F));
+  EXPECT_EQ(acc.size(), 2U);
+  const auto map = acc.finish();
+  ASSERT_EQ(map.points.size(), 2U);
+  EXPECT_FLOAT_EQ(map.intensities[0], 0.25F);
+  EXPECT_FLOAT_EQ(map.intensities[1], 0.75F);
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorOutputDoesNotDependOnInsertionOrder)
+{
+  // The emitted map is sorted by voxel index, so the same set of points gives
+  // byte-identical output whatever order the bag delivered them in — the hash
+  // container's own iteration order must never reach the map.
+  const std::vector<std::array<float, 3>> pts{
+    {5.0F, 0.0F, 0.0F}, {-3.0F, 2.0F, 1.0F}, {0.0F, 0.0F, 0.0F}, {1.0F, -7.0F, 4.0F}};
+  commands::MapAccumulator forward{0.5};
+  for (const auto & p : pts) {
+    EXPECT_TRUE(forward.add(p, 0.5F));
+  }
+  commands::MapAccumulator backward{0.5};
+  for (auto it = pts.rbegin(); it != pts.rend(); ++it) {
+    EXPECT_TRUE(backward.add(*it, 0.5F));
+  }
+  const auto a = forward.finish();
+  const auto b = backward.finish();
+  ASSERT_EQ(a.points.size(), pts.size());
+  ASSERT_EQ(b.points.size(), pts.size());
+  for (std::size_t i = 0; i < a.points.size(); ++i) {
+    EXPECT_EQ(a.points[i], b.points[i]) << i;
+  }
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorRejectsUnquantizablePoint)
+{
+  // A coordinate too large to index a voxel is as unusable as a NaN: refused
+  // here rather than overflowing the index and landing in a wrong voxel.
+  commands::MapAccumulator acc{0.1};
+  EXPECT_FALSE(acc.add({1e30F, 0.0F, 0.0F}, 1.0F));
+  EXPECT_TRUE(acc.empty());
+}
+
 // ---- accumulate_cloud_into_map ----------------------------------------------
 
 // Two poses at 0 s and 10 s translating along +x at `v_mps`, so the
@@ -541,28 +625,56 @@ pc::PointCloud2 make_cloud_xyzit(
 
 TEST(CalibCamLidarCommonTest, AccumulateCloudAppendsPointsWithIntensities)
 {
-  pc::PcdCloud map;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
   commands::MapAccumulationStats stats;
   const auto trajectory = moving_trajectory(0.0);
   const auto error = commands::accumulate_cloud_into_map(
     map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.25F}, {4.0F, 5.0F, 6.0F, 0.75F}}, 5'000'000'000LL),
     trajectory, std::nullopt, stats);
   EXPECT_FALSE(error.has_value()) << *error;
-  ASSERT_EQ(map.points.size(), 2U);
-  EXPECT_FLOAT_EQ(map.points[0][0], 1.0F);
-  EXPECT_FLOAT_EQ(map.points[0][1], 2.0F);
-  EXPECT_FLOAT_EQ(map.points[0][2], 3.0F);
-  ASSERT_EQ(map.intensities.size(), 2U);
-  EXPECT_FLOAT_EQ(map.intensities[0], 0.25F);
-  EXPECT_FLOAT_EQ(map.intensities[1], 0.75F);
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 2U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 1.0F);
+  EXPECT_FLOAT_EQ(out.points[0][1], 2.0F);
+  EXPECT_FLOAT_EQ(out.points[0][2], 3.0F);
+  ASSERT_EQ(out.intensities.size(), 2U);
+  EXPECT_FLOAT_EQ(out.intensities[0], 0.25F);
+  EXPECT_FLOAT_EQ(out.intensities[1], 0.75F);
   EXPECT_EQ(stats.clouds_read, 1U);
   EXPECT_EQ(stats.points_added, 2U);
   EXPECT_EQ(stats.clouds_deskewed, 0U);
 }
 
+TEST(CalibCamLidarCommonTest, AccumulateCloudVoxelizesRepeatedSweeps)
+{
+  // The real reason the grid exists: a stationary platform re-measuring one
+  // surface. Two sweeps of the same three points must leave three map points,
+  // not six — while points_added still counts everything that was read, so
+  // the log can show the gap.
+  commands::MapAccumulator map{0.5};
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  const std::vector<std::array<float, 4>> sweep{
+    {1.0F, 0.0F, 0.0F, 0.2F}, {1.1F, 0.0F, 0.0F, 0.4F}, {9.0F, 0.0F, 0.0F, 1.0F}};
+  for (int i = 0; i < 2; ++i) {
+    const auto error = commands::accumulate_cloud_into_map(
+      map, make_cloud_xyzi(sweep, 5'000'000'000LL), trajectory, std::nullopt, stats);
+    EXPECT_FALSE(error.has_value()) << *error;
+  }
+  EXPECT_EQ(stats.points_added, 6U);
+  const auto out = map.finish();
+  // (1.0, 1.1) share the [1.0, 1.5) voxel; 9.0 is its own.
+  ASSERT_EQ(out.points.size(), 2U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 1.05F);
+  EXPECT_FLOAT_EQ(out.points[1][0], 9.0F);
+  ASSERT_EQ(out.intensities.size(), 2U);
+  EXPECT_FLOAT_EQ(out.intensities[0], 0.3F);  // mean of 0.2 and 0.4, twice over
+  EXPECT_FLOAT_EQ(out.intensities[1], 1.0F);
+}
+
 TEST(CalibCamLidarCommonTest, AccumulateCloudAppliesPoseAndExtrinsic)
 {
-  pc::PcdCloud map;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
   commands::MapAccumulationStats stats;
   // T_ref_of(5 s) = (5, 0, 0); the extrinsic lifts the cloud frame by +1 in y,
   // so (1, 2, 3) in the cloud lands at (6, 3, 3) in the ref frame.
@@ -571,10 +683,11 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudAppliesPoseAndExtrinsic)
     map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL), trajectory,
     translation_transform(0.0, 1.0, 0.0), stats);
   EXPECT_FALSE(error.has_value()) << *error;
-  ASSERT_EQ(map.points.size(), 1U);
-  EXPECT_FLOAT_EQ(map.points[0][0], 6.0F);
-  EXPECT_FLOAT_EQ(map.points[0][1], 3.0F);
-  EXPECT_FLOAT_EQ(map.points[0][2], 3.0F);
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 1U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 6.0F);
+  EXPECT_FLOAT_EQ(out.points[0][1], 3.0F);
+  EXPECT_FLOAT_EQ(out.points[0][2], 3.0F);
 }
 
 TEST(CalibCamLidarCommonTest, AccumulateCloudRejectsCloudWithoutIntensity)
@@ -592,24 +705,26 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudRejectsCloudWithoutIntensity)
     {"z", 8, pc::PointFieldType::kFloat32, 1},
   };
   c.data.resize(c.point_step);
-  pc::PcdCloud map;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
   commands::MapAccumulationStats stats;
   const auto trajectory = moving_trajectory(0.0);
   EXPECT_TRUE(
     commands::accumulate_cloud_into_map(map, c, trajectory, std::nullopt, stats).has_value());
-  EXPECT_TRUE(map.points.empty());
+  const auto out = map.finish();
+  EXPECT_TRUE(out.points.empty());
 }
 
 TEST(CalibCamLidarCommonTest, AccumulateCloudSkipsStampOutsideTrajectorySpan)
 {
-  pc::PcdCloud map;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
   commands::MapAccumulationStats stats;
   const auto trajectory = moving_trajectory(0.0);  // spans 0..10 s
   const auto error = commands::accumulate_cloud_into_map(
     map, make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 20'000'000'000LL), trajectory, std::nullopt,
     stats);
   EXPECT_FALSE(error.has_value()) << *error;
-  EXPECT_TRUE(map.points.empty());
+  const auto out = map.finish();
+  EXPECT_TRUE(out.points.empty());
   EXPECT_EQ(stats.clouds_skipped_out_of_span, 1U);
   EXPECT_EQ(stats.points_added, 0U);
 }
@@ -619,15 +734,16 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudSkipsStampOutsideTrajectorySpan)
 // accumulated as-is — deskewing it would be a no-op that only rewrites bytes.
 TEST(CalibCamLidarCommonTest, AccumulateCloudDoesNotDeskewUniformTimeField)
 {
-  pc::PcdCloud map;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
   commands::MapAccumulationStats stats;
   const auto trajectory = moving_trajectory(1.0);
   const auto error = commands::accumulate_cloud_into_map(
     map, make_cloud_xyzit({{0.0F, 0.0F, 0.0F, 0.5F, 0.0F}}, 5'000'000'000LL), trajectory,
     std::nullopt, stats);
   EXPECT_FALSE(error.has_value()) << *error;
-  ASSERT_EQ(map.points.size(), 1U);
-  EXPECT_FLOAT_EQ(map.points[0][0], 5.0F);  // placed at the header stamp, un-deskewed
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 1U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 5.0F);  // placed at the header stamp, un-deskewed
   EXPECT_EQ(stats.clouds_deskewed, 0U);
 }
 
@@ -636,7 +752,7 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudDoesNotDeskewUniformTimeField)
 // into the sweep lands at the pose of 5.5 s, not 5 s.
 TEST(CalibCamLidarCommonTest, AccumulateCloudDeskewsVaryingTimeField)
 {
-  pc::PcdCloud map;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
   commands::MapAccumulationStats stats;
   const auto trajectory = moving_trajectory(1.0);
   const auto error = commands::accumulate_cloud_into_map(
@@ -645,24 +761,26 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudDeskewsVaryingTimeField)
       {{0.0F, 0.0F, 0.0F, 0.5F, 0.5F}, {0.0F, 0.0F, 0.0F, 0.25F, 0.0F}}, 5'000'000'000LL),
     trajectory, std::nullopt, stats);
   EXPECT_FALSE(error.has_value()) << *error;
-  ASSERT_EQ(map.points.size(), 2U);
-  EXPECT_FLOAT_EQ(map.points[0][0], 5.5F);
-  EXPECT_FLOAT_EQ(map.points[1][0], 5.0F);
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 2U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 5.5F);
+  EXPECT_FLOAT_EQ(out.points[1][0], 5.0F);
   EXPECT_EQ(stats.clouds_deskewed, 1U);
 }
 
 TEST(CalibCamLidarCommonTest, AccumulateCloudDropsNonFinitePoints)
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();
-  pc::PcdCloud map;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
   commands::MapAccumulationStats stats;
   const auto trajectory = moving_trajectory(0.0);
   const auto error = commands::accumulate_cloud_into_map(
     map, make_cloud_xyzi({{nan, 0.0F, 0.0F, 0.5F}, {1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL),
     trajectory, std::nullopt, stats);
   EXPECT_FALSE(error.has_value()) << *error;
-  ASSERT_EQ(map.points.size(), 1U);
-  EXPECT_FLOAT_EQ(map.points[0][0], 1.0F);
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 1U);
+  EXPECT_FLOAT_EQ(out.points[0][0], 1.0F);
   EXPECT_EQ(stats.points_dropped_nonfinite, 1U);
 }
 
@@ -670,10 +788,11 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudRejectsBigEndianCloud)
 {
   auto c = make_cloud_xyzi({{1.0F, 2.0F, 3.0F, 0.5F}}, 5'000'000'000LL);
   c.is_bigendian = true;
-  pc::PcdCloud map;
+  commands::MapAccumulator map{0.0};  // grid off: these pin placement, not downsampling
   commands::MapAccumulationStats stats;
   const auto trajectory = moving_trajectory(0.0);
   EXPECT_TRUE(
     commands::accumulate_cloud_into_map(map, c, trajectory, std::nullopt, stats).has_value());
-  EXPECT_TRUE(map.points.empty());
+  const auto out = map.finish();
+  EXPECT_TRUE(out.points.empty());
 }

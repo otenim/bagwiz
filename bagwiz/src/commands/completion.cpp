@@ -1006,8 +1006,8 @@ std::vector<std::string> complete_tf(const CompletionRequest & request)
 //              --parent <frame> --child <frame> [--cam-info <topic>] [-o <out>]
 //              [--samples <n>] [--fix <axes>] [--keyframe-dist <m>]
 //              [--keyframe-rot <deg>] [--max-trans <m>] [--max-rot <deg>]
-//              [--nid-bins <n>] [--min-depth <m>] [--max-depth <m>] [--json]
-//              [-w|--overwrite]
+//              [--nid-bins <n>] [--min-depth <m>] [--max-depth <m>]
+//              [--voxel <m>] [--json] [-w|--overwrite]
 std::vector<std::string> complete_calib(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1028,30 +1028,32 @@ std::vector<std::string> complete_calib(const CompletionRequest & request)
 
   if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
     return matching(
-      with_help({"--cam",
-                 "--cam-info",
-                 "--child",
-                 "--fix",
-                 "--input",
-                 "--json",
-                 "--keyframe-dist",
-                 "--keyframe-rot",
-                 "--max-depth",
-                 "--max-rot",
-                 "--max-trans",
-                 "--min-depth",
-                 "--nid-bins",
-                 "--of",
-                 "--output",
-                 "--overwrite",
-                 "--parent",
-                 "--pcd",
-                 "--pose",
-                 "--ref",
-                 "--samples",
-                 "-i",
-                 "-o",
-                 "-w"}),
+      with_help(
+        {"--cam",
+         "--cam-info",
+         "--child",
+         "--fix",
+         "--input",
+         "--json",
+         "--keyframe-dist",
+         "--keyframe-rot",
+         "--max-depth",
+         "--max-rot",
+         "--max-trans",
+         "--min-depth",
+         "--nid-bins",
+         "--of",
+         "--output",
+         "--overwrite",
+         "--parent",
+         "--pcd",
+         "--pose",
+         "--ref",
+         "--samples",
+         "--voxel",
+         "-i",
+         "-o",
+         "-w"}),
       current);
   }
 

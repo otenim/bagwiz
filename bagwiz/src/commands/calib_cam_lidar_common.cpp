@@ -16,7 +16,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -156,6 +158,9 @@ std::string validate_calibrate_flags(const CalibCamLidarArgs & args)
   }
   if (args.min_depth <= 0.0 || args.max_depth <= args.min_depth) {
     return "--min-depth must be positive and below --max-depth";
+  }
+  if (args.voxel_size < 0.0) {
+    return "--voxel must be non-negative (0 keeps every point)";
   }
   if (args.keyframe_dist < 0.0 || args.keyframe_rot_deg < 0.0) {
     return "--keyframe-dist and --keyframe-rot must be non-negative (0 disables the gate)";
@@ -369,8 +374,86 @@ std::optional<core::calib::Mat4> interpolate_trajectory(
     q[1], q[2], q[3]);
 }
 
+std::size_t MapAccumulator::VoxelKeyHash::operator()(const VoxelKey & key) const
+{
+  // Boost-style combine of the three indices: neighbouring voxels differ by 1
+  // on one axis, which the golden-ratio constant and the shifts spread across
+  // buckets instead of leaving them adjacent.
+  std::size_t seed = 0;
+  for (const std::int32_t v : {key.x, key.y, key.z}) {
+    seed ^= std::hash<std::int32_t>{}(v) + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+  }
+  return seed;
+}
+
+bool MapAccumulator::add(const std::array<float, 3> & point, float intensity)
+{
+  if (voxel_size_ <= 0.0) {
+    raw_.points.push_back(point);
+    raw_.intensities.push_back(intensity);
+    return true;
+  }
+  // Floor, never truncate: truncation folds -0.5..0 onto the same index as
+  // 0..0.5, merging every pair of voxels that straddles an axis.
+  const double qx = std::floor(static_cast<double>(point[0]) / voxel_size_);
+  const double qy = std::floor(static_cast<double>(point[1]) / voxel_size_);
+  const double qz = std::floor(static_cast<double>(point[2]) / voxel_size_);
+  constexpr double kMinIndex = -2147483648.0;
+  constexpr double kMaxIndex = 2147483647.0;
+  const auto representable = [](double q) { return q >= kMinIndex && q <= kMaxIndex; };
+  if (!representable(qx) || !representable(qy) || !representable(qz)) {
+    return false;
+  }
+  auto & accum = voxels_[VoxelKey{
+    static_cast<std::int32_t>(qx), static_cast<std::int32_t>(qy), static_cast<std::int32_t>(qz)}];
+  accum.x += point[0];
+  accum.y += point[1];
+  accum.z += point[2];
+  accum.intensity += intensity;
+  ++accum.count;
+  return true;
+}
+
+std::size_t MapAccumulator::size() const
+{
+  return voxel_size_ <= 0.0 ? raw_.points.size() : voxels_.size();
+}
+
+core::pointcloud::PcdCloud MapAccumulator::finish()
+{
+  if (voxel_size_ <= 0.0) {
+    return std::move(raw_);
+  }
+  // Sorted by voxel index so the hash container's iteration order — which is
+  // an implementation detail, not a property of the bag — never reaches the
+  // map. Two runs over the same clouds must produce the same map.
+  std::vector<std::pair<VoxelKey, VoxelAccum>> ordered(voxels_.begin(), voxels_.end());
+  voxels_.clear();
+  std::sort(ordered.begin(), ordered.end(), [](const auto & a, const auto & b) {
+    if (a.first.x != b.first.x) {
+      return a.first.x < b.first.x;
+    }
+    if (a.first.y != b.first.y) {
+      return a.first.y < b.first.y;
+    }
+    return a.first.z < b.first.z;
+  });
+
+  core::pointcloud::PcdCloud out;
+  out.points.reserve(ordered.size());
+  out.intensities.reserve(ordered.size());
+  for (const auto & [key, accum] : ordered) {
+    const double n = accum.count;
+    out.points.push_back(
+      {static_cast<float>(accum.x / n), static_cast<float>(accum.y / n),
+       static_cast<float>(accum.z / n)});
+    out.intensities.push_back(static_cast<float>(accum.intensity / n));
+  }
+  return out;
+}
+
 std::optional<std::string> accumulate_cloud_into_map(
-  core::pointcloud::PcdCloud & map, core::pointcloud::PointCloud2 cloud,
+  MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
   std::span<const core::TrajectoryPose> trajectory,
   const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats)
 {
@@ -453,8 +536,6 @@ std::optional<std::string> accumulate_cloud_into_map(
   }
 
   const core::calib::Mat4 t_ref_cloud = core::calib::mat4_multiply(*t_ref_of, t_of_cloud_mat);
-  map.points.reserve(map.points.size() + n);
-  map.intensities.reserve(map.intensities.size() + n);
   for (std::size_t i = 0; i < n; ++i) {
     const float x = read_cloud_field(cloud, i, fx->offset, fx->type);
     const float y = read_cloud_field(cloud, i, fy->offset, fy->type);
@@ -464,9 +545,14 @@ std::optional<std::string> accumulate_cloud_into_map(
       continue;
     }
     const auto p = core::calib::transform_point(t_ref_cloud, {x, y, z});
-    map.points.push_back(
-      {static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])});
-    map.intensities.push_back(read_cloud_field(cloud, i, fi->offset, fi->type));
+    const std::array<float, 3> point{
+      static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])};
+    // A point too far out to index a voxel is garbage the map cannot place;
+    // counted with the non-finite drops rather than folded into a wrong voxel.
+    if (!map.add(point, read_cloud_field(cloud, i, fi->offset, fi->type))) {
+      ++stats.points_dropped_nonfinite;
+      continue;
+    }
     ++stats.points_added;
   }
   return std::nullopt;

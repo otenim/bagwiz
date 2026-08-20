@@ -28,7 +28,7 @@ bagwiz calib cam-lidar -i <input> --pcd <topic> --pose <topic> --cam <topic> \
   [--cam-info <topic>] [-o <output>] [--samples <n>] [--fix <axes>] \
   [--keyframe-dist <m>] [--keyframe-rot <deg>] \
   [--max-trans <m>] [--max-rot <deg>] [--nid-bins <n>] [--min-depth <m>] \
-  [--max-depth <m>] [--json] [-w|--overwrite]
+  [--max-depth <m>] [--voxel <m>] [--json] [-w|--overwrite]
 ```
 
 ### Example
@@ -68,6 +68,7 @@ bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 | `--nid-bins <n>`        | NID intensity/gray histogram bins, `4`–`256`. Default `16`. Long-form only.                                                                                                                                                                                                                                |
 | `--min-depth <m>`       | Nearest projected map-point depth kept, in meters. Default `2`. Long-form only.                                                                                                                                                                                                                            |
 | `--max-depth <m>`       | Farthest projected map-point depth kept, in meters. Default `150`. Long-form only.                                                                                                                                                                                                                         |
+| `--voxel <m>`           | Edge length of the grid the accumulated map is collapsed onto, in meters. Default `0.1`; `0` keeps every point of every cloud. See [How the map is built](#how-the-map-is-built). Long-form only.                                                                                                          |
 | `--json`                | Emit the stdout summary as JSON instead of the human table. The YAML is written either way. Long-form only.                                                                                                                                                                                                |
 | `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path.                                                                                                                                                                                                                                                                  |
 
@@ -97,9 +98,21 @@ knowing:
   cloud intensity against image gray; a topic without one is rejected before
   any refining starts.
 
-Points are accumulated verbatim — no voxel filtering or downsampling — so the
-map's density follows the recording, and memory grows with the bag's length
-and cloud rate.
+Points are collapsed onto a voxel grid as they arrive — one point per
+occupied voxel, at the centroid of everything that landed in it and carrying
+their mean intensity — so the map costs memory in proportion to the
+**surface** it covers rather than to the number of points recorded. This
+matters because a driving platform re-measures the same surface once per
+sweep, hundreds of times over a bag, and NID reads the map as a statistical
+sample of (intensity, gray) pairs that those duplicates do not enrich. The
+run logs both counts, e.g. `Map: 2100000 point(s) on a 0.100 m voxel grid
+from 118 cloud(s) ... (37223852 point(s) read, 0 deskewed)`.
+
+`--voxel 0` turns the grid off and keeps every point of every cloud, at the
+memory and per-iteration cost the raw density implies — worth it only for a
+short recording, or a `--pcd` topic that is already a sparse or
+pre-downsampled map. The emitted map is ordered by voxel index either way, so
+two runs over the same clouds build the same map.
 
 `--parent`/`--child` must name an edge that is both on the resolved chain
 from `--of` to the camera's optical frame, and recorded directly on a
