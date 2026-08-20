@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -31,6 +32,7 @@ using bagwiz::core::tui::image::clear_image;
 using bagwiz::core::tui::image::fit_image;
 using bagwiz::core::tui::image::ImageBackend;
 using bagwiz::core::tui::image::ImageFit;
+using bagwiz::core::tui::image::ImageTransfer;
 using bagwiz::core::tui::image::render_image;
 using bagwiz::core::tui::image::TerminalImageCaps;
 
@@ -236,6 +238,96 @@ TEST(TerminalImageRendererTest, ClearSixelIsNoOp)
   std::ostringstream out;
   clear_image(out, ImageBackend::kSixel);
   EXPECT_TRUE(out.str().empty());
+}
+
+// --- render_image (Kitty PNG transfer) ---------------------------------------
+
+// base64 of the first 6 bytes of the PNG signature. Six bytes is two whole
+// base64 groups, so these 8 characters are the exact prefix of any base64'd
+// PNG regardless of what follows — enough to prove the payload is a PNG
+// bitstream and not raw pixels, without decoding it.
+std::string png_base64_prefix()
+{
+  static constexpr std::array<std::byte, 6> kSignature{std::byte{0x89}, std::byte{0x50},
+                                                       std::byte{0x4E}, std::byte{0x47},
+                                                       std::byte{0x0D}, std::byte{0x0A}};
+  return base64_encode(std::span<const std::byte>(kSignature.data(), kSignature.size()));
+}
+
+TEST(TerminalImageRendererTest, RenderKittyPngEmitsF100FramingWithAPngPayload)
+{
+  const PackedRaster raster = make_raster(8, 8);
+  const CellRegion region{1, 1, 3, 3};
+  TerminalImageCaps caps = kitty_caps(2, 2);
+  caps.transfer = ImageTransfer::kPng;
+  const ImageFit fit = fit_image(raster.width, raster.height, region, caps.cell);
+
+  std::ostringstream out;
+  const std::string err = render_image(out, raster, region, caps);
+  ASSERT_EQ(err, "");
+  const std::string s = out.str();
+
+  // Same centering and chunk framing as the raw path; only `f` changes.
+  const std::string cup = "\x1b[" + std::to_string(fit.row) + ";" + std::to_string(fit.col) + "H";
+  EXPECT_NE(s.find(cup), std::string::npos);
+  const std::string header = "\x1b_Gf=100,s=" + std::to_string(fit.px_width) +
+                             ",v=" + std::to_string(fit.px_height) + ",a=T,m=0;";
+  const auto header_at = s.find(header);
+  ASSERT_NE(header_at, std::string::npos);
+  // The payload right after the control keys is a base64'd PNG, not raw pixels.
+  EXPECT_EQ(s.compare(header_at + header.size(), 8U, png_base64_prefix()), 0);
+  ASSERT_GE(s.size(), 2U);
+  EXPECT_EQ(s.substr(s.size() - 2), "\x1b\\");
+}
+
+TEST(TerminalImageRendererTest, RenderKittyPngIsSmallerOnTheWireThanRawRgb)
+{
+  // The whole point of the PNG transfer: fewer bytes cross the pty for the same
+  // frame. make_raster's content is compressible, as real camera frames are.
+  const PackedRaster raster = make_raster(64, 64);
+  const CellRegion region{1, 1, 20, 40};
+
+  std::ostringstream raw_out;
+  TerminalImageCaps raw_caps = kitty_caps(10, 20);
+  ASSERT_EQ(render_image(raw_out, raster, region, raw_caps), "");
+
+  std::ostringstream png_out;
+  TerminalImageCaps png_caps = kitty_caps(10, 20);
+  png_caps.transfer = ImageTransfer::kPng;
+  ASSERT_EQ(render_image(png_out, raster, region, png_caps), "");
+
+  EXPECT_LT(png_out.str().size(), raw_out.str().size());
+}
+
+TEST(TerminalImageRendererTest, RenderKittyPngChunksLargePayload)
+{
+  const PackedRaster raster = make_raster(64, 64);
+  const CellRegion region{1, 1, 40, 80};
+  TerminalImageCaps caps = kitty_caps(20, 40);
+  caps.transfer = ImageTransfer::kPng;
+
+  std::ostringstream out;
+  ASSERT_EQ(render_image(out, raster, region, caps), "");
+  const std::string s = out.str();
+
+  EXPECT_NE(s.find(",a=T,m=1;"), std::string::npos);
+  EXPECT_NE(s.find("m=0;"), std::string::npos);
+}
+
+TEST(TerminalImageRendererTest, RenderSixelIgnoresAPngTransferRequest)
+{
+  // Sixel has no format negotiation. A caps struct that somehow carries kPng
+  // must still produce a DCS stream rather than a PNG the terminal cannot read.
+  const PackedRaster raster = make_raster(8, 8);
+  const CellRegion region{1, 1, 6, 12};
+  TerminalImageCaps caps = sixel_caps(6, 12);
+  caps.transfer = ImageTransfer::kPng;
+
+  std::ostringstream out;
+  ASSERT_EQ(render_image(out, raster, region, caps), "");
+  const std::string s = out.str();
+  EXPECT_NE(s.find("\x1bP"), std::string::npos);
+  EXPECT_EQ(s.find("\x1b_G"), std::string::npos);
 }
 
 }  // namespace

@@ -8,6 +8,7 @@
 
 #include "bagwiz/core/tui/image/terminal_image_renderer.hpp"
 
+#include "bagwiz/core/image/image_encoder.hpp"
 #include "bagwiz/core/tui/renderer.hpp"
 
 extern "C" {
@@ -28,6 +29,7 @@ extern "C" {
 #include <ostream>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bagwiz::core::tui::image
@@ -63,11 +65,15 @@ struct ScaleContext
   }
 };
 
-// Resize the canonical BGR24 `raster` to `dst_w` x `dst_h` and convert to packed
-// RGB24 (the order Kitty's f=24 transmission expects). On success fills `out_rgb`
-// with dst_w * 3 * dst_h bytes and returns ""; otherwise returns the reason.
-std::string scale_to_rgb24(
-  const PackedRaster & raster, int dst_w, int dst_h, std::vector<std::byte> & out_rgb)
+// Resize the canonical BGR24 `raster` to `dst_w` x `dst_h` in `dst_fmt`. Both
+// supported destinations are 3 bytes per pixel: RGB24 for the transmit paths
+// that ship pixels directly (Kitty f=24, Sixel), BGR24 for the PNG path, which
+// hands the result to encode_png() and lets that do the channel swap. On success
+// fills `out` with dst_w * 3 * dst_h bytes and returns ""; otherwise returns the
+// reason.
+std::string scale_raster(
+  const PackedRaster & raster, int dst_w, int dst_h, AVPixelFormat dst_fmt,
+  std::vector<std::byte> & out_pixels)
 {
   // Guard the int casts and the `* 3` stride below against overflow. Real sensor
   // images are nowhere near this; a pathological width/height is rejected rather
@@ -91,8 +97,7 @@ std::string scale_to_rgb24(
 
   ScaleContext ctx;
   ctx.sws = sws_getContext(
-    src_w, src_h, AV_PIX_FMT_BGR24, dst_w, dst_h, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr,
-    nullptr);
+    src_w, src_h, AV_PIX_FMT_BGR24, dst_w, dst_h, dst_fmt, SWS_BILINEAR, nullptr, nullptr, nullptr);
   if (ctx.sws == nullptr) {
     return "failed to create swscale context for the preview";
   }
@@ -109,8 +114,7 @@ std::string scale_to_rgb24(
   // afterward (same discipline as image_decoder.cpp).
   std::array<std::uint8_t *, 4> dst_data{};
   std::array<int, 4> dst_linesize{};
-  const int alloc =
-    av_image_alloc(dst_data.data(), dst_linesize.data(), dst_w, dst_h, AV_PIX_FMT_RGB24, 16);
+  const int alloc = av_image_alloc(dst_data.data(), dst_linesize.data(), dst_w, dst_h, dst_fmt, 16);
   if (alloc < 0) {
     return "could not allocate preview output buffer";
   }
@@ -123,29 +127,35 @@ std::string scale_to_rgb24(
   }
 
   const int row_bytes = dst_w * 3;
-  out_rgb.assign(
+  out_pixels.assign(
     static_cast<std::size_t>(row_bytes) * static_cast<std::size_t>(dst_h), std::byte{0});
   for (int y = 0; y < dst_h; ++y) {
     std::memcpy(
-      out_rgb.data() + static_cast<std::ptrdiff_t>(y) * row_bytes,
+      out_pixels.data() + static_cast<std::ptrdiff_t>(y) * row_bytes,
       ctx.dst_buf + static_cast<std::ptrdiff_t>(y) * dst_linesize[0],
       static_cast<std::size_t>(row_bytes));
   }
   return "";
 }
 
-// Emit a Kitty graphics transmit-and-display (a=T) escape for `rgb` (packed
-// RGB24, w*h*3 bytes), positioned at 1-based (row, col). Control keys ride only
-// the first chunk; the base64 payload is split into <=kKittyChunkBytes pieces
-// with m=1 on every chunk but the last.
-void emit_kitty(std::ostream & out, std::span<const std::byte> rgb, int w, int h, int row, int col)
+// Emit a Kitty graphics transmit-and-display (a=T) escape for `data` at the
+// 1-based (row, col). `data` is packed RGB24 (w*h*3 bytes) for kRawRgb and a
+// PNG bitstream for kPng; `w`/`h` describe the picture either way. The protocol
+// reads a PNG's dimensions from the bitstream and treats `s`/`v` as optional
+// there, but they are accurate by construction so both formats carry them and
+// the framing stays uniform. Control keys ride only the first chunk; the base64
+// payload is split into <=kKittyChunkBytes pieces with m=1 on every chunk but
+// the last.
+void emit_kitty(
+  std::ostream & out, std::span<const std::byte> data, int w, int h, int row, int col,
+  ImageTransfer transfer)
 {
-  if (rgb.empty()) {
+  if (data.empty()) {
     return;  // nothing to transmit; never emit a degenerate s=0,v=0 escape
   }
   move_cursor(out, row, col);
 
-  const std::string payload = base64_encode(rgb);
+  const std::string payload = base64_encode(data);
   const std::size_t total = payload.size();
   std::size_t pos = 0;
   bool first = true;
@@ -154,7 +164,8 @@ void emit_kitty(std::ostream & out, std::span<const std::byte> rgb, int w, int h
     const bool last = pos + take >= total;
     out << "\x1b_G";
     if (first) {
-      out << "f=24,s=" << w << ",v=" << h << ",a=T,";
+      out << "f=" << (transfer == ImageTransfer::kPng ? "100" : "24") << ",s=" << w << ",v=" << h
+          << ",a=T,";
     }
     out << "m=" << (last ? '0' : '1') << ';';
     out.write(payload.data() + pos, static_cast<std::streamsize>(take));
@@ -165,6 +176,35 @@ void emit_kitty(std::ostream & out, std::span<const std::byte> rgb, int w, int h
       break;
     }
   }
+}
+
+// Scale `raster` to `fit` and transmit it as a Kitty PNG (f=100). PNG spends
+// sender CPU to roughly halve the bytes crossing the pty, which is why the
+// remote path prefers it; see preferred_transfer(). The scale target is BGR24
+// because encode_png() takes the canonical raster order and does the swap
+// itself. Returns "" on success or a human-readable reason.
+std::string emit_kitty_png(std::ostream & out, const PackedRaster & raster, const ImageFit & fit)
+{
+  std::vector<std::byte> bgr;
+  if (std::string err = scale_raster(raster, fit.px_width, fit.px_height, AV_PIX_FMT_BGR24, bgr);
+      !err.empty()) {
+    return err;
+  }
+
+  PackedRaster scaled;
+  scaled.width = static_cast<std::uint32_t>(fit.px_width);
+  scaled.height = static_cast<std::uint32_t>(fit.px_height);
+  scaled.bgr = std::move(bgr);
+  const auto encoded = bagwiz::core::image::encode_png(scaled);
+  if (!encoded.ok()) {
+    return encoded.error;
+  }
+
+  const auto & png = *encoded.png;
+  emit_kitty(
+    out, std::span<const std::byte>(png.data(), png.size()), fit.px_width, fit.px_height, fit.row,
+    fit.col, ImageTransfer::kPng);
+  return "";
 }
 
 // libsixel output callback: append the encoded sixel bytes to the ostream passed
@@ -327,14 +367,21 @@ std::string render_image(
     return "preview region is too small for the image";
   }
 
+  // Only Kitty can be handed a PNG; Sixel's own encoder takes pixels, so the
+  // request is ignored there rather than producing a payload it cannot read.
+  if (caps.backend == ImageBackend::kKitty && caps.transfer == ImageTransfer::kPng) {
+    return emit_kitty_png(out, raster, fit);
+  }
+
   std::vector<std::byte> rgb;
-  if (std::string err = scale_to_rgb24(raster, fit.px_width, fit.px_height, rgb); !err.empty()) {
+  if (std::string err = scale_raster(raster, fit.px_width, fit.px_height, AV_PIX_FMT_RGB24, rgb);
+      !err.empty()) {
     return err;
   }
 
   switch (caps.backend) {
     case ImageBackend::kKitty:
-      emit_kitty(out, rgb, fit.px_width, fit.px_height, fit.row, fit.col);
+      emit_kitty(out, rgb, fit.px_width, fit.px_height, fit.row, fit.col, ImageTransfer::kRawRgb);
       return "";
     case ImageBackend::kSixel:
       return emit_sixel(out, rgb, fit.px_width, fit.px_height, fit.row, fit.col);

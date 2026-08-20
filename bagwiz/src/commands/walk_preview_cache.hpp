@@ -66,6 +66,9 @@ struct TileRenderKey
   int cell_width = 0;
   int cell_height = 0;
   core::tui::image::ImageBackend backend = core::tui::image::ImageBackend::kNone;
+  // Raw RGB and PNG frame the same picture as different escape bytes, so a
+  // replay across a switch would emit a payload framed for the other format.
+  core::tui::image::ImageTransfer transfer = core::tui::image::ImageTransfer::kRawRgb;
 
   [[nodiscard]] bool operator==(const TileRenderKey &) const = default;
 };

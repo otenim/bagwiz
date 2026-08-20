@@ -108,6 +108,17 @@ outright, as on every screen).
   save, so revisiting a nearby frame reuses the decode; only the
   rectify/overlay compositing is redone per repaint. Frames beyond the cache
   are re-decoded on demand.
+- **Over ssh the frame is transmitted as PNG instead of raw pixels.** A Kitty
+  terminal accepts either, and PNG roughly halves the bytes crossing the
+  connection (measured at 2.0-2.2x on real camera frames) for about 80 ms of
+  encoding per frame — worth it below roughly 39 MB/s of throughput, which is
+  every ssh link and no local terminal. bagwiz picks PNG when `SSH_CONNECTION`
+  or `SSH_TTY` is set and raw pixels otherwise; override with
+  `BAGWIZ_WALK_PREVIEW_TRANSFER` (see [Environment](#environment)). **Sixel
+  terminals are unaffected** — the Sixel protocol has no transfer-format
+  choice, so they always send pixels.
+  This changes only how many bytes are sent, never the image's resolution or
+  its on-screen size.
 - Pressing `u` toggles **rectification** (lens-distortion correction) when a CameraInfo topic was resolved or
   explicitly provided. The rectified frame is rendered and saved by `S`. If no
   CameraInfo is available, `u` shows `rectify: no camera_info` in the status
@@ -329,6 +340,15 @@ because `walk` is the most decoder-centric command.
   selection (`backend=schema` / `backend=introspection`), which the interactive
   `walk` preview would otherwise never print. An unrecognised value is ignored
   with a warning. See `bagwiz_base/src/core/base/logging.cpp`.
+- `BAGWIZ_WALK_PREVIEW_TRANSFER`: how the image preview hands each frame to a
+  Kitty-protocol terminal, one of `auto`, `raw`, or `png` (case-insensitive).
+  Unset defaults to `auto`, which sends `png` when `SSH_CONNECTION` or
+  `SSH_TTY` is set and `raw` otherwise. Set it to `png` when `auto` misses a
+  slow link it cannot detect (mosh, a container, a serial console), or to `raw`
+  when the terminal decodes PNG slowly enough to outweigh the smaller transfer.
+  **Ignored on Sixel terminals**, which have no transfer-format choice. An
+  unrecognised value is ignored with a warning. See
+  `bagwiz_tui/src/core/tui/image/terminal_image_caps.cpp`.
 
 ## Exit status
 

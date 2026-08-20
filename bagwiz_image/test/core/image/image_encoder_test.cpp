@@ -158,3 +158,21 @@ TEST(ImageEncoderTest, OversizeDimensionIsError)
   EXPECT_FALSE(encoded.ok());
   EXPECT_FALSE(encoded.error.empty());
 }
+
+// The encoder runs with PNG prediction filtering on (`pred=mixed`), which is
+// what keeps walk's saved frames and its remote preview transfer small. A
+// gradient is the sharpest way to observe it: per-row deltas are constant, so a
+// filtered PNG collapses to a fraction of the raster while an unfiltered one
+// (libav's default `pred=none`) stays at ~100% of it — larger, in fact, than
+// the input. The quarter-size bound sits far from both outcomes, so this
+// asserts the setting without pinning encoder-version-specific byte counts.
+TEST(ImageEncoderTest, PredictionFilteringIsEnabled)
+{
+  const PackedRaster source = make_gradient(256, 256);
+
+  const auto encoded = encode_png(source);
+  ASSERT_TRUE(encoded.ok()) << encoded.error;
+  EXPECT_LT(encoded.png->size(), source.bgr.size() / 4)
+    << "PNG is " << encoded.png->size() << " bytes for a " << source.bgr.size()
+    << "-byte raster; prediction filtering looks disabled";
+}

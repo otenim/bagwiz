@@ -11,6 +11,7 @@
 
 #include "bagwiz/core/tui/layout.hpp"
 
+#include <optional>
 #include <ostream>
 #include <string_view>
 
@@ -28,6 +29,17 @@ enum class ImageBackend {
   kKitty,  // Kitty graphics protocol
 };
 
+// How a frame's pixels are handed to the terminal. Kitty accepts both raw RGB
+// (`f=24`) and a PNG bitstream (`f=100`); PNG spends sender CPU to roughly halve
+// the bytes crossing the pty, which is the right trade over ssh and the wrong
+// one on a local terminal that can absorb raw pixels faster than we can deflate
+// them. Sixel has no format negotiation at all — 256-color palette plus RLE is
+// its only encoding — so it is always kRawRgb.
+enum class ImageTransfer {
+  kRawRgb,  // Kitty f=24: base64 of packed RGB24, four wire bytes per pixel
+  kPng,     // Kitty f=100: base64 of a PNG bitstream
+};
+
 // Pixel size of one character cell. Always strictly positive.
 struct CellPixels
 {
@@ -39,9 +51,34 @@ struct TerminalImageCaps
 {
   ImageBackend backend = ImageBackend::kNone;
   CellPixels cell;
+  ImageTransfer transfer = ImageTransfer::kRawRgb;
 
   [[nodiscard]] bool can_render() const noexcept { return backend != ImageBackend::kNone; }
 };
+
+// An explicit `BAGWIZ_WALK_PREVIEW_TRANSFER` setting. kAuto means "decide from
+// the session", which is also what an unset variable yields.
+enum class TransferOverride { kAuto, kRawRgb, kPng };
+
+// True when this session's terminal sits on the far end of an ssh link, judged
+// by the variables sshd puts in the login environment. Pure: the caller passes
+// the values so the policy is testable without mutating the process
+// environment. A defined-but-empty variable (`export SSH_TTY=`) does not count —
+// sshd always sets a non-empty one.
+[[nodiscard]] bool session_is_remote(const char * ssh_connection, const char * ssh_tty) noexcept;
+
+// Parse a `BAGWIZ_WALK_PREVIEW_TRANSFER` value (case-insensitive): "auto",
+// "raw", or "png". Unset (nullptr) or empty is kAuto. Returns nullopt when the
+// variable is set to something unrecognised, so the caller can warn rather than
+// let a typo silently read as "auto".
+[[nodiscard]] std::optional<TransferOverride> parse_transfer_override(const char * value) noexcept;
+
+// The transfer format to use: the override when one is given, else PNG on a
+// remote session and raw RGB locally. Sixel (and kNone) is always kRawRgb — it
+// cannot decode a PNG payload, so neither the heuristic nor an explicit
+// override may hand it one. Pure.
+[[nodiscard]] ImageTransfer preferred_transfer(
+  ImageBackend backend, bool remote, TransferOverride override_value) noexcept;
 
 // Per-cell pixel size derived from `term`. When the terminal reports pixel
 // dimensions (xpixel/ypixel > 0) the cell size is xpixel/cols by ypixel/rows;
