@@ -9,6 +9,7 @@
 #include "traj_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 
 #include <fstream>
 #include <memory>
@@ -39,8 +40,12 @@ std::unique_ptr<core::decoder::Decoder> open_topic_decoder(
 
 bool write_tum_file(
   const std::filesystem::path & output_path, std::span<const core::TrajectoryPose> poses,
-  const char * logger)
+  bool overwrite, const char * logger)
 {
+  if (const auto r = core::prepare_output_path(output_path, overwrite); !r.ok) {
+    BAGWIZ_LOG_ERROR(logger, "%s", r.error.c_str());
+    return false;
+  }
   std::ofstream out(output_path, std::ios::out | std::ios::trunc);
   if (!out) {
     BAGWIZ_LOG_ERROR(logger, "Failed to open output path %s for writing", output_path.c_str());

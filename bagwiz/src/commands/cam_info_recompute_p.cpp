@@ -130,6 +130,16 @@ int run_yaml_mode(const CamInfoRecomputePArgs & args)
     return 1;
   }
 
+  // Claim -o before parsing, so a collision does not wait on the read. The
+  // check is non-destructive; prepare_output_path() below does the removal
+  // once the run is certain to produce a calibration.
+  if (args.output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*args.output_path, args.overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
+  }
+
   const auto parsed = img::parse_camera_calibration_yaml(args.input_path);
   if (!parsed.ok()) {
     BAGWIZ_LOG_ERROR(
@@ -338,6 +348,16 @@ int run_bag_mode(const CamInfoRecomputePArgs & args)
       "-t/--topics <topic>..., or pass a .yaml calibration file as <input>.",
       args.input_path.string().c_str());
     return 1;
+  }
+
+  // Claim -o before touching the bag. The check is non-destructive (the
+  // dispatch below removes the existing entry), so it only moves the collision
+  // verdict ahead of the read.
+  if (args.output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*args.output_path, args.overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
   }
 
   // 1. Inspect the bag and confirm every requested <topic> exists and is a

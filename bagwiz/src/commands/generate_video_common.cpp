@@ -341,18 +341,14 @@ VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args)
 
 std::string validate_video_output_path(const std::filesystem::path & output_path, bool overwrite)
 {
-  // Fail fast on an output collision before the expensive encode. The actual
-  // removal happens just before the rename, so an existing file is only
-  // replaced once the new video is fully written.
-  {
-    std::error_code ec;
-    if (std::filesystem::exists(output_path, ec) && !overwrite) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "output '%s' already exists; pass -w/--overwrite to replace it.",
-        output_path.string().c_str());
-      return "output '" + output_path.string() +
-             "' already exists; pass -w/--overwrite to replace it.";
-    }
+  // Fail fast on an output collision before the expensive encode, through the
+  // same check every other subcommand's -o path runs. The check is
+  // non-destructive; finalize_video_output() does the removal just before the
+  // rename, so an existing file is only replaced once the new video is fully
+  // written.
+  if (const auto r = core::check_output_path_free(output_path, overwrite); !r.ok) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+    return r.error;
   }
 
   // Create the output's parent directory if needed.

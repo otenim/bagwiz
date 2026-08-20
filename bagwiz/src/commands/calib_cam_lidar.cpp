@@ -879,12 +879,23 @@ std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
 
 int run_calib_cam_lidar(const CalibCamLidarArgs & args)
 {
-  // 1. Cross-field validation.
+  // 1. Cross-field validation, the output path included. The check is
+  // non-destructive — the existing entry is removed only at the write site in
+  // step 10 — so it runs here rather than after the refinement: a collision
+  // that would otherwise surface minutes later now costs one stat.
   if (const auto err = validate_calibrate_flags(args); !err.empty()) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", err.c_str());
     return 1;
   }
   const auto fix_spec = parse_fix_spec(args.fix_axes).first;
+  const std::filesystem::path out_path =
+    args.output_path.empty()
+      ? std::filesystem::path(default_calib_cam_lidar_output_path(args.input_path))
+      : std::filesystem::path(args.output_path);
+  if (const auto r = core::check_output_path_free(out_path, args.overwrite); !r.ok) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+    return 1;
+  }
 
   // 2. Topics: --pcd (PointCloud2), --pose (a supported pose type), and the
   // --cam image topic + its CameraInfo.
@@ -1088,10 +1099,6 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
     std::span<const geometry_msgs::msg::TransformStamped>(&ts, 1),
     args.input_path.string() + " (bagwiz calib cam-lidar)");
 
-  const std::filesystem::path out_path =
-    args.output_path.empty()
-      ? std::filesystem::path(default_calib_cam_lidar_output_path(args.input_path))
-      : std::filesystem::path(args.output_path);
   if (const auto r = core::prepare_output_path(out_path, args.overwrite); !r.ok) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
     return 1;

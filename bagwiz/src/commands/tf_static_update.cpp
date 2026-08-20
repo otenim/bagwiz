@@ -9,6 +9,7 @@
 #include "bagwiz/commands/tf_static_update.hpp"
 
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/base/str_utils.hpp"
 #include "bagwiz/core/tf/tf_static_collect.hpp"
 #include "bagwiz/core/tf/tf_static_tree_yaml.hpp"
@@ -83,6 +84,16 @@ int run_tf_static_update(
       "Topic '%s' does not have 'tf_static' as its final path segment, so bagwiz's static-TF "
       "readers will treat it as a dynamic TF topic and skip it.",
       topic.c_str());
+  }
+
+  // Claim -o before reading the tree. The check is non-destructive (the
+  // dispatch below removes the existing entry), so a collision costs one stat
+  // instead of a whole-topic static TF read.
+  if (output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*output_path, overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
   }
 
   // Load the merged static tree, keeping the per-topic split so updates land in

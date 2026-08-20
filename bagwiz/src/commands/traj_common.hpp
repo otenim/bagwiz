@@ -32,12 +32,14 @@ namespace bagwiz::commands
 [[nodiscard]] std::unique_ptr<core::decoder::Decoder> open_topic_decoder(
   io::BagReader & reader, const std::string & topic, const char * logger);
 
-// Write `poses` to `output_path` in the TUM trajectory format, truncating any
-// existing file. On open failure the command's usual error is logged to
+// Write `poses` to `output_path` in the TUM trajectory format. The output path
+// is claimed here (core::prepare_output_path) rather than by the caller, so a
+// run that fails before it has poses to write cannot delete a pre-existing file
+// under `overwrite`. On a collision or an open failure the error is logged to
 // `logger` and false is returned.
 [[nodiscard]] bool write_tum_file(
   const std::filesystem::path & output_path, std::span<const core::TrajectoryPose> poses,
-  const char * logger);
+  bool overwrite, const char * logger);
 
 }  // namespace bagwiz::commands
 

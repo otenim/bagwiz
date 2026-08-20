@@ -12,6 +12,7 @@
 #include "bagwiz/core/bag/write_order.hpp"
 #include "bagwiz/core/base/duration_parse.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/pointcloud/cloud_transform.hpp"
 #include "bagwiz/core/pointcloud/concat_sync.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
@@ -793,6 +794,15 @@ int run_pcd_concat(const PcdConcatArgs & args)
   std::optional<std::int64_t> tolerance_override;
   if (!parse_tolerance_override(args, tolerance_override, kLogger)) {
     return 1;
+  }
+  // Claim -o here, before pass A reads the bag. The check is non-destructive
+  // (the dispatch below removes the existing entry), so an -o collision costs
+  // one stat instead of a full stamp-collection pass.
+  if (args.output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*args.output_path, args.overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
   }
 
   // ---- open reader, validate topics ---------------------------------------

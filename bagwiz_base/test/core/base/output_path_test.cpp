@@ -107,3 +107,92 @@ TEST_F(OutputPathTest, ExistingDirectoryWithoutOverwriteIsError)
   EXPECT_FALSE(r.ok);
   EXPECT_TRUE(std::filesystem::exists(target));
 }
+
+// check_output_path_free() is the non-destructive half of the policy: it must
+// return the same verdicts as prepare_output_path() while leaving the
+// filesystem exactly as it found it, so a command can call it before work that
+// can still fail.
+
+TEST_F(OutputPathTest, CheckOnlyNonExistentPathIsOk)
+{
+  const auto target = tmp_dir_ / "no_such_file.tum";
+  const auto r = bagwiz::core::check_output_path_free(target, /*overwrite=*/false);
+  EXPECT_TRUE(r.ok);
+  EXPECT_TRUE(r.error.empty());
+  EXPECT_FALSE(std::filesystem::exists(target));
+}
+
+TEST_F(OutputPathTest, CheckOnlyExistingFileWithoutOverwriteIsError)
+{
+  const auto target = tmp_dir_ / "existing.tum";
+  touch(target);
+
+  const auto r = bagwiz::core::check_output_path_free(target, /*overwrite=*/false);
+  EXPECT_FALSE(r.ok);
+  EXPECT_NE(r.error.find("-w/--overwrite"), std::string::npos);
+  EXPECT_NE(r.error.find(target.string()), std::string::npos);
+  EXPECT_TRUE(std::filesystem::exists(target));
+}
+
+TEST_F(OutputPathTest, CheckOnlyExistingFileWithOverwriteIsOkAndKeepsTheFile)
+{
+  const auto target = tmp_dir_ / "existing.tum";
+  touch(target);
+
+  const auto r = bagwiz::core::check_output_path_free(target, /*overwrite=*/true);
+  EXPECT_TRUE(r.ok) << r.error;
+  // The whole point of the check-only half: the caller may still bail, so the
+  // file must survive until prepare_output_path() claims it at the write site.
+  EXPECT_TRUE(std::filesystem::exists(target));
+}
+
+TEST_F(OutputPathTest, CheckOnlyExistingDirectoryWithOverwriteIsOkAndKeepsTheTree)
+{
+  const auto target = tmp_dir_ / "existing_bag_dir";
+  std::filesystem::create_directories(target / "nested");
+  touch(target / "metadata.yaml");
+
+  const auto r = bagwiz::core::check_output_path_free(target, /*overwrite=*/true);
+  EXPECT_TRUE(r.ok) << r.error;
+  EXPECT_TRUE(std::filesystem::exists(target / "metadata.yaml"));
+}
+
+TEST_F(OutputPathTest, CheckOnlyExistingDirectoryWithoutOverwriteIsError)
+{
+  const auto target = tmp_dir_ / "existing_bag_dir";
+  std::filesystem::create_directories(target);
+
+  const auto r = bagwiz::core::check_output_path_free(target, /*overwrite=*/false);
+  EXPECT_FALSE(r.ok);
+  EXPECT_TRUE(std::filesystem::exists(target));
+}
+
+TEST_F(OutputPathTest, CheckOnlyAndPrepareAgreeOnTheCollisionMessage)
+{
+  // The early refusal and the late one are the same message, so a user cannot
+  // tell from the text which phase rejected the run.
+  const auto target = tmp_dir_ / "existing.tum";
+  touch(target);
+
+  const auto checked = bagwiz::core::check_output_path_free(target, /*overwrite=*/false);
+  const auto prepared = bagwiz::core::prepare_output_path(target, /*overwrite=*/false);
+  EXPECT_FALSE(checked.ok);
+  EXPECT_FALSE(prepared.ok);
+  EXPECT_EQ(checked.error, prepared.error);
+}
+
+TEST_F(OutputPathTest, CheckOnlyExistingSymlinkWithoutOverwriteIsError)
+{
+  // symlink_status, not status: a dangling symlink still occupies the path, so
+  // the early check must refuse it exactly as prepare_output_path() does.
+  const auto target = tmp_dir_ / "dangling.tum";
+  std::error_code ec;
+  std::filesystem::create_symlink(tmp_dir_ / "missing_target", target, ec);
+  if (ec) {
+    GTEST_SKIP() << "cannot create symlinks here: " << ec.message();
+  }
+
+  const auto r = bagwiz::core::check_output_path_free(target, /*overwrite=*/false);
+  EXPECT_FALSE(r.ok);
+  EXPECT_TRUE(std::filesystem::is_symlink(std::filesystem::symlink_status(target)));
+}

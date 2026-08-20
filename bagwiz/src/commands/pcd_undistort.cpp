@@ -11,6 +11,7 @@
 #include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/duration_parse.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/pipeline/stage_profiler.hpp"
 #include "bagwiz/core/pointcloud/deskew.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
@@ -654,6 +655,16 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
         kLogger,
         "pcd undistort: --compression/--compression-level apply only to mcap outputs; this "
         "output is SQLite3 (.db3)");
+      return 1;
+    }
+  }
+
+  // Claim -o before pass 1. The check is non-destructive (the dispatch removes
+  // the existing entry), so an -o collision costs one stat instead of a full
+  // trajectory build over the input.
+  if (args.output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*args.output_path, args.overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
       return 1;
     }
   }

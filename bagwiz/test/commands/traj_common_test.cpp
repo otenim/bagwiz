@@ -95,7 +95,7 @@ TEST_F(TrajCommonTest, WriteTumFileWritesExactTumBytes)
   };
 
   const auto out_path = tmp_dir_ / "traj.tum";
-  ASSERT_TRUE(bagwiz::commands::write_tum_file(out_path, poses, kLogger));
+  ASSERT_TRUE(bagwiz::commands::write_tum_file(out_path, poses, /*overwrite=*/false, kLogger));
 
   std::ostringstream expected;
   bagwiz::core::write_tum(expected, poses);
@@ -114,8 +114,52 @@ TEST_F(TrajCommonTest, WriteTumFileFailsOnUnwritablePath)
     {1LL, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0},
   };
   const auto out_path = tmp_dir_ / "no" / "such" / "dir" / "traj.tum";
-  EXPECT_FALSE(bagwiz::commands::write_tum_file(out_path, poses, kLogger));
+  EXPECT_FALSE(bagwiz::commands::write_tum_file(out_path, poses, /*overwrite=*/false, kLogger));
   EXPECT_FALSE(std::filesystem::exists(out_path));
+}
+
+TEST_F(TrajCommonTest, WriteTumFileRefusesAnExistingPathWithoutOverwrite)
+{
+  // The claim now lives inside write_tum_file, so it is the function that
+  // refuses an occupied path — and leaves the file it refused untouched.
+  const std::vector<bagwiz::core::TrajectoryPose> poses{
+    {1LL, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0},
+  };
+  const auto out_path = tmp_dir_ / "occupied.tum";
+  {
+    std::ofstream seed(out_path);
+    seed << "keep me";
+  }
+
+  EXPECT_FALSE(bagwiz::commands::write_tum_file(out_path, poses, /*overwrite=*/false, kLogger));
+
+  std::ifstream in(out_path);
+  ASSERT_TRUE(in);
+  std::ostringstream actual;
+  actual << in.rdbuf();
+  EXPECT_EQ(actual.str(), "keep me");
+}
+
+TEST_F(TrajCommonTest, WriteTumFileReplacesAnExistingPathWithOverwrite)
+{
+  const std::vector<bagwiz::core::TrajectoryPose> poses{
+    {1LL, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0},
+  };
+  const auto out_path = tmp_dir_ / "occupied.tum";
+  {
+    std::ofstream seed(out_path);
+    seed << "stale";
+  }
+
+  ASSERT_TRUE(bagwiz::commands::write_tum_file(out_path, poses, /*overwrite=*/true, kLogger));
+
+  std::ostringstream expected;
+  bagwiz::core::write_tum(expected, poses);
+  std::ifstream in(out_path, std::ios::binary);
+  ASSERT_TRUE(in);
+  std::ostringstream actual;
+  actual << in.rdbuf();
+  EXPECT_EQ(actual.str(), expected.str());
 }
 
 }  // namespace

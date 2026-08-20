@@ -12,6 +12,7 @@
 #include "bagwiz/core/bag/bag_passthrough.hpp"
 #include "bagwiz/core/bag/rewrite.hpp"
 #include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
 #include "bagwiz/io/topics.hpp"
@@ -158,6 +159,16 @@ int run_topic_drop(const TopicDropArgs & args)
   if (args.topics.empty()) {
     BAGWIZ_LOG_ERROR(kLogger, "topic drop: no topic selector given; nothing to remove.");
     return 1;
+  }
+
+  // Claim -o before touching the bag. The check is non-destructive (the
+  // dispatch below removes the existing entry), so it only moves the collision
+  // verdict ahead of the read.
+  if (args.output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*args.output_path, args.overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
   }
 
   // 1. Snapshot the bag's topic list up front so the "all topics matched"

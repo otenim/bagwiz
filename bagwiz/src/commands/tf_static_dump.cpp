@@ -84,6 +84,16 @@ int run_tf_static_dump(
   const std::filesystem::path & input_path,
   const std::optional<std::filesystem::path> & output_path, bool overwrite)
 {
+  // Refuse an occupied -o path before reading anything. This check removes
+  // nothing, so the "claim only once the run is certain" rule below still
+  // holds; it only moves the collision verdict ahead of the read.
+  if (output_path.has_value()) {
+    if (const auto r = core::check_output_path_free(*output_path, overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+      return 1;
+    }
+  }
+
   std::vector<core::StaticTopicTransforms> static_topics;
   try {
     // First message only: static TF is latched, so a broadcaster's first message
