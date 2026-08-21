@@ -231,6 +231,58 @@ TEST(CalibCamLidarCommonTest, ParseSkipDurations)
   }
 }
 
+TEST(CalibCamLidarCommonTest, ParseCamOffset)
+{
+  {
+    // Omitted (the default): no shift.
+    const auto [ns, err] = commands::parse_cam_offset(valid_args());
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(ns, 0);
+  }
+  {
+    // The sign is literal: a negative offset places each image at an earlier
+    // trajectory time (the camera stamp ran late).
+    auto args = valid_args();
+    args.cam_offset = "-42ms";
+    const auto [ns, err] = commands::parse_cam_offset(args);
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(ns, -42'000'000LL);
+  }
+  {
+    auto args = valid_args();
+    args.cam_offset = "+1.5s";
+    const auto [ns, err] = commands::parse_cam_offset(args);
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(ns, 1'500'000'000LL);
+  }
+  {
+    auto args = valid_args();
+    args.cam_offset = "0s";
+    const auto [ns, err] = commands::parse_cam_offset(args);
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(ns, 0);
+  }
+  {
+    // A unit suffix is mandatory (the --skip-start grammar): a bare number
+    // could be read as ms or s and is rejected rather than guessed.
+    auto args = valid_args();
+    args.cam_offset = "42";
+    EXPECT_NE(commands::parse_cam_offset(args).second, "");
+    args = valid_args();
+    args.cam_offset = "42x";
+    EXPECT_NE(commands::parse_cam_offset(args).second, "");
+    args = valid_args();
+    args.cam_offset = "bogus";
+    EXPECT_NE(commands::parse_cam_offset(args).second, "");
+  }
+  {
+    // A bad offset also fails cross-field validation.
+    auto args = valid_args();
+    args.cam_offset = "bogus";
+    EXPECT_NE(commands::validate_calibrate_flags(args), "");
+  }
+}
+
 TEST(CalibCamLidarCommonTest, PickSampleIndicesRespectsMarginAndSpread)
 {
   std::vector<std::int64_t> stamps;

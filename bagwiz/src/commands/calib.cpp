@@ -154,6 +154,12 @@ private:
       "--skip-end", cam_lidar_args_.skip_end,
       "Exclude this duration from the bag's end from the estimation "
       "(e.g. 10s; a unit suffix is required: ns/us/ms/s)");
+    sub->add_option(
+      "--cam-offset", cam_lidar_args_.cam_offset,
+      "Signed duration added to every image stamp before it is matched against the --pose "
+      "trajectory, so the image stamped t is placed at pose(t + offset); a camera clock that "
+      "stamps late is corrected with a negative value (e.g. -42ms; a unit suffix is required: "
+      "ns/us/ms/s)");
     sub->add_flag("--json", cam_lidar_args_.json, "Emit the stdout summary as JSON");
     sub->add_flag(
       "-w,--overwrite", cam_lidar_args_.overwrite, "Replace an existing -o/--output path");

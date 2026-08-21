@@ -169,7 +169,26 @@ std::string validate_calibrate_flags(const CalibCamLidarArgs & args)
   if (const auto err = parse_skip_durations(args).second; !err.empty()) {
     return err;
   }
+  if (const auto err = parse_cam_offset(args).second; !err.empty()) {
+    return err;
+  }
   return parse_fix_spec(args.fix_axes).second;
+}
+
+std::pair<std::int64_t, std::string> parse_cam_offset(const CalibCamLidarArgs & args)
+{
+  if (args.cam_offset.empty()) {
+    return {0, ""};
+  }
+  // The --skip-start grammar: the unit suffix is mandatory, so a bare number
+  // (ms or s?) is a parse failure rather than a guess. The sign is kept.
+  const auto ns = core::parse_duration_ns(args.cam_offset, core::DurationUnitPolicy::RequireUnit);
+  if (!ns.has_value()) {
+    return {
+      0, "--cam-offset: '" + args.cam_offset +
+           "' is not a duration (expected e.g. -42ms, 1.5s; a unit suffix is required)"};
+  }
+  return {*ns, ""};
 }
 
 std::pair<std::array<std::int64_t, 2>, std::string> parse_skip_durations(
@@ -705,6 +724,12 @@ std::string render_calibrate_summary(
   }
   out += fmt::format("\nnid: {} -> {}\n", result.nid_before, result.nid_after);
   out += fmt::format("samples used: {}\n", result.samples_used);
+  // Only when set: the shift is part of what the refined edge was fitted
+  // under, so a report that is re-read later must carry it.
+  if (const std::int64_t cam_offset_ns = parse_cam_offset(args).first; cam_offset_ns != 0) {
+    out +=
+      fmt::format("camera stamp offset: {:+.3f} ms\n", static_cast<double>(cam_offset_ns) / 1e6);
+  }
 
   std::vector<std::array<double, 6>> held_components;
   held_components.reserve(result.auto_held.size());
@@ -753,6 +778,9 @@ std::string render_calibrate_json(
   out += fmt::format("  \"nid_before\": {},\n", result.nid_before);
   out += fmt::format("  \"nid_after\": {},\n", result.nid_after);
   out += fmt::format("  \"samples\": {},\n", result.samples_used);
+  // The --cam-offset the samples were placed under (0 when omitted), so the
+  // report states the shift the refined edge depends on.
+  out += fmt::format("  \"cam_offset_ns\": {},\n", parse_cam_offset(args).first);
   out += "  \"axes\": {\n";
   const auto edge_after = core::calib::apply_edge_delta(edge_before, result.delta);
   for (std::size_t axis = 0; axis < 6; ++axis) {

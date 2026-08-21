@@ -29,7 +29,7 @@ bagwiz calib cam-lidar -i <input> --pcd <topic> --pose <topic> --cam <topic> \
   [--keyframe-dist <m>] [--keyframe-rot <deg>] \
   [--max-trans <m>] [--max-rot <deg>] [--nid-bins <n>] [--min-depth <m>] \
   [--max-depth <m>] [--voxel <m>] [--skip-start <dur>] [--skip-end <dur>] \
-  [--json] [-w|--overwrite]
+  [--cam-offset <dur>] [--json] [-w|--overwrite]
 ```
 
 ### Example
@@ -72,6 +72,7 @@ bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 | `--voxel <m>`           | Edge length of the grid the accumulated map is collapsed onto, in meters. Default `0.1`; `0` keeps every point of every cloud. See [How the map is built](#how-the-map-is-built). Long-form only.                                                                                                          |
 | `--skip-start <dur>`    | Exclude this duration, measured from the bag's start, from the estimation (e.g. `30s`; a unit suffix is required: `ns`/`us`/`ms`/`s`). See [Sample selection](#sample-selection). Long-form only.                                                                                                          |
 | `--skip-end <dur>`      | Exclude this duration, measured from the bag's end, from the estimation. Same duration grammar as `--skip-start`. Long-form only.                                                                                                                                                                          |
+| `--cam-offset <dur>`    | Signed duration added to every image stamp before the `--pose` lookup, so the image stamped $t$ is placed at the pose of $t + \text{offset}$; a camera clock that stamps late is corrected with a negative value (e.g. `-42ms`; same grammar as `--skip-start`). See [Method](#method). Long-form only.    |
 | `--json`                | Emit the stdout summary as JSON instead of the human table. The YAML is written either way. Long-form only.                                                                                                                                                                                                |
 | `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path.                                                                                                                                                                                                                                                                  |
 
@@ -177,6 +178,21 @@ minimizes the mean NID across all samples, confined to the trust region
 around the edge's bag value (`--max-trans`, `--max-rot`), so a bad initial
 mount value or an unconstrained axis cannot wander to an unrelated optimum.
 
+`--cam-offset` shifts that lookup: every image stamp has the offset added the
+moment it is read, so sample eligibility and picking, the keyframe gate, the
+map's frustum cull, the pre-cull and each sample's pose all see the same
+shifted time and the image stamped $t$ is placed at the trajectory's pose of
+$t + \text{offset}$. Clouds and poses are never shifted. The sign is literal:
+when the camera's clock stamps later than the `--pose` clock (an image stamped
+$t$ was really taken when the trajectory was at $t - 42\,\text{ms}$), pass
+`--cam-offset -42ms`. A constant offset of a few tens of milliseconds is an
+ordinary property of a multi-sensor rig — at highway speed it is a displacement
+of the order of a meter plus the rotation swept in that time at every sample —
+and is not something the NID search can absorb, so it has to be measured and
+passed in. The run logs the applied offset, the human report prints it as
+`camera stamp offset` when non-zero, and `--json` always carries it as
+`cam_offset_ns`.
+
 The six numbers the search moves are the edge's own `x, y, z, roll, pitch,
 yaw` — the scalars [`static dump`](tf.md#bagwiz-tf-static-dump) writes — and the
 delta is added to them axis by axis. The value the cost was evaluated at, the
@@ -281,7 +297,8 @@ apply with: bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lid
 
 Rotations in the human table are shown in degrees; `--json` reports the same
 `before`/`after`/`delta` per axis in radians instead, alongside the `parent`,
-`child`, `nid_before`, `nid_after`, `samples`, and `held` fields. Each axis
+`child`, `nid_before`, `nid_after`, `samples`, `cam_offset_ns` (the applied
+`--cam-offset` in nanoseconds, `0` when omitted), and `held` fields. Each axis
 also carries its curvature evidence: `curvature` and `std_error` as measured,
 `curvature_ratio` as their quotient — `null` for an axis that was never
 probed (a `--fix`-named one), the ratio additionally `null` when the estimate
@@ -294,7 +311,8 @@ invalid flag combination (`--samples` under 3, `--fix` naming an unknown token,
 combining `none` with other tokens, or naming all six axes, a non-positive `--max-trans`/`--max-rot`/`--min-depth`, `--nid-bins`
 outside `4`–`256`, `--max-depth` at or below `--min-depth`, an empty
 `--of`/`--ref`, or a negative `--keyframe-dist`/`--keyframe-rot`, or an
-unparseable or negative `--skip-start`/`--skip-end`), a missing or
+unparseable or negative `--skip-start`/`--skip-end`, or an unparseable
+`--cam-offset`), a missing or
 wrong-typed `--pcd`/`--pose`/`--cam` topic, a `--pcd` topic without an
 `intensity` field, an unparseable or big-endian cloud, a `--pcd`/`--cam`
 topic with no messages, every cloud falling outside the trajectory span, a

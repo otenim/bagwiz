@@ -945,8 +945,8 @@ TEST(FlagCompletionTest, CalibCamLidarDashListsCamLidarFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "calib", "cam-lidar", "-"}),
-    "--cam\n--cam-info\n--child\n--fix\n--help\n--input\n--json\n--keyframe-dist\n--keyframe-rot\n"
-    "--max-depth\n--max-rot\n"
+    "--cam\n--cam-info\n--cam-offset\n--child\n--fix\n--help\n--input\n--json\n--keyframe-dist\n"
+    "--keyframe-rot\n--max-depth\n--max-rot\n"
     "--max-trans\n--min-depth\n--nid-bins\n--of\n--output\n--overwrite\n--parent\n--pcd\n--pose\n"
     "--ref\n--samples\n--skip-end\n--skip-start\n--voxel\n-h\n-i\n-o\n-w\n");
 }
