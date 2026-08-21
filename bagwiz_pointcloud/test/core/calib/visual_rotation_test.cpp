@@ -59,13 +59,13 @@ calib::GrayImage make_texture(std::uint64_t seed)
   std::uniform_real_distribution<double> ux(0.0, kW);
   std::uniform_real_distribution<double> uy(0.0, kH);
   std::uniform_real_distribution<double> usig(1.5, 6.0);
-  std::uniform_real_distribution<double> uamp(-90.0, 90.0);
+  std::uniform_real_distribution<double> amplitude_dist(-90.0, 90.0);
   std::vector<double> acc(static_cast<std::size_t>(kW) * kH, 128.0);
   for (int b = 0; b < 700; ++b) {
     const double cx = ux(rng);
     const double cy = uy(rng);
     const double sig = usig(rng);
-    const double amp = uamp(rng);
+    const double amp = amplitude_dist(rng);
     const int r = static_cast<int>(3.0 * sig) + 1;
     for (int dy = -r; dy <= r; ++dy) {
       for (int dx = -r; dx <= r; ++dx) {
