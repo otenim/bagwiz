@@ -276,6 +276,19 @@ TEST(CalibCamLidarCommonTest, ParseCamOffset)
     EXPECT_NE(commands::parse_cam_offset(args).second, "");
   }
   {
+    // Magnitudes beyond 24 h are rejected (a unit slip, and unbounded values
+    // could overflow when added to an epoch stamp); 24 h itself still parses.
+    auto args = valid_args();
+    args.cam_offset = "-86400s";
+    EXPECT_EQ(commands::parse_cam_offset(args).second, "");
+    args = valid_args();
+    args.cam_offset = "90000s";
+    EXPECT_NE(commands::parse_cam_offset(args).second, "");
+    args = valid_args();
+    args.cam_offset = "-9223372036000000000ns";
+    EXPECT_NE(commands::parse_cam_offset(args).second, "");
+  }
+  {
     // A bad offset also fails cross-field validation.
     auto args = valid_args();
     args.cam_offset = "bogus";

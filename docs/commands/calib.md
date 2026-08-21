@@ -312,7 +312,7 @@ combining `none` with other tokens, or naming all six axes, a non-positive `--ma
 outside `4`–`256`, `--max-depth` at or below `--min-depth`, an empty
 `--of`/`--ref`, or a negative `--keyframe-dist`/`--keyframe-rot`, or an
 unparseable or negative `--skip-start`/`--skip-end`, or an unparseable
-`--cam-offset`), a missing or
+`--cam-offset` or one beyond ±24 h), a missing or
 wrong-typed `--pcd`/`--pose`/`--cam` topic, a `--pcd` topic without an
 `intensity` field, an unparseable or big-endian cloud, a `--pcd`/`--cam`
 topic with no messages, every cloud falling outside the trajectory span, a

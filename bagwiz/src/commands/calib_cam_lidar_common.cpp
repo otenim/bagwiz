@@ -188,6 +188,16 @@ std::pair<std::int64_t, std::string> parse_cam_offset(const CalibCamLidarArgs & 
       0, "--cam-offset: '" + args.cam_offset +
            "' is not a duration (expected e.g. -42ms, 1.5s; a unit suffix is required)"};
   }
+  // A sensor clock offset is milliseconds to seconds; whole days only ever
+  // mean a typo or a wrong unit, and the parser alone lets a value sit near
+  // the int64 limit, where adding it to an epoch stamp would overflow.
+  constexpr std::int64_t kMaxCamOffsetNs = 24LL * 3600LL * 1'000'000'000LL;
+  if (*ns > kMaxCamOffsetNs || *ns < -kMaxCamOffsetNs) {
+    return {
+      0, "--cam-offset: '" + args.cam_offset +
+           "' is beyond +-24h; a sensor clock offset is "
+           "milliseconds to seconds (check the unit suffix)"};
+  }
   return {*ns, ""};
 }
 

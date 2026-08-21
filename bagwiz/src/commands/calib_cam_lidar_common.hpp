@@ -148,7 +148,9 @@ struct FixSpec
 // literal — a camera clock that stamps late relative to the --pose clock is
 // corrected with a negative offset. Errors (returned in the second member;
 // the first member is only meaningful when it is empty): a value that fails
-// the --skip-start duration grammar (a unit suffix is mandatory).
+// the --skip-start duration grammar (a unit suffix is mandatory), or a
+// magnitude beyond 24 h — a sensor clock offset is milliseconds to seconds,
+// and an unbounded value added to an epoch stamp could overflow.
 [[nodiscard]] std::pair<std::int64_t, std::string> parse_cam_offset(const CalibCamLidarArgs & args);
 
 // Pick up to `samples` image-stamp indices into `image_stamps_ns` (sorted
