@@ -29,7 +29,7 @@ bagwiz calib cam-lidar -i <input> --pcd <topic> --pose <topic> --cam <topic> \
   [--keyframe-dist <m>] [--keyframe-rot <deg>] \
   [--max-trans <m>] [--max-rot <deg>] [--nid-bins <n>] [--min-depth <m>] \
   [--max-depth <m>] [--voxel <m>] [--skip-start <dur>] [--skip-end <dur>] \
-  [--cam-offset <dur>] [--json] [-w|--overwrite]
+  [--cam-offset <dur>|auto] [--imu <topic>] [--json] [-w|--overwrite]
 ```
 
 ### Example
@@ -72,7 +72,8 @@ bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lidar.yaml
 | `--voxel <m>`           | Edge length of the grid the accumulated map is collapsed onto, in meters. Default `0.1`; `0` keeps every point of every cloud. See [How the map is built](#how-the-map-is-built). Long-form only.                                                                                                          |
 | `--skip-start <dur>`    | Exclude this duration, measured from the bag's start, from the estimation (e.g. `30s`; a unit suffix is required: `ns`/`us`/`ms`/`s`). See [Sample selection](#sample-selection). Long-form only.                                                                                                          |
 | `--skip-end <dur>`      | Exclude this duration, measured from the bag's end, from the estimation. Same duration grammar as `--skip-start`. Long-form only.                                                                                                                                                                          |
-| `--cam-offset <dur>`    | Signed duration added to every image stamp before the `--pose` lookup, so the image stamped $t$ is placed at the pose of $t + \text{offset}$; a camera clock that stamps late is corrected with a negative value (e.g. `-42ms`; same grammar as `--skip-start`). See [Method](#method). Long-form only.    |
+| `--cam-offset <dur>`    | Signed duration added to every image stamp before the `--pose` lookup, so the image stamped $t$ is placed at the pose of $t + \text{offset}$ (negative when the camera stamps late, e.g. `-42ms`), or `auto` to measure it from the bag. See [Time offset](#time-offset). Long-form only.                  |
+| `--imu <topic>`         | `sensor_msgs/msg/Imu` topic used as the timing bridge for `--cam-offset auto` (its frame must be reachable from `--of` through the static TF); rejected without `auto`. A literal topic name, not a glob. See [Time offset](#time-offset). Long-form only.                                                 |
 | `--json`                | Emit the stdout summary as JSON instead of the human table. The YAML is written either way. Long-form only.                                                                                                                                                                                                |
 | `-w`, `--overwrite`     | Replace an existing `-o`/`--output` path.                                                                                                                                                                                                                                                                  |
 
@@ -178,20 +179,7 @@ minimizes the mean NID across all samples, confined to the trust region
 around the edge's bag value (`--max-trans`, `--max-rot`), so a bad initial
 mount value or an unconstrained axis cannot wander to an unrelated optimum.
 
-`--cam-offset` shifts that lookup: every image stamp has the offset added the
-moment it is read, so sample eligibility and picking, the keyframe gate, the
-map's frustum cull, the pre-cull and each sample's pose all see the same
-shifted time and the image stamped $t$ is placed at the trajectory's pose of
-$t + \text{offset}$. Clouds and poses are never shifted. The sign is literal:
-when the camera's clock stamps later than the `--pose` clock (an image stamped
-$t$ was really taken when the trajectory was at $t - 42\,\text{ms}$), pass
-`--cam-offset -42ms`. A constant offset of a few tens of milliseconds is an
-ordinary property of a multi-sensor rig — at highway speed it is a displacement
-of the order of a meter plus the rotation swept in that time at every sample —
-and is not something the NID search can absorb, so it has to be measured and
-passed in. The run logs the applied offset, the human report prints it as
-`camera stamp offset` when non-zero, and `--json` always carries it as
-`cam_offset_ns`.
+`--cam-offset` shifts that lookup — see [Time offset](#time-offset) below.
 
 The six numbers the search moves are the edge's own `x, y, z, roll, pitch,
 yaw` — the scalars [`static dump`](tf.md#bagwiz-tf-static-dump) writes — and the
@@ -203,6 +191,65 @@ which leaves the bag's own scalar for that axis in the output verbatim even
 when the edge's rotation does not commute (an optical-convention mount, say).
 The default `--fix auto` generalizes this from axes to directions — see the
 next section.
+
+### Time offset
+
+A camera whose clock stamps images earlier or later than the `--pose` clock
+puts every sample at the wrong pose: the image stamped $t$ is looked up at
+pose($t$) while it was taken at pose($t + \delta$). A constant offset of a few
+tens of milliseconds is an ordinary property of a multi-sensor rig — at highway
+speed it is a displacement of the order of a meter plus the rotation swept in
+that time at every sample — and it is not something the NID search can absorb:
+NID is nearly flat in the offset while the refined roll and translation wander
+with the sample set. So the offset is measured and passed in, or measured by the
+command itself.
+
+`--cam-offset <dur>` adds the value to every image stamp the moment the stamps
+are read, so sample eligibility and picking, the keyframe gate, the map's
+frustum cull, the pre-cull and each sample's pose all see the same shifted time
+and the image stamped $t$ is placed at the trajectory's pose of
+$t + \text{offset}$. Clouds and poses are never shifted. The sign is literal:
+when the camera's clock stamps later than the `--pose` clock (an image stamped
+$t$ was really taken when the trajectory was at $t - 42\,\text{ms}$), pass
+`--cam-offset -42ms`.
+
+`--cam-offset auto` measures the offset from the bag. Consecutive image pairs
+inside the trajectory span (at most 1200 frames, as evenly spread contiguous
+blocks of 100 so a long bag stays bounded) are decoded, downscaled to at most
+1440 px on the longer side, and the camera's rotation between the two frames is
+solved from tracked corners two ways — through the essential matrix, right when
+the platform translates, and as a pure rotation, right when it barely moves,
+where the essential matrix degenerates. Each series is then matched against a
+reference rotation over the same window shifted by a candidate offset $d$ on a
+1 ms grid within $\pm 250\,\text{ms}$: a robust (Huber) residual is minimized,
+the minimum refined with a parabola, and its spread taken from a bootstrap over
+the pairs. The series that explains more of its own signal is kept and named in
+the report.
+
+- Without `--imu` (method `trajectory`), the reference is the `--pose`
+  trajectory's own rotation, interpolated exactly as the samples are.
+- With `--imu <topic>` (method `imu`), the reference is the gyro integrated over
+  the window, which times the camera against the IMU clock; the trajectory's
+  consecutive-pose rotations are timed against the same gyro, and the
+  difference of the two is the camera-vs-pose offset. The IMU's own latency
+  cancels in that difference — the IMU bridges the two clocks, it does not
+  anchor either — and the two legs are reported as well. The IMU frame must be
+  reachable from `--of` through the bag's static TF; the gyro is rotated into
+  `--of` through that chain.
+
+The estimate is applied exactly like a manual value and the run reports it:
+the log line `Estimated --cam-offset …`, the human report's
+`camera stamp offset` line (with the spread, the pair count, the method and the
+solver), and in `--json` the `cam_offset_estimate` object (`offset_ns`,
+`std_ns`, `method`, `visual_estimator`, `pairs`, `signal_rms_mrad`,
+`residual_rms_before_mrad`, `residual_rms_after_mrad`, and under `imu`
+`camera_imu_offset_ns` / `pose_imu_offset_ns`; `null` for a manual or omitted
+offset). `auto` fails — rather than applying a number the data cannot support —
+when fewer than 50 frame pairs track, when the platform does not rotate enough
+to time against (a static bag), when the best shift sits on the grid's edge
+(the offset is beyond $\pm 250\,\text{ms}$), or when the bootstrap spread
+exceeds 20 ms; the message then suggests a manual `--cam-offset`. The
+estimation adds roughly the image-decode time of the tracked frames to the run.
 
 ### Observability report and automatic holding
 
@@ -298,7 +345,8 @@ apply with: bagwiz tf static update -i capture.mcap --yaml capture_calib_cam_lid
 Rotations in the human table are shown in degrees; `--json` reports the same
 `before`/`after`/`delta` per axis in radians instead, alongside the `parent`,
 `child`, `nid_before`, `nid_after`, `samples`, `cam_offset_ns` (the applied
-`--cam-offset` in nanoseconds, `0` when omitted), and `held` fields. Each axis
+`--cam-offset` in nanoseconds, `0` when omitted), `cam_offset_estimate` (see
+[Time offset](#time-offset); `null` unless `auto`), and `held` fields. Each axis
 also carries its curvature evidence: `curvature` and `std_error` as measured,
 `curvature_ratio` as their quotient — `null` for an axis that was never
 probed (a `--fix`-named one), the ratio additionally `null` when the estimate
@@ -312,7 +360,7 @@ combining `none` with other tokens, or naming all six axes, a non-positive `--ma
 outside `4`–`256`, `--max-depth` at or below `--min-depth`, an empty
 `--of`/`--ref`, or a negative `--keyframe-dist`/`--keyframe-rot`, or an
 unparseable or negative `--skip-start`/`--skip-end`, or an unparseable
-`--cam-offset` or one beyond ±24 h), a missing or
+`--cam-offset` or one beyond ±24 h, or `--imu` without `--cam-offset auto`), a missing or
 wrong-typed `--pcd`/`--pose`/`--cam` topic, a `--pcd` topic without an
 `intensity` field, an unparseable or big-endian cloud, a `--pcd`/`--cam`
 topic with no messages, every cloud falling outside the trajectory span, a
@@ -321,7 +369,9 @@ leave fewer than two trajectory poses inside the window, an unresolvable
 CameraInfo, a cloud frame with no static-TF path from `--of`, a
 `--parent`/`--child` edge that is not on the static chain (or not directly on
 a static topic), too few usable image samples surviving the trajectory-span
-and pre-cull filtering, or a refinement failure (e.g. no sample projects
+and pre-cull filtering, a `--cam-offset auto` estimate the data cannot support
+(see [Time offset](#time-offset)) or an unreadable `--imu` topic or frame chain,
+or a refinement failure (e.g. no sample projects
 enough map points at the initial estimate, or no direction of the edge is
 observable at all).
 

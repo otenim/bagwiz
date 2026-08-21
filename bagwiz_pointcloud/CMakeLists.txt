@@ -45,6 +45,8 @@ add_library(bagwiz_pointcloud
   src/core/calib/nid_cost.cpp
   src/core/calib/observability.cpp
   src/core/calib/extrinsic_refine.cpp
+  src/core/calib/time_offset.cpp
+  src/core/calib/visual_rotation.cpp
   src/core/pointcloud/cloud_concat.cpp
   src/core/pointcloud/cloud_transform.cpp
   src/core/pointcloud/color_mapper.cpp
@@ -89,7 +91,8 @@ else()
   endforeach()
 endif()
 # OpenCV is an implementation detail of the point-cloud overlay path
-# (overlay.cpp). Keep it PRIVATE so it does not leak into the export set.
+# (overlay.cpp) and of the calib visual gyro (visual_rotation.cpp). Keep it
+# PRIVATE so it does not leak into the export set.
 target_link_libraries(bagwiz_pointcloud PRIVATE ${OpenCV_LIBS})
 
 install(TARGETS bagwiz_pointcloud
@@ -192,6 +195,12 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_calib_observability_test test/core/calib/observability_test.cpp)
   target_link_libraries(bagwiz_calib_observability_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_time_offset_test test/core/calib/time_offset_test.cpp)
+  target_link_libraries(bagwiz_calib_time_offset_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_calib_visual_rotation_test test/core/calib/visual_rotation_test.cpp)
+  target_link_libraries(bagwiz_calib_visual_rotation_test bagwiz_pointcloud)
 endif()
 
 ament_package()

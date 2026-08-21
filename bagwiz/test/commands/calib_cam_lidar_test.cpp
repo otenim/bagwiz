@@ -19,6 +19,7 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 
 #include <gtest/gtest.h>
 #include <rcutils/allocator.h>
@@ -33,6 +34,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <span>
 #include <string>
 #include <vector>
@@ -64,6 +66,8 @@ constexpr const char * kCamInfoTopic = "/cam/camera_info";
 constexpr const char * kPcdTopic = "/lidar/points";
 constexpr const char * kPoseTopic = "/pose";
 constexpr const char * kTfStaticTopic = "/tf_static";
+constexpr const char * kImuTopic = "/imu";
+constexpr const char * kImuFrame = "imu_link";
 
 constexpr std::uint32_t kImageWidth = 320;
 constexpr std::uint32_t kImageHeight = 240;
@@ -184,7 +188,7 @@ struct Scene
 // ramp (gray = px * 255 / (width - 1), constant along v) rendered into a real
 // packed-BGR24 raster (b == g == r == gray, so gray_from_bgr24's BT.601
 // weights reconstruct it exactly) — no splatting.
-Scene build_scene()
+Scene build_scene(bool with_dots = false)
 {
   Scene scene;
   for (int iy = -15; iy < 15; ++iy) {
@@ -207,7 +211,77 @@ Scene build_scene()
       scene.ramp_bgr[base + 2] = gray;
     }
   }
+  if (with_dots) {
+    // Sparse soft blobs on top of the ramp: corners for the --cam-offset auto
+    // tracker, too sparse to disturb the ramp's gray/intensity correlation.
+    std::mt19937_64 rng(42);
+    std::uniform_real_distribution<double> ux(0.0, kImageWidth);
+    std::uniform_real_distribution<double> uy(0.0, kImageHeight);
+    std::uniform_real_distribution<double> uamp(-70.0, 70.0);
+    for (int b = 0; b < 250; ++b) {
+      const double cx = ux(rng);
+      const double cy = uy(rng);
+      const double amp = uamp(rng);
+      for (int dy = -6; dy <= 6; ++dy) {
+        for (int dx = -6; dx <= 6; ++dx) {
+          const int x = static_cast<int>(cx) + dx;
+          const int y = static_cast<int>(cy) + dy;
+          if (
+            x < 0 || y < 0 || x >= static_cast<int>(kImageWidth) ||
+            y >= static_cast<int>(kImageHeight)) {
+            continue;
+          }
+          const double g = std::exp(-(dx * dx + dy * dy) / (2.0 * 2.0 * 2.0));
+          const std::size_t base =
+            (static_cast<std::size_t>(y) * kImageWidth + static_cast<std::size_t>(x)) * 3;
+          for (int c = 0; c < 3; ++c) {
+            const double v =
+              std::clamp(static_cast<double>(scene.ramp_bgr[base + c]) + amp * g, 0.0, 255.0);
+            scene.ramp_bgr[base + c] = static_cast<std::uint8_t>(v);
+          }
+        }
+      }
+    }
+  }
   return scene;
+}
+
+// The ramp raster as seen by a camera rotated by `yaw_rad` about its own z
+// (the fixture's base_link z is the optical axis, so a pose yaw rolls the
+// image): a pure rotation, so the view is the base raster warped by the
+// homography K R K^-1 — exact for the wall at any depth. Bilinear sampling,
+// mid-gray outside.
+std::vector<std::uint8_t> render_rolled_ramp(const std::vector<std::uint8_t> & base, double yaw_rad)
+{
+  std::vector<std::uint8_t> out(base.size(), 128);
+  const double c = std::cos(yaw_rad);
+  const double sn = std::sin(yaw_rad);
+  for (std::uint32_t v = 0; v < kImageHeight; ++v) {
+    for (std::uint32_t u = 0; u < kImageWidth; ++u) {
+      // K^-1 p, rotate by R(yaw) about z, K again (fx == fy so the scale drops out).
+      const double x = (static_cast<double>(u) - kCx) / kFx;
+      const double y = (static_cast<double>(v) - kCy) / kFy;
+      const double xs = (c * x - sn * y) * kFx + kCx;
+      const double ys = (sn * x + c * y) * kFy + kCy;
+      if (xs < 0.0 || ys < 0.0 || xs >= kImageWidth - 1.0 || ys >= kImageHeight - 1.0) {
+        continue;
+      }
+      const auto x0 = static_cast<std::size_t>(xs);
+      const auto y0 = static_cast<std::size_t>(ys);
+      const double fx = xs - static_cast<double>(x0);
+      const double fy = ys - static_cast<double>(y0);
+      for (std::size_t ch = 0; ch < 3; ++ch) {
+        const auto at = [&](std::size_t xx, std::size_t yy) {
+          return static_cast<double>(base[(yy * kImageWidth + xx) * 3 + ch]);
+        };
+        const double g = at(x0, y0) * (1 - fx) * (1 - fy) + at(x0 + 1, y0) * fx * (1 - fy) +
+                         at(x0, y0 + 1) * (1 - fx) * fy + at(x0 + 1, y0 + 1) * fx * fy;
+        out[(static_cast<std::size_t>(v) * kImageWidth + u) * 3 + ch] =
+          static_cast<std::uint8_t>(std::clamp(g, 0.0, 255.0));
+      }
+    }
+  }
+  return out;
 }
 
 // The scene's wall as one PointCloud2 message in the lidar frame: x/y/z
@@ -342,8 +416,42 @@ struct FixtureBagOptions
   // pose and the end of the span. The --cam-offset test needs a trajectory
   // whose interpolated pose actually depends on the lookup time.
   double pose_t1_yaw_rad = 0.0;
+  // A continuously yawing trajectory instead: yaw(t) = amplitude * sin(2 pi
+  // (t - pose_t0) / period) at every pose (pose_t1_yaw_rad is ignored when
+  // the amplitude is non-zero). What `--cam-offset auto` needs: rotation
+  // throughout the span for the visual gyro to time against.
+  double pose_yaw_amplitude_rad = 0.0;
+  double pose_yaw_period_s = 8.0;
+  // Render each image as the ramp seen from the yawing camera at the image's
+  // TRUE capture time, stamp + image_true_offset_ns (a negative value: the
+  // camera clock stamps late). Off: every image is the plain ramp.
+  bool render_images_from_pose = false;
+  std::int64_t image_true_offset_ns = 0;
+  // An Imu topic (kImuTopic, frame kImuFrame) carrying the yaw rate at this
+  // rate, each sample stamped imu_latency_ns AFTER its true time. 0 = none.
+  // The writer adds the identity base_link -> imu_link static edge.
+  double imu_rate_hz = 0.0;
+  std::int64_t imu_latency_ns = 0;
   bool cloud_with_intensity = true;
   bool cloud_with_time_field = false;
+
+  [[nodiscard]] double yaw_at(std::int64_t stamp_ns) const
+  {
+    if (pose_yaw_amplitude_rad != 0.0) {
+      const double t = static_cast<double>(stamp_ns - pose_t0_ns) / 1e9;
+      return pose_yaw_amplitude_rad * std::sin(2.0 * M_PI * t / pose_yaw_period_s);
+    }
+    return stamp_ns == pose_t1_ns ? pose_t1_yaw_rad : 0.0;
+  }
+  [[nodiscard]] double yaw_rate_at(std::int64_t stamp_ns) const
+  {
+    if (pose_yaw_amplitude_rad == 0.0) {
+      return 0.0;
+    }
+    const double t = static_cast<double>(stamp_ns - pose_t0_ns) / 1e9;
+    const double w = 2.0 * M_PI / pose_yaw_period_s;
+    return pose_yaw_amplitude_rad * w * std::cos(w * t);
+  }
 };
 
 // Writes one bag with /tf_static (the edges plus the identity lidar edge),
@@ -360,6 +468,9 @@ void write_fixture_bag(
   writer->declare_topic(topic_info(kCamInfoTopic, "sensor_msgs/msg/CameraInfo"));
   writer->declare_topic(topic_info(kPcdTopic, "sensor_msgs/msg/PointCloud2"));
   writer->declare_topic(topic_info(kPoseTopic, "geometry_msgs/msg/PoseStamped"));
+  if (opts.imu_rate_hz > 0.0) {
+    writer->declare_topic(topic_info(kImuTopic, "sensor_msgs/msg/Imu"));
+  }
 
   auto edges = opts.static_edges;
   geometry_msgs::msg::TransformStamped lidar_edge;
@@ -367,6 +478,13 @@ void write_fixture_bag(
   lidar_edge.child_frame_id = kLidarFrame;
   lidar_edge.transform.rotation.w = 1.0;
   edges.push_back(lidar_edge);
+  if (opts.imu_rate_hz > 0.0) {
+    geometry_msgs::msg::TransformStamped imu_edge;
+    imu_edge.header.frame_id = kParentFrame;
+    imu_edge.child_frame_id = kImuFrame;
+    imu_edge.transform.rotation.w = 1.0;
+    edges.push_back(imu_edge);
+  }
   const auto tf_cdr = bagwiz::core::serialize_tf_message(edges);
   writer->write(kTfStaticTopic, 0, std::span<const std::byte>(tf_cdr.data(), tf_cdr.size()));
 
@@ -377,10 +495,30 @@ void write_fixture_bag(
 
   for (const std::int64_t stamp_ns : opts.image_stamps_ns) {
     const auto sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
+    const auto nsec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
+    const std::vector<std::uint8_t> raster =
+      opts.render_images_from_pose
+        ? render_rolled_ramp(scene.ramp_bgr, opts.yaw_at(stamp_ns + opts.image_true_offset_ns))
+        : scene.ramp_bgr;
     const auto image_cdr =
-      serialize_image_bgr8(sec, 0, opts.optical_frame, kImageWidth, kImageHeight, scene.ramp_bgr);
+      serialize_image_bgr8(sec, nsec, opts.optical_frame, kImageWidth, kImageHeight, raster);
     writer->write(
       kImageTopic, stamp_ns, std::span<const std::byte>(image_cdr.data(), image_cdr.size()));
+  }
+  if (opts.imu_rate_hz > 0.0) {
+    const auto period_ns = static_cast<std::int64_t>(std::llround(1e9 / opts.imu_rate_hz));
+    for (std::int64_t t = opts.pose_t0_ns; t <= opts.pose_t1_ns; t += period_ns) {
+      sensor_msgs::msg::Imu imu;
+      imu.header.frame_id = kImuFrame;
+      const std::int64_t stamp = t + opts.imu_latency_ns;
+      imu.header.stamp.sec = static_cast<std::int32_t>(stamp / 1'000'000'000LL);
+      imu.header.stamp.nanosec = static_cast<std::uint32_t>(stamp % 1'000'000'000LL);
+      imu.angular_velocity.z = opts.yaw_rate_at(t);
+      imu.linear_acceleration.z = 9.81;
+      imu.orientation.w = 1.0;
+      const auto imu_cdr = serialize_typed(imu, "sensor_msgs/msg/Imu");
+      writer->write(kImuTopic, stamp, std::span<const std::byte>(imu_cdr.data(), imu_cdr.size()));
+    }
   }
 
   const auto cloud = make_wall_cloud(
@@ -398,7 +536,7 @@ void write_fixture_bag(
     pose.header.frame_id = kRefFrame;
     pose.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
     pose.header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
-    const double yaw_rad = stamp_ns == opts.pose_t1_ns ? opts.pose_t1_yaw_rad : 0.0;
+    const double yaw_rad = opts.yaw_at(stamp_ns);
     pose.pose.orientation.z = std::sin(yaw_rad / 2.0);
     pose.pose.orientation.w = std::cos(yaw_rad / 2.0);
     const auto pose_cdr = serialize_typed(pose, "geometry_msgs/msg/PoseStamped");
@@ -767,6 +905,140 @@ TEST_F(CalibCamLidarTest, CamOffsetPlacesImagesAtTheShiftedPose)
   EXPECT_NEAR(yaw_shifted, 0.0, 0.15 * M_PI / 180.0);
   EXPECT_NE(report_shifted.find("\"cam_offset_ns\": -20000000000"), std::string::npos)
     << report_shifted;
+}
+
+// The `--cam-offset auto` fixture: a trajectory yawing +-3 deg with an 8 s
+// period across 10..50 s (poses at 10 Hz), images at 5 Hz over 15..45 s
+// stamped 120 ms late (each shows the camera 120 ms before its stamp), the
+// wall cloud stamped where the yaw passes through zero (18 s) so the map sits
+// at the identity pose the scene was built for, and the ramp dotted so the
+// tracker has corners.
+FixtureBagOptions auto_offset_fixture()
+{
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  for (std::int64_t t = 15'000'000'000LL; t <= 45'000'000'000LL; t += 200'000'000LL) {
+    opts.image_stamps_ns.push_back(t);
+  }
+  for (std::int64_t t = 10'100'000'000LL; t < 50'000'000'000LL; t += 100'000'000LL) {
+    opts.mid_pose_stamps_ns.push_back(t);
+  }
+  opts.pose_yaw_amplitude_rad = 3.0 * M_PI / 180.0;
+  opts.pose_yaw_period_s = 8.0;
+  opts.cloud_stamp_ns = 18'000'000'000LL;
+  opts.render_images_from_pose = true;
+  opts.image_true_offset_ns = -120'000'000LL;
+  return opts;
+}
+
+// The `cam_offset_ns` / `offset_ns` the JSON report carries.
+std::int64_t json_int_field(const std::string & json, const std::string & field)
+{
+  const std::string key = "\"" + field + "\": ";
+  const std::size_t pos = json.find(key);
+  EXPECT_NE(pos, std::string::npos) << "missing '" << field << "' in:\n" << json;
+  if (pos == std::string::npos) {
+    return 0;
+  }
+  return std::stoll(json.substr(pos + key.size()));
+}
+
+// `--cam-offset auto` against the trajectory: the estimate lands on the
+// -120 ms the images were stamped by, is applied (cam_offset_ns), and the
+// refined edge stays at the bag value it was rendered for.
+TEST_F(CalibCamLidarTest, CamOffsetAutoEstimatesAgainstTheTrajectory)
+{
+  const auto scene = build_scene(/*with_dots=*/true);
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, auto_offset_fixture());
+
+  auto args = base_args(tmp_dir_);
+  args.fix_axes = "x,y,z";
+  args.cam_offset = "auto";
+  args.json = true;
+  ::testing::internal::CaptureStdout();
+  ::testing::internal::CaptureStderr();
+  const int rc = run_calib_cam_lidar(args);
+  const std::string report = ::testing::internal::GetCapturedStdout();
+  const std::string logs = ::testing::internal::GetCapturedStderr();
+  ASSERT_EQ(rc, 0) << logs;
+  ASSERT_TRUE(std::filesystem::exists(args.output_path));
+  EXPECT_NE(logs.find("Estimated --cam-offset"), std::string::npos) << logs;
+  EXPECT_NE(report.find("\"method\": \"trajectory\""), std::string::npos) << report;
+  const std::int64_t applied = json_int_field(report, "cam_offset_ns");
+  EXPECT_NEAR(static_cast<double>(applied) / 1e6, -120.0, 30.0) << report;
+  EXPECT_EQ(json_int_field(report, "offset_ns"), applied) << report;
+
+  const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
+  ASSERT_TRUE(parsed.ok()) << parsed.error;
+  const auto rpy = bagwiz::core::quaternion_to_rpy(parsed.transforms->front().transform.rotation);
+  EXPECT_NEAR(rpy.yaw, 0.0, 0.2 * M_PI / 180.0);
+}
+
+// The same with --imu: both legs of the bridge are reported, the gyro's own
+// +50 ms latency cancels, and the estimate is the same -120 ms.
+TEST_F(CalibCamLidarTest, CamOffsetAutoBridgesThroughTheImu)
+{
+  const auto scene = build_scene(/*with_dots=*/true);
+  auto opts = auto_offset_fixture();
+  opts.imu_rate_hz = 100.0;
+  opts.imu_latency_ns = 50'000'000LL;
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.fix_axes = "x,y,z";
+  args.cam_offset = "auto";
+  args.imu_topic = kImuTopic;
+  args.json = true;
+  ::testing::internal::CaptureStdout();
+  ::testing::internal::CaptureStderr();
+  const int rc = run_calib_cam_lidar(args);
+  const std::string report = ::testing::internal::GetCapturedStdout();
+  const std::string logs = ::testing::internal::GetCapturedStderr();
+  ASSERT_EQ(rc, 0) << logs;
+  EXPECT_NE(report.find("\"method\": \"imu\""), std::string::npos) << report;
+  EXPECT_NEAR(static_cast<double>(json_int_field(report, "cam_offset_ns")) / 1e6, -120.0, 30.0)
+    << report;
+  // camera vs gyro carries the gyro latency (+50 ms) on top of the -120 ms;
+  // pose vs gyro is the latency alone.
+  EXPECT_NEAR(
+    static_cast<double>(json_int_field(report, "camera_imu_offset_ns")) / 1e6, -70.0, 30.0)
+    << report;
+  EXPECT_NEAR(static_cast<double>(json_int_field(report, "pose_imu_offset_ns")) / 1e6, 50.0, 20.0)
+    << report;
+}
+
+TEST_F(CalibCamLidarTest, RejectsImuWithoutAuto)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.imu_topic = kImuTopic;  // no --cam-offset auto
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+}
+
+// A static bag has no rotation to time against: `auto` must refuse rather
+// than apply a meaningless zero.
+TEST_F(CalibCamLidarTest, CamOffsetAutoFailsWithoutRotation)
+{
+  const auto scene = build_scene(/*with_dots=*/true);
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.cam_offset = "auto";
+  ::testing::internal::CaptureStderr();
+  const int rc = run_calib_cam_lidar(args);
+  const std::string logs = ::testing::internal::GetCapturedStderr();
+  EXPECT_EQ(rc, 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+  EXPECT_NE(logs.find("could not estimate the camera stamp offset"), std::string::npos) << logs;
 }
 
 // An offset that carries every image stamp outside the (margin-shrunk)

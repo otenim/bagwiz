@@ -93,11 +93,19 @@ struct CalibCamLidarArgs
   std::string skip_start;
   std::string skip_end;
   // --cam-offset: raw signed duration string (the same grammar as --skip-start:
-  // a unit suffix is mandatory, e.g. "-42ms", "+1.5s"). Empty = none. Added to
-  // every image's stamp before anything reads it, so the image stamped t is
-  // placed at pose(t + offset): a camera clock that runs late relative to the
-  // --pose clock is corrected with a negative value. See parse_cam_offset.
+  // a unit suffix is mandatory, e.g. "-42ms", "+1.5s"), or "auto". Empty =
+  // none. Added to every image's stamp before anything reads it, so the image
+  // stamped t is placed at pose(t + offset): a camera clock that runs late
+  // relative to the --pose clock is corrected with a negative value. "auto"
+  // measures the offset from the bag's own images against the --pose
+  // trajectory (or, with --imu, bridged through the gyro) and applies the
+  // estimate. See parse_cam_offset and estimate_cam_offset.
   std::string cam_offset;
+  // --imu: Imu topic used as the timing bridge for `--cam-offset auto`; empty
+  // = none. Only meaningful with auto (validate_calibrate_flags rejects it
+  // otherwise). The IMU frame must be reachable from --of through the bag's
+  // static TF; the gyro is rotated into --of through that chain.
+  std::string imu_topic;
   bool json = false;       // --json; emit the stdout summary as JSON
   bool overwrite = false;  // -w,--overwrite; replace an existing -o/--output path
 };
@@ -140,18 +148,52 @@ struct FixSpec
 [[nodiscard]] std::pair<std::array<std::int64_t, 2>, std::string> parse_skip_durations(
   const CalibCamLidarArgs & args);
 
-// The parsed --cam-offset value in nanoseconds (0 for an omitted flag). The
-// run path adds it to every image stamp the moment the stamps are read, so
+// The parsed --cam-offset: either a fixed value in nanoseconds (0 for an
+// omitted flag) or the request to estimate it (`auto`). The run path adds the
+// applied value to every image stamp the moment the stamps are read, so
 // sample eligibility and picking, the keyframe gate, the map's frustum cull,
 // the pre-cull and each sample's trajectory pose all see the same shifted
 // time: the image stamped t is placed at pose(t + offset). The sign is
 // literal — a camera clock that stamps late relative to the --pose clock is
-// corrected with a negative offset. Errors (returned in the second member;
-// the first member is only meaningful when it is empty): a value that fails
-// the --skip-start duration grammar (a unit suffix is mandatory), or a
-// magnitude beyond 24 h — a sensor clock offset is milliseconds to seconds,
-// and an unbounded value added to an epoch stamp could overflow.
-[[nodiscard]] std::pair<std::int64_t, std::string> parse_cam_offset(const CalibCamLidarArgs & args);
+// corrected with a negative offset.
+struct CamOffsetSpec
+{
+  bool auto_estimate = false;  // `auto`: measure it from the bag (estimate_cam_offset)
+  std::int64_t offset_ns = 0;  // the fixed value; 0 under auto or when omitted
+};
+
+// Errors (returned in the second member; the first member is only meaningful
+// when it is empty): a value that is neither `auto` nor a duration in the
+// --skip-start grammar (a unit suffix is mandatory), or a magnitude beyond
+// 24 h — a sensor clock offset is milliseconds to seconds, and an unbounded
+// value added to an epoch stamp could overflow.
+[[nodiscard]] std::pair<CamOffsetSpec, std::string> parse_cam_offset(
+  const CalibCamLidarArgs & args);
+
+// What `--cam-offset auto` measured, for the report. Offsets follow the
+// --cam-offset convention (the value added to image stamps).
+struct CamOffsetEstimateReport
+{
+  std::int64_t offset_ns = 0;
+  std::int64_t std_ns = 0;       // bootstrap spread
+  std::string method;            // "trajectory" (images vs --pose) or "imu" (gyro bridge)
+  std::string visual_estimator;  // "essential" or "rotation": the frame-pair solver kept
+  std::size_t pairs = 0;         // frame pairs the fit rests on
+  double signal_rms_mrad = 0.0;
+  double residual_rms_before_mrad = 0.0;
+  double residual_rms_after_mrad = 0.0;
+  // imu method only: the two legs of the bridge (camera vs gyro, pose vs gyro).
+  std::optional<std::int64_t> camera_imu_offset_ns;
+  std::optional<std::int64_t> pose_imu_offset_ns;
+};
+
+// The offset a run applied, for the report: the manual value, or the estimate
+// under auto (then `estimate` is set). Default: nothing applied.
+struct CamOffsetReport
+{
+  std::int64_t applied_ns = 0;
+  std::optional<CamOffsetEstimateReport> estimate;
+};
 
 // Pick up to `samples` image-stamp indices into `image_stamps_ns` (sorted
 // ascending), evenly spread inside the trajectory span shrunk by `margin_ns`
@@ -355,7 +397,8 @@ private:
 // emitted YAML uses.
 [[nodiscard]] std::string render_calibrate_summary(
   const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
-  const std::array<double, 6> & edge_before, const std::string & yaml_path);
+  const std::array<double, 6> & edge_before, const std::string & yaml_path,
+  const CamOffsetReport & cam_offset = {});
 
 // Render the machine-readable `--json` summary of a refine result, mirroring
 // `tf static calc --json`'s nesting/key-naming style (hand-built with fmt
@@ -368,7 +411,7 @@ private:
 // render_calibrate_summary uses.
 [[nodiscard]] std::string render_calibrate_json(
   const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
-  const std::array<double, 6> & edge_before);
+  const std::array<double, 6> & edge_before, const CamOffsetReport & cam_offset = {});
 
 // Entry point for `bagwiz calib cam-lidar`'s run path: builds the --of -> --ref
 // trajectory from the --pose topic, accumulates the --pcd topic's clouds into

@@ -29,6 +29,7 @@
 #include "bagwiz/io/bag_open.hpp"
 #include "bagwiz/io/topics.hpp"
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "calib_cam_lidar_offset.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "pcd_undistort_common.hpp"    // NOLINT(build/include_subdir) src-local shared header
 
 #include <tf2/buffer_core.hpp>
@@ -495,15 +496,8 @@ std::int64_t header_stamp_ns_of(std::string_view type, std::span<const std::byte
   return 0;
 }
 
-// `cam_offset_ns` (the parsed --cam-offset) is added to every stamp here, at
-// the one place the image times enter the command, so every consumer — sample
-// eligibility and picking, the keyframe gate, the frustum cull, the pre-cull
-// and each sample's trajectory pose — sees the same shifted time and the image
-// stamped t is placed at pose(t + offset). A stamp that fell back to the bag
-// record time is shifted the same way: the offset corrects the image's time
-// whatever its source.
 std::optional<std::vector<std::int64_t>> scan_image_stamps(
-  const CalibCamLidarArgs & args, io::BagReader & reader, std::int64_t cam_offset_ns)
+  const CalibCamLidarArgs & args, io::BagReader & reader)
 {
   io::ReadFilter filter;
   filter.topics = {args.cam_topic};
@@ -516,9 +510,9 @@ std::optional<std::vector<std::int64_t>> scan_image_stamps(
     while (reader.next(raw)) {
       const std::int64_t header_stamp_ns = header_stamp_ns_of(raw.topic->type, raw.payload);
       if (header_stamp_ns != 0) {
-        stamps.push_back(header_stamp_ns + cam_offset_ns);
+        stamps.push_back(header_stamp_ns);
       } else {
-        stamps.push_back(raw.timestamp_ns + cam_offset_ns);
+        stamps.push_back(raw.timestamp_ns);
         ++fallback_count;
       }
     }
@@ -535,13 +529,6 @@ std::optional<std::vector<std::int64_t>> scan_image_stamps(
       kLogger,
       "%zu of %zu image message(s) on '%s' had no header stamp; using bag record time for those.",
       fallback_count, stamps.size(), args.cam_topic.c_str());
-  }
-  if (cam_offset_ns != 0) {
-    BAGWIZ_LOG_INFO(
-      kLogger,
-      "Applying --cam-offset %+.3f ms to %zu image stamp(s) on '%s': each image is placed at "
-      "pose(stamp + offset).",
-      static_cast<double>(cam_offset_ns) / 1e6, stamps.size(), args.cam_topic.c_str());
   }
   return stamps;
 }
@@ -986,15 +973,54 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   if (!chain.has_value()) {
     return 1;
   }
+  // The initial (delta=0) camera pose chain, shared by the offset estimate,
+  // the frustum cull and the candidate assembly.
+  const core::calib::Mat4 t_trajframe_cam0 = core::calib::mat4_multiply(
+    chain->t_trajframe_parent,
+    core::calib::mat4_multiply(
+      core::calib::edge_transform(chain->edge_bag, {}), chain->t_child_camoptical));
 
   // 5. Cheap stamp scan + sample picking (reuses `reader`; no next() has run
   // on it yet, so set_filter here is still legal). Ahead of the map pass:
   // picking needs only image stamps and the trajectory, and the picks decide
   // which part of the scene the map must cover at all.
-  const auto stamps =
-    scan_image_stamps(args, *reader, parse_cam_offset(args).first);  // validated in step 1
+  auto stamps = scan_image_stamps(args, *reader);
   if (!stamps.has_value()) {
     return 1;
+  }
+
+  // 5a. --cam-offset: the manual value, or under `auto` the estimate measured
+  // from these images against the trajectory (or the --imu gyro). Applied to
+  // every stamp here, at the one place the image times enter the command, so
+  // every consumer — sample eligibility and picking, the keyframe gate, the
+  // frustum cull, the pre-cull and each sample's trajectory pose — sees the
+  // same shifted time and the image stamped t is placed at pose(t + offset).
+  // A stamp that fell back to the bag record time is shifted the same way:
+  // the offset corrects the image's time whatever its source.
+  CamOffsetReport cam_offset;
+  {
+    const CamOffsetSpec spec = parse_cam_offset(args).first;  // validated in step 1
+    if (spec.auto_estimate) {
+      const auto estimate = estimate_cam_offset(
+        CamOffsetEstimateInput{args, *stamps, *poses, *cam_info, t_trajframe_cam0, static_buffer});
+      if (!estimate.has_value()) {
+        return 1;
+      }
+      cam_offset.estimate = *estimate;
+      cam_offset.applied_ns = estimate->offset_ns;
+    } else {
+      cam_offset.applied_ns = spec.offset_ns;
+    }
+    if (cam_offset.applied_ns != 0) {
+      for (auto & stamp_ns : *stamps) {
+        stamp_ns += cam_offset.applied_ns;
+      }
+      BAGWIZ_LOG_INFO(
+        kLogger,
+        "Applying --cam-offset %+.3f ms to %zu image stamp(s) on '%s': each image is placed at "
+        "pose(stamp + offset).",
+        static_cast<double>(cam_offset.applied_ns) / 1e6, stamps->size(), args.cam_topic.c_str());
+    }
   }
   std::vector<std::size_t> picks;
   std::vector<std::size_t> group_of;  // gated mode only; parallel to picks
@@ -1058,13 +1084,6 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   cam.width = first.gray.width;
   cam.height = first.gray.height;
 
-  // The initial (delta=0) camera pose chain, shared by the frustum cull below
-  // and the candidate assembly.
-  const core::calib::Mat4 t_trajframe_cam0 = core::calib::mat4_multiply(
-    chain->t_trajframe_parent,
-    core::calib::mat4_multiply(
-      core::calib::edge_transform(chain->edge_bag, {}), chain->t_child_camoptical));
-
   // 7. Map: accumulate the --pcd topic's clouds into the --ref frame,
   // dropping points no picked sample can see as they arrive.
   const auto frusta = build_sample_frusta(args, *decoded, *poses, cam, t_trajframe_cam0);
@@ -1125,8 +1144,8 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   }
 
   const std::string report =
-    args.json ? render_calibrate_json(args, result, edge_before)
-              : render_calibrate_summary(args, result, edge_before, out_path.string());
+    args.json ? render_calibrate_json(args, result, edge_before, cam_offset)
+              : render_calibrate_summary(args, result, edge_before, out_path.string(), cam_offset);
   fmt::print(stdout, "{}{}", report, args.json ? "\n" : "");
   if (std::fflush(stdout) != 0) {
     BAGWIZ_LOG_ERROR(kLogger, "Failed to write the calibration report to stdout");

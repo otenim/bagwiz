@@ -234,37 +234,61 @@ TEST(CalibCamLidarCommonTest, ParseSkipDurations)
 TEST(CalibCamLidarCommonTest, ParseCamOffset)
 {
   {
-    // Omitted (the default): no shift.
-    const auto [ns, err] = commands::parse_cam_offset(valid_args());
+    // Omitted (the default): no shift, no estimation.
+    const auto [spec, err] = commands::parse_cam_offset(valid_args());
     EXPECT_EQ(err, "");
-    EXPECT_EQ(ns, 0);
+    EXPECT_FALSE(spec.auto_estimate);
+    EXPECT_EQ(spec.offset_ns, 0);
   }
   {
     // The sign is literal: a negative offset places each image at an earlier
     // trajectory time (the camera stamp ran late).
     auto args = valid_args();
     args.cam_offset = "-42ms";
-    const auto [ns, err] = commands::parse_cam_offset(args);
+    const auto [spec, err] = commands::parse_cam_offset(args);
     EXPECT_EQ(err, "");
-    EXPECT_EQ(ns, -42'000'000LL);
+    EXPECT_FALSE(spec.auto_estimate);
+    EXPECT_EQ(spec.offset_ns, -42'000'000LL);
   }
   {
     auto args = valid_args();
     args.cam_offset = "+1.5s";
-    const auto [ns, err] = commands::parse_cam_offset(args);
+    const auto [spec, err] = commands::parse_cam_offset(args);
     EXPECT_EQ(err, "");
-    EXPECT_EQ(ns, 1'500'000'000LL);
+    EXPECT_EQ(spec.offset_ns, 1'500'000'000LL);
   }
   {
     auto args = valid_args();
     args.cam_offset = "0s";
-    const auto [ns, err] = commands::parse_cam_offset(args);
+    const auto [spec, err] = commands::parse_cam_offset(args);
     EXPECT_EQ(err, "");
-    EXPECT_EQ(ns, 0);
+    EXPECT_EQ(spec.offset_ns, 0);
+  }
+  {
+    // `auto`: estimate it from the bag; no fixed value.
+    auto args = valid_args();
+    args.cam_offset = "auto";
+    const auto [spec, err] = commands::parse_cam_offset(args);
+    EXPECT_EQ(err, "");
+    EXPECT_TRUE(spec.auto_estimate);
+    EXPECT_EQ(spec.offset_ns, 0);
+    EXPECT_EQ(commands::validate_calibrate_flags(args), "");
+    // --imu composes with auto ...
+    args.imu_topic = "/imu";
+    EXPECT_EQ(commands::validate_calibrate_flags(args), "");
+  }
+  {
+    // ... and only with auto: nothing else reads the IMU.
+    auto args = valid_args();
+    args.imu_topic = "/imu";
+    EXPECT_NE(commands::validate_calibrate_flags(args), "");
+    args.cam_offset = "-42ms";
+    EXPECT_NE(commands::validate_calibrate_flags(args), "");
   }
   {
     // A unit suffix is mandatory (the --skip-start grammar): a bare number
-    // could be read as ms or s and is rejected rather than guessed.
+    // could be read as ms or s and is rejected rather than guessed; so is
+    // anything that is neither a duration nor `auto` (case-sensitive).
     auto args = valid_args();
     args.cam_offset = "42";
     EXPECT_NE(commands::parse_cam_offset(args).second, "");
@@ -273,6 +297,9 @@ TEST(CalibCamLidarCommonTest, ParseCamOffset)
     EXPECT_NE(commands::parse_cam_offset(args).second, "");
     args = valid_args();
     args.cam_offset = "bogus";
+    EXPECT_NE(commands::parse_cam_offset(args).second, "");
+    args = valid_args();
+    args.cam_offset = "Auto";
     EXPECT_NE(commands::parse_cam_offset(args).second, "");
   }
   {
