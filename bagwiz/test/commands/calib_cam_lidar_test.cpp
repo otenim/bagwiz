@@ -217,11 +217,11 @@ Scene build_scene(bool with_dots = false)
     std::mt19937_64 rng(42);
     std::uniform_real_distribution<double> ux(0.0, kImageWidth);
     std::uniform_real_distribution<double> uy(0.0, kImageHeight);
-    std::uniform_real_distribution<double> uamp(-70.0, 70.0);
+    std::uniform_real_distribution<double> amplitude_dist(-70.0, 70.0);
     for (int b = 0; b < 250; ++b) {
       const double cx = ux(rng);
       const double cy = uy(rng);
-      const double amp = uamp(rng);
+      const double amp = amplitude_dist(rng);
       for (int dy = -6; dy <= 6; ++dy) {
         for (int dx = -6; dx <= 6; ++dx) {
           const int x = static_cast<int>(cx) + dx;
