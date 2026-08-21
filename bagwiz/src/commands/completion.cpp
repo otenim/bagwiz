@@ -1008,7 +1008,8 @@ std::vector<std::string> complete_tf(const CompletionRequest & request)
 //              [--keyframe-rot <deg>] [--max-trans <m>] [--max-rot <deg>]
 //              [--nid-bins <n>] [--min-depth <m>] [--max-depth <m>]
 //              [--voxel <m>] [--skip-start <dur>] [--skip-end <dur>]
-//              [--cam-offset <dur>] [--json] [-w|--overwrite]
+//              [--cam-offset <dur>|auto] [--imu <topic>] [--json]
+//              [-w|--overwrite]
 std::vector<std::string> complete_calib(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1029,18 +1030,46 @@ std::vector<std::string> complete_calib(const CompletionRequest & request)
 
   if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
     return matching(
-      with_help({"--cam",          "--cam-info",  "--cam-offset", "--child",
-                 "--fix",          "--input",     "--json",       "--keyframe-dist",
-                 "--keyframe-rot", "--max-depth", "--max-rot",    "--max-trans",
-                 "--min-depth",    "--nid-bins",  "--of",         "--output",
-                 "--overwrite",    "--parent",    "--pcd",        "--pose",
-                 "--ref",          "--samples",   "--skip-end",   "--skip-start",
-                 "--voxel",        "-i",          "-o",           "-w"}),
+      with_help(
+        {"--cam",
+         "--cam-info",
+         "--cam-offset",
+         "--child",
+         "--fix",
+         "--imu",
+         "--input",
+         "--json",
+         "--keyframe-dist",
+         "--keyframe-rot",
+         "--max-depth",
+         "--max-rot",
+         "--max-trans",
+         "--min-depth",
+         "--nid-bins",
+         "--of",
+         "--output",
+         "--overwrite",
+         "--parent",
+         "--pcd",
+         "--pose",
+         "--ref",
+         "--samples",
+         "--skip-end",
+         "--skip-start",
+         "--voxel",
+         "-i",
+         "-o",
+         "-w"}),
       current);
   }
 
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
+    // --cam-offset takes a duration (free text) or the word `auto`; only the
+    // word can be offered.
+    if (previous == "--cam-offset") {
+      return matching({"auto"}, current);
+    }
     if (previous == "--parent" || previous == "--child") {
       const auto bag_arg = find_input_bag(request);
       if (!bag_arg) {

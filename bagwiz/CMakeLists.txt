@@ -191,6 +191,7 @@ set(bagwiz_command_sources
   src/commands/calib.cpp
   src/commands/calib_cam_lidar.cpp
   src/commands/calib_cam_lidar_common.cpp
+  src/commands/calib_cam_lidar_offset.cpp
   src/commands/tf.cpp
   src/commands/tf_static_cp.cpp
   src/commands/tf_static_drop.cpp
@@ -487,12 +488,13 @@ if(BUILD_TESTING)
     test/commands/calib_cam_lidar_test.cpp
     src/commands/calib_cam_lidar.cpp
     src/commands/calib_cam_lidar_common.cpp
+    src/commands/calib_cam_lidar_offset.cpp
     src/commands/pcd_undistort_common.cpp)
   target_include_directories(bagwiz_calib_cam_lidar_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(
     bagwiz_calib_cam_lidar_test ${bagwiz_test_libs} fmt::fmt yaml-cpp
-    ${geometry_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
+    ${geometry_msgs_TARGETS} ${sensor_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
 
   # pcd.cpp carries the PcdCommand registrar + CLI11 wiring for both `pcd
   # concat` and `pcd undistort` together, so proving pcd.cpp's own

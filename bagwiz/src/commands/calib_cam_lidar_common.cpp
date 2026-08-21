@@ -169,24 +169,34 @@ std::string validate_calibrate_flags(const CalibCamLidarArgs & args)
   if (const auto err = parse_skip_durations(args).second; !err.empty()) {
     return err;
   }
-  if (const auto err = parse_cam_offset(args).second; !err.empty()) {
-    return err;
+  const auto [cam_offset, cam_offset_err] = parse_cam_offset(args);
+  if (!cam_offset_err.empty()) {
+    return cam_offset_err;
+  }
+  if (!args.imu_topic.empty() && !cam_offset.auto_estimate) {
+    return "--imu only applies with --cam-offset auto (nothing else reads the IMU)";
   }
   return parse_fix_spec(args.fix_axes).second;
 }
 
-std::pair<std::int64_t, std::string> parse_cam_offset(const CalibCamLidarArgs & args)
+std::pair<CamOffsetSpec, std::string> parse_cam_offset(const CalibCamLidarArgs & args)
 {
+  CamOffsetSpec spec;
   if (args.cam_offset.empty()) {
-    return {0, ""};
+    return {spec, ""};
+  }
+  if (args.cam_offset == "auto") {
+    spec.auto_estimate = true;
+    return {spec, ""};
   }
   // The --skip-start grammar: the unit suffix is mandatory, so a bare number
   // (ms or s?) is a parse failure rather than a guess. The sign is kept.
   const auto ns = core::parse_duration_ns(args.cam_offset, core::DurationUnitPolicy::RequireUnit);
   if (!ns.has_value()) {
     return {
-      0, "--cam-offset: '" + args.cam_offset +
-           "' is not a duration (expected e.g. -42ms, 1.5s; a unit suffix is required)"};
+      spec, "--cam-offset: '" + args.cam_offset +
+              "' is neither 'auto' nor a duration (expected e.g. -42ms, 1.5s; a unit suffix "
+              "is required)"};
   }
   // A sensor clock offset is milliseconds to seconds; whole days only ever
   // mean a typo or a wrong unit, and the parser alone lets a value sit near
@@ -194,11 +204,12 @@ std::pair<std::int64_t, std::string> parse_cam_offset(const CalibCamLidarArgs & 
   constexpr std::int64_t kMaxCamOffsetNs = 24LL * 3600LL * 1'000'000'000LL;
   if (*ns > kMaxCamOffsetNs || *ns < -kMaxCamOffsetNs) {
     return {
-      0, "--cam-offset: '" + args.cam_offset +
-           "' is beyond +-24h; a sensor clock offset is "
-           "milliseconds to seconds (check the unit suffix)"};
+      spec, "--cam-offset: '" + args.cam_offset +
+              "' is beyond +-24h; a sensor clock offset is "
+              "milliseconds to seconds (check the unit suffix)"};
   }
-  return {*ns, ""};
+  spec.offset_ns = *ns;
+  return {spec, ""};
 }
 
 std::pair<std::array<std::int64_t, 2>, std::string> parse_skip_durations(
@@ -715,7 +726,8 @@ std::string curvature_ratio_text(const core::calib::CurvatureEstimate & est)
 
 std::string render_calibrate_summary(
   const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
-  const std::array<double, 6> & edge_before, const std::string & yaml_path)
+  const std::array<double, 6> & edge_before, const std::string & yaml_path,
+  const CamOffsetReport & cam_offset)
 {
   std::string out = fmt::format("calib cam-lidar: {} -> {}\n", args.parent_frame, args.child_frame);
   out += fmt::format(
@@ -735,10 +747,18 @@ std::string render_calibrate_summary(
   out += fmt::format("\nnid: {} -> {}\n", result.nid_before, result.nid_after);
   out += fmt::format("samples used: {}\n", result.samples_used);
   // Only when set: the shift is part of what the refined edge was fitted
-  // under, so a report that is re-read later must carry it.
-  if (const std::int64_t cam_offset_ns = parse_cam_offset(args).first; cam_offset_ns != 0) {
-    out +=
-      fmt::format("camera stamp offset: {:+.3f} ms\n", static_cast<double>(cam_offset_ns) / 1e6);
+  // under, so a report that is re-read later must carry it. Under auto the
+  // measurement behind the value is spelled out too.
+  if (cam_offset.applied_ns != 0 || cam_offset.estimate.has_value()) {
+    out += fmt::format(
+      "camera stamp offset: {:+.3f} ms", static_cast<double>(cam_offset.applied_ns) / 1e6);
+    if (cam_offset.estimate.has_value()) {
+      const auto & e = *cam_offset.estimate;
+      out += fmt::format(
+        " (estimated: +-{:.1f} ms, {} frame pair(s) vs {}, {} solver)",
+        static_cast<double>(e.std_ns) / 1e6, e.pairs, e.method, e.visual_estimator);
+    }
+    out += "\n";
   }
 
   std::vector<std::array<double, 6>> held_components;
@@ -780,7 +800,7 @@ std::string render_calibrate_summary(
 
 std::string render_calibrate_json(
   const CalibCamLidarArgs & args, const core::calib::RefineResult & result,
-  const std::array<double, 6> & edge_before)
+  const std::array<double, 6> & edge_before, const CamOffsetReport & cam_offset)
 {
   std::string out = "{\n";
   out += fmt::format("  \"parent\": \"{}\",\n", json_escape(args.parent_frame));
@@ -789,8 +809,30 @@ std::string render_calibrate_json(
   out += fmt::format("  \"nid_after\": {},\n", result.nid_after);
   out += fmt::format("  \"samples\": {},\n", result.samples_used);
   // The --cam-offset the samples were placed under (0 when omitted), so the
-  // report states the shift the refined edge depends on.
-  out += fmt::format("  \"cam_offset_ns\": {},\n", parse_cam_offset(args).first);
+  // report states the shift the refined edge depends on; under auto, the
+  // measurement behind it (null for a manual or omitted offset).
+  out += fmt::format("  \"cam_offset_ns\": {},\n", cam_offset.applied_ns);
+  if (cam_offset.estimate.has_value()) {
+    const auto & e = *cam_offset.estimate;
+    out += "  \"cam_offset_estimate\": {\n";
+    out += fmt::format("    \"offset_ns\": {},\n", e.offset_ns);
+    out += fmt::format("    \"std_ns\": {},\n", e.std_ns);
+    out += fmt::format("    \"method\": \"{}\",\n", e.method);
+    out += fmt::format("    \"visual_estimator\": \"{}\",\n", e.visual_estimator);
+    out += fmt::format("    \"pairs\": {},\n", e.pairs);
+    out += fmt::format("    \"signal_rms_mrad\": {},\n", e.signal_rms_mrad);
+    out += fmt::format("    \"residual_rms_before_mrad\": {},\n", e.residual_rms_before_mrad);
+    out += fmt::format("    \"residual_rms_after_mrad\": {},\n", e.residual_rms_after_mrad);
+    out += fmt::format(
+      "    \"camera_imu_offset_ns\": {},\n",
+      e.camera_imu_offset_ns.has_value() ? std::to_string(*e.camera_imu_offset_ns) : "null");
+    out += fmt::format(
+      "    \"pose_imu_offset_ns\": {}\n",
+      e.pose_imu_offset_ns.has_value() ? std::to_string(*e.pose_imu_offset_ns) : "null");
+    out += "  },\n";
+  } else {
+    out += "  \"cam_offset_estimate\": null,\n";
+  }
   out += "  \"axes\": {\n";
   const auto edge_after = core::calib::apply_edge_delta(edge_before, result.delta);
   for (std::size_t axis = 0; axis < 6; ++axis) {

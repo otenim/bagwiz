@@ -159,7 +159,13 @@ private:
       "Signed duration added to every image stamp before it is matched against the --pose "
       "trajectory, so the image stamped t is placed at pose(t + offset); a camera clock that "
       "stamps late is corrected with a negative value (e.g. -42ms; a unit suffix is required: "
-      "ns/us/ms/s)");
+      "ns/us/ms/s). 'auto' measures it from the bag's own images against the trajectory (or "
+      "the --imu gyro) and applies the estimate");
+    add_topic_option(
+      *sub, "--imu", cam_lidar_args_.imu_topic,
+      "Imu topic used as the timing bridge for --cam-offset auto (its frame must be reachable "
+      "from --of through the bag's static TF); only valid with auto",
+      TopicSlotSpec{.allowed_types = kImuType, .mode = TopicSelectorMode::kLiteral});
     sub->add_flag("--json", cam_lidar_args_.json, "Emit the stdout summary as JSON");
     sub->add_flag(
       "-w,--overwrite", cam_lidar_args_.overwrite, "Replace an existing -o/--output path");
