@@ -92,6 +92,12 @@ struct CalibCamLidarArgs
   // parse_skip_durations.
   std::string skip_start;
   std::string skip_end;
+  // --cam-offset: raw signed duration string (the same grammar as --skip-start:
+  // a unit suffix is mandatory, e.g. "-42ms", "+1.5s"). Empty = none. Added to
+  // every image's stamp before anything reads it, so the image stamped t is
+  // placed at pose(t + offset): a camera clock that runs late relative to the
+  // --pose clock is corrected with a negative value. See parse_cam_offset.
+  std::string cam_offset;
   bool json = false;       // --json; emit the stdout summary as JSON
   bool overwrite = false;  // -w,--overwrite; replace an existing -o/--output path
 };
@@ -133,6 +139,19 @@ struct FixSpec
 // is mandatory) or a negative duration.
 [[nodiscard]] std::pair<std::array<std::int64_t, 2>, std::string> parse_skip_durations(
   const CalibCamLidarArgs & args);
+
+// The parsed --cam-offset value in nanoseconds (0 for an omitted flag). The
+// run path adds it to every image stamp the moment the stamps are read, so
+// sample eligibility and picking, the keyframe gate, the map's frustum cull,
+// the pre-cull and each sample's trajectory pose all see the same shifted
+// time: the image stamped t is placed at pose(t + offset). The sign is
+// literal — a camera clock that stamps late relative to the --pose clock is
+// corrected with a negative offset. Errors (returned in the second member;
+// the first member is only meaningful when it is empty): a value that fails
+// the --skip-start duration grammar (a unit suffix is mandatory), or a
+// magnitude beyond 24 h — a sensor clock offset is milliseconds to seconds,
+// and an unbounded value added to an epoch stamp could overflow.
+[[nodiscard]] std::pair<std::int64_t, std::string> parse_cam_offset(const CalibCamLidarArgs & args);
 
 // Pick up to `samples` image-stamp indices into `image_stamps_ns` (sorted
 // ascending), evenly spread inside the trajectory span shrunk by `margin_ns`

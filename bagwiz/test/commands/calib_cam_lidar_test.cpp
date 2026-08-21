@@ -337,6 +337,11 @@ struct FixtureBagOptions
   // The --skip-start/--skip-end tests need interior poses so trimming the
   // endpoints still leaves an interpolatable trajectory.
   std::vector<std::int64_t> mid_pose_stamps_ns;
+  // Yaw (about z) of the pose at pose_t1_ns; every other pose stays identity,
+  // so a non-zero value makes the trajectory turn between the last interior
+  // pose and the end of the span. The --cam-offset test needs a trajectory
+  // whose interpolated pose actually depends on the lookup time.
+  double pose_t1_yaw_rad = 0.0;
   bool cloud_with_intensity = true;
   bool cloud_with_time_field = false;
 };
@@ -393,7 +398,9 @@ void write_fixture_bag(
     pose.header.frame_id = kRefFrame;
     pose.header.stamp.sec = static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL);
     pose.header.stamp.nanosec = static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL);
-    pose.pose.orientation.w = 1.0;
+    const double yaw_rad = stamp_ns == opts.pose_t1_ns ? opts.pose_t1_yaw_rad : 0.0;
+    pose.pose.orientation.z = std::sin(yaw_rad / 2.0);
+    pose.pose.orientation.w = std::cos(yaw_rad / 2.0);
     const auto pose_cdr = serialize_typed(pose, "geometry_msgs/msg/PoseStamped");
     writer->write(
       kPoseTopic, stamp_ns, std::span<const std::byte>(pose_cdr.data(), pose_cdr.size()));
@@ -705,6 +712,76 @@ TEST_F(CalibCamLidarTest, RejectsSkipsLeavingTooFewPoses)
   // The window [0, 45] s trims the 50 s endpoint pose, leaving only the 10 s
   // one — too few to interpolate.
   args.skip_end = "5s";
+  EXPECT_EQ(run_calib_cam_lidar(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+}
+
+// --cam-offset end to end. The trajectory is identity through 35 s and then
+// turns to +1.5 deg of yaw at 50 s, while the images are stamped 37..45 s but
+// were "really" taken 20 s earlier, at identity poses (the bag's camera clock
+// ran 20 s late). Without the offset every sample is placed at a turned pose
+// (0.2..1.0 deg) and the refinement absorbs that as a spurious edge yaw; with
+// `--cam-offset -20s` the samples land back on the identity poses and the
+// refined edge stays where the bag put it. The same bag, the same images, the
+// same map — only the image-stamp lookup time moves.
+TEST_F(CalibCamLidarTest, CamOffsetPlacesImagesAtTheShiftedPose)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  for (const int sec : {37, 39, 41, 43, 45}) {
+    opts.image_stamps_ns.push_back(static_cast<std::int64_t>(sec) * 1'000'000'000LL);
+  }
+  opts.mid_pose_stamps_ns = {20'000'000'000LL, 30'000'000'000LL, 35'000'000'000LL};
+  opts.pose_t1_yaw_rad = 1.5 * M_PI / 180.0;
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  const auto refined_yaw = [&](const std::string & cam_offset, std::string * report) {
+    auto args = base_args(tmp_dir_);
+    args.fix_axes = "x,y,z";
+    args.cam_offset = cam_offset;
+    args.json = true;
+    args.overwrite = true;
+    ::testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStderr();
+    const int rc = run_calib_cam_lidar(args);
+    *report = ::testing::internal::GetCapturedStdout();
+    const std::string logs = ::testing::internal::GetCapturedStderr();
+    EXPECT_EQ(rc, 0) << logs;
+    EXPECT_TRUE(std::filesystem::exists(args.output_path));
+    const auto parsed = bagwiz::core::parse_static_tf_tree_yaml(args.output_path);
+    EXPECT_TRUE(parsed.ok()) << parsed.error;
+    return bagwiz::core::quaternion_to_rpy(parsed.transforms->front().transform.rotation).yaw;
+  };
+
+  std::string report_unshifted;
+  const double yaw_unshifted = refined_yaw("", &report_unshifted);
+  // Placed at turned poses, the refinement must have moved the edge's yaw
+  // well away from the bag value (the per-sample compensation is 0.2..1.0
+  // deg, so the compromise sits far above the 0.15 deg recovery tolerance).
+  EXPECT_GT(std::abs(yaw_unshifted), 0.3 * M_PI / 180.0);
+  EXPECT_NE(report_unshifted.find("\"cam_offset_ns\": 0"), std::string::npos) << report_unshifted;
+
+  std::string report_shifted;
+  const double yaw_shifted = refined_yaw("-20s", &report_shifted);
+  EXPECT_NEAR(yaw_shifted, 0.0, 0.15 * M_PI / 180.0);
+  EXPECT_NE(report_shifted.find("\"cam_offset_ns\": -20000000000"), std::string::npos)
+    << report_shifted;
+}
+
+// An offset that carries every image stamp outside the (margin-shrunk)
+// trajectory span is the same failure as images that never overlapped it:
+// the run stops before any map work rather than silently running on nothing.
+TEST_F(CalibCamLidarTest, RejectsCamOffsetPushingEveryImageOutOfSpan)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(0.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();  // 15..43 s in a 10..50 s span
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.cam_offset = "40s";  // 55..83 s: nothing left inside [13, 47] s
   EXPECT_EQ(run_calib_cam_lidar(args), 1);
   EXPECT_FALSE(std::filesystem::exists(args.output_path));
 }
