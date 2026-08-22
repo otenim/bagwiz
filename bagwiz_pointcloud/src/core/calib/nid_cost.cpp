@@ -8,11 +8,13 @@
 
 #include "bagwiz/core/calib/nid_cost.hpp"
 
+#include "bagwiz/core/base/parallel_sort.hpp"
 #include "bagwiz/core/calib/depth_cull.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <vector>
 
 namespace bagwiz::core::calib
@@ -34,21 +36,33 @@ GrayImage gray_from_bgr24(std::span<const std::byte> bgr, std::uint32_t width, s
   return out;
 }
 
-std::vector<std::uint8_t> equalize_intensity_bins(std::span<const float> intensities, int bins)
+std::vector<std::uint8_t> equalize_intensity_bins(
+  std::span<const float> intensities, int bins, WorkerPool * pool)
 {
   // Rank-based equalization: sort a copy, then each value's bin is its rank
   // quantile. Ties share the bin of their first occurrence so identical
   // intensities always land in the same bin.
   std::vector<float> sorted(intensities.begin(), intensities.end());
-  std::sort(sorted.begin(), sorted.end());
+  parallel_sort(sorted, pool, std::less<float>{});
   std::vector<std::uint8_t> out(intensities.size());
   const double n = static_cast<double>(sorted.size());
-  for (std::size_t i = 0; i < intensities.size(); ++i) {
-    const auto rank =
-      std::lower_bound(sorted.begin(), sorted.end(), intensities[i]) - sorted.begin();
-    const int bin = static_cast<int>(static_cast<double>(rank) / n * bins);
-    out[i] = static_cast<std::uint8_t>(std::clamp(bin, 0, bins - 1));
+  const auto rank_range = [&](std::size_t begin, std::size_t end) {
+    for (std::size_t i = begin; i < end; ++i) {
+      const auto rank =
+        std::lower_bound(sorted.begin(), sorted.end(), intensities[i]) - sorted.begin();
+      const int bin = static_cast<int>(static_cast<double>(rank) / n * bins);
+      out[i] = static_cast<std::uint8_t>(std::clamp(bin, 0, bins - 1));
+    }
+  };
+  constexpr std::size_t kRankChunk = 1U << 16U;
+  const std::size_t chunks = (intensities.size() + kRankChunk - 1) / kRankChunk;
+  if (pool == nullptr || chunks <= 1) {
+    rank_range(0, intensities.size());
+    return out;
   }
+  pool->parallel_for(chunks, [&](std::size_t c) {
+    rank_range(c * kRankChunk, std::min(intensities.size(), (c + 1) * kRankChunk));
+  });
   return out;
 }
 

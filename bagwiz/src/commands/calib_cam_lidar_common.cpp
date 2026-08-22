@@ -9,18 +9,26 @@
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include "bagwiz/core/base/duration_parse.hpp"
+#include "bagwiz/core/base/parallel_sort.hpp"
 #include "bagwiz/core/calib/observability.hpp"
 #include "bagwiz/core/pointcloud/deskew.hpp"
 #include "bagwiz/core/pointcloud/point_time.hpp"
 
 #include <fmt/core.h>
 
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -54,59 +62,56 @@ const char * axis_observability_name(core::calib::AxisObservability observabilit
   return "unknown";  // unreachable; keeps -Wreturn-type / cppcheck happy
 }
 
-// Read one point's field as a float regardless of its declared datatype.
-// `offset` must be in bounds for the cloud's point_step (callers check via the
-// field table). Little-endian point data only — accumulate_cloud_into_map
-// rejects big-endian clouds before reading anything.
-float read_cloud_field(
-  const core::pointcloud::PointCloud2 & cloud, std::size_t point_idx, std::uint32_t offset,
-  core::pointcloud::PointFieldType type)
+// Read one point field, stored at `at`, as a float regardless of its declared
+// datatype. Little-endian point data only — accumulate_cloud_into_map rejects
+// big-endian clouds before reading anything.
+using FieldReadFn = float (*)(const std::byte * at);
+
+template <typename T>
+float read_field_as(const std::byte * at)
 {
-  const std::byte * base = cloud.data.data() + point_idx * cloud.point_step + offset;
-  switch (type) {
-    case core::pointcloud::PointFieldType::kFloat32: {
-      float v;
-      std::memcpy(&v, base, sizeof(v));
-      return v;
-    }
-    case core::pointcloud::PointFieldType::kFloat64: {
-      double v;
-      std::memcpy(&v, base, sizeof(v));
-      return static_cast<float>(v);
-    }
-    case core::pointcloud::PointFieldType::kInt8: {
-      std::int8_t v;
-      std::memcpy(&v, base, sizeof(v));
-      return static_cast<float>(v);
-    }
-    case core::pointcloud::PointFieldType::kUint8: {
-      std::uint8_t v;
-      std::memcpy(&v, base, sizeof(v));
-      return static_cast<float>(v);
-    }
-    case core::pointcloud::PointFieldType::kInt16: {
-      std::int16_t v;
-      std::memcpy(&v, base, sizeof(v));
-      return static_cast<float>(v);
-    }
-    case core::pointcloud::PointFieldType::kUint16: {
-      std::uint16_t v;
-      std::memcpy(&v, base, sizeof(v));
-      return static_cast<float>(v);
-    }
-    case core::pointcloud::PointFieldType::kInt32: {
-      std::int32_t v;
-      std::memcpy(&v, base, sizeof(v));
-      return static_cast<float>(v);
-    }
-    case core::pointcloud::PointFieldType::kUint32: {
-      std::uint32_t v;
-      std::memcpy(&v, base, sizeof(v));
-      return static_cast<float>(v);
-    }
-  }
-  return 0.0F;  // unreachable; keeps -Wreturn-type / cppcheck happy
+  T v;
+  std::memcpy(&v, at, sizeof(v));
+  return static_cast<float>(v);
 }
+
+// The reader for a field's datatype, chosen once per cloud so the per-point
+// loop does not re-dispatch on the type for every field of every point.
+FieldReadFn field_reader(core::pointcloud::PointFieldType type)
+{
+  switch (type) {
+    case core::pointcloud::PointFieldType::kFloat32:
+      return &read_field_as<float>;
+    case core::pointcloud::PointFieldType::kFloat64:
+      return &read_field_as<double>;
+    case core::pointcloud::PointFieldType::kInt8:
+      return &read_field_as<std::int8_t>;
+    case core::pointcloud::PointFieldType::kUint8:
+      return &read_field_as<std::uint8_t>;
+    case core::pointcloud::PointFieldType::kInt16:
+      return &read_field_as<std::int16_t>;
+    case core::pointcloud::PointFieldType::kUint16:
+      return &read_field_as<std::uint16_t>;
+    case core::pointcloud::PointFieldType::kInt32:
+      return &read_field_as<std::int32_t>;
+    case core::pointcloud::PointFieldType::kUint32:
+      return &read_field_as<std::uint32_t>;
+  }
+  return &read_field_as<float>;  // unreachable; keeps -Wreturn-type / cppcheck happy
+}
+
+// A readable field of the cloud being accumulated: its byte offset inside a
+// point and the reader for its datatype.
+struct FieldRef
+{
+  std::uint32_t offset;
+  FieldReadFn read;
+};
+
+// Points per chunk below which a cloud is placed on the calling thread alone:
+// spreading a few thousand points over the pool costs more in wake-ups than
+// it saves.
+constexpr std::size_t kMinPointsPerChunk = 4096;
 
 // The field's declared offset+size fits inside point_step (and its count is 1,
 // so the readback below sees one value per point).
@@ -457,13 +462,15 @@ std::size_t MapAccumulator::VoxelKeyHash::operator()(const VoxelKey & key) const
   return seed;
 }
 
-bool MapAccumulator::add(const std::array<float, 3> & point, float intensity)
+MapAccumulator::MapAccumulator(double voxel_size, int partitions)
+: voxel_size_(voxel_size),
+  voxels_(static_cast<std::size_t>(voxel_size > 0.0 ? std::max(partitions, 1) : 1))
 {
-  if (voxel_size_ <= 0.0) {
-    raw_.points.push_back(point);
-    raw_.intensities.push_back(intensity);
-    return true;
-  }
+}
+
+std::optional<MapAccumulator::VoxelKey> MapAccumulator::voxel_of(
+  const std::array<float, 3> & point) const
+{
   // Floor, never truncate: truncation folds -0.5..0 onto the same index as
   // 0..0.5, merging every pair of voxels that straddles an axis.
   const double qx = std::floor(static_cast<double>(point[0]) / voxel_size_);
@@ -473,34 +480,72 @@ bool MapAccumulator::add(const std::array<float, 3> & point, float intensity)
   constexpr double kMaxIndex = 2147483647.0;
   const auto representable = [](double q) { return q >= kMinIndex && q <= kMaxIndex; };
   if (!representable(qx) || !representable(qy) || !representable(qz)) {
-    return false;
+    return std::nullopt;
   }
-  auto & accum = voxels_[VoxelKey{
-    static_cast<std::int32_t>(qx), static_cast<std::int32_t>(qy), static_cast<std::int32_t>(qz)}];
+  return VoxelKey{
+    static_cast<std::int32_t>(qx), static_cast<std::int32_t>(qy), static_cast<std::int32_t>(qz)};
+}
+
+int MapAccumulator::partition_of(const VoxelKey & key) const
+{
+  // A second mix over the map's own hash, so the keys one partition receives
+  // do not all share a residue that partition's map then hashes on again.
+  const std::uint64_t mixed =
+    static_cast<std::uint64_t>(VoxelKeyHash{}(key)) * 0x9E3779B97F4A7C15ULL;
+  return static_cast<int>((mixed >> 32U) % voxels_.size());
+}
+
+void MapAccumulator::add_to_voxel(
+  int partition, const VoxelKey & key, const std::array<float, 3> & point, float intensity)
+{
+  assert(voxel_size_ > 0.0 && partition == partition_of(key));
+  auto & accum = voxels_[static_cast<std::size_t>(partition)][key];
   accum.x += point[0];
   accum.y += point[1];
   accum.z += point[2];
   accum.intensity += intensity;
   ++accum.count;
+}
+
+bool MapAccumulator::add(const std::array<float, 3> & point, float intensity)
+{
+  if (voxel_size_ <= 0.0) {
+    raw_.points.push_back(point);
+    raw_.intensities.push_back(intensity);
+    return true;
+  }
+  const auto key = voxel_of(point);
+  if (!key.has_value()) {
+    return false;
+  }
+  add_to_voxel(partition_of(*key), *key, point, intensity);
   return true;
 }
 
 std::size_t MapAccumulator::size() const
 {
-  return voxel_size_ <= 0.0 ? raw_.points.size() : voxels_.size();
+  if (voxel_size_ <= 0.0) {
+    return raw_.points.size();
+  }
+  std::size_t total = 0;
+  for (const auto & partition : voxels_) {
+    total += partition.size();
+  }
+  return total;
 }
 
-core::pointcloud::PcdCloud MapAccumulator::finish()
+core::pointcloud::PcdCloud MapAccumulator::finish(core::WorkerPool * pool)
 {
   if (voxel_size_ <= 0.0) {
     return std::move(raw_);
   }
-  // Sorted by voxel index so the hash container's iteration order — which is
-  // an implementation detail, not a property of the bag — never reaches the
-  // map. Two runs over the same clouds must produce the same map.
-  std::vector<std::pair<VoxelKey, VoxelAccum>> ordered(voxels_.begin(), voxels_.end());
-  voxels_.clear();
-  std::sort(ordered.begin(), ordered.end(), [](const auto & a, const auto & b) {
+  using Entry = std::pair<VoxelKey, VoxelAccum>;
+  // Sorted by voxel index so neither the hash containers' iteration order nor
+  // the partition split — implementation details, not properties of the bag —
+  // ever reaches the map. Two runs over the same clouds must produce the same
+  // map. The keys are unique, so the order is total and parallel_sort yields
+  // exactly the sequence a single std::sort would.
+  const auto key_less = [](const Entry & a, const Entry & b) {
     if (a.first.x != b.first.x) {
       return a.first.x < b.first.x;
     }
@@ -508,18 +553,59 @@ core::pointcloud::PcdCloud MapAccumulator::finish()
       return a.first.y < b.first.y;
     }
     return a.first.z < b.first.z;
+  };
+  const std::size_t total = size();
+  const auto run = [&](std::size_t n, const std::function<void(std::size_t)> & fn) {
+    if (pool != nullptr && n > 1) {
+      pool->parallel_for(n, fn);
+      return;
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+      fn(i);
+    }
+  };
+
+  // Drain every partition into its slice of one vector and release its nodes
+  // — on the partition's own worker when there is a pool.
+  std::vector<std::size_t> offsets(voxels_.size() + 1, 0);
+  for (std::size_t p = 0; p < voxels_.size(); ++p) {
+    offsets[p + 1] = offsets[p] + voxels_[p].size();
+  }
+  std::vector<Entry> ordered(total);
+  run(voxels_.size(), [&](std::size_t p) {
+    std::size_t i = offsets[p];
+    for (const auto & entry : voxels_[p]) {
+      ordered[i++] = entry;
+    }
+    std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash>().swap(voxels_[p]);
   });
+#if defined(__GLIBC__)
+  // The maps' nodes — tens of millions of small blocks, freed just now — stay
+  // resident in the allocator's arenas unless they are handed back; the sort
+  // below allocates a buffer the size of the map, so without this the run's
+  // peak memory would carry the map twice. glibc-specific; elsewhere the
+  // allocator is left to its own policy.
+  malloc_trim(0);
+#endif
+  core::parallel_sort(ordered, pool, key_less);
 
   core::pointcloud::PcdCloud out;
-  out.points.reserve(ordered.size());
-  out.intensities.reserve(ordered.size());
-  for (const auto & [key, accum] : ordered) {
-    const double n = accum.count;
-    out.points.push_back(
-      {static_cast<float>(accum.x / n), static_cast<float>(accum.y / n),
-       static_cast<float>(accum.z / n)});
-    out.intensities.push_back(static_cast<float>(accum.intensity / n));
-  }
+  out.points.resize(total);
+  out.intensities.resize(total);
+  constexpr std::size_t kEmitChunk = 1U << 16U;
+  const std::size_t chunks = (total + kEmitChunk - 1) / kEmitChunk;
+  run(chunks, [&](std::size_t c) {
+    const std::size_t begin = c * kEmitChunk;
+    const std::size_t end = std::min(total, begin + kEmitChunk);
+    for (std::size_t i = begin; i < end; ++i) {
+      const VoxelAccum & accum = ordered[i].second;
+      const double n = accum.count;
+      out.points[i] = {
+        static_cast<float>(accum.x / n), static_cast<float>(accum.y / n),
+        static_cast<float>(accum.z / n)};
+      out.intensities[i] = static_cast<float>(accum.intensity / n);
+    }
+  });
   return out;
 }
 
@@ -539,26 +625,99 @@ bool point_in_any_view(const std::array<double, 3> & p, std::span<const SampleVi
   return false;
 }
 
+std::vector<ViewRejectBox> view_reject_boxes(std::span<const SampleViewFrustum> views)
+{
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  std::vector<ViewRejectBox> boxes;
+  boxes.reserve(views.size());
+  for (const auto & v : views) {
+    ViewRejectBox box;
+    if (v.lo_depth <= 0.0) {
+      box.lo = {-kInf, -kInf, -kInf};
+      box.hi = {kInf, kInf, kInf};
+      boxes.push_back(box);
+      continue;
+    }
+    box.lo = {kInf, kInf, kInf};
+    box.hi = {-kInf, -kInf, -kInf};
+    const core::calib::Mat4 t_ref_cam = core::calib::rigid_inverse(v.t_cam_ref);
+    for (const double depth : {v.lo_depth, v.hi_depth}) {
+      for (const double xn : {v.lo_xn, v.hi_xn}) {
+        for (const double yn : {v.lo_yn, v.hi_yn}) {
+          const auto corner =
+            core::calib::transform_point(t_ref_cam, {xn * depth, yn * depth, depth});
+          for (std::size_t k = 0; k < 3; ++k) {
+            box.lo[k] = std::min(box.lo[k], corner[k] - kViewRejectBoxPadMeters);
+            box.hi[k] = std::max(box.hi[k], corner[k] + kViewRejectBoxPadMeters);
+          }
+        }
+      }
+    }
+    boxes.push_back(box);
+  }
+  return boxes;
+}
+
+bool point_in_any_view(
+  const std::array<double, 3> & p, std::span<const SampleViewFrustum> views,
+  std::span<const ViewRejectBox> boxes)
+{
+  for (std::size_t i = 0; i < views.size(); ++i) {
+    const auto & box = boxes[i];
+    if (
+      p[0] < box.lo[0] || p[0] > box.hi[0] || p[1] < box.lo[1] || p[1] > box.hi[1] ||
+      p[2] < box.lo[2] || p[2] > box.hi[2]) {
+      continue;
+    }
+    // Depth first: the window rejects most of what the box let through, and
+    // the other two coordinates are only needed once it passes. Each row is
+    // the same expression transform_point evaluates, so the values are the
+    // ones the plain predicate above tests.
+    const auto & v = views[i];
+    const double z = core::calib::transform_point_z(v.t_cam_ref, p);
+    if (z < v.lo_depth || z > v.hi_depth) {
+      continue;
+    }
+    const double xn = core::calib::transform_point_x(v.t_cam_ref, p) / z;
+    const double yn = core::calib::transform_point_y(v.t_cam_ref, p) / z;
+    if (xn >= v.lo_xn && xn <= v.hi_xn && yn >= v.lo_yn && yn <= v.hi_yn) {
+      return true;
+    }
+  }
+  return false;
+}
+
+MapAccumulationContext::MapAccumulationContext(
+  std::span<const SampleViewFrustum> views_in, core::WorkerPool * pool_in)
+: views(views_in), boxes(view_reject_boxes(views_in)), pool(pool_in)
+{
+}
+
 std::optional<std::string> accumulate_cloud_into_map(
   MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
   std::span<const core::TrajectoryPose> trajectory,
   const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats,
   std::span<const SampleViewFrustum> views)
 {
+  MapAccumulationContext context{views, nullptr};
+  return accumulate_cloud_into_map(map, std::move(cloud), trajectory, t_of_cloud, stats, context);
+}
+
+std::optional<std::string> accumulate_cloud_into_map(
+  MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
+  std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats,
+  MapAccumulationContext & context)
+{
   ++stats.clouds_read;
 
   // The field layout, captured by value up front: deskew below replaces the
   // cloud (field table preserved), which would dangle pointers into the old
   // one. intensity is mandatory (NID needs it); x/y/z must be readable.
-  struct FieldRef
-  {
-    std::uint32_t offset;
-    core::pointcloud::PointFieldType type;
-  };
   const auto field_ref = [&cloud](const std::string & name) -> std::optional<FieldRef> {
     for (const auto & f : cloud.fields) {
       if (f.name == name && field_readable(f, cloud.point_step)) {
-        return FieldRef{f.offset, f.datatype};
+        return FieldRef{f.offset, field_reader(f.datatype)};
       }
     }
     return std::nullopt;
@@ -624,30 +783,112 @@ std::optional<std::string> accumulate_cloud_into_map(
   }
 
   const core::calib::Mat4 t_ref_cloud = core::calib::mat4_multiply(*t_ref_of, t_of_cloud_mat);
-  for (std::size_t i = 0; i < n; ++i) {
-    const float x = read_cloud_field(cloud, i, fx->offset, fx->type);
-    const float y = read_cloud_field(cloud, i, fy->offset, fy->type);
-    const float z = read_cloud_field(cloud, i, fz->offset, fz->type);
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
-      ++stats.points_dropped_nonfinite;
-      continue;
+
+  // Placement: one chunk of the point range per worker (a small cloud stays on
+  // the calling thread). Each chunk reads its points' fields, drops the
+  // non-finite ones, places the rest and culls them against the views,
+  // keeping its survivors in point order — per-point work over immutable
+  // input, so the split changes nothing about any one point.
+  const std::size_t parallelism =
+    context.pool != nullptr ? static_cast<std::size_t>(context.pool->size()) : 1;
+  const std::size_t chunk_count = std::clamp<std::size_t>(n / kMinPointsPerChunk, 1, parallelism);
+  const std::size_t chunk_size = (n + chunk_count - 1) / chunk_count;
+  const auto partitions = static_cast<std::size_t>(map.partitions());
+  const bool gridded = map.gridded();
+  if (context.chunks.size() < chunk_count) {
+    context.chunks.resize(chunk_count);
+  }
+  const std::span<const SampleViewFrustum> views = context.views;
+  const std::span<const ViewRejectBox> boxes = context.boxes;
+  const auto place_chunk = [&](std::size_t c) {
+    auto & chunk = context.chunks[c];
+    chunk.buckets.resize(partitions);
+    for (auto & bucket : chunk.buckets) {
+      bucket.keys.clear();
+      bucket.points.clear();
+      bucket.intensities.clear();
     }
-    const auto p = core::calib::transform_point(t_ref_cloud, {x, y, z});
-    // A point no sample's view can ever contain is dropped here rather than
-    // carried through the voxel grid and discarded at candidate assembly.
-    if (!views.empty() && !point_in_any_view(p, views)) {
-      ++stats.points_culled_out_of_view;
-      continue;
+    chunk.nonfinite = 0;
+    chunk.culled = 0;
+    chunk.placed = 0;
+    const std::size_t begin = c * chunk_size;
+    const std::size_t end = std::min(n, begin + chunk_size);
+    const std::byte * const data = cloud.data.data();
+    for (std::size_t i = begin; i < end; ++i) {
+      const std::byte * const base = data + i * cloud.point_step;
+      const float x = fx->read(base + fx->offset);
+      const float y = fy->read(base + fy->offset);
+      const float z = fz->read(base + fz->offset);
+      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+        ++chunk.nonfinite;
+        continue;
+      }
+      const auto p = core::calib::transform_point(t_ref_cloud, {x, y, z});
+      // A point no sample's view can ever contain is dropped here rather than
+      // carried through the voxel grid and discarded at candidate assembly.
+      if (!views.empty() && !point_in_any_view(p, views, boxes)) {
+        ++chunk.culled;
+        continue;
+      }
+      const std::array<float, 3> placed{
+        static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])};
+      std::size_t partition = 0;
+      if (gridded) {
+        // A point too far out to index a voxel is garbage the map cannot
+        // place; counted with the non-finite drops rather than folded into a
+        // wrong voxel. The key is kept with the point so the insertion does
+        // not quantize it a second time.
+        const auto key = map.voxel_of(placed);
+        if (!key.has_value()) {
+          ++chunk.nonfinite;
+          continue;
+        }
+        partition = static_cast<std::size_t>(map.partition_of(*key));
+        chunk.buckets[partition].keys.push_back(*key);
+      }
+      auto & bucket = chunk.buckets[partition];
+      bucket.points.push_back(placed);
+      bucket.intensities.push_back(fi->read(base + fi->offset));
+      ++chunk.placed;
     }
-    const std::array<float, 3> point{
-      static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])};
-    // A point too far out to index a voxel is garbage the map cannot place;
-    // counted with the non-finite drops rather than folded into a wrong voxel.
-    if (!map.add(point, read_cloud_field(cloud, i, fi->offset, fi->type))) {
-      ++stats.points_dropped_nonfinite;
-      continue;
+  };
+  if (context.pool != nullptr && chunk_count > 1) {
+    context.pool->parallel_for(chunk_count, place_chunk);
+  } else {
+    for (std::size_t c = 0; c < chunk_count; ++c) {
+      place_chunk(c);
     }
-    ++stats.points_added;
+  }
+  for (std::size_t c = 0; c < chunk_count; ++c) {
+    const auto & chunk = context.chunks[c];
+    stats.points_dropped_nonfinite += chunk.nonfinite;
+    stats.points_culled_out_of_view += chunk.culled;
+    stats.points_added += chunk.placed;
+  }
+
+  // Insertion: one worker per map partition, each walking the chunks in order
+  // and its own bucket of each in point order. A voxel receives its points
+  // in exactly the sequence a single loop over the points would have fed it,
+  // so its running sums add the same values in the same order.
+  const auto insert_partition = [&](std::size_t t) {
+    const int partition = static_cast<int>(t);
+    for (std::size_t c = 0; c < chunk_count; ++c) {
+      const auto & bucket = context.chunks[c].buckets[t];
+      for (std::size_t k = 0; k < bucket.points.size(); ++k) {
+        if (gridded) {
+          map.add_to_voxel(partition, bucket.keys[k], bucket.points[k], bucket.intensities[k]);
+        } else {
+          map.add(bucket.points[k], bucket.intensities[k]);
+        }
+      }
+    }
+  };
+  if (context.pool != nullptr && partitions > 1) {
+    context.pool->parallel_for(partitions, insert_partition);
+  } else {
+    for (std::size_t t = 0; t < partitions; ++t) {
+      insert_partition(t);
+    }
   }
   return std::nullopt;
 }

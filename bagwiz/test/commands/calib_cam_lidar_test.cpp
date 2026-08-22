@@ -34,6 +34,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <random>
 #include <span>
 #include <string>
@@ -1239,4 +1240,35 @@ TEST_F(CalibCamLidarTest, OpticalConventionEdgeYamlMatchesTheReportedEdge)
   EXPECT_NEAR(rpy.roll, after[3], 1e-9);
   EXPECT_NEAR(rpy.pitch, after[4], 1e-9);
   EXPECT_NEAR(rpy.yaw, after[5], 1e-9);
+}
+
+// -j/--threads end to end: the same fixture refined with every pass on the
+// calling thread and with a 4-way pool writes the same bytes, because the map
+// is filled in the same order and the NID histograms count the same integers
+// whatever the split.
+TEST_F(CalibCamLidarTest, ThreadCountDoesNotChangeTheYaml)
+{
+  const auto scene = build_scene();
+  FixtureBagOptions opts;
+  opts.static_edges = {make_static_edge(1.0 * M_PI / 180.0)};
+  opts.image_stamps_ns = default_image_stamps_ns();
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, opts);
+
+  auto args = base_args(tmp_dir_);
+  args.fix_axes = "x,y,z";
+  const auto read_all = [](const std::filesystem::path & path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  };
+
+  args.threads = 1;
+  args.output_path = (tmp_dir_ / "sync.yaml").string();
+  ASSERT_EQ(run_calib_cam_lidar(args), 0);
+  args.threads = 4;
+  args.output_path = (tmp_dir_ / "pool.yaml").string();
+  ASSERT_EQ(run_calib_cam_lidar(args), 0);
+
+  const auto sync_yaml = read_all(tmp_dir_ / "sync.yaml");
+  ASSERT_FALSE(sync_yaml.empty());
+  EXPECT_EQ(read_all(tmp_dir_ / "pool.yaml"), sync_yaml);
 }

@@ -39,14 +39,36 @@ using Mat4 = std::array<double, 16>;
 /// Extract the roll-pitch-yaw angles from a transform (inverse of make_transform).
 [[nodiscard]] std::array<double, 3> rpy_of(const Mat4 & t);
 
-/// Apply a rigid transform to a 3D point.
-// Angle in radians of the relative rotation between the two transforms'
-// rotation blocks (axis-angle magnitude of R_a^T * R_b, via the trace
-// formula). Translation does not contribute. Always in [0, pi].
+/// Angle in radians of the relative rotation between the two transforms'
+/// rotation blocks (axis-angle magnitude of R_a^T * R_b, via the trace
+/// formula). Translation does not contribute. Always in [0, pi].
 [[nodiscard]] double rotation_angle_between(const Mat4 & a, const Mat4 & b);
 
-[[nodiscard]] std::array<double, 3> transform_point(
-  const Mat4 & t, const std::array<double, 3> & p);
+/// The three coordinates of a rigid transform applied to a 3D point, one at a
+/// time, for callers that can reject on one coordinate (a depth window, say)
+/// before paying for the other two. transform_point is defined as exactly
+/// these three expressions, so a coordinate computed through one of them is
+/// the same double as the matching component of transform_point. Inline
+/// because they sit in the hottest per-point loops.
+[[nodiscard]] inline double transform_point_x(const Mat4 & t, const std::array<double, 3> & p)
+{
+  return t[0] * p[0] + t[4] * p[1] + t[8] * p[2] + t[12];
+}
+[[nodiscard]] inline double transform_point_y(const Mat4 & t, const std::array<double, 3> & p)
+{
+  return t[1] * p[0] + t[5] * p[1] + t[9] * p[2] + t[13];
+}
+[[nodiscard]] inline double transform_point_z(const Mat4 & t, const std::array<double, 3> & p)
+{
+  return t[2] * p[0] + t[6] * p[1] + t[10] * p[2] + t[14];
+}
+
+/// Apply a rigid transform to a 3D point.
+[[nodiscard]] inline std::array<double, 3> transform_point(
+  const Mat4 & t, const std::array<double, 3> & p)
+{
+  return {transform_point_x(t, p), transform_point_y(t, p), transform_point_z(t, p)};
+}
 
 }  // namespace bagwiz::core::calib
 

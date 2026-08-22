@@ -9,6 +9,7 @@
 #ifndef COMMANDS__CALIB_CAM_LIDAR_COMMON_HPP_
 #define COMMANDS__CALIB_CAM_LIDAR_COMMON_HPP_
 
+#include "bagwiz/core/base/worker_pool.hpp"
 #include "bagwiz/core/calib/extrinsic_refine.hpp"
 #include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/se3.hpp"
@@ -108,6 +109,14 @@ struct CalibCamLidarArgs
   std::string imu_topic;
   bool json = false;       // --json; emit the stdout summary as JSON
   bool overwrite = false;  // -w,--overwrite; replace an existing -o/--output path
+  // -j,--threads: total parallelism of the map accumulation, the refinement
+  // and the sample decoding (the same knob `pcd undistort` has). 0 = the
+  // hardware concurrency, 1 = everything on the calling thread; resolved by
+  // resolve_num_threads. The value never changes the result: the map is
+  // filled in the same order and the NID histograms count the same integers
+  // whatever the split, so the YAML and the report are identical for every
+  // thread count.
+  int threads = 0;
 };
 
 // Validate the cross-field/range constraints the per-option CLI checks
@@ -297,6 +306,33 @@ struct SampleViewFrustum
 [[nodiscard]] bool point_in_any_view(
   const std::array<double, 3> & p, std::span<const SampleViewFrustum> views);
 
+// The axis-aligned box, in the --ref frame, around one sample view's frustum:
+// the eight corners of the padded normalized rectangle at lo_depth and
+// hi_depth carried through the inverse of t_cam_ref, widened by
+// kViewRejectBoxPadMeters on every side. Every point the exact predicate
+// accepts lies inside it — the frustum is convex for lo_depth > 0 and the pad
+// covers the roundoff of both transforms — so a point outside the box can be
+// rejected on six compares before any transform is paid for. A view with
+// lo_depth <= 0 is not a convex frustum (its normalized bounds flip sign
+// behind the camera) and gets an unbounded box, i.e. no pre-rejection.
+struct ViewRejectBox
+{
+  std::array<double, 3> lo{};
+  std::array<double, 3> hi{};
+};
+inline constexpr double kViewRejectBoxPadMeters = 1e-3;
+[[nodiscard]] std::vector<ViewRejectBox> view_reject_boxes(
+  std::span<const SampleViewFrustum> views);
+
+// point_in_any_view with each view's reject box (from view_reject_boxes, so
+// `boxes` is parallel to `views`) tried first, and the camera-frame depth
+// evaluated before the other two coordinates: the same truth value, at a
+// fraction of the cost for the points every view rejects — which, for a
+// narrow camera against a 360-degree lidar, is most of them.
+[[nodiscard]] bool point_in_any_view(
+  const std::array<double, 3> & p, std::span<const SampleViewFrustum> views,
+  std::span<const ViewRejectBox> boxes);
+
 // The calibration map under construction: points are collapsed onto a voxel
 // grid as they arrive, one running centroid and mean intensity per occupied
 // voxel, so the map costs memory in proportion to the SURFACE it covers
@@ -305,16 +341,53 @@ struct SampleViewFrustum
 // times over a bag — and NID reads the map as a statistical sample of
 // (intensity, gray) pairs, which those duplicates do not enrich. A voxel size
 // of 0 turns the grid off and keeps every point verbatim, in arrival order.
+//
+// The grid can be split into `partitions` independent hash maps, each owning
+// the voxels whose key hashes to it, so an insertion pass can feed every
+// partition from its own thread (add_to_partition). A voxel's running sums
+// still add the same points in the same order as they would in one map, and
+// finish() orders the union by voxel index, so the map does not depend on
+// the partition count.
 class MapAccumulator
 {
 public:
-  explicit MapAccumulator(double voxel_size) : voxel_size_(voxel_size) {}
+  explicit MapAccumulator(double voxel_size, int partitions = 1);
 
   // Adds one point already expressed in the --ref frame. False when the
   // coordinates cannot be quantized — a magnitude no voxel index can hold is
   // as unusable as a NaN, and the caller counts it the same way — which
   // cannot happen with the grid off.
   bool add(const std::array<float, 3> & point, float intensity);
+
+  // Whether points are collapsed onto the grid at all (voxel size > 0).
+  [[nodiscard]] bool gridded() const { return voxel_size_ > 0.0; }
+
+  // The independently fed slices of the grid (1 with the grid off).
+  [[nodiscard]] int partitions() const { return static_cast<int>(voxels_.size()); }
+
+  // The grid cell a --ref point falls in, for the split insertion below.
+  struct VoxelKey
+  {
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::int32_t z = 0;
+    bool operator==(const VoxelKey & other) const = default;
+  };
+
+  // The voxel of a --ref point, or nullopt when the point cannot be quantized
+  // (what add would refuse). Only meaningful with the grid on.
+  [[nodiscard]] std::optional<VoxelKey> voxel_of(const std::array<float, 3> & point) const;
+
+  // The partition `key`'s voxel lives in.
+  [[nodiscard]] int partition_of(const VoxelKey & key) const;
+
+  // add() for a point whose voxel (from voxel_of) and partition (from
+  // partition_of) the caller already holds: safe to call concurrently for
+  // different partitions, because each partition's voxels live in their own
+  // map, and never refused, because the point already quantized. The caller
+  // keeps the per-voxel order it wants. Grid on only.
+  void add_to_voxel(
+    int partition, const VoxelKey & key, const std::array<float, 3> & point, float intensity);
 
   // Occupied voxels so far (points so far, with the grid off).
   [[nodiscard]] std::size_t size() const;
@@ -323,17 +396,13 @@ public:
   // Materializes the map and empties the accumulator (one-shot): one point per
   // occupied voxel, at its centroid and carrying its mean intensity, ordered
   // by voxel index so the same points give the same map whatever order the
-  // bag delivered them in. With the grid off, the points as they were added.
-  [[nodiscard]] core::pointcloud::PcdCloud finish();
+  // bag delivered them in, and whatever the partition count. With the grid
+  // off, the points as they were added. Given a pool, a large map is drained,
+  // split into voxel-index ranges and sorted on it — the same order, since
+  // the ranges are disjoint and emitted in index order.
+  [[nodiscard]] core::pointcloud::PcdCloud finish(core::WorkerPool * pool = nullptr);
 
 private:
-  struct VoxelKey
-  {
-    std::int32_t x = 0;
-    std::int32_t y = 0;
-    std::int32_t z = 0;
-    bool operator==(const VoxelKey & other) const = default;
-  };
   struct VoxelKeyHash
   {
     std::size_t operator()(const VoxelKey & key) const;
@@ -351,7 +420,8 @@ private:
 
   double voxel_size_;
   core::pointcloud::PcdCloud raw_;  // grid off
-  std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash> voxels_;
+  // One map per partition (exactly one with the grid off).
+  std::vector<std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash>> voxels_;
 };
 
 // Append one --pcd cloud to the accumulated map, expressed in the
@@ -375,12 +445,63 @@ private:
 // `views` is the frustum union of the image samples the map is built for: a
 // placed point outside every view is dropped (counted in
 // MapAccumulationStats::points_culled_out_of_view), since no NID evaluation
-// could ever project it. The default empty span disables the cull.
+// could ever project it. The default empty span disables the cull. This
+// overload runs everything on the calling thread; the run path uses the
+// MapAccumulationContext overload below.
 [[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
   MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
   std::span<const core::TrajectoryPose> trajectory,
   const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats,
   std::span<const SampleViewFrustum> views = {});
+
+// Per-run state of the --pcd accumulation pass, shared by every cloud: the
+// sample views with their reject boxes, the worker pool the per-point work is
+// spread over (nullptr = everything on the calling thread), and the per-chunk
+// survivor buffers the pass reuses from cloud to cloud. `views` must outlive
+// the context.
+struct MapAccumulationContext
+{
+  explicit MapAccumulationContext(
+    std::span<const SampleViewFrustum> views = {}, core::WorkerPool * pool = nullptr);
+
+  std::span<const SampleViewFrustum> views;
+  std::vector<ViewRejectBox> boxes;  // parallel to views
+  core::WorkerPool * pool = nullptr;
+
+  // One chunk's share of a cloud's placement pass: the placed points that
+  // survived the finiteness check, the cull and quantization, bucketed by the
+  // map partition their voxel belongs to and kept in point order inside each
+  // bucket, plus the drop counts. Kept across clouds so the buffers keep
+  // their capacity.
+  struct Bucket
+  {
+    std::vector<MapAccumulator::VoxelKey> keys;  // grid on: parallel to points
+    std::vector<std::array<float, 3>> points;
+    std::vector<float> intensities;  // parallel to points
+  };
+  struct Chunk
+  {
+    std::vector<Bucket> buckets;  // one per map partition
+    std::uint64_t nonfinite = 0;  // non-finite or unquantizable coordinates
+    std::uint64_t culled = 0;
+    std::uint64_t placed = 0;  // points that reached a bucket
+  };
+  std::vector<Chunk> chunks;
+};
+
+// accumulate_cloud_into_map over a shared context: the per-point work (field
+// reads, the finiteness check, the placement transform, the cull, the voxel
+// lookup) is split into one chunk per worker and run on the context's pool,
+// each chunk bucketing its survivors by map partition in point order; the
+// partitions are then each fed on their own worker, chunk by chunk, so every
+// voxel's running sums add its points in the order a single loop over the
+// points would have — the map is the same whatever the pool size and the
+// partition count.
+[[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
+  MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
+  std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats,
+  MapAccumulationContext & context);
 
 // Default `-o/--output` path when omitted: "<input stem>_calib_cam_lidar.yaml"
 // in the current working directory.

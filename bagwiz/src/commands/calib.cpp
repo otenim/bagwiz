@@ -166,6 +166,13 @@ private:
       "Imu topic used as the timing bridge for --cam-offset auto (its frame must be reachable "
       "from --of through the bag's static TF); only valid with auto",
       TopicSlotSpec{.allowed_types = kImuType, .mode = TopicSelectorMode::kLiteral});
+    sub
+      ->add_option(
+        "-j,--threads", cam_lidar_args_.threads,
+        "Number of worker threads for the map accumulation, the refinement and the sample "
+        "decoding (default: 0 = hardware concurrency; 1 = sync). Range 0-256; in-range values "
+        "above hardware concurrency are capped.")
+      ->check(CLI::Range(0, 256));
     sub->add_flag("--json", cam_lidar_args_.json, "Emit the stdout summary as JSON");
     sub->add_flag(
       "-w,--overwrite", cam_lidar_args_.overwrite, "Replace an existing -o/--output path");
