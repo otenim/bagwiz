@@ -37,11 +37,17 @@ double probe_step(std::size_t axis)
 }
 
 // The cost evaluations of one refinement: the per-(sample, range) projection
-// buffers and the per-sample NID scratch, kept across the thousands of
-// evaluations a run makes so none of them allocates, and the pool they run
-// on. Each evaluation projects every sample's points as one range per worker
-// — a flat (sample x range) task list, so the parallelism is not capped at
-// the sample count — then builds each sample's histogram from its ranges.
+// buffers, cull grids and histograms and the per-sample NID scratch, kept
+// across the thousands of evaluations a run makes so none of them allocates,
+// and the pool they run on. Each evaluation is four rounds over a flat
+// (sample x range) task list — so the parallelism is not capped at the
+// sample count — with a per-sample round between: project each range and
+// observe it into the range's own cull grid; merge every sample's range grids
+// into its grid (a per-cell min); count each range's kept points against the
+// sample's grid into the range's histograms; add every sample's range
+// histograms up and take the NID. Every step is a per-point computation, a
+// min-reduction or an integer sum, so the costs are the ones one pass per
+// sample would compute.
 class SampleCostEvaluator
 {
 public:
@@ -55,7 +61,6 @@ public:
     pool_(pool),
     ranges_(pool != nullptr ? static_cast<std::size_t>(pool->size()) : 1),
     buffers_(samples.size() * ranges_),
-    chunks_(samples.size(), std::vector<ProjectedChunk>(ranges_)),
     scratch_(samples.size()),
     poses_(samples.size()),
     costs_(samples.size())
@@ -72,25 +77,56 @@ public:
     for (std::size_t s = 0; s < samples_.size(); ++s) {
       poses_[s] = rigid_inverse(mat4_multiply(samples_[s].t_world_trajframe, t_trajframe_cam));
     }
+    // 1. Project each range and observe it into the range's own cull grid.
     run(samples_.size() * ranges_, [&](std::size_t task) {
       const std::size_t s = task / ranges_;
       const std::size_t r = task % ranges_;
-      const std::size_t n = samples_[s].points_world.size();
+      const CalibSample & sample = samples_[s];
+      const std::size_t n = sample.points_world.size();
       const std::size_t per_range = (n + ranges_ - 1) / ranges_;
       const std::size_t begin = std::min(n, r * per_range);
       const std::size_t end = std::min(n, begin + per_range);
       auto & buffer = buffers_[task];
       buffer.points.clear();
       buffer.bins.clear();
-      project_sample_points(
-        samples_[s], cam_, poses_[s], nid_, begin, end, buffer.points, buffer.bins);
+      project_sample_points(sample, cam_, poses_[s], nid_, begin, end, buffer.points, buffer.bins);
+      buffer.grid.reset(sample.image.width, sample.image.height, nid_.cull_cell_px);
+      buffer.grid.observe(buffer.points);
     });
+    // 2. Each sample's grid: the min over its range grids.
     run(samples_.size(), [&](std::size_t s) {
+      auto & grid = scratch_[s].grid;
+      grid.reset(samples_[s].image.width, samples_[s].image.height, nid_.cull_cell_px);
       for (std::size_t r = 0; r < ranges_; ++r) {
-        auto & buffer = buffers_[s * ranges_ + r];
-        chunks_[s][r] = ProjectedChunk{buffer.points, buffer.bins};
+        grid.merge(buffers_[s * ranges_ + r].grid);
       }
-      costs_[s] = nid_of_projected(samples_[s], nid_, chunks_[s], scratch_[s]);
+    });
+    // 3. Count each range's kept points, against the sample's grid, into the
+    // range's histograms.
+    run(samples_.size() * ranges_, [&](std::size_t task) {
+      const std::size_t s = task / ranges_;
+      auto & buffer = buffers_[task];
+      buffer.histograms.reset(nid_.bins);
+      accumulate_histograms(
+        samples_[s], nid_, ProjectedChunk{buffer.points, buffer.bins}, scratch_[s].grid,
+        buffer.histograms);
+    });
+    // 4. Each sample's cost from the sum of its range histograms.
+    run(samples_.size(), [&](std::size_t s) {
+      std::size_t projected = 0;
+      for (std::size_t r = 0; r < ranges_; ++r) {
+        projected += buffers_[s * ranges_ + r].points.size();
+      }
+      if (projected < nid_.min_points) {
+        costs_[s] = std::nullopt;
+        return;
+      }
+      auto & histograms = scratch_[s].histograms;
+      histograms.reset(nid_.bins);
+      for (std::size_t r = 0; r < ranges_; ++r) {
+        histograms.add(buffers_[s * ranges_ + r].histograms);
+      }
+      costs_[s] = nid_from_histograms(histograms, nid_);
     });
     return costs_;
   }
@@ -100,6 +136,8 @@ private:
   {
     std::vector<DepthCullPoint> points;
     std::vector<std::uint8_t> bins;
+    DepthCullGrid grid;
+    NidHistograms histograms;
   };
 
   void run(std::size_t n, const std::function<void(std::size_t)> & fn)
@@ -119,10 +157,9 @@ private:
   const NidParams & nid_;
   WorkerPool * pool_;
   std::size_t ranges_;
-  std::vector<Buffer> buffers_;                      // [sample * ranges_ + range]
-  std::vector<std::vector<ProjectedChunk>> chunks_;  // per sample, its ranges' spans
-  std::vector<NidScratch> scratch_;                  // per sample
-  std::vector<Mat4> poses_;                          // per sample, world -> camera at delta
+  std::vector<Buffer> buffers_;      // [sample * ranges_ + range]
+  std::vector<NidScratch> scratch_;  // per sample
+  std::vector<Mat4> poses_;          // per sample, world -> camera at delta
   std::vector<std::optional<double>> costs_;
 };
 

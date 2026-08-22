@@ -74,3 +74,33 @@ TEST(DepthCullTest, GridObservesBatchesInAnyOrder)
     }
   }
 }
+
+TEST(DepthCullTest, MergedRangeGridsKeepWhatOneGridKeeps)
+{
+  // Two halves observed into two grids and merged give every point the
+  // verdict one grid over both halves gives: the per-cell nearest depth is a
+  // min, so it does not matter which grid saw which point.
+  std::vector<calib::DepthCullPoint> pts{{4.0F, 4.0F, 10.0F, 0},  {5.0F, 5.0F, 2.0F, 0},
+                                         {20.0F, 4.0F, 5.0F, 0},  {21.0F, 5.0F, 5.5F, 0},
+                                         {40.0F, 40.0F, 1.0F, 0}, {41.0F, 41.0F, 30.0F, 0}};
+  constexpr std::uint32_t kW = 64;
+  constexpr std::uint32_t kH = 64;
+  constexpr std::uint32_t kCell = 8;
+  constexpr float kMargin = 0.75F;
+  std::vector<std::uint8_t> reference(pts.size());
+  calib::depth_cull_keep(pts, kW, kH, kCell, kMargin, reference);
+
+  calib::DepthCullGrid first;
+  calib::DepthCullGrid second;
+  first.reset(kW, kH, kCell);
+  second.reset(kW, kH, kCell);
+  first.observe(std::span<calib::DepthCullPoint>(pts.data(), 3));
+  second.observe(std::span<calib::DepthCullPoint>(pts.data() + 3, 3));
+  calib::DepthCullGrid merged;
+  merged.reset(kW, kH, kCell);
+  merged.merge(second);
+  merged.merge(first);
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    EXPECT_EQ(merged.keeps(pts[i], kMargin) ? 1 : 0, reference[i]) << i;
+  }
+}

@@ -210,3 +210,51 @@ TEST(NidCostTest, ProjectSampleRangeCoversExactlyItsRange)
     EXPECT_EQ(split_bins[i], whole_bins[i]);
   }
 }
+
+TEST(NidCostTest, HistogramsAddedOverRangesMatchOnePass)
+{
+  // The four-round decomposition the refinement's evaluator runs — range
+  // grids merged, range histograms added — gives exactly nid_cost's value.
+  // Exact agreement is asserted because the grid merge is a min over the same
+  // points and the histogram sum adds the same integers.
+  const auto cam = test_camera();
+  calib::NidParams params;
+  params.min_points = 100;
+  const auto sample = make_correlated_sample(cam, params.bins);
+  const calib::Mat4 pose =
+    calib::rigid_inverse(calib::make_transform({0.01, -0.02, 0.0}, {0.0, 0.0, 0.5 * M_PI / 180.0}));
+  const auto reference = calib::nid_cost(sample, cam, pose, params);
+  ASSERT_TRUE(reference.has_value());
+
+  constexpr std::size_t kRanges = 5;
+  const std::size_t n = sample.points_world.size();
+  const std::size_t per = (n + kRanges - 1) / kRanges;
+  std::vector<std::vector<calib::DepthCullPoint>> points(kRanges);
+  std::vector<std::vector<std::uint8_t>> bins(kRanges);
+  std::vector<calib::DepthCullGrid> grids(kRanges);
+  calib::DepthCullGrid merged;
+  merged.reset(sample.image.width, sample.image.height, params.cull_cell_px);
+  std::size_t projected = 0;
+  for (std::size_t r = 0; r < kRanges; ++r) {
+    const std::size_t begin = std::min(n, r * per);
+    const std::size_t end = std::min(n, begin + per);
+    calib::project_sample_points(sample, cam, pose, params, begin, end, points[r], bins[r]);
+    grids[r].reset(sample.image.width, sample.image.height, params.cull_cell_px);
+    grids[r].observe(points[r]);
+    merged.merge(grids[r]);
+    projected += points[r].size();
+  }
+  ASSERT_GE(projected, params.min_points);
+  calib::NidHistograms total;
+  total.reset(params.bins);
+  for (std::size_t r = 0; r < kRanges; ++r) {
+    calib::NidHistograms part;
+    part.reset(params.bins);
+    calib::accumulate_histograms(
+      sample, params, calib::ProjectedChunk{points[r], bins[r]}, merged, part);
+    total.add(part);
+  }
+  const auto decomposed = calib::nid_from_histograms(total, params);
+  ASSERT_TRUE(decomposed.has_value());
+  EXPECT_EQ(*decomposed, *reference);
+}

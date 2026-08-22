@@ -89,21 +89,52 @@ struct ProjectedChunk
   std::span<const std::uint8_t> bins;
 };
 
+// The histograms one NID evaluation is computed from: the bins x bins joint
+// gray/lidar counts, the two marginals and the number of points counted. The
+// counts are integers held in double, so histograms built over any split of
+// the points add() up to exactly the histograms one pass would have built.
+struct NidHistograms
+{
+  std::vector<double> joint;
+  std::vector<double> h_gray;
+  std::vector<double> h_lidar;
+  std::size_t count = 0;
+
+  // Zero everything for `bins` bins.
+  void reset(int bins);
+  // Elementwise sum with `other` (same bin count).
+  void add(const NidHistograms & other);
+};
+
+// Count the points of `chunk` the depth cull keeps — `grid` must have
+// observed every point of the sample, including this chunk's — into `into`:
+// the gray bin under the point's pixel against the point's intensity bin.
+void accumulate_histograms(
+  const CalibSample & sample, const NidParams & params, const ProjectedChunk & chunk,
+  const DepthCullGrid & grid, NidHistograms & into);
+
+// The NID of complete histograms: nullopt when fewer than params.min_points
+// were counted or the joint entropy is zero (a constant image or a constant
+// intensity leaves NID undefined).
+[[nodiscard]] std::optional<double> nid_from_histograms(
+  const NidHistograms & histograms, const NidParams & params);
+
 // The scratch one NID evaluation works in, owned by the caller so a pass that
 // evaluates thousands of costs does not allocate the cull grid and the
 // histograms afresh every time.
 struct NidScratch
 {
   DepthCullGrid grid;
-  std::vector<double> joint;
-  std::vector<double> h_gray;
-  std::vector<double> h_lidar;
+  NidHistograms histograms;
 };
 
 // The second half of nid_cost over already-projected points, given as chunks
-// in any order: the depth cull's per-cell nearest depth is a min-reduction
-// and the histograms count integers, so every split of the projected set into
-// chunks yields the same cost. nullopt as nid_cost.
+// in any order: observe every chunk into one cull grid, count every chunk's
+// kept points into one set of histograms, and take the NID of those. The
+// depth cull's per-cell nearest depth is a min-reduction and the histograms
+// count integers, so every split of the projected set into chunks — and
+// every split of this pass itself over grids merged and histograms added
+// afterwards — yields the same cost. nullopt as nid_cost.
 [[nodiscard]] std::optional<double> nid_of_projected(
   const CalibSample & sample, const NidParams & params, std::span<const ProjectedChunk> chunks,
   NidScratch & scratch);

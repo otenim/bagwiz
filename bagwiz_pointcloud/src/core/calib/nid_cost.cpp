@@ -102,6 +102,75 @@ void project_sample_points(
   }
 }
 
+void NidHistograms::reset(int bins)
+{
+  joint.assign(static_cast<std::size_t>(bins) * bins, 0.0);
+  h_gray.assign(static_cast<std::size_t>(bins), 0.0);
+  h_lidar.assign(static_cast<std::size_t>(bins), 0.0);
+  count = 0;
+}
+
+void NidHistograms::add(const NidHistograms & other)
+{
+  for (std::size_t i = 0; i < joint.size(); ++i) {
+    joint[i] += other.joint[i];
+  }
+  for (std::size_t i = 0; i < h_gray.size(); ++i) {
+    h_gray[i] += other.h_gray[i];
+    h_lidar[i] += other.h_lidar[i];
+  }
+  count += other.count;
+}
+
+void accumulate_histograms(
+  const CalibSample & sample, const NidParams & params, const ProjectedChunk & chunk,
+  const DepthCullGrid & grid, NidHistograms & into)
+{
+  const int bins = params.bins;
+  for (std::size_t i = 0; i < chunk.points.size(); ++i) {
+    const auto & point = chunk.points[i];
+    if (!grid.keeps(point, params.cull_margin_m)) {
+      continue;
+    }
+    const auto px = static_cast<std::uint32_t>(point.u);
+    const auto py = static_cast<std::uint32_t>(point.v);
+    const int gb =
+      sample.image.gray[static_cast<std::size_t>(py) * sample.image.width + px] * bins / 256;
+    const int lb = chunk.bins[i];
+    into.joint[static_cast<std::size_t>(gb) * bins + lb] += 1.0;
+    into.h_gray[gb] += 1.0;
+    into.h_lidar[lb] += 1.0;
+    ++into.count;
+  }
+}
+
+std::optional<double> nid_from_histograms(
+  const NidHistograms & histograms, const NidParams & params)
+{
+  const std::size_t count = histograms.count;
+  if (count < params.min_points) {
+    return std::nullopt;
+  }
+  const auto entropy = [count](std::span<const double> h) {
+    double e = 0.0;
+    for (const double c : h) {
+      if (c > 0.0) {
+        const double p = c / static_cast<double>(count);
+        e -= p * std::log(p);
+      }
+    }
+    return e;
+  };
+  const double h_g = entropy(histograms.h_gray);
+  const double h_l = entropy(histograms.h_lidar);
+  const double h_joint = entropy(histograms.joint);
+  if (h_joint <= 0.0) {
+    return std::nullopt;  // constant image or constant intensity: NID undefined
+  }
+  const double mutual = h_g + h_l - h_joint;
+  return (h_joint - mutual) / h_joint;
+}
+
 std::optional<double> nid_of_projected(
   const CalibSample & sample, const NidParams & params, std::span<const ProjectedChunk> chunks,
   NidScratch & scratch)
@@ -113,56 +182,15 @@ std::optional<double> nid_of_projected(
   if (projected < params.min_points) {
     return std::nullopt;
   }
-
   scratch.grid.reset(sample.image.width, sample.image.height, params.cull_cell_px);
   for (const auto & chunk : chunks) {
     scratch.grid.observe(chunk.points);
   }
-
-  const int bins = params.bins;
-  scratch.joint.assign(static_cast<std::size_t>(bins) * bins, 0.0);
-  scratch.h_gray.assign(static_cast<std::size_t>(bins), 0.0);
-  scratch.h_lidar.assign(static_cast<std::size_t>(bins), 0.0);
-  std::size_t count = 0;
+  scratch.histograms.reset(params.bins);
   for (const auto & chunk : chunks) {
-    for (std::size_t i = 0; i < chunk.points.size(); ++i) {
-      const auto & point = chunk.points[i];
-      if (!scratch.grid.keeps(point, params.cull_margin_m)) {
-        continue;
-      }
-      const auto px = static_cast<std::uint32_t>(point.u);
-      const auto py = static_cast<std::uint32_t>(point.v);
-      const int gb =
-        sample.image.gray[static_cast<std::size_t>(py) * sample.image.width + px] * bins / 256;
-      const int lb = chunk.bins[i];
-      scratch.joint[static_cast<std::size_t>(gb) * bins + lb] += 1.0;
-      scratch.h_gray[gb] += 1.0;
-      scratch.h_lidar[lb] += 1.0;
-      ++count;
-    }
+    accumulate_histograms(sample, params, chunk, scratch.grid, scratch.histograms);
   }
-  if (count < params.min_points) {
-    return std::nullopt;
-  }
-
-  const auto entropy = [count](std::span<const double> h) {
-    double e = 0.0;
-    for (const double c : h) {
-      if (c > 0.0) {
-        const double p = c / static_cast<double>(count);
-        e -= p * std::log(p);
-      }
-    }
-    return e;
-  };
-  const double h_g = entropy(scratch.h_gray);
-  const double h_l = entropy(scratch.h_lidar);
-  const double h_joint = entropy(scratch.joint);
-  if (h_joint <= 0.0) {
-    return std::nullopt;  // constant image or constant intensity: NID undefined
-  }
-  const double mutual = h_g + h_l - h_joint;
-  return (h_joint - mutual) / h_joint;
+  return nid_from_histograms(scratch.histograms, params);
 }
 
 std::optional<double> nid_cost(

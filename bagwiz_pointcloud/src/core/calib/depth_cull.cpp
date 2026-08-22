@@ -39,6 +39,16 @@ void DepthCullGrid::observe(std::span<DepthCullPoint> points)
   }
 }
 
+void DepthCullGrid::merge(const DepthCullGrid & other)
+{
+  assert(other.nearest_.size() == nearest_.size() && other.grid_w_ == grid_w_);
+  for (std::size_t i = 0; i < nearest_.size(); ++i) {
+    if (other.nearest_[i] < nearest_[i]) {
+      nearest_[i] = other.nearest_[i];
+    }
+  }
+}
+
 void depth_cull_keep(
   std::span<DepthCullPoint> points, std::uint32_t width, std::uint32_t height,
   std::uint32_t cell_px, float margin_m, std::span<std::uint8_t> keep_out)

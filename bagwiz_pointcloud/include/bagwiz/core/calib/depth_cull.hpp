@@ -32,16 +32,21 @@ struct DepthCullPoint
 // The cell grid one depth cull works over: the nearest depth seen in each
 // cell_px x cell_px pixel cell. reset() sizes it for an image and clears it,
 // observe() folds a set of projected points in — writing each point's `cell`
-// — and keeps() is the per-point verdict once every point was observed. The
-// nearest depth is a min-reduction, so the points may be observed in any
-// order and in any number of batches without changing a single verdict,
-// which is what lets a caller project one image's points on several threads.
+// — merge() folds another grid of the same shape in, and keeps() is the
+// per-point verdict once every point was observed. The nearest depth is a
+// min-reduction, so the points may be observed in any order, in any number
+// of batches, and into any number of grids merged afterwards, without
+// changing a single verdict — which is what lets a caller project one image's
+// points on several threads.
 class DepthCullGrid
 {
 public:
   // Precondition: cell_px > 0.
   void reset(std::uint32_t width, std::uint32_t height, std::uint32_t cell_px);
   void observe(std::span<DepthCullPoint> points);
+  // Per-cell min with `other`, which must have been reset() with the same
+  // image size and cell size.
+  void merge(const DepthCullGrid & other);
   [[nodiscard]] bool keeps(const DepthCullPoint & point, float margin_m) const
   {
     return point.depth <= nearest_[point.cell] + margin_m;
