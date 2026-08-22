@@ -31,6 +31,10 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rcutils REQUIRED)
+# Threads::Threads supplies -pthread for the std::thread in WorkerPool and the
+# mutex/condition_variable in the public worker_pool.hpp, so it is linked
+# PUBLIC: every consumer of that header needs it too.
+find_package(Threads REQUIRED)
 
 add_library(bagwiz_base
   src/core/base/atomic_write.cpp
@@ -41,6 +45,7 @@ add_library(bagwiz_base
   src/core/base/str_utils.cpp
   src/core/base/terminal_input.cpp
   src/core/base/topic_match.cpp
+  src/core/base/worker_pool.cpp
 )
 target_include_directories(bagwiz_base
   PUBLIC
@@ -62,6 +67,7 @@ else()
     target_link_libraries(bagwiz_base PUBLIC ${${bagwiz_dep}_TARGETS})
   endforeach()
 endif()
+target_link_libraries(bagwiz_base PUBLIC Threads::Threads)
 
 install(TARGETS bagwiz_base
   EXPORT export_${PROJECT_NAME}
@@ -72,7 +78,10 @@ install(DIRECTORY include/ DESTINATION include)
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 # rcutils appears in the public logging.hpp, so downstream packages need it.
-ament_export_dependencies(rcutils)
+# Threads::Threads is a PUBLIC link (WorkerPool's std::thread), so it leaks
+# through the static export as $<LINK_ONLY:Threads::Threads>; downstream
+# packages must be able to re-create that target.
+ament_export_dependencies(rcutils Threads)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
@@ -97,6 +106,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_topic_match_test test/core/base/topic_match_test.cpp)
   target_link_libraries(bagwiz_topic_match_test bagwiz_base)
+
+  ament_add_gtest(bagwiz_worker_pool_test test/core/base/worker_pool_test.cpp)
+  target_link_libraries(bagwiz_worker_pool_test bagwiz_base)
 endif()
 
 ament_package()
