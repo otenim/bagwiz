@@ -104,12 +104,4 @@ double rotation_angle_between(const Mat4 & a, const Mat4 & b)
   return std::acos(c);
 }
 
-std::array<double, 3> transform_point(const Mat4 & t, const std::array<double, 3> & p)
-{
-  return {
-    t[0] * p[0] + t[4] * p[1] + t[8] * p[2] + t[12],
-    t[1] * p[0] + t[5] * p[1] + t[9] * p[2] + t[13],
-    t[2] * p[0] + t[6] * p[1] + t[10] * p[2] + t[14]};
-}
-
 }  // namespace bagwiz::core::calib
