@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -82,14 +83,15 @@ std::optional<std::string> load_tf_buffer(
   return std::nullopt;
 }
 
-std::optional<std::string> load_static_tf_buffer(
-  const std::filesystem::path & input, tf2::BufferCore & buffer)
+StaticTfTransforms load_static_tf_transforms(const std::filesystem::path & input, StaticTfRead read)
 {
+  StaticTfTransforms out;
   std::unique_ptr<io::BagReader> reader;
   try {
     reader = io::open_read(input);
   } catch (const std::exception & e) {
-    return std::string("failed to reopen bag for static TF: ") + e.what();
+    out.error = std::string("failed to reopen bag for static TF: ") + e.what();
+    return out;
   }
 
   std::vector<const io::TopicInfo *> static_topics;
@@ -103,7 +105,8 @@ std::optional<std::string> load_static_tf_buffer(
     // flags (pcd concat's --frame, pcd undistort's --ref/--of, ...), so it
     // must not bake any one of them into the message. Callers that want
     // flag-specific context should prepend their own.
-    return "bag has no static TF topic (…/tf_static)";
+    out.error = "bag has no static TF topic (…/tf_static)";
+    return out;
   }
 
   io::ReadFilter filter;
@@ -116,9 +119,21 @@ std::optional<std::string> load_static_tf_buffer(
   for (const auto * t : static_topics) {
     auto open = decoder::open_decoder(*t);
     if (!open.ok()) {
-      return "could not open decoder for '" + t->name + "': " + open.error;
+      out.error = "could not open decoder for '" + t->name + "': " + open.error;
+      return out;
     }
     decoders.emplace(t->name, std::move(open.decoder));
+  }
+
+  // kFirstMessagePerTopic: the topics still waiting for their first message.
+  // A topic leaves the set once it has one, and an empty set ends the read —
+  // the storage-level topic filter cannot express "first only", and the rest
+  // of a long recording is republications of the same latched set.
+  std::unordered_set<std::string> pending;
+  if (read == StaticTfRead::kFirstMessagePerTopic) {
+    for (const auto * t : static_topics) {
+      pending.insert(t->name);
+    }
   }
 
   io::RawMessage raw;
@@ -128,17 +143,48 @@ std::optional<std::string> load_static_tf_buffer(
       if (it == decoders.end()) {
         continue;
       }
+      if (read == StaticTfRead::kFirstMessagePerTopic && !pending.contains(raw.topic->name)) {
+        continue;
+      }
       const auto decoded = it->second->decode(raw.payload);
       if (!decoded.ok()) {
-        return "failed to decode static TF on '" + raw.topic->name + "': " + decoded.error;
+        out.error = "failed to decode static TF on '" + raw.topic->name + "': " + decoded.error;
+        out.transforms.clear();
+        return out;
       }
-      for (const auto & t : extract_tf_message(*decoded.value)) {
-        buffer.setTransform(t, "bagwiz", /*is_static=*/true);
+      const auto transforms = extract_tf_message(*decoded.value);
+      out.transforms.insert(out.transforms.end(), transforms.begin(), transforms.end());
+      if (read == StaticTfRead::kFirstMessagePerTopic) {
+        pending.erase(raw.topic->name);
+        if (pending.empty()) {
+          break;
+        }
       }
     }
   } catch (const std::exception & e) {
-    return std::string("error reading static TF: ") + e.what();
+    out.error = std::string("error reading static TF: ") + e.what();
+    out.transforms.clear();
+    return out;
   }
+  return out;
+}
+
+void set_static_transforms(
+  tf2::BufferCore & buffer, std::span<const geometry_msgs::msg::TransformStamped> transforms)
+{
+  for (const auto & t : transforms) {
+    buffer.setTransform(t, "bagwiz", /*is_static=*/true);
+  }
+}
+
+std::optional<std::string> load_static_tf_buffer(
+  const std::filesystem::path & input, tf2::BufferCore & buffer, StaticTfRead read)
+{
+  const auto loaded = load_static_tf_transforms(input, read);
+  if (!loaded.ok()) {
+    return loaded.error;
+  }
+  set_static_transforms(buffer, loaded.transforms);
   return std::nullopt;
 }
 

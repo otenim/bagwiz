@@ -84,17 +84,25 @@ struct TrajectoryBuildResult
   [[nodiscard]] bool ok() const { return error.empty() && !trajectory.empty(); }
 };
 
+// Whether build_sorted_of_ref_trajectory loads the bag's static TF into the
+// buffer it is given (kLoad, the default) or finds it there already
+// (kPreloaded — the caller filled the buffer, e.g. from one read it shares
+// with its own static-only buffer, and the builder must not scan the bag for
+// it again).
+enum class StaticTfInBuffer { kLoad, kPreloaded };
+
 // Pass 1: load the bag's static TF into `buffer` (kept by the caller for the
-// extrinsic resolution that follows), build the --of -> --ref trajectory from
-// the motion-source topic — TFMessage edges, pose / odometry samples composed
-// with static-TF bridges, or (when `motion_is_twist`) twist samples integrated
-// into a relative trajectory — sorted by stamp. With a twist source the motion
-// is relative, so `ref` is unused. Logs the command's errors to `logger`; on
-// failure returns with !ok() and `error` set.
+// extrinsic resolution that follows) unless `static_tf` says it is already
+// there, build the --of -> --ref trajectory from the motion-source topic —
+// TFMessage edges, pose / odometry samples composed with static-TF bridges, or
+// (when `motion_is_twist`) twist samples integrated into a relative trajectory
+// — sorted by stamp. With a twist source the motion is relative, so `ref` is
+// unused. Logs the command's errors to `logger`; on failure returns with
+// !ok() and `error` set.
 [[nodiscard]] TrajectoryBuildResult build_sorted_of_ref_trajectory(
   const std::filesystem::path & input_path, const io::TopicInfo & motion_ti,
   const std::string & ref, const std::string & of, bool motion_is_twist, tf2::BufferCore & buffer,
-  const char * logger);
+  const char * logger, StaticTfInBuffer static_tf = StaticTfInBuffer::kLoad);
 
 // find_point_time_field only reads `.fields`, so a header-only peek (no point
 // data copy) is enough to tell whether a --pcd topic has a usable per-point

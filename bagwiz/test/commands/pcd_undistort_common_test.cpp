@@ -9,6 +9,7 @@
 #include "pcd_undistort_common.hpp"  // NOLINT(build/include_subdir) testing a src-local unit
 
 #include "bagwiz/core/introspection/introspection_loader.hpp"
+#include "bagwiz/core/tf/tf_buffer_loader.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
@@ -616,6 +617,33 @@ TEST_F(PcdUndistortCommonTest, TrajectoryFromOdometryTopic)
   ASSERT_TRUE(built.ok()) << built.error;
   ASSERT_EQ(built.trajectory.size(), 1u);
   EXPECT_NEAR(built.trajectory[0].tx, 3.0, 1e-6);
+}
+
+TEST_F(PcdUndistortCommonTest, TrajectoryWithPreloadedStaticTfMatchesTheLoadingMode)
+{
+  // A buffer the caller filled from its own static TF read gives the same
+  // trajectory as letting the builder load it, and the builder does not need
+  // the bag's static topic for it.
+  write_odometry_bag(bag_);
+  const auto pose_ti = topic_info("/odom", kOdometryType);
+  tf2::BufferCore loaded{kTfBufferCacheTime};
+  const auto by_loading = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, pose_ti, "map", "base_link", /*motion_is_twist=*/false, loaded, kLogger);
+  ASSERT_TRUE(by_loading.ok()) << by_loading.error;
+
+  tf2::BufferCore preloaded{kTfBufferCacheTime};
+  ASSERT_FALSE(bagwiz::core::load_static_tf_buffer(bag_, preloaded).has_value());
+  const auto by_preloading = bagwiz::commands::build_sorted_of_ref_trajectory(
+    bag_, pose_ti, "map", "base_link", /*motion_is_twist=*/false, preloaded, kLogger,
+    bagwiz::commands::StaticTfInBuffer::kPreloaded);
+  ASSERT_TRUE(by_preloading.ok()) << by_preloading.error;
+  ASSERT_EQ(by_preloading.trajectory.size(), by_loading.trajectory.size());
+  for (std::size_t i = 0; i < by_loading.trajectory.size(); ++i) {
+    EXPECT_EQ(by_preloading.trajectory[i].timestamp_ns, by_loading.trajectory[i].timestamp_ns);
+    EXPECT_EQ(by_preloading.trajectory[i].tx, by_loading.trajectory[i].tx);
+    EXPECT_EQ(by_preloading.trajectory[i].ty, by_loading.trajectory[i].ty);
+    EXPECT_EQ(by_preloading.trajectory[i].tz, by_loading.trajectory[i].tz);
+  }
 }
 
 TEST_F(PcdUndistortCommonTest, TrajectoryFailsWithoutTfPath)

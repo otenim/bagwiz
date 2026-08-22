@@ -10,6 +10,7 @@
 #define BAGWIZ__CORE__TF__TF_BUFFER_LOADER_HPP_
 
 #include "bagwiz/core/tf/tf_merge_check.hpp"
+#include "bagwiz/core/tf/tf_static_collect.hpp"
 #include "bagwiz/core/tf/tf_topics.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
@@ -21,6 +22,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -33,11 +35,39 @@ namespace bagwiz::core
 [[nodiscard]] std::optional<std::string> load_tf_buffer(
   const std::filesystem::path & input, tf2::BufferCore & buffer);
 
+// The bag's static transforms — every TransformStamped on every static TF
+// topic (…/tf_static), in read order — with `read` deciding how much of each
+// topic is read: StaticTfRead::kWholeTopic (every message, so a value a later
+// message re-publishes wins once fed into a buffer) or kFirstMessagePerTopic
+// (stop at each static topic's first message and stop reading the bag once
+// every static topic has produced one; static TF is latched, so the first
+// message is normally the whole tree, and the rest of a long recording is
+// republications this mode never reads). `error` is set, and `transforms`
+// empty, on the failures load_static_tf_buffer reports: no static topic, a
+// decoder or decode failure, an IO error.
+struct StaticTfTransforms
+{
+  std::vector<geometry_msgs::msg::TransformStamped> transforms;
+  std::string error;
+  [[nodiscard]] bool ok() const { return error.empty(); }
+};
+[[nodiscard]] StaticTfTransforms load_static_tf_transforms(
+  const std::filesystem::path & input, StaticTfRead read = StaticTfRead::kWholeTopic);
+
+// Feed `transforms` into `buffer` as static transforms (authority "bagwiz"),
+// in order — what load_static_tf_buffer does with what it read, exposed so a
+// caller that needs the static tree in more than one buffer reads the bag
+// once.
+void set_static_transforms(
+  tf2::BufferCore & buffer, std::span<const geometry_msgs::msg::TransformStamped> transforms);
+
 // Load ONLY the bag's static TF topics (…/tf_static) into `buffer` as static
-// transforms (dynamic /tf is ignored). Returns std::nullopt on success, else an
-// error string (no static topic, decode failure, IO error).
+// transforms (dynamic /tf is ignored): load_static_tf_transforms with `read`,
+// then set_static_transforms. Returns std::nullopt on success, else an error
+// string (no static topic, decode failure, IO error).
 [[nodiscard]] std::optional<std::string> load_static_tf_buffer(
-  const std::filesystem::path & input, tf2::BufferCore & buffer);
+  const std::filesystem::path & input, tf2::BufferCore & buffer,
+  StaticTfRead read = StaticTfRead::kWholeTopic);
 
 // One observed (parent, child) edge with its stamp, recorded for the
 // transforms republished on a nominated input topic. Used by trajectory
