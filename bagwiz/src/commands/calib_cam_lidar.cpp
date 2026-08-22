@@ -210,17 +210,20 @@ std::optional<core::image::CameraInfo> resolve_image_and_cam_info(
 
 // Builds the --of -> --ref trajectory from the --pose topic (the same builder
 // `pcd undistort` runs) and requires at least two poses so
-// interpolate_trajectory has something to bracket. The TF buffer the builder
-// fills is deliberately dropped afterwards: for a TFMessage --pose topic it
-// carries replayed dynamic edges, while the chain resolution below works off
-// a static-only buffer.
+// interpolate_trajectory has something to bracket. The builder works off its
+// own buffer, fed from `static_tf` — the one static TF read of the run — and
+// deliberately dropped afterwards: for a TFMessage --pose topic it ends up
+// carrying replayed dynamic edges, while the chain resolution below works
+// off the run's static-only buffer.
 std::optional<std::vector<core::TrajectoryPose>> build_trajectory(
-  const CalibCamLidarArgs & args, const io::TopicInfo & pose_ti)
+  const CalibCamLidarArgs & args, const io::TopicInfo & pose_ti,
+  std::span<const geometry_msgs::msg::TransformStamped> static_tf)
 {
   tf2::BufferCore buffer{std::chrono::hours(24 * 365)};
+  core::set_static_transforms(buffer, static_tf);
   auto built = build_sorted_of_ref_trajectory(
     args.input_path, pose_ti, args.ref_frame, args.of_frame, /*motion_is_twist=*/false, buffer,
-    kLogger);
+    kLogger, StaticTfInBuffer::kPreloaded);
   if (!built.ok()) {
     if (!built.error.empty()) {
       BAGWIZ_LOG_ERROR(kLogger, "%s", built.error.c_str());
@@ -955,8 +958,20 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
     return 1;
   }
 
-  // 3. Trajectory from the --pose topic (T_ref_of, sorted).
-  auto poses = build_trajectory(args, *pose_ti);
+  // 3. The bag's static TF, read once: each static topic's first message —
+  // static TF is latched, so that message is the whole tree, and the rest of
+  // the recording is republications the read stops short of. It feeds the
+  // trajectory builder's buffer here and the run's static-only buffer below
+  // (the chain, the per-cloud extrinsic, the --imu frame).
+  const auto static_tf =
+    core::load_static_tf_transforms(args.input_path, core::StaticTfRead::kFirstMessagePerTopic);
+  if (!static_tf.ok()) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", static_tf.error.c_str());
+    return 1;
+  }
+
+  // 3a. Trajectory from the --pose topic (T_ref_of, sorted).
+  auto poses = build_trajectory(args, *pose_ti, static_tf.transforms);
   if (!poses.has_value()) {
     return 1;
   }
@@ -1006,11 +1021,7 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   // 4. Static TF chain around the edited edge, off a static-only buffer the
   // map accumulation also resolves the cloud extrinsic from.
   tf2::BufferCore static_buffer{std::chrono::hours(24 * 365)};
-  if (const auto err = core::load_static_tf_buffer(args.input_path, static_buffer);
-      err.has_value()) {
-    BAGWIZ_LOG_ERROR(kLogger, "%s", err->c_str());
-    return 1;
-  }
+  core::set_static_transforms(static_buffer, static_tf.transforms);
   const auto chain = resolve_edge_chain(args, static_buffer, cam_info->frame_id);
   if (!chain.has_value()) {
     return 1;

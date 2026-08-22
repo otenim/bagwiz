@@ -134,7 +134,11 @@ two runs over the same clouds build the same map.
 from `--of` to the camera's optical frame, and recorded directly on a
 static TF topic (e.g. `/tf_static`) — an edge only reachable through dynamic
 `/tf` is not something `static update` can rewrite later, so `cam-lidar`
-rejects it up front.
+rejects it up front. The static tree itself is taken from each static
+topic's first message — static TF is latched, so that message carries the
+whole tree — and read once per run, for the trajectory, the chain and the
+per-cloud extrinsic alike; a value a later message re-publishes with a
+different transform is not picked up.
 
 ### Sample selection
 

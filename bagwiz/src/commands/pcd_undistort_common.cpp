@@ -574,10 +574,13 @@ const io::TopicInfo * validate_undistort_topics(
 TrajectoryBuildResult build_sorted_of_ref_trajectory(
   const std::filesystem::path & input_path, const io::TopicInfo & motion_ti,
   const std::string & ref, const std::string & of, bool motion_is_twist, tf2::BufferCore & buffer,
-  const char * logger)
+  const char * logger, StaticTfInBuffer static_tf)
 {
   TrajectoryBuildResult out;
-  if (const auto error = core::load_static_tf_buffer(input_path, buffer); error.has_value()) {
+  if (const auto error = static_tf == StaticTfInBuffer::kLoad
+                           ? core::load_static_tf_buffer(input_path, buffer)
+                           : std::nullopt;
+      error.has_value()) {
     // load_static_tf_buffer is a shared, caller-neutral helper (it names no
     // command's flags), so its detail is always safe to forward here.
     BAGWIZ_LOG_ERROR(
