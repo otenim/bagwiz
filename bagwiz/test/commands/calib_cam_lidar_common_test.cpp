@@ -8,6 +8,8 @@
 
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
+#include "bagwiz/core/base/worker_pool.hpp"
+#include "bagwiz/core/calib/se3.hpp"
 #include "bagwiz/core/pointcloud/point_cloud_io.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 
@@ -23,9 +25,11 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace commands = bagwiz::commands;
+namespace calib = bagwiz::core::calib;
 namespace pc = bagwiz::core::pointcloud;
 
 namespace
@@ -1050,4 +1054,212 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudRejectsBigEndianCloud)
     commands::accumulate_cloud_into_map(map, c, trajectory, std::nullopt, stats).has_value());
   const auto out = map.finish();
   EXPECT_TRUE(out.points.empty());
+}
+
+// ---- reject boxes + the chunk-parallel placement ---------------------------
+
+namespace
+{
+
+// Deterministic pseudo-random doubles in [lo, hi) from a fixed-seed LCG, so
+// the point sets below are the same on every run and every platform.
+class Lcg
+{
+public:
+  explicit Lcg(std::uint64_t seed) : state_(seed) {}
+  double next(double lo, double hi)
+  {
+    state_ = state_ * 6364136223846793005ULL + 1442695040888963407ULL;
+    const double unit = static_cast<double>(state_ >> 11) / 9007199254740992.0;
+    return lo + (hi - lo) * unit;
+  }
+
+private:
+  std::uint64_t state_;
+};
+
+// A view whose camera sits at `position` in the --ref frame, turned by `rpy`,
+// with an off-center normalized rectangle and a 1.5-40 m depth window.
+commands::SampleViewFrustum make_view(
+  const std::array<double, 3> & rpy, const std::array<double, 3> & position)
+{
+  commands::SampleViewFrustum v;
+  v.t_cam_ref = calib::rigid_inverse(calib::make_transform(position, rpy));
+  v.lo_xn = -0.8;
+  v.hi_xn = 0.6;
+  v.lo_yn = -0.5;
+  v.hi_yn = 0.4;
+  v.lo_depth = 1.5;
+  v.hi_depth = 40.0;
+  return v;
+}
+
+bool inside_box(const std::array<double, 3> & p, const commands::ViewRejectBox & box)
+{
+  return p[0] >= box.lo[0] && p[0] <= box.hi[0] && p[1] >= box.lo[1] && p[1] <= box.hi[1] &&
+         p[2] >= box.lo[2] && p[2] <= box.hi[2];
+}
+
+}  // namespace
+
+TEST(CalibCamLidarCommonTest, ViewRejectBoxContainsEveryPointTheViewAccepts)
+{
+  // Random --ref points around a tilted, translated view: every point the
+  // exact predicate accepts must lie inside the view's reject box (the box is
+  // a padded superset of the frustum), and the box must reject plenty of the
+  // surrounding space — otherwise it would not be a filter.
+  const std::vector<commands::SampleViewFrustum> views{
+    make_view({0.3, -0.2, 1.1}, {3.0, -2.0, 1.0})};
+  const auto boxes = commands::view_reject_boxes(views);
+  ASSERT_EQ(boxes.size(), 1U);
+  Lcg rng{7};
+  std::size_t accepted = 0;
+  std::size_t outside = 0;
+  for (int i = 0; i < 20000; ++i) {
+    const std::array<double, 3> p{rng.next(-60, 60), rng.next(-60, 60), rng.next(-60, 60)};
+    const bool in_box = inside_box(p, boxes[0]);
+    if (commands::point_in_any_view(p, views)) {
+      ++accepted;
+      EXPECT_TRUE(in_box) << "point " << i << " is in view but outside its reject box";
+    }
+    if (!in_box) {
+      ++outside;
+    }
+  }
+  EXPECT_GT(accepted, 100U);
+  EXPECT_GT(outside, 10000U);
+}
+
+TEST(CalibCamLidarCommonTest, ViewRejectBoxIsUnboundedWhenMinDepthIsNotPositive)
+{
+  // Behind the camera the normalized bounds flip sign, so a window reaching
+  // depth 0 is not a convex frustum: no box, no pre-rejection.
+  auto view = make_view({0.0, 0.0, 0.0}, {0.0, 0.0, 0.0});
+  view.lo_depth = 0.0;
+  const auto boxes = commands::view_reject_boxes(std::vector<commands::SampleViewFrustum>{view});
+  ASSERT_EQ(boxes.size(), 1U);
+  for (std::size_t k = 0; k < 3; ++k) {
+    EXPECT_EQ(boxes[0].lo[k], -std::numeric_limits<double>::infinity());
+    EXPECT_EQ(boxes[0].hi[k], std::numeric_limits<double>::infinity());
+  }
+}
+
+TEST(CalibCamLidarCommonTest, PointInAnyViewWithBoxesMatchesTheExactPredicate)
+{
+  // Three views, 50,000 random points: the boxed predicate returns exactly
+  // what the exact one does. Exact agreement is asserted because both are
+  // per-point computations over immutable input, the box only pre-rejects,
+  // and the depth-first path evaluates the very expressions transform_point
+  // is made of.
+  const std::vector<commands::SampleViewFrustum> views{
+    make_view({0.3, -0.2, 1.1}, {3.0, -2.0, 1.0}), make_view({-1.2, 0.4, -2.5}, {-10.0, 5.0, 0.5}),
+    make_view({0.0, 0.0, 0.0}, {0.0, 0.0, -3.0})};
+  const auto boxes = commands::view_reject_boxes(views);
+  Lcg rng{11};
+  std::size_t kept = 0;
+  for (int i = 0; i < 50000; ++i) {
+    const std::array<double, 3> p{rng.next(-50, 50), rng.next(-50, 50), rng.next(-50, 50)};
+    const bool exact = commands::point_in_any_view(p, views);
+    EXPECT_EQ(commands::point_in_any_view(p, views, boxes), exact) << "point " << i;
+    kept += exact ? 1 : 0;
+  }
+  EXPECT_GT(kept, 100U);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudReadsNonFloat32Fields)
+{
+  // float64 x/y/z and a uint16 intensity (point_step 26): every field is read
+  // through the reader picked for its datatype, not assumed float32.
+  pc::PointCloud2 c;
+  c.timestamp_ns = 5'000'000'000LL;
+  c.frame_id = "lidar";
+  c.height = 1;
+  c.width = 2;
+  c.point_step = 26;
+  c.row_step = c.point_step * c.width;
+  c.fields = {
+    {"x", 0, pc::PointFieldType::kFloat64, 1},
+    {"y", 8, pc::PointFieldType::kFloat64, 1},
+    {"z", 16, pc::PointFieldType::kFloat64, 1},
+    {"intensity", 24, pc::PointFieldType::kUint16, 1},
+  };
+  c.data.resize(static_cast<std::size_t>(c.point_step) * c.width);
+  const auto put = [&](std::size_t i, double x, double y, double z, std::uint16_t intensity) {
+    std::byte * base = c.data.data() + i * c.point_step;
+    std::memcpy(base, &x, sizeof(x));
+    std::memcpy(base + 8, &y, sizeof(y));
+    std::memcpy(base + 16, &z, sizeof(z));
+    std::memcpy(base + 24, &intensity, sizeof(intensity));
+  };
+  put(0, 1.5, -2.25, 3.0, 7);
+  put(1, 4.0, 5.0, 6.0, 65535);
+
+  commands::MapAccumulator map{0.0};
+  commands::MapAccumulationStats stats;
+  const auto trajectory = moving_trajectory(0.0);
+  const auto error = commands::accumulate_cloud_into_map(map, c, trajectory, std::nullopt, stats);
+  EXPECT_FALSE(error.has_value()) << *error;
+  const auto out = map.finish();
+  ASSERT_EQ(out.points.size(), 2U);
+  EXPECT_EQ(out.points[0], (std::array<float, 3>{1.5F, -2.25F, 3.0F}));
+  EXPECT_EQ(out.points[1], (std::array<float, 3>{4.0F, 5.0F, 6.0F}));
+  ASSERT_EQ(out.intensities.size(), 2U);
+  EXPECT_EQ(out.intensities[0], 7.0F);
+  EXPECT_EQ(out.intensities[1], 65535.0F);
+}
+
+TEST(CalibCamLidarCommonTest, AccumulateCloudOnThePoolMatchesTheInlinePass)
+{
+  // A 50,001-point cloud (no multiple of any chunk count) with non-finite
+  // points sprinkled in, three views, a moving trajectory and a cloud
+  // extrinsic, placed once on the calling thread and once on a 4-way pool.
+  // Exact agreement is asserted because the pool splits only the per-point
+  // work — field reads, the placement transform, the cull, each a function
+  // of that point alone — and the voxel grid is fed in point order either
+  // way, so its running sums add the same values in the same order.
+  Lcg rng{3};
+  std::vector<std::array<float, 4>> pts;
+  pts.reserve(50001);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  for (int i = 0; i < 50001; ++i) {
+    if (i % 977 == 0) {
+      pts.push_back({nan, 0.0F, 0.0F, 1.0F});
+      continue;
+    }
+    pts.push_back(
+      {static_cast<float>(rng.next(-40, 40)), static_cast<float>(rng.next(-40, 40)),
+       static_cast<float>(rng.next(-40, 40)), static_cast<float>(rng.next(0, 255))});
+  }
+  const auto cloud = make_cloud_xyzi(pts, 5'000'000'000LL);
+  const std::vector<commands::SampleViewFrustum> views{
+    make_view({0.3, -0.2, 1.1}, {3.0, -2.0, 1.0}), make_view({-1.2, 0.4, -2.5}, {-10.0, 5.0, 0.5}),
+    make_view({0.0, 0.0, 0.0}, {0.0, 0.0, -3.0})};
+  const auto trajectory = moving_trajectory(2.0);
+  const auto extrinsic = translation_transform(0.5, -0.25, 0.1);
+
+  const auto run = [&](int threads) {
+    bagwiz::core::WorkerPool pool{threads};
+    commands::MapAccumulationContext context{views, &pool};
+    commands::MapAccumulator map{0.25};
+    commands::MapAccumulationStats stats;
+    const auto error =
+      commands::accumulate_cloud_into_map(map, cloud, trajectory, extrinsic, stats, context);
+    EXPECT_FALSE(error.has_value());
+    return std::pair{map.finish(), stats};
+  };
+  const auto [inline_map, inline_stats] = run(1);
+  const auto [pool_map, pool_stats] = run(4);
+
+  ASSERT_EQ(pool_map.points.size(), inline_map.points.size());
+  EXPECT_GT(inline_map.points.size(), 100U);
+  for (std::size_t i = 0; i < inline_map.points.size(); ++i) {
+    EXPECT_EQ(pool_map.points[i], inline_map.points[i]) << "point " << i;
+    EXPECT_EQ(pool_map.intensities[i], inline_map.intensities[i]) << "intensity " << i;
+  }
+  EXPECT_EQ(pool_stats.clouds_read, inline_stats.clouds_read);
+  EXPECT_EQ(pool_stats.points_added, inline_stats.points_added);
+  EXPECT_EQ(pool_stats.points_culled_out_of_view, inline_stats.points_culled_out_of_view);
+  EXPECT_EQ(pool_stats.points_dropped_nonfinite, inline_stats.points_dropped_nonfinite);
+  EXPECT_GT(inline_stats.points_culled_out_of_view, 0U);
+  EXPECT_EQ(inline_stats.points_dropped_nonfinite, 52U);
 }

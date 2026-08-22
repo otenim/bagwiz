@@ -9,6 +9,7 @@
 #ifndef COMMANDS__CALIB_CAM_LIDAR_COMMON_HPP_
 #define COMMANDS__CALIB_CAM_LIDAR_COMMON_HPP_
 
+#include "bagwiz/core/base/worker_pool.hpp"
 #include "bagwiz/core/calib/extrinsic_refine.hpp"
 #include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/se3.hpp"
@@ -305,6 +306,33 @@ struct SampleViewFrustum
 [[nodiscard]] bool point_in_any_view(
   const std::array<double, 3> & p, std::span<const SampleViewFrustum> views);
 
+// The axis-aligned box, in the --ref frame, around one sample view's frustum:
+// the eight corners of the padded normalized rectangle at lo_depth and
+// hi_depth carried through the inverse of t_cam_ref, widened by
+// kViewRejectBoxPadMeters on every side. Every point the exact predicate
+// accepts lies inside it — the frustum is convex for lo_depth > 0 and the pad
+// covers the roundoff of both transforms — so a point outside the box can be
+// rejected on six compares before any transform is paid for. A view with
+// lo_depth <= 0 is not a convex frustum (its normalized bounds flip sign
+// behind the camera) and gets an unbounded box, i.e. no pre-rejection.
+struct ViewRejectBox
+{
+  std::array<double, 3> lo{};
+  std::array<double, 3> hi{};
+};
+inline constexpr double kViewRejectBoxPadMeters = 1e-3;
+[[nodiscard]] std::vector<ViewRejectBox> view_reject_boxes(
+  std::span<const SampleViewFrustum> views);
+
+// point_in_any_view with each view's reject box (from view_reject_boxes, so
+// `boxes` is parallel to `views`) tried first, and the camera-frame depth
+// evaluated before the other two coordinates: the same truth value, at a
+// fraction of the cost for the points every view rejects — which, for a
+// narrow camera against a 360-degree lidar, is most of them.
+[[nodiscard]] bool point_in_any_view(
+  const std::array<double, 3> & p, std::span<const SampleViewFrustum> views,
+  std::span<const ViewRejectBox> boxes);
+
 // The calibration map under construction: points are collapsed onto a voxel
 // grid as they arrive, one running centroid and mean intensity per occupied
 // voxel, so the map costs memory in proportion to the SURFACE it covers
@@ -383,12 +411,53 @@ private:
 // `views` is the frustum union of the image samples the map is built for: a
 // placed point outside every view is dropped (counted in
 // MapAccumulationStats::points_culled_out_of_view), since no NID evaluation
-// could ever project it. The default empty span disables the cull.
+// could ever project it. The default empty span disables the cull. This
+// overload runs everything on the calling thread; the run path uses the
+// MapAccumulationContext overload below.
 [[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
   MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
   std::span<const core::TrajectoryPose> trajectory,
   const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats,
   std::span<const SampleViewFrustum> views = {});
+
+// Per-run state of the --pcd accumulation pass, shared by every cloud: the
+// sample views with their reject boxes, the worker pool the per-point work is
+// spread over (nullptr = everything on the calling thread), and the per-chunk
+// survivor buffers the pass reuses from cloud to cloud. `views` must outlive
+// the context.
+struct MapAccumulationContext
+{
+  explicit MapAccumulationContext(
+    std::span<const SampleViewFrustum> views = {}, core::WorkerPool * pool = nullptr);
+
+  std::span<const SampleViewFrustum> views;
+  std::vector<ViewRejectBox> boxes;  // parallel to views
+  core::WorkerPool * pool = nullptr;
+
+  // One chunk's share of a cloud's placement pass: the placed points that
+  // survived the finiteness check and the cull, in point order, plus the two
+  // drop counts. Kept across clouds so the buffers keep their capacity.
+  struct Chunk
+  {
+    std::vector<std::array<float, 3>> points;
+    std::vector<float> intensities;  // parallel to points
+    std::uint64_t nonfinite = 0;
+    std::uint64_t culled = 0;
+  };
+  std::vector<Chunk> chunks;
+};
+
+// accumulate_cloud_into_map over a shared context: the per-point work (field
+// reads, the finiteness check, the placement transform, the cull) is split
+// into one chunk per worker and run on the context's pool, and the voxel grid
+// is then fed chunk by chunk in point order — exactly the sequence the
+// single-threaded overload feeds it — so the per-voxel running sums, and with
+// them the map, are the same whatever the pool size.
+[[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
+  MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
+  std::span<const core::TrajectoryPose> trajectory,
+  const std::optional<geometry_msgs::msg::Transform> & t_of_cloud, MapAccumulationStats & stats,
+  MapAccumulationContext & context);
 
 // Default `-o/--output` path when omitted: "<input stem>_calib_cam_lidar.yaml"
 // in the current working directory.

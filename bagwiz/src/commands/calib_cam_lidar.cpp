@@ -364,10 +364,12 @@ std::optional<core::calib::EdgeChain> resolve_edge_chain(
 // header stamp first. Points outside every sample's view (the `views`
 // frustum union) are dropped as they go, so the grid only ever holds what
 // the samples can look at. The map needs intensity for NID — a cloud
-// without it is a hard error, as is an unparseable message.
+// without it is a hard error, as is an unparseable message. The per-point
+// work of every cloud runs on `pool`.
 std::optional<core::pointcloud::PcdCloud> accumulate_map(
   const CalibCamLidarArgs & args, std::span<const core::TrajectoryPose> poses,
-  const tf2::BufferCore & static_buffer, std::span<const SampleViewFrustum> views)
+  const tf2::BufferCore & static_buffer, std::span<const SampleViewFrustum> views,
+  core::WorkerPool & pool)
 {
   auto reader = io::open_read_or_log(args.input_path, kLogger);
   if (!reader) {
@@ -379,6 +381,7 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
 
   MapAccumulator map{args.voxel_size};
   MapAccumulationStats stats;
+  MapAccumulationContext context{views, &pool};
   std::unordered_map<std::string, std::optional<geometry_msgs::msg::Transform>> extrinsic_by_frame;
   io::RawMessage raw;
   try {
@@ -411,7 +414,7 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
         }
       }
       if (const auto err = accumulate_cloud_into_map(
-            map, std::move(*parsed.cloud), poses, ext_it->second, stats, views);
+            map, std::move(*parsed.cloud), poses, ext_it->second, stats, context);
           err.has_value()) {
         BAGWIZ_LOG_ERROR(kLogger, "Topic '%s': %s.", args.pcd_topic.c_str(), err->c_str());
         return std::nullopt;
@@ -1093,7 +1096,7 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   // 7. Map: accumulate the --pcd topic's clouds into the --ref frame,
   // dropping points no picked sample can see as they arrive.
   const auto frusta = build_sample_frusta(args, *decoded, *poses, cam, t_trajframe_cam0);
-  const auto cloud = accumulate_map(args, *poses, static_buffer, frusta);
+  const auto cloud = accumulate_map(args, *poses, static_buffer, frusta, pool);
   if (!cloud.has_value()) {
     return 1;
   }
