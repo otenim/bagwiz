@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -144,4 +145,116 @@ TEST(NidCostTest, EqualizeIntensityBinsOnThePoolMatchesTheSerialOne)
   const auto pooled = calib::equalize_intensity_bins(intensities, 16, &pool);
   ASSERT_EQ(pooled.size(), serial.size());
   EXPECT_EQ(pooled, serial);
+}
+
+TEST(NidCostTest, NidOfProjectedMatchesNidCostForAnyChunking)
+{
+  // The same sample projected as 1, 4 and 7 ranges and scored from those
+  // chunks gives exactly nid_cost's value. Exact agreement is asserted because
+  // projection is per point, the depth cull's nearest depth is a min-reduction
+  // over the same set, the histograms count the same integers, and the
+  // entropy sums run over the bins in one fixed order.
+  const auto cam = test_camera();
+  calib::NidParams params;
+  params.min_points = 100;
+  const auto sample = make_correlated_sample(cam, params.bins);
+  const calib::Mat4 pose =
+    calib::rigid_inverse(calib::make_transform({0.01, -0.02, 0.0}, {0.0, 0.0, 0.5 * M_PI / 180.0}));
+  const auto reference = calib::nid_cost(sample, cam, pose, params);
+  ASSERT_TRUE(reference.has_value());
+  for (const std::size_t ranges : {std::size_t{1}, std::size_t{4}, std::size_t{7}}) {
+    const std::size_t n = sample.points_world.size();
+    const std::size_t per = (n + ranges - 1) / ranges;
+    std::vector<std::vector<calib::DepthCullPoint>> points(ranges);
+    std::vector<std::vector<std::uint8_t>> bins(ranges);
+    std::vector<calib::ProjectedChunk> chunks;
+    for (std::size_t r = 0; r < ranges; ++r) {
+      const std::size_t begin = std::min(n, r * per);
+      const std::size_t end = std::min(n, begin + per);
+      calib::project_sample_points(sample, cam, pose, params, begin, end, points[r], bins[r]);
+    }
+    // Chunks handed over in reverse, to pin that their order is irrelevant.
+    for (std::size_t r = ranges; r-- > 0;) {
+      chunks.push_back(calib::ProjectedChunk{points[r], bins[r]});
+    }
+    calib::NidScratch scratch;
+    const auto chunked = calib::nid_of_projected(sample, params, chunks, scratch);
+    ASSERT_TRUE(chunked.has_value()) << ranges;
+    EXPECT_EQ(*chunked, *reference) << ranges << " ranges";
+  }
+}
+
+TEST(NidCostTest, ProjectSampleRangeCoversExactlyItsRange)
+{
+  // Two ranges concatenate to the whole projection, point for point.
+  const auto cam = test_camera();
+  const calib::NidParams params;
+  const auto sample = make_correlated_sample(cam, params.bins);
+  const auto pose = calib::identity_mat4();
+  std::vector<calib::DepthCullPoint> whole;
+  std::vector<std::uint8_t> whole_bins;
+  calib::project_sample_points(
+    sample, cam, pose, params, 0, sample.points_world.size(), whole, whole_bins);
+  ASSERT_GT(whole.size(), 100U);
+  std::vector<calib::DepthCullPoint> split;
+  std::vector<std::uint8_t> split_bins;
+  const std::size_t cut = sample.points_world.size() / 3;
+  calib::project_sample_points(sample, cam, pose, params, 0, cut, split, split_bins);
+  calib::project_sample_points(
+    sample, cam, pose, params, cut, sample.points_world.size(), split, split_bins);
+  ASSERT_EQ(split.size(), whole.size());
+  for (std::size_t i = 0; i < whole.size(); ++i) {
+    EXPECT_EQ(split[i].u, whole[i].u);
+    EXPECT_EQ(split[i].v, whole[i].v);
+    EXPECT_EQ(split[i].depth, whole[i].depth);
+    EXPECT_EQ(split_bins[i], whole_bins[i]);
+  }
+}
+
+TEST(NidCostTest, HistogramsAddedOverRangesMatchOnePass)
+{
+  // The four-round decomposition the refinement's evaluator runs — range
+  // grids merged, range histograms added — gives exactly nid_cost's value.
+  // Exact agreement is asserted because the grid merge is a min over the same
+  // points and the histogram sum adds the same integers.
+  const auto cam = test_camera();
+  calib::NidParams params;
+  params.min_points = 100;
+  const auto sample = make_correlated_sample(cam, params.bins);
+  const calib::Mat4 pose =
+    calib::rigid_inverse(calib::make_transform({0.01, -0.02, 0.0}, {0.0, 0.0, 0.5 * M_PI / 180.0}));
+  const auto reference = calib::nid_cost(sample, cam, pose, params);
+  ASSERT_TRUE(reference.has_value());
+
+  constexpr std::size_t kRanges = 5;
+  const std::size_t n = sample.points_world.size();
+  const std::size_t per = (n + kRanges - 1) / kRanges;
+  std::vector<std::vector<calib::DepthCullPoint>> points(kRanges);
+  std::vector<std::vector<std::uint8_t>> bins(kRanges);
+  std::vector<calib::DepthCullGrid> grids(kRanges);
+  calib::DepthCullGrid merged;
+  merged.reset(sample.image.width, sample.image.height, params.cull_cell_px);
+  std::size_t projected = 0;
+  for (std::size_t r = 0; r < kRanges; ++r) {
+    const std::size_t begin = std::min(n, r * per);
+    const std::size_t end = std::min(n, begin + per);
+    calib::project_sample_points(sample, cam, pose, params, begin, end, points[r], bins[r]);
+    grids[r].reset(sample.image.width, sample.image.height, params.cull_cell_px);
+    grids[r].observe(points[r]);
+    merged.merge(grids[r]);
+    projected += points[r].size();
+  }
+  ASSERT_GE(projected, params.min_points);
+  calib::NidHistograms total;
+  total.reset(params.bins);
+  for (std::size_t r = 0; r < kRanges; ++r) {
+    calib::NidHistograms part;
+    part.reset(params.bins);
+    calib::accumulate_histograms(
+      sample, params, calib::ProjectedChunk{points[r], bins[r]}, merged, part);
+    total.add(part);
+  }
+  const auto decomposed = calib::nid_from_histograms(total, params);
+  ASSERT_TRUE(decomposed.has_value());
+  EXPECT_EQ(*decomposed, *reference);
 }
