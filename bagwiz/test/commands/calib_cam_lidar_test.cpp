@@ -1272,3 +1272,36 @@ TEST_F(CalibCamLidarTest, ThreadCountDoesNotChangeTheYaml)
   ASSERT_FALSE(sync_yaml.empty());
   EXPECT_EQ(read_all(tmp_dir_ / "pool.yaml"), sync_yaml);
 }
+
+// The keyframe-gated path decodes and scores many candidate frames per
+// interval; on the calling thread and on a 4-way pool it must pick the same
+// frames and write the same bytes.
+TEST_F(CalibCamLidarTest, ThreadCountDoesNotChangeTheGatedYaml)
+{
+  // The yawing auto-offset fixture, gated on rotation: dozens of intervals,
+  // up to eight candidate frames decoded and scored per picked interval.
+  const auto scene = build_scene(/*with_dots=*/true);
+  write_fixture_bag(tmp_dir_ / "bag.mcap", scene, auto_offset_fixture());
+
+  auto args = base_args(tmp_dir_);
+  args.fix_axes = "x,y,z";
+  args.cam_offset = "-120ms";
+  args.keyframe_rot_deg = 1.0;
+  const auto read_all = [](const std::filesystem::path & path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  };
+  args.threads = 1;
+  args.output_path = (tmp_dir_ / "sync.yaml").string();
+  ::testing::internal::CaptureStderr();
+  const int sync_rc = run_calib_cam_lidar(args);
+  const std::string sync_logs = ::testing::internal::GetCapturedStderr();
+  ASSERT_EQ(sync_rc, 0) << sync_logs;
+  EXPECT_NE(sync_logs.find("Keyframe gate:"), std::string::npos) << sync_logs;
+  args.threads = 4;
+  args.output_path = (tmp_dir_ / "pool.yaml").string();
+  ASSERT_EQ(run_calib_cam_lidar(args), 0);
+  const auto sync_yaml = read_all(tmp_dir_ / "sync.yaml");
+  ASSERT_FALSE(sync_yaml.empty());
+  EXPECT_EQ(read_all(tmp_dir_ / "pool.yaml"), sync_yaml);
+}

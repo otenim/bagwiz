@@ -648,9 +648,13 @@ struct DecodedSample
   std::size_t pick_ordinal = 0;
 };
 
+// The picked messages are read in one pass and decoded on `pool`, one frame
+// per task (the JPEG decode and the gray conversion are per frame), then
+// assembled — and their decode failures reported — in pick order, so the
+// decoded list is the one a serial loop would have built.
 std::optional<std::vector<DecodedSample>> decode_picked_samples(
   const CalibCamLidarArgs & args, std::span<const std::size_t> picks,
-  std::span<const std::int64_t> stamps)
+  std::span<const std::int64_t> stamps, core::WorkerPool & pool)
 {
   auto reader = io::open_read_or_log(args.input_path, kLogger);
   if (!reader) {
@@ -660,8 +664,17 @@ std::optional<std::vector<DecodedSample>> decode_picked_samples(
   filter.topics = {args.cam_topic};
   reader->set_filter(filter);
 
-  std::vector<DecodedSample> decoded;
-  decoded.reserve(picks.size());
+  // One picked message: its payload held past the reader, its type and the
+  // pick it answers.
+  struct Picked
+  {
+    io::FrozenMessage message;
+    std::string type;
+    std::size_t idx = 0;     // image index on the topic
+    std::size_t pick_i = 0;  // pick ordinal
+  };
+  std::vector<Picked> picked;
+  picked.reserve(picks.size());
   io::RawMessage raw;
   try {
     std::size_t pick_i = 0;
@@ -671,21 +684,7 @@ std::optional<std::vector<DecodedSample>> decode_picked_samples(
         ++idx;
         continue;
       }
-      const auto packed = core::image::to_packed_raster(raw.topic->type, raw.payload);
-      if (!packed.ok()) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "Dropping sample at %" PRId64 " ns: failed to decode: %s", stamps[idx],
-          packed.error.c_str());
-        ++idx;
-        ++pick_i;
-        continue;
-      }
-      DecodedSample sample;
-      sample.gray = core::calib::gray_from_bgr24(
-        packed.raster->bgr, packed.raster->width, packed.raster->height);
-      sample.stamp_ns = stamps[idx];
-      sample.pick_ordinal = pick_i;
-      decoded.push_back(std::move(sample));
+      picked.push_back({reader->freeze(raw), raw.topic->type, idx, pick_i});
       ++idx;
       ++pick_i;
     }
@@ -693,18 +692,57 @@ std::optional<std::vector<DecodedSample>> decode_picked_samples(
     BAGWIZ_LOG_ERROR(kLogger, "Error reading topic '%s': %s", args.cam_topic.c_str(), e.what());
     return std::nullopt;
   }
+
+  struct Outcome
+  {
+    std::optional<DecodedSample> sample;
+    std::string error;  // set when the decode failed
+  };
+  std::vector<Outcome> outcomes(picked.size());
+  pool.parallel_for(picked.size(), [&](std::size_t i) {
+    const auto & p = picked[i];
+    const auto packed = core::image::to_packed_raster(p.type, p.message.payload);
+    if (!packed.ok()) {
+      outcomes[i].error = packed.error;
+      return;
+    }
+    DecodedSample sample;
+    sample.gray =
+      core::calib::gray_from_bgr24(packed.raster->bgr, packed.raster->width, packed.raster->height);
+    sample.stamp_ns = stamps[p.idx];
+    sample.pick_ordinal = p.pick_i;
+    outcomes[i].sample = std::move(sample);
+  });
+
+  std::vector<DecodedSample> decoded;
+  decoded.reserve(picked.size());
+  for (std::size_t i = 0; i < picked.size(); ++i) {
+    if (!outcomes[i].sample.has_value()) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "Dropping sample at %" PRId64 " ns: failed to decode: %s", stamps[picked[i].idx],
+        outcomes[i].error.c_str());
+      continue;
+    }
+    decoded.push_back(std::move(*outcomes[i].sample));
+  }
   return decoded;
 }
 
 // Reduce decoded candidates to one per gate interval: the sharpest member
-// (gray_sharpness), matching `map slam --color-keyframe-blur`'s policy that a
-// motion-blurred frame is worse than a redundant one.
+// (gray_sharpness, scored on `pool` — one frame per task), matching `map slam
+// --color-keyframe-blur`'s policy that a motion-blurred frame is worse than a
+// redundant one. The selection itself runs in decode order, so ties resolve
+// as they always did.
 std::vector<DecodedSample> sharpest_per_group(
-  std::vector<DecodedSample> && decoded, std::span<const std::size_t> group_of)
+  std::vector<DecodedSample> && decoded, std::span<const std::size_t> group_of,
+  core::WorkerPool & pool)
 {
+  std::vector<double> scores(decoded.size());
+  pool.parallel_for(
+    decoded.size(), [&](std::size_t i) { scores[i] = gray_sharpness(decoded[i].gray); });
   std::map<std::size_t, std::pair<double, std::size_t>> best;  // group -> (score, decoded idx)
   for (std::size_t i = 0; i < decoded.size(); ++i) {
-    const double score = gray_sharpness(decoded[i].gray);
+    const double score = scores[i];
     const std::size_t group = group_of[decoded[i].pick_ordinal];
     const auto it = best.find(group);
     if (it == best.end() || score > it->second.first) {
@@ -1114,12 +1152,12 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   // 6. Decode only the picked messages + build the camera model from the
   // first one. In gated mode every interval's candidates are decoded and the
   // sharpest one per interval survives.
-  auto decoded = decode_picked_samples(args, picks, *stamps);
+  auto decoded = decode_picked_samples(args, picks, *stamps, pool);
   if (!decoded.has_value()) {
     return 1;  // decode_picked_samples already logged the specific read error.
   }
   if (gated) {
-    *decoded = sharpest_per_group(std::move(*decoded), group_of);
+    *decoded = sharpest_per_group(std::move(*decoded), group_of, pool);
   }
   if (decoded->size() < 3) {
     BAGWIZ_LOG_ERROR(
