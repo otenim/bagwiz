@@ -9,11 +9,16 @@
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include "bagwiz/core/base/duration_parse.hpp"
+#include "bagwiz/core/base/parallel_sort.hpp"
 #include "bagwiz/core/calib/observability.hpp"
 #include "bagwiz/core/pointcloud/deskew.hpp"
 #include "bagwiz/core/pointcloud/point_time.hpp"
 
 #include <fmt/core.h>
+
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 #include <algorithm>
 #include <cassert>
@@ -107,11 +112,6 @@ struct FieldRef
 // spreading a few thousand points over the pool costs more in wake-ups than
 // it saves.
 constexpr std::size_t kMinPointsPerChunk = 4096;
-// Voxels below which MapAccumulator::finish sorts on the calling thread even
-// when given a pool, and the stride at which it samples voxel x indices to
-// balance its sort ranges.
-constexpr std::size_t kParallelFinishMinVoxels = 1U << 16U;
-constexpr std::size_t kFinishSampleStride = 1024;
 
 // The field's declared offset+size fits inside point_step (and its count is 1,
 // so the readback below sees one value per point).
@@ -543,7 +543,8 @@ core::pointcloud::PcdCloud MapAccumulator::finish(core::WorkerPool * pool)
   // Sorted by voxel index so neither the hash containers' iteration order nor
   // the partition split — implementation details, not properties of the bag —
   // ever reaches the map. Two runs over the same clouds must produce the same
-  // map.
+  // map. The keys are unique, so the order is total and parallel_sort yields
+  // exactly the sequence a single std::sort would.
   const auto key_less = [](const Entry & a, const Entry & b) {
     if (a.first.x != b.first.x) {
       return a.first.x < b.first.x;
@@ -553,97 +554,56 @@ core::pointcloud::PcdCloud MapAccumulator::finish(core::WorkerPool * pool)
     }
     return a.first.z < b.first.z;
   };
-  const auto emit = [](const Entry & entry, std::array<float, 3> & point, float & intensity) {
-    const VoxelAccum & accum = entry.second;
-    const double n = accum.count;
-    point = {
-      static_cast<float>(accum.x / n), static_cast<float>(accum.y / n),
-      static_cast<float>(accum.z / n)};
-    intensity = static_cast<float>(accum.intensity / n);
-  };
   const std::size_t total = size();
+  const auto run = [&](std::size_t n, const std::function<void(std::size_t)> & fn) {
+    if (pool != nullptr && n > 1) {
+      pool->parallel_for(n, fn);
+      return;
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+      fn(i);
+    }
+  };
+
+  // Drain every partition into its slice of one vector and release its nodes
+  // — on the partition's own worker when there is a pool.
+  std::vector<std::size_t> offsets(voxels_.size() + 1, 0);
+  for (std::size_t p = 0; p < voxels_.size(); ++p) {
+    offsets[p + 1] = offsets[p] + voxels_[p].size();
+  }
+  std::vector<Entry> ordered(total);
+  run(voxels_.size(), [&](std::size_t p) {
+    std::size_t i = offsets[p];
+    for (const auto & entry : voxels_[p]) {
+      ordered[i++] = entry;
+    }
+    std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash>().swap(voxels_[p]);
+  });
+#if defined(__GLIBC__)
+  // The maps' nodes — tens of millions of small blocks, freed just now — stay
+  // resident in the allocator's arenas unless they are handed back; the sort
+  // below allocates a buffer the size of the map, so without this the run's
+  // peak memory would carry the map twice. glibc-specific; elsewhere the
+  // allocator is left to its own policy.
+  malloc_trim(0);
+#endif
+  core::parallel_sort(ordered, pool, key_less);
+
   core::pointcloud::PcdCloud out;
   out.points.resize(total);
   out.intensities.resize(total);
-
-  // A small map, or no pool: one vector, one sort, on the calling thread.
-  if (pool == nullptr || pool->size() <= 1 || total < kParallelFinishMinVoxels) {
-    std::vector<Entry> ordered;
-    ordered.reserve(total);
-    for (auto & partition : voxels_) {
-      ordered.insert(ordered.end(), partition.begin(), partition.end());
-      partition.clear();
-    }
-    std::sort(ordered.begin(), ordered.end(), key_less);
-    for (std::size_t i = 0; i < total; ++i) {
-      emit(ordered[i], out.points[i], out.intensities[i]);
-    }
-    return out;
-  }
-
-  // A large map on a pool: drain every partition on its own worker, split the
-  // union into voxel-x ranges balanced on a sample of the x indices, sort the
-  // ranges on the pool and write each at its offset. The ranges are disjoint
-  // and emitted in x order, and every range is sorted by (x, y, z) inside, so
-  // the result is exactly the single sort above.
-  const std::size_t partitions = voxels_.size();
-  const auto ranges = static_cast<std::size_t>(pool->size());
-  std::vector<std::vector<Entry>> drained(partitions);
-  std::vector<std::vector<std::int32_t>> sampled(partitions);
-  pool->parallel_for(partitions, [&](std::size_t p) {
-    auto & map = voxels_[p];
-    drained[p].reserve(map.size());
-    std::size_t i = 0;
-    for (const auto & entry : map) {
-      drained[p].push_back(entry);
-      if (i++ % kFinishSampleStride == 0) {
-        sampled[p].push_back(entry.first.x);
-      }
-    }
-    // Release the nodes here, on the worker, rather than all of them on the
-    // calling thread at the end.
-    std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash>().swap(map);
-  });
-  std::vector<std::int32_t> xs;
-  for (const auto & s : sampled) {
-    xs.insert(xs.end(), s.begin(), s.end());
-  }
-  std::sort(xs.begin(), xs.end());
-  // Range r holds the entries with bounds[r-1] <= x < bounds[r] (open-ended
-  // at both ends); the bounds are the sample's quantiles.
-  std::vector<std::int32_t> bounds;
-  for (std::size_t r = 1; r < ranges && !xs.empty(); ++r) {
-    bounds.push_back(xs[(r * xs.size()) / ranges]);
-  }
-  const auto range_of = [&](std::int32_t x) {
-    return static_cast<std::size_t>(
-      std::upper_bound(bounds.begin(), bounds.end(), x) - bounds.begin());
-  };
-  std::vector<std::vector<std::vector<Entry>>> buckets(
-    partitions, std::vector<std::vector<Entry>>(ranges));
-  pool->parallel_for(partitions, [&](std::size_t p) {
-    for (const auto & entry : drained[p]) {
-      buckets[p][range_of(entry.first.x)].push_back(entry);
-    }
-    std::vector<Entry>().swap(drained[p]);
-  });
-  std::vector<std::size_t> offsets(ranges + 1, 0);
-  for (std::size_t r = 0; r < ranges; ++r) {
-    offsets[r + 1] = offsets[r];
-    for (std::size_t p = 0; p < partitions; ++p) {
-      offsets[r + 1] += buckets[p][r].size();
-    }
-  }
-  pool->parallel_for(ranges, [&](std::size_t r) {
-    std::vector<Entry> entries;
-    entries.reserve(offsets[r + 1] - offsets[r]);
-    for (std::size_t p = 0; p < partitions; ++p) {
-      entries.insert(entries.end(), buckets[p][r].begin(), buckets[p][r].end());
-      std::vector<Entry>().swap(buckets[p][r]);
-    }
-    std::sort(entries.begin(), entries.end(), key_less);
-    for (std::size_t i = 0; i < entries.size(); ++i) {
-      emit(entries[i], out.points[offsets[r] + i], out.intensities[offsets[r] + i]);
+  constexpr std::size_t kEmitChunk = 1U << 16U;
+  const std::size_t chunks = (total + kEmitChunk - 1) / kEmitChunk;
+  run(chunks, [&](std::size_t c) {
+    const std::size_t begin = c * kEmitChunk;
+    const std::size_t end = std::min(total, begin + kEmitChunk);
+    for (std::size_t i = begin; i < end; ++i) {
+      const VoxelAccum & accum = ordered[i].second;
+      const double n = accum.count;
+      out.points[i] = {
+        static_cast<float>(accum.x / n), static_cast<float>(accum.y / n),
+        static_cast<float>(accum.z / n)};
+      out.intensities[i] = static_cast<float>(accum.intensity / n);
     }
   });
   return out;

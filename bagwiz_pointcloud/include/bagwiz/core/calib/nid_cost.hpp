@@ -9,6 +9,7 @@
 #ifndef BAGWIZ__CORE__CALIB__NID_COST_HPP_
 #define BAGWIZ__CORE__CALIB__NID_COST_HPP_
 
+#include "bagwiz/core/base/worker_pool.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 #include "bagwiz/core/image/camera_distortion.hpp"
 
@@ -61,9 +62,11 @@ struct NidParams
   std::span<const std::byte> bgr, std::uint32_t width, std::uint32_t height);
 
 // Histogram-equalize raw intensities into [0, bins) so skewed lidar
-// intensity distributions still spread across the joint histogram.
+// intensity distributions still spread across the joint histogram. Given a
+// pool, the sort and the per-value ranking run on it; the bins are the same
+// either way, because a value's rank is a function of the value set alone.
 [[nodiscard]] std::vector<std::uint8_t> equalize_intensity_bins(
-  std::span<const float> intensities, int bins);
+  std::span<const float> intensities, int bins, WorkerPool * pool = nullptr);
 
 // NID of one sample at camera pose t_cam_world (world -> camera optical).
 // nullopt when fewer than params.min_points survive projection + culling.

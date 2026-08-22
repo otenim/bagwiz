@@ -8,6 +8,7 @@
 
 #include "bagwiz/core/calib/nid_cost.hpp"
 
+#include "bagwiz/core/base/worker_pool.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 #include "correlated_scene.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
@@ -16,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -121,4 +123,25 @@ TEST(NidCostTest, NonFiniteAndUlpEdgePointsAreSkipped)
   const auto poisoned_cost = calib::nid_cost(poisoned, cam, calib::identity_mat4(), params);
   ASSERT_TRUE(poisoned_cost.has_value());
   EXPECT_DOUBLE_EQ(*poisoned_cost, *baseline);
+}
+
+TEST(NidCostTest, EqualizeIntensityBinsOnThePoolMatchesTheSerialOne)
+{
+  // 300,000 intensities drawn from a skewed, tie-heavy distribution, binned
+  // on the calling thread and on a 4-way pool: identical bins. Exact
+  // agreement is asserted because a value's rank is the count of strictly
+  // smaller values — a function of the value set, not of how equal values
+  // were ordered — and the bin is a function of the rank.
+  std::vector<float> intensities;
+  std::uint64_t state = 17;
+  for (int i = 0; i < 300000; ++i) {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    const auto r = static_cast<double>(state >> 11) / 9007199254740992.0;
+    intensities.push_back(static_cast<float>(static_cast<int>(r * r * 255.0)));
+  }
+  const auto serial = calib::equalize_intensity_bins(intensities, 16, nullptr);
+  bagwiz::core::WorkerPool pool{4};
+  const auto pooled = calib::equalize_intensity_bins(intensities, 16, &pool);
+  ASSERT_EQ(pooled.size(), serial.size());
+  EXPECT_EQ(pooled, serial);
 }

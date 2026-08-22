@@ -109,6 +109,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_worker_pool_test test/core/base/worker_pool_test.cpp)
   target_link_libraries(bagwiz_worker_pool_test bagwiz_base)
+
+  ament_add_gtest(bagwiz_parallel_sort_test test/core/base/parallel_sort_test.cpp)
+  target_link_libraries(bagwiz_parallel_sort_test bagwiz_base)
 endif()
 
 ament_package()

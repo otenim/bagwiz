@@ -903,7 +903,8 @@ std::optional<std::vector<core::calib::CalibSample>> assemble_samples(
   // decided by exactly the points NID scores, so the binning cannot drift
   // with the map's coverage (frustum culling, the voxel size, or the map
   // source) — only with what the samples actually look at.
-  const auto bins = core::calib::equalize_intensity_bins(candidate_intensities, args.nid_bins);
+  const auto bins =
+    core::calib::equalize_intensity_bins(candidate_intensities, args.nid_bins, &pool);
   std::size_t pos = 0;
   for (std::size_t s = 0; s < samples.size(); ++s) {
     samples[s].intensity_bins.assign(
