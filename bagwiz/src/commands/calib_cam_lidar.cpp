@@ -10,6 +10,7 @@
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/base/output_path.hpp"
 #include "bagwiz/core/base/str_utils.hpp"
+#include "bagwiz/core/base/worker_pool.hpp"
 #include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 #include "bagwiz/core/image/camera_distortion.hpp"
@@ -31,6 +32,7 @@
 #include "calib_cam_lidar_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "calib_cam_lidar_offset.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "pcd_undistort_common.hpp"    // NOLINT(build/include_subdir) src-local shared header
+#include "worker_threads.hpp"          // NOLINT(build/include_subdir) src-local shared header
 
 #include <tf2/buffer_core.hpp>
 #include <tf2/exceptions.hpp>
@@ -55,6 +57,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -897,6 +900,9 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
     BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
     return 1;
   }
+  // One worker pool for the whole run, shared by every pass with per-point or
+  // per-sample work, sized by -j/--threads (0 = the hardware concurrency).
+  core::WorkerPool pool{resolve_num_threads(args.threads, std::thread::hardware_concurrency())};
 
   // 2. Topics: --pcd (PointCloud2), --pose (a supported pose type), and the
   // --cam image topic + its CameraInfo.

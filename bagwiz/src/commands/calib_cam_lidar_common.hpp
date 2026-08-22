@@ -108,6 +108,14 @@ struct CalibCamLidarArgs
   std::string imu_topic;
   bool json = false;       // --json; emit the stdout summary as JSON
   bool overwrite = false;  // -w,--overwrite; replace an existing -o/--output path
+  // -j,--threads: total parallelism of the map accumulation, the refinement
+  // and the sample decoding (the same knob `pcd undistort` has). 0 = the
+  // hardware concurrency, 1 = everything on the calling thread; resolved by
+  // resolve_num_threads. The value never changes the result: the map is
+  // filled in the same order and the NID histograms count the same integers
+  // whatever the split, so the YAML and the report are identical for every
+  // thread count.
+  int threads = 0;
 };
 
 // Validate the cross-field/range constraints the per-option CLI checks
