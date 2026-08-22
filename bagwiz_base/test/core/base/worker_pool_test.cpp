@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -83,7 +84,7 @@ TEST(WorkerPoolTest, PropagatesTheExceptionAndStaysUsable)
     });
     FAIL() << "expected the loop to throw";
   } catch (const std::runtime_error & e) {
-    EXPECT_STREQ(e.what(), "index seven");
+    EXPECT_EQ(std::string(e.what()), "index seven");
   }
   std::atomic<int> count{0};
   pool.parallel_for(100, [&](std::size_t) { count.fetch_add(1); });
