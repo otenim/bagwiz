@@ -341,16 +341,53 @@ inline constexpr double kViewRejectBoxPadMeters = 1e-3;
 // times over a bag — and NID reads the map as a statistical sample of
 // (intensity, gray) pairs, which those duplicates do not enrich. A voxel size
 // of 0 turns the grid off and keeps every point verbatim, in arrival order.
+//
+// The grid can be split into `partitions` independent hash maps, each owning
+// the voxels whose key hashes to it, so an insertion pass can feed every
+// partition from its own thread (add_to_partition). A voxel's running sums
+// still add the same points in the same order as they would in one map, and
+// finish() orders the union by voxel index, so the map does not depend on
+// the partition count.
 class MapAccumulator
 {
 public:
-  explicit MapAccumulator(double voxel_size) : voxel_size_(voxel_size) {}
+  explicit MapAccumulator(double voxel_size, int partitions = 1);
 
   // Adds one point already expressed in the --ref frame. False when the
   // coordinates cannot be quantized — a magnitude no voxel index can hold is
   // as unusable as a NaN, and the caller counts it the same way — which
   // cannot happen with the grid off.
   bool add(const std::array<float, 3> & point, float intensity);
+
+  // Whether points are collapsed onto the grid at all (voxel size > 0).
+  [[nodiscard]] bool gridded() const { return voxel_size_ > 0.0; }
+
+  // The independently fed slices of the grid (1 with the grid off).
+  [[nodiscard]] int partitions() const { return static_cast<int>(voxels_.size()); }
+
+  // The grid cell a --ref point falls in, for the split insertion below.
+  struct VoxelKey
+  {
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::int32_t z = 0;
+    bool operator==(const VoxelKey & other) const = default;
+  };
+
+  // The voxel of a --ref point, or nullopt when the point cannot be quantized
+  // (what add would refuse). Only meaningful with the grid on.
+  [[nodiscard]] std::optional<VoxelKey> voxel_of(const std::array<float, 3> & point) const;
+
+  // The partition `key`'s voxel lives in.
+  [[nodiscard]] int partition_of(const VoxelKey & key) const;
+
+  // add() for a point whose voxel (from voxel_of) and partition (from
+  // partition_of) the caller already holds: safe to call concurrently for
+  // different partitions, because each partition's voxels live in their own
+  // map, and never refused, because the point already quantized. The caller
+  // keeps the per-voxel order it wants. Grid on only.
+  void add_to_voxel(
+    int partition, const VoxelKey & key, const std::array<float, 3> & point, float intensity);
 
   // Occupied voxels so far (points so far, with the grid off).
   [[nodiscard]] std::size_t size() const;
@@ -359,17 +396,13 @@ public:
   // Materializes the map and empties the accumulator (one-shot): one point per
   // occupied voxel, at its centroid and carrying its mean intensity, ordered
   // by voxel index so the same points give the same map whatever order the
-  // bag delivered them in. With the grid off, the points as they were added.
-  [[nodiscard]] core::pointcloud::PcdCloud finish();
+  // bag delivered them in, and whatever the partition count. With the grid
+  // off, the points as they were added. Given a pool, a large map is drained,
+  // split into voxel-index ranges and sorted on it — the same order, since
+  // the ranges are disjoint and emitted in index order.
+  [[nodiscard]] core::pointcloud::PcdCloud finish(core::WorkerPool * pool = nullptr);
 
 private:
-  struct VoxelKey
-  {
-    std::int32_t x = 0;
-    std::int32_t y = 0;
-    std::int32_t z = 0;
-    bool operator==(const VoxelKey & other) const = default;
-  };
   struct VoxelKeyHash
   {
     std::size_t operator()(const VoxelKey & key) const;
@@ -387,7 +420,8 @@ private:
 
   double voxel_size_;
   core::pointcloud::PcdCloud raw_;  // grid off
-  std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash> voxels_;
+  // One map per partition (exactly one with the grid off).
+  std::vector<std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash>> voxels_;
 };
 
 // Append one --pcd cloud to the accumulated map, expressed in the
@@ -435,24 +469,34 @@ struct MapAccumulationContext
   core::WorkerPool * pool = nullptr;
 
   // One chunk's share of a cloud's placement pass: the placed points that
-  // survived the finiteness check and the cull, in point order, plus the two
-  // drop counts. Kept across clouds so the buffers keep their capacity.
-  struct Chunk
+  // survived the finiteness check, the cull and quantization, bucketed by the
+  // map partition their voxel belongs to and kept in point order inside each
+  // bucket, plus the drop counts. Kept across clouds so the buffers keep
+  // their capacity.
+  struct Bucket
   {
+    std::vector<MapAccumulator::VoxelKey> keys;  // grid on: parallel to points
     std::vector<std::array<float, 3>> points;
     std::vector<float> intensities;  // parallel to points
-    std::uint64_t nonfinite = 0;
+  };
+  struct Chunk
+  {
+    std::vector<Bucket> buckets;  // one per map partition
+    std::uint64_t nonfinite = 0;  // non-finite or unquantizable coordinates
     std::uint64_t culled = 0;
+    std::uint64_t placed = 0;  // points that reached a bucket
   };
   std::vector<Chunk> chunks;
 };
 
 // accumulate_cloud_into_map over a shared context: the per-point work (field
-// reads, the finiteness check, the placement transform, the cull) is split
-// into one chunk per worker and run on the context's pool, and the voxel grid
-// is then fed chunk by chunk in point order — exactly the sequence the
-// single-threaded overload feeds it — so the per-voxel running sums, and with
-// them the map, are the same whatever the pool size.
+// reads, the finiteness check, the placement transform, the cull, the voxel
+// lookup) is split into one chunk per worker and run on the context's pool,
+// each chunk bucketing its survivors by map partition in point order; the
+// partitions are then each fed on their own worker, chunk by chunk, so every
+// voxel's running sums add its points in the order a single loop over the
+// points would have — the map is the same whatever the pool size and the
+// partition count.
 [[nodiscard]] std::optional<std::string> accumulate_cloud_into_map(
   MapAccumulator & map, core::pointcloud::PointCloud2 cloud,
   std::span<const core::TrajectoryPose> trajectory,

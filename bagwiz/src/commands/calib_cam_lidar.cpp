@@ -379,7 +379,9 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
   filter.topics = {args.pcd_topic};
   reader->set_filter(filter);
 
-  MapAccumulator map{args.voxel_size};
+  // One grid partition per worker, so the insertion pass runs as wide as the
+  // placement pass.
+  MapAccumulator map{args.voxel_size, pool.size()};
   MapAccumulationStats stats;
   MapAccumulationContext context{views, &pool};
   std::unordered_map<std::string, std::optional<geometry_msgs::msg::Transform>> extrinsic_by_frame;
@@ -479,7 +481,7 @@ std::optional<core::pointcloud::PcdCloud> accumulate_map(
       kLogger, "Map: %zu point(s) from %" PRIu64 " cloud(s) on '%s' (%" PRIu64 " deskewed).",
       map.size(), stats.clouds_read, args.pcd_topic.c_str(), stats.clouds_deskewed);
   }
-  return map.finish();
+  return map.finish(&pool);
 }
 
 // ---- phase 6: cheap stamp scan ---------------------------------------------

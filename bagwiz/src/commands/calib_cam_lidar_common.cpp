@@ -16,12 +16,14 @@
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <functional>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -105,6 +107,11 @@ struct FieldRef
 // spreading a few thousand points over the pool costs more in wake-ups than
 // it saves.
 constexpr std::size_t kMinPointsPerChunk = 4096;
+// Voxels below which MapAccumulator::finish sorts on the calling thread even
+// when given a pool, and the stride at which it samples voxel x indices to
+// balance its sort ranges.
+constexpr std::size_t kParallelFinishMinVoxels = 1U << 16U;
+constexpr std::size_t kFinishSampleStride = 1024;
 
 // The field's declared offset+size fits inside point_step (and its count is 1,
 // so the readback below sees one value per point).
@@ -455,13 +462,15 @@ std::size_t MapAccumulator::VoxelKeyHash::operator()(const VoxelKey & key) const
   return seed;
 }
 
-bool MapAccumulator::add(const std::array<float, 3> & point, float intensity)
+MapAccumulator::MapAccumulator(double voxel_size, int partitions)
+: voxel_size_(voxel_size),
+  voxels_(static_cast<std::size_t>(voxel_size > 0.0 ? std::max(partitions, 1) : 1))
 {
-  if (voxel_size_ <= 0.0) {
-    raw_.points.push_back(point);
-    raw_.intensities.push_back(intensity);
-    return true;
-  }
+}
+
+std::optional<MapAccumulator::VoxelKey> MapAccumulator::voxel_of(
+  const std::array<float, 3> & point) const
+{
   // Floor, never truncate: truncation folds -0.5..0 onto the same index as
   // 0..0.5, merging every pair of voxels that straddles an axis.
   const double qx = std::floor(static_cast<double>(point[0]) / voxel_size_);
@@ -471,34 +480,71 @@ bool MapAccumulator::add(const std::array<float, 3> & point, float intensity)
   constexpr double kMaxIndex = 2147483647.0;
   const auto representable = [](double q) { return q >= kMinIndex && q <= kMaxIndex; };
   if (!representable(qx) || !representable(qy) || !representable(qz)) {
-    return false;
+    return std::nullopt;
   }
-  auto & accum = voxels_[VoxelKey{
-    static_cast<std::int32_t>(qx), static_cast<std::int32_t>(qy), static_cast<std::int32_t>(qz)}];
+  return VoxelKey{
+    static_cast<std::int32_t>(qx), static_cast<std::int32_t>(qy), static_cast<std::int32_t>(qz)};
+}
+
+int MapAccumulator::partition_of(const VoxelKey & key) const
+{
+  // A second mix over the map's own hash, so the keys one partition receives
+  // do not all share a residue that partition's map then hashes on again.
+  const std::uint64_t mixed =
+    static_cast<std::uint64_t>(VoxelKeyHash{}(key)) * 0x9E3779B97F4A7C15ULL;
+  return static_cast<int>((mixed >> 32U) % voxels_.size());
+}
+
+void MapAccumulator::add_to_voxel(
+  int partition, const VoxelKey & key, const std::array<float, 3> & point, float intensity)
+{
+  assert(voxel_size_ > 0.0 && partition == partition_of(key));
+  auto & accum = voxels_[static_cast<std::size_t>(partition)][key];
   accum.x += point[0];
   accum.y += point[1];
   accum.z += point[2];
   accum.intensity += intensity;
   ++accum.count;
+}
+
+bool MapAccumulator::add(const std::array<float, 3> & point, float intensity)
+{
+  if (voxel_size_ <= 0.0) {
+    raw_.points.push_back(point);
+    raw_.intensities.push_back(intensity);
+    return true;
+  }
+  const auto key = voxel_of(point);
+  if (!key.has_value()) {
+    return false;
+  }
+  add_to_voxel(partition_of(*key), *key, point, intensity);
   return true;
 }
 
 std::size_t MapAccumulator::size() const
 {
-  return voxel_size_ <= 0.0 ? raw_.points.size() : voxels_.size();
+  if (voxel_size_ <= 0.0) {
+    return raw_.points.size();
+  }
+  std::size_t total = 0;
+  for (const auto & partition : voxels_) {
+    total += partition.size();
+  }
+  return total;
 }
 
-core::pointcloud::PcdCloud MapAccumulator::finish()
+core::pointcloud::PcdCloud MapAccumulator::finish(core::WorkerPool * pool)
 {
   if (voxel_size_ <= 0.0) {
     return std::move(raw_);
   }
-  // Sorted by voxel index so the hash container's iteration order — which is
-  // an implementation detail, not a property of the bag — never reaches the
-  // map. Two runs over the same clouds must produce the same map.
-  std::vector<std::pair<VoxelKey, VoxelAccum>> ordered(voxels_.begin(), voxels_.end());
-  voxels_.clear();
-  std::sort(ordered.begin(), ordered.end(), [](const auto & a, const auto & b) {
+  using Entry = std::pair<VoxelKey, VoxelAccum>;
+  // Sorted by voxel index so neither the hash containers' iteration order nor
+  // the partition split — implementation details, not properties of the bag —
+  // ever reaches the map. Two runs over the same clouds must produce the same
+  // map.
+  const auto key_less = [](const Entry & a, const Entry & b) {
     if (a.first.x != b.first.x) {
       return a.first.x < b.first.x;
     }
@@ -506,18 +552,100 @@ core::pointcloud::PcdCloud MapAccumulator::finish()
       return a.first.y < b.first.y;
     }
     return a.first.z < b.first.z;
-  });
-
-  core::pointcloud::PcdCloud out;
-  out.points.reserve(ordered.size());
-  out.intensities.reserve(ordered.size());
-  for (const auto & [key, accum] : ordered) {
+  };
+  const auto emit = [](const Entry & entry, std::array<float, 3> & point, float & intensity) {
+    const VoxelAccum & accum = entry.second;
     const double n = accum.count;
-    out.points.push_back(
-      {static_cast<float>(accum.x / n), static_cast<float>(accum.y / n),
-       static_cast<float>(accum.z / n)});
-    out.intensities.push_back(static_cast<float>(accum.intensity / n));
+    point = {
+      static_cast<float>(accum.x / n), static_cast<float>(accum.y / n),
+      static_cast<float>(accum.z / n)};
+    intensity = static_cast<float>(accum.intensity / n);
+  };
+  const std::size_t total = size();
+  core::pointcloud::PcdCloud out;
+  out.points.resize(total);
+  out.intensities.resize(total);
+
+  // A small map, or no pool: one vector, one sort, on the calling thread.
+  if (pool == nullptr || pool->size() <= 1 || total < kParallelFinishMinVoxels) {
+    std::vector<Entry> ordered;
+    ordered.reserve(total);
+    for (auto & partition : voxels_) {
+      ordered.insert(ordered.end(), partition.begin(), partition.end());
+      partition.clear();
+    }
+    std::sort(ordered.begin(), ordered.end(), key_less);
+    for (std::size_t i = 0; i < total; ++i) {
+      emit(ordered[i], out.points[i], out.intensities[i]);
+    }
+    return out;
   }
+
+  // A large map on a pool: drain every partition on its own worker, split the
+  // union into voxel-x ranges balanced on a sample of the x indices, sort the
+  // ranges on the pool and write each at its offset. The ranges are disjoint
+  // and emitted in x order, and every range is sorted by (x, y, z) inside, so
+  // the result is exactly the single sort above.
+  const std::size_t partitions = voxels_.size();
+  const auto ranges = static_cast<std::size_t>(pool->size());
+  std::vector<std::vector<Entry>> drained(partitions);
+  std::vector<std::vector<std::int32_t>> sampled(partitions);
+  pool->parallel_for(partitions, [&](std::size_t p) {
+    auto & map = voxels_[p];
+    drained[p].reserve(map.size());
+    std::size_t i = 0;
+    for (const auto & entry : map) {
+      drained[p].push_back(entry);
+      if (i++ % kFinishSampleStride == 0) {
+        sampled[p].push_back(entry.first.x);
+      }
+    }
+    // Release the nodes here, on the worker, rather than all of them on the
+    // calling thread at the end.
+    std::unordered_map<VoxelKey, VoxelAccum, VoxelKeyHash>().swap(map);
+  });
+  std::vector<std::int32_t> xs;
+  for (const auto & s : sampled) {
+    xs.insert(xs.end(), s.begin(), s.end());
+  }
+  std::sort(xs.begin(), xs.end());
+  // Range r holds the entries with bounds[r-1] <= x < bounds[r] (open-ended
+  // at both ends); the bounds are the sample's quantiles.
+  std::vector<std::int32_t> bounds;
+  for (std::size_t r = 1; r < ranges && !xs.empty(); ++r) {
+    bounds.push_back(xs[(r * xs.size()) / ranges]);
+  }
+  const auto range_of = [&](std::int32_t x) {
+    return static_cast<std::size_t>(
+      std::upper_bound(bounds.begin(), bounds.end(), x) - bounds.begin());
+  };
+  std::vector<std::vector<std::vector<Entry>>> buckets(
+    partitions, std::vector<std::vector<Entry>>(ranges));
+  pool->parallel_for(partitions, [&](std::size_t p) {
+    for (const auto & entry : drained[p]) {
+      buckets[p][range_of(entry.first.x)].push_back(entry);
+    }
+    std::vector<Entry>().swap(drained[p]);
+  });
+  std::vector<std::size_t> offsets(ranges + 1, 0);
+  for (std::size_t r = 0; r < ranges; ++r) {
+    offsets[r + 1] = offsets[r];
+    for (std::size_t p = 0; p < partitions; ++p) {
+      offsets[r + 1] += buckets[p][r].size();
+    }
+  }
+  pool->parallel_for(ranges, [&](std::size_t r) {
+    std::vector<Entry> entries;
+    entries.reserve(offsets[r + 1] - offsets[r]);
+    for (std::size_t p = 0; p < partitions; ++p) {
+      entries.insert(entries.end(), buckets[p][r].begin(), buckets[p][r].end());
+      std::vector<Entry>().swap(buckets[p][r]);
+    }
+    std::sort(entries.begin(), entries.end(), key_less);
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+      emit(entries[i], out.points[offsets[r] + i], out.intensities[offsets[r] + i]);
+    }
+  });
   return out;
 }
 
@@ -705,6 +833,8 @@ std::optional<std::string> accumulate_cloud_into_map(
     context.pool != nullptr ? static_cast<std::size_t>(context.pool->size()) : 1;
   const std::size_t chunk_count = std::clamp<std::size_t>(n / kMinPointsPerChunk, 1, parallelism);
   const std::size_t chunk_size = (n + chunk_count - 1) / chunk_count;
+  const auto partitions = static_cast<std::size_t>(map.partitions());
+  const bool gridded = map.gridded();
   if (context.chunks.size() < chunk_count) {
     context.chunks.resize(chunk_count);
   }
@@ -712,10 +842,15 @@ std::optional<std::string> accumulate_cloud_into_map(
   const std::span<const ViewRejectBox> boxes = context.boxes;
   const auto place_chunk = [&](std::size_t c) {
     auto & chunk = context.chunks[c];
-    chunk.points.clear();
-    chunk.intensities.clear();
+    chunk.buckets.resize(partitions);
+    for (auto & bucket : chunk.buckets) {
+      bucket.keys.clear();
+      bucket.points.clear();
+      bucket.intensities.clear();
+    }
     chunk.nonfinite = 0;
     chunk.culled = 0;
+    chunk.placed = 0;
     const std::size_t begin = c * chunk_size;
     const std::size_t end = std::min(n, begin + chunk_size);
     const std::byte * const data = cloud.data.data();
@@ -735,9 +870,26 @@ std::optional<std::string> accumulate_cloud_into_map(
         ++chunk.culled;
         continue;
       }
-      chunk.points.push_back(
-        {static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])});
-      chunk.intensities.push_back(fi->read(base + fi->offset));
+      const std::array<float, 3> placed{
+        static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])};
+      std::size_t partition = 0;
+      if (gridded) {
+        // A point too far out to index a voxel is garbage the map cannot
+        // place; counted with the non-finite drops rather than folded into a
+        // wrong voxel. The key is kept with the point so the insertion does
+        // not quantize it a second time.
+        const auto key = map.voxel_of(placed);
+        if (!key.has_value()) {
+          ++chunk.nonfinite;
+          continue;
+        }
+        partition = static_cast<std::size_t>(map.partition_of(*key));
+        chunk.buckets[partition].keys.push_back(*key);
+      }
+      auto & bucket = chunk.buckets[partition];
+      bucket.points.push_back(placed);
+      bucket.intensities.push_back(fi->read(base + fi->offset));
+      ++chunk.placed;
     }
   };
   if (context.pool != nullptr && chunk_count > 1) {
@@ -747,22 +899,35 @@ std::optional<std::string> accumulate_cloud_into_map(
       place_chunk(c);
     }
   }
-
-  // Insertion: chunk by chunk, in point order, on the calling thread — the
-  // exact sequence a single loop over the points would have fed the grid, so
-  // every voxel's running sums add the same values in the same order.
   for (std::size_t c = 0; c < chunk_count; ++c) {
     const auto & chunk = context.chunks[c];
     stats.points_dropped_nonfinite += chunk.nonfinite;
     stats.points_culled_out_of_view += chunk.culled;
-    for (std::size_t k = 0; k < chunk.points.size(); ++k) {
-      // A point too far out to index a voxel is garbage the map cannot place;
-      // counted with the non-finite drops rather than folded into a wrong voxel.
-      if (!map.add(chunk.points[k], chunk.intensities[k])) {
-        ++stats.points_dropped_nonfinite;
-        continue;
+    stats.points_added += chunk.placed;
+  }
+
+  // Insertion: one worker per map partition, each walking the chunks in order
+  // and its own bucket of each in point order. A voxel receives its points
+  // in exactly the sequence a single loop over the points would have fed it,
+  // so its running sums add the same values in the same order.
+  const auto insert_partition = [&](std::size_t t) {
+    const int partition = static_cast<int>(t);
+    for (std::size_t c = 0; c < chunk_count; ++c) {
+      const auto & bucket = context.chunks[c].buckets[t];
+      for (std::size_t k = 0; k < bucket.points.size(); ++k) {
+        if (gridded) {
+          map.add_to_voxel(partition, bucket.keys[k], bucket.points[k], bucket.intensities[k]);
+        } else {
+          map.add(bucket.points[k], bucket.intensities[k]);
+        }
       }
-      ++stats.points_added;
+    }
+  };
+  if (context.pool != nullptr && partitions > 1) {
+    context.pool->parallel_for(partitions, insert_partition);
+  } else {
+    for (std::size_t t = 0; t < partitions; ++t) {
+      insert_partition(t);
     }
   }
   return std::nullopt;

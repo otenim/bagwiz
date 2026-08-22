@@ -1240,12 +1240,12 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudOnThePoolMatchesTheInlinePass)
   const auto run = [&](int threads) {
     bagwiz::core::WorkerPool pool{threads};
     commands::MapAccumulationContext context{views, &pool};
-    commands::MapAccumulator map{0.25};
+    commands::MapAccumulator map{0.25, threads};
     commands::MapAccumulationStats stats;
     const auto error =
       commands::accumulate_cloud_into_map(map, cloud, trajectory, extrinsic, stats, context);
     EXPECT_FALSE(error.has_value());
-    return std::pair{map.finish(), stats};
+    return std::pair{map.finish(&pool), stats};
   };
   const auto [inline_map, inline_stats] = run(1);
   const auto [pool_map, pool_stats] = run(4);
@@ -1262,4 +1262,98 @@ TEST(CalibCamLidarCommonTest, AccumulateCloudOnThePoolMatchesTheInlinePass)
   EXPECT_EQ(pool_stats.points_dropped_nonfinite, inline_stats.points_dropped_nonfinite);
   EXPECT_GT(inline_stats.points_culled_out_of_view, 0U);
   EXPECT_EQ(inline_stats.points_dropped_nonfinite, 52U);
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorPartitionsDoNotChangeTheMap)
+{
+  // The same points through one partition and through five: identical maps.
+  // Exact agreement is asserted because a voxel's running sums add the same
+  // points in the same order whichever partition's map holds it, and finish()
+  // orders the union by voxel index.
+  Lcg rng{5};
+  std::vector<std::array<float, 3>> pts;
+  std::vector<float> intensities;
+  for (int i = 0; i < 20000; ++i) {
+    pts.push_back(
+      {static_cast<float>(rng.next(-5, 5)), static_cast<float>(rng.next(-5, 5)),
+       static_cast<float>(rng.next(-5, 5))});
+    intensities.push_back(static_cast<float>(rng.next(0, 255)));
+  }
+  const auto fill = [&](int partitions) {
+    commands::MapAccumulator acc{0.5, partitions};
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+      EXPECT_TRUE(acc.add(pts[i], intensities[i]));
+    }
+    EXPECT_EQ(acc.partitions(), partitions);
+    return acc.finish();
+  };
+  const auto one = fill(1);
+  const auto five = fill(5);
+  ASSERT_EQ(one.points.size(), five.points.size());
+  EXPECT_GT(one.points.size(), 1000U);
+  for (std::size_t i = 0; i < one.points.size(); ++i) {
+    EXPECT_EQ(one.points[i], five.points[i]) << i;
+    EXPECT_EQ(one.intensities[i], five.intensities[i]) << i;
+  }
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorKeyedAddMatchesAdd)
+{
+  // voxel_of is nullopt exactly where add refuses, partition_of names a slice
+  // inside the partition count, and add_to_voxel through that slice collapses
+  // with add() into the same voxel; the grid-off accumulator has one
+  // partition and no grid.
+  commands::MapAccumulator acc{0.5, 4};
+  const std::array<float, 3> p{1.0F, -2.0F, 3.0F};
+  const auto key = acc.voxel_of(p);
+  ASSERT_TRUE(key.has_value());
+  const int partition = acc.partition_of(*key);
+  EXPECT_GE(partition, 0);
+  EXPECT_LT(partition, 4);
+  acc.add_to_voxel(partition, *key, p, 1.0F);
+  EXPECT_TRUE(acc.add({1.2F, -1.8F, 3.2F}, 3.0F));  // same 0.5 m voxel
+  EXPECT_EQ(acc.size(), 1U);
+  EXPECT_FALSE(acc.voxel_of({1e30F, 0.0F, 0.0F}).has_value());
+  const auto out = acc.finish();
+  ASSERT_EQ(out.intensities.size(), 1U);
+  EXPECT_FLOAT_EQ(out.intensities[0], 2.0F);
+
+  commands::MapAccumulator raw{0.0, 4};
+  EXPECT_FALSE(raw.gridded());
+  EXPECT_EQ(raw.partitions(), 1);
+}
+
+TEST(CalibCamLidarCommonTest, VoxelAccumulatorParallelFinishMatchesTheSerialOne)
+{
+  // A map large enough for finish() to take its ranged, pooled path: the
+  // points and intensities come out in the same order with the same values
+  // as the single sort. Exact agreement is asserted because the ranges are
+  // disjoint in x and emitted in x order, each sorted by (x, y, z) inside —
+  // one total order over unique keys — and every voxel's centroid is the
+  // same function of the same sums.
+  Lcg rng{9};
+  std::vector<std::array<float, 3>> pts;
+  for (int i = 0; i < 300000; ++i) {
+    pts.push_back(
+      {static_cast<float>(rng.next(-50, 50)), static_cast<float>(rng.next(-50, 50)),
+       static_cast<float>(rng.next(-50, 50))});
+  }
+  const auto fill = [&]() {
+    commands::MapAccumulator acc{0.5, 4};
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+      EXPECT_TRUE(acc.add(pts[i], static_cast<float>(i % 251)));
+    }
+    return acc;
+  };
+  auto serial_acc = fill();
+  auto pooled_acc = fill();
+  ASSERT_GT(serial_acc.size(), 65536U);
+  const auto serial = serial_acc.finish();
+  bagwiz::core::WorkerPool pool{4};
+  const auto pooled = pooled_acc.finish(&pool);
+  ASSERT_EQ(pooled.points.size(), serial.points.size());
+  for (std::size_t i = 0; i < serial.points.size(); ++i) {
+    EXPECT_EQ(pooled.points[i], serial.points[i]) << i;
+    EXPECT_EQ(pooled.intensities[i], serial.intensities[i]) << i;
+  }
 }
