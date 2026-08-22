@@ -1150,7 +1150,7 @@ int run_calib_cam_lidar(const CalibCamLidarArgs & args)
   params.auto_fix = fix_spec.auto_fix;
   params.max_trans = args.max_trans;
   params.max_rot = args.max_rot_deg * M_PI / 180.0;
-  const auto result = core::calib::refine_extrinsic(*samples, cam, *chain, params);
+  const auto result = core::calib::refine_extrinsic(*samples, cam, *chain, params, &pool);
   if (!result.ok) {
     BAGWIZ_LOG_ERROR(kLogger, "Refinement failed: %s", result.error.c_str());
     return 1;

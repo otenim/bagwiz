@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -144,4 +145,68 @@ TEST(NidCostTest, EqualizeIntensityBinsOnThePoolMatchesTheSerialOne)
   const auto pooled = calib::equalize_intensity_bins(intensities, 16, &pool);
   ASSERT_EQ(pooled.size(), serial.size());
   EXPECT_EQ(pooled, serial);
+}
+
+TEST(NidCostTest, NidOfProjectedMatchesNidCostForAnyChunking)
+{
+  // The same sample projected as 1, 4 and 7 ranges and scored from those
+  // chunks gives exactly nid_cost's value. Exact agreement is asserted because
+  // projection is per point, the depth cull's nearest depth is a min-reduction
+  // over the same set, the histograms count the same integers, and the
+  // entropy sums run over the bins in one fixed order.
+  const auto cam = test_camera();
+  calib::NidParams params;
+  params.min_points = 100;
+  const auto sample = make_correlated_sample(cam, params.bins);
+  const calib::Mat4 pose =
+    calib::rigid_inverse(calib::make_transform({0.01, -0.02, 0.0}, {0.0, 0.0, 0.5 * M_PI / 180.0}));
+  const auto reference = calib::nid_cost(sample, cam, pose, params);
+  ASSERT_TRUE(reference.has_value());
+  for (const std::size_t ranges : {std::size_t{1}, std::size_t{4}, std::size_t{7}}) {
+    const std::size_t n = sample.points_world.size();
+    const std::size_t per = (n + ranges - 1) / ranges;
+    std::vector<std::vector<calib::DepthCullPoint>> points(ranges);
+    std::vector<std::vector<std::uint8_t>> bins(ranges);
+    std::vector<calib::ProjectedChunk> chunks;
+    for (std::size_t r = 0; r < ranges; ++r) {
+      const std::size_t begin = std::min(n, r * per);
+      const std::size_t end = std::min(n, begin + per);
+      calib::project_sample_points(sample, cam, pose, params, begin, end, points[r], bins[r]);
+    }
+    // Chunks handed over in reverse, to pin that their order is irrelevant.
+    for (std::size_t r = ranges; r-- > 0;) {
+      chunks.push_back(calib::ProjectedChunk{points[r], bins[r]});
+    }
+    calib::NidScratch scratch;
+    const auto chunked = calib::nid_of_projected(sample, params, chunks, scratch);
+    ASSERT_TRUE(chunked.has_value()) << ranges;
+    EXPECT_EQ(*chunked, *reference) << ranges << " ranges";
+  }
+}
+
+TEST(NidCostTest, ProjectSampleRangeCoversExactlyItsRange)
+{
+  // Two ranges concatenate to the whole projection, point for point.
+  const auto cam = test_camera();
+  const calib::NidParams params;
+  const auto sample = make_correlated_sample(cam, params.bins);
+  const auto pose = calib::identity_mat4();
+  std::vector<calib::DepthCullPoint> whole;
+  std::vector<std::uint8_t> whole_bins;
+  calib::project_sample_points(
+    sample, cam, pose, params, 0, sample.points_world.size(), whole, whole_bins);
+  ASSERT_GT(whole.size(), 100U);
+  std::vector<calib::DepthCullPoint> split;
+  std::vector<std::uint8_t> split_bins;
+  const std::size_t cut = sample.points_world.size() / 3;
+  calib::project_sample_points(sample, cam, pose, params, 0, cut, split, split_bins);
+  calib::project_sample_points(
+    sample, cam, pose, params, cut, sample.points_world.size(), split, split_bins);
+  ASSERT_EQ(split.size(), whole.size());
+  for (std::size_t i = 0; i < whole.size(); ++i) {
+    EXPECT_EQ(split[i].u, whole[i].u);
+    EXPECT_EQ(split[i].v, whole[i].v);
+    EXPECT_EQ(split[i].depth, whole[i].depth);
+    EXPECT_EQ(split_bins[i], whole_bins[i]);
+  }
 }

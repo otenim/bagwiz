@@ -13,6 +13,7 @@
 #include "bagwiz/core/calib/se3.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <vector>
@@ -66,28 +67,29 @@ std::vector<std::uint8_t> equalize_intensity_bins(
   return out;
 }
 
-std::optional<double> nid_cost(
+void project_sample_points(
   const CalibSample & sample, const CameraModel & cam, const Mat4 & t_cam_world,
-  const NidParams & params)
+  const NidParams & params, std::size_t begin, std::size_t end,
+  std::vector<DepthCullPoint> & points, std::vector<std::uint8_t> & bins)
 {
-  std::vector<DepthCullPoint> points;
-  std::vector<std::uint8_t> lidar_bins;
-  points.reserve(sample.points_world.size());
-  lidar_bins.reserve(sample.points_world.size());
-
-  for (std::size_t i = 0; i < sample.points_world.size(); ++i) {
+  for (std::size_t i = begin; i < end; ++i) {
     const auto & p = sample.points_world[i];
-    const auto pc = transform_point(t_cam_world, {p[0], p[1], p[2]});
-    // Narrow first, then validate in POSITIVE form on the narrowed values.
-    // Both halves matter: a NaN passes every negative-form test (`NaN < min`
-    // and `NaN > max` are both false), and a double column just under `width`
-    // can round UP to exactly `width` when narrowed, which would index one
-    // past the last column of the image row and of depth_cull's cell grid.
-    const auto fz = static_cast<float>(pc[2]);
+    const std::array<double, 3> pw{p[0], p[1], p[2]};
+    // Depth first — the window rejects most points, and the other two rows
+    // of the transform are only needed once it passes. Narrow first, then
+    // validate in POSITIVE form on the narrowed values. Both halves matter: a
+    // NaN passes every negative-form test (`NaN < min` and `NaN > max` are
+    // both false), and a double column just under `width` can round UP to
+    // exactly `width` when narrowed, which would index one past the last
+    // column of the image row and of depth_cull's cell grid.
+    const double z = transform_point_z(t_cam_world, pw);
+    const auto fz = static_cast<float>(z);
     if (!(fz >= params.min_depth && fz <= params.max_depth)) {
       continue;
     }
-    const auto nd = image::distort_normalized(pc[0] / pc[2], pc[1] / pc[2], cam.model, cam.d);
+    const double x = transform_point_x(t_cam_world, pw);
+    const double y = transform_point_y(t_cam_world, pw);
+    const auto nd = image::distort_normalized(x / z, y / z, cam.model, cam.d);
     const auto fu = static_cast<float>(cam.k[0] * nd.x + cam.k[2]);
     const auto fv = static_cast<float>(cam.k[4] * nd.y + cam.k[5]);
     if (
@@ -96,35 +98,48 @@ std::optional<double> nid_cost(
       continue;
     }
     points.push_back({fu, fv, fz, 0});
-    lidar_bins.push_back(sample.intensity_bins[i]);
+    bins.push_back(sample.intensity_bins[i]);
   }
-  if (points.size() < params.min_points) {
+}
+
+std::optional<double> nid_of_projected(
+  const CalibSample & sample, const NidParams & params, std::span<const ProjectedChunk> chunks,
+  NidScratch & scratch)
+{
+  std::size_t projected = 0;
+  for (const auto & chunk : chunks) {
+    projected += chunk.points.size();
+  }
+  if (projected < params.min_points) {
     return std::nullopt;
   }
 
-  std::vector<std::uint8_t> keep(points.size());
-  depth_cull_keep(
-    points, sample.image.width, sample.image.height, params.cull_cell_px, params.cull_margin_m,
-    keep);
+  scratch.grid.reset(sample.image.width, sample.image.height, params.cull_cell_px);
+  for (const auto & chunk : chunks) {
+    scratch.grid.observe(chunk.points);
+  }
 
   const int bins = params.bins;
-  std::vector<double> joint(static_cast<std::size_t>(bins) * bins, 0.0);
-  std::vector<double> h_gray(bins, 0.0);
-  std::vector<double> h_lidar(bins, 0.0);
+  scratch.joint.assign(static_cast<std::size_t>(bins) * bins, 0.0);
+  scratch.h_gray.assign(static_cast<std::size_t>(bins), 0.0);
+  scratch.h_lidar.assign(static_cast<std::size_t>(bins), 0.0);
   std::size_t count = 0;
-  for (std::size_t i = 0; i < points.size(); ++i) {
-    if (keep[i] == 0) {
-      continue;
+  for (const auto & chunk : chunks) {
+    for (std::size_t i = 0; i < chunk.points.size(); ++i) {
+      const auto & point = chunk.points[i];
+      if (!scratch.grid.keeps(point, params.cull_margin_m)) {
+        continue;
+      }
+      const auto px = static_cast<std::uint32_t>(point.u);
+      const auto py = static_cast<std::uint32_t>(point.v);
+      const int gb =
+        sample.image.gray[static_cast<std::size_t>(py) * sample.image.width + px] * bins / 256;
+      const int lb = chunk.bins[i];
+      scratch.joint[static_cast<std::size_t>(gb) * bins + lb] += 1.0;
+      scratch.h_gray[gb] += 1.0;
+      scratch.h_lidar[lb] += 1.0;
+      ++count;
     }
-    const auto px = static_cast<std::uint32_t>(points[i].u);
-    const auto py = static_cast<std::uint32_t>(points[i].v);
-    const int gb =
-      sample.image.gray[static_cast<std::size_t>(py) * sample.image.width + px] * bins / 256;
-    const int lb = lidar_bins[i];
-    joint[static_cast<std::size_t>(gb) * bins + lb] += 1.0;
-    h_gray[gb] += 1.0;
-    h_lidar[lb] += 1.0;
-    ++count;
   }
   if (count < params.min_points) {
     return std::nullopt;
@@ -140,14 +155,29 @@ std::optional<double> nid_cost(
     }
     return e;
   };
-  const double h_g = entropy(h_gray);
-  const double h_l = entropy(h_lidar);
-  const double h_joint = entropy(joint);
+  const double h_g = entropy(scratch.h_gray);
+  const double h_l = entropy(scratch.h_lidar);
+  const double h_joint = entropy(scratch.joint);
   if (h_joint <= 0.0) {
     return std::nullopt;  // constant image or constant intensity: NID undefined
   }
   const double mutual = h_g + h_l - h_joint;
   return (h_joint - mutual) / h_joint;
+}
+
+std::optional<double> nid_cost(
+  const CalibSample & sample, const CameraModel & cam, const Mat4 & t_cam_world,
+  const NidParams & params)
+{
+  std::vector<DepthCullPoint> points;
+  std::vector<std::uint8_t> bins;
+  points.reserve(sample.points_world.size());
+  bins.reserve(sample.points_world.size());
+  project_sample_points(
+    sample, cam, t_cam_world, params, 0, sample.points_world.size(), points, bins);
+  NidScratch scratch;
+  const std::array<ProjectedChunk, 1> chunks{ProjectedChunk{points, bins}};
+  return nid_of_projected(sample, params, chunks, scratch);
 }
 
 }  // namespace bagwiz::core::calib

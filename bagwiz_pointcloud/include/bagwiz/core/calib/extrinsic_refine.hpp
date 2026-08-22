@@ -9,6 +9,7 @@
 #ifndef BAGWIZ__CORE__CALIB__EXTRINSIC_REFINE_HPP_
 #define BAGWIZ__CORE__CALIB__EXTRINSIC_REFINE_HPP_
 
+#include "bagwiz/core/base/worker_pool.hpp"
 #include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/observability.hpp"
 #include "bagwiz/core/calib/se3.hpp"
@@ -16,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -123,15 +125,27 @@ struct RefineResult
 [[nodiscard]] bool held_directions_cover_axis(
   std::span<const HeldDirection> held, std::size_t axis);
 
+/// Per-sample NID costs at `delta` (nullopt for a sample that projects too
+/// few points), evaluated over `pool` — nullptr runs everything on the
+/// calling thread. Every sample's points are projected as one range per
+/// worker, then each sample's histogram is built from its ranges. The costs
+/// are the same for every pool size: projection is per point, the depth
+/// cull's nearest depth is a min-reduction and the histograms count integers.
+[[nodiscard]] std::vector<std::optional<double>> evaluate_sample_costs(
+  std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,
+  const std::array<double, 6> & delta, const NidParams & nid, WorkerPool * pool);
+
 /// Two-pass Nelder-Mead refinement of the free axes of `chain`'s edited edge,
 /// minimizing mean NID cost over `samples`, followed by a per-axis
 /// observability probe around the optimum (significance-tested paired
 /// curvature; see observability.hpp). With RefineParams::auto_fix the probe
 /// runs on the full Hessian's eigen-directions instead, unobservable
-/// directions are held at the bag value, and the rest are re-optimized.
+/// directions are held at the bag value, and the rest are re-optimized. Every
+/// cost evaluation runs over `pool` (see evaluate_sample_costs); nullptr runs
+/// them on the calling thread. The result does not depend on the pool.
 [[nodiscard]] RefineResult refine_extrinsic(
   std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,
-  const RefineParams & params);
+  const RefineParams & params, WorkerPool * pool = nullptr);
 
 }  // namespace bagwiz::core::calib
 

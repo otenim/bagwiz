@@ -10,6 +10,7 @@
 #define BAGWIZ__CORE__CALIB__NID_COST_HPP_
 
 #include "bagwiz/core/base/worker_pool.hpp"
+#include "bagwiz/core/calib/depth_cull.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 #include "bagwiz/core/image/camera_distortion.hpp"
 
@@ -68,8 +69,48 @@ struct NidParams
 [[nodiscard]] std::vector<std::uint8_t> equalize_intensity_bins(
   std::span<const float> intensities, int bins, WorkerPool * pool = nullptr);
 
-// NID of one sample at camera pose t_cam_world (world -> camera optical).
-// nullopt when fewer than params.min_points survive projection + culling.
+// Project sample.points_world[begin, end) through t_cam_world (world ->
+// camera optical) and append the points that land inside the depth window
+// and the image — as DepthCullPoint (pixel, depth) plus, in `bins`, the
+// point's intensity bin — to the two vectors, in point order. The first half
+// of nid_cost, on its own so a caller can split one sample's points into
+// ranges and project them concurrently: every point's outcome depends on
+// that point alone.
+void project_sample_points(
+  const CalibSample & sample, const CameraModel & cam, const Mat4 & t_cam_world,
+  const NidParams & params, std::size_t begin, std::size_t end,
+  std::vector<DepthCullPoint> & points, std::vector<std::uint8_t> & bins);
+
+// One chunk of projected points with their intensity bins (parallel spans).
+// The points are mutable because the depth cull writes each point's cell.
+struct ProjectedChunk
+{
+  std::span<DepthCullPoint> points;
+  std::span<const std::uint8_t> bins;
+};
+
+// The scratch one NID evaluation works in, owned by the caller so a pass that
+// evaluates thousands of costs does not allocate the cull grid and the
+// histograms afresh every time.
+struct NidScratch
+{
+  DepthCullGrid grid;
+  std::vector<double> joint;
+  std::vector<double> h_gray;
+  std::vector<double> h_lidar;
+};
+
+// The second half of nid_cost over already-projected points, given as chunks
+// in any order: the depth cull's per-cell nearest depth is a min-reduction
+// and the histograms count integers, so every split of the projected set into
+// chunks yields the same cost. nullopt as nid_cost.
+[[nodiscard]] std::optional<double> nid_of_projected(
+  const CalibSample & sample, const NidParams & params, std::span<const ProjectedChunk> chunks,
+  NidScratch & scratch);
+
+// NID of one sample at camera pose t_cam_world (world -> camera optical):
+// project_sample_points over every point, then nid_of_projected. nullopt
+// when fewer than params.min_points survive projection + culling.
 [[nodiscard]] std::optional<double> nid_cost(
   const CalibSample & sample, const CameraModel & cam, const Mat4 & t_cam_world,
   const NidParams & params);

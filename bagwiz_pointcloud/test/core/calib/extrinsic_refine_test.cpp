@@ -8,6 +8,8 @@
 
 #include "bagwiz/core/calib/extrinsic_refine.hpp"
 
+#include "bagwiz/core/base/worker_pool.hpp"
+#include "bagwiz/core/calib/nid_cost.hpp"
 #include "bagwiz/core/calib/observability.hpp"
 #include "bagwiz/core/calib/se3.hpp"
 #include "correlated_scene.hpp"  // NOLINT(build/include_subdir) src-local shared header
@@ -17,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 namespace calib = bagwiz::core::calib;
@@ -265,4 +268,81 @@ TEST(ExtrinsicRefineTest, EdgeTransformIsAdditiveOnANonCommutingRotation)
       {edge_bag[0], edge_bag[1], edge_bag[2]}, {edge_bag[3], edge_bag[4], edge_bag[5]}),
     calib::make_transform({delta[0], delta[1], delta[2]}, {delta[3], delta[4], delta[5]}));
   EXPECT_GT(std::abs(actual[0] - right_multiplied[0]), 1e-6);
+}
+
+TEST(ExtrinsicRefineTest, EvaluateSampleCostsMatchesSerialNidCost)
+{
+  // Three samples at different trajectory poses, evaluated on a 4-way pool
+  // (each sample's points projected as four ranges) against nid_cost run
+  // serially per sample. Exact agreement is asserted because projection is
+  // per point, the depth cull's nearest depth is a min-reduction and the
+  // histograms count integers — none of it depends on the split.
+  const auto cam = test_camera();
+  const auto params = test_params();
+  std::vector<calib::CalibSample> samples;
+  for (const double yaw : {0.0, 0.2 * kDeg, -0.3 * kDeg}) {
+    auto sample = make_correlated_sample(cam, params.nid.bins);
+    sample.t_world_trajframe = calib::make_transform({0.0, 0.0, 0.0}, {0.0, 0.0, yaw});
+    samples.push_back(std::move(sample));
+  }
+  calib::EdgeChain chain;
+  chain.t_trajframe_parent = calib::identity_mat4();
+  chain.edge_bag = {0.01, 0, 0, 0, 0, 0.5 * kDeg};
+  chain.t_child_camoptical = calib::identity_mat4();
+  const std::array<double, 6> delta{0.0, 0.005, 0.0, 0.0, 0.0, -0.2 * kDeg};
+
+  bagwiz::core::WorkerPool pool{4};
+  const auto pooled = calib::evaluate_sample_costs(samples, cam, chain, delta, params.nid, &pool);
+  const auto inline_costs =
+    calib::evaluate_sample_costs(samples, cam, chain, delta, params.nid, nullptr);
+  ASSERT_EQ(pooled.size(), samples.size());
+  const calib::Mat4 t_trajframe_cam = calib::mat4_multiply(
+    chain.t_trajframe_parent,
+    calib::mat4_multiply(calib::edge_transform(chain.edge_bag, delta), chain.t_child_camoptical));
+  for (std::size_t s = 0; s < samples.size(); ++s) {
+    const calib::Mat4 t_cam_world =
+      calib::rigid_inverse(calib::mat4_multiply(samples[s].t_world_trajframe, t_trajframe_cam));
+    const auto serial = calib::nid_cost(samples[s], cam, t_cam_world, params.nid);
+    ASSERT_TRUE(serial.has_value()) << s;
+    ASSERT_TRUE(pooled[s].has_value()) << s;
+    EXPECT_EQ(*pooled[s], *serial) << s;
+    ASSERT_TRUE(inline_costs[s].has_value()) << s;
+    EXPECT_EQ(*inline_costs[s], *serial) << s;
+  }
+}
+
+TEST(ExtrinsicRefineTest, RefineResultDoesNotDependOnThePool)
+{
+  // The whole refinement (default --fix auto) on the calling thread and on a
+  // 4-way pool: the same delta, the same NIDs, the same curvature evidence.
+  // Exact agreement is asserted for the reason EvaluateSampleCostsMatches-
+  // SerialNidCost gives — every evaluated cost is identical — and the
+  // optimizer is deterministic over identical costs.
+  const auto cam = test_camera();
+  const auto params = test_params();
+  const std::vector<calib::CalibSample> samples{make_correlated_sample(cam, params.nid.bins)};
+  calib::EdgeChain chain;
+  chain.t_trajframe_parent = calib::identity_mat4();
+  chain.edge_bag = {0, 0, 0, 0, 0, 1.0 * kDeg};
+  chain.t_child_camoptical = calib::identity_mat4();
+
+  bagwiz::core::WorkerPool pool{4};
+  const auto pooled = calib::refine_extrinsic(samples, cam, chain, params, &pool);
+  const auto serial = calib::refine_extrinsic(samples, cam, chain, params, nullptr);
+  ASSERT_TRUE(pooled.ok) << pooled.error;
+  ASSERT_TRUE(serial.ok) << serial.error;
+  EXPECT_EQ(pooled.delta, serial.delta);
+  EXPECT_EQ(pooled.nid_before, serial.nid_before);
+  EXPECT_EQ(pooled.nid_after, serial.nid_after);
+  EXPECT_EQ(pooled.samples_used, serial.samples_used);
+  EXPECT_EQ(pooled.observability, serial.observability);
+  for (std::size_t axis = 0; axis < 6; ++axis) {
+    EXPECT_EQ(pooled.curvature[axis].mean, serial.curvature[axis].mean) << axis;
+    EXPECT_EQ(pooled.curvature[axis].std_error, serial.curvature[axis].std_error) << axis;
+    EXPECT_EQ(pooled.curvature[axis].pairs, serial.curvature[axis].pairs) << axis;
+  }
+  ASSERT_EQ(pooled.auto_held.size(), serial.auto_held.size());
+  for (std::size_t i = 0; i < pooled.auto_held.size(); ++i) {
+    EXPECT_EQ(pooled.auto_held[i].unit, serial.auto_held[i].unit) << i;
+  }
 }

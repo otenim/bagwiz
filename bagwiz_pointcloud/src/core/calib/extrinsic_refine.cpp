@@ -17,7 +17,8 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <future>
+#include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
@@ -35,32 +36,95 @@ double probe_step(std::size_t axis)
   return axis < 3 ? kProbeStepTrans : kProbeStepRot;
 }
 
-// Per-sample NID costs at one delta (one async task per sample, as the old
-// mean-only total_cost ran them).
-std::vector<std::optional<double>> sample_costs(
-  std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,
-  const std::array<double, 6> & delta, const NidParams & nid)
+// The cost evaluations of one refinement: the per-(sample, range) projection
+// buffers and the per-sample NID scratch, kept across the thousands of
+// evaluations a run makes so none of them allocates, and the pool they run
+// on. Each evaluation projects every sample's points as one range per worker
+// — a flat (sample x range) task list, so the parallelism is not capped at
+// the sample count — then builds each sample's histogram from its ranges.
+class SampleCostEvaluator
 {
-  const Mat4 t_trajframe_cam = mat4_multiply(
-    chain.t_trajframe_parent,
-    mat4_multiply(edge_transform(chain.edge_bag, delta), chain.t_child_camoptical));
+public:
+  SampleCostEvaluator(
+    std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,
+    const NidParams & nid, WorkerPool * pool)
+  : samples_(samples),
+    cam_(cam),
+    chain_(chain),
+    nid_(nid),
+    pool_(pool),
+    ranges_(pool != nullptr ? static_cast<std::size_t>(pool->size()) : 1),
+    buffers_(samples.size() * ranges_),
+    chunks_(samples.size(), std::vector<ProjectedChunk>(ranges_)),
+    scratch_(samples.size()),
+    poses_(samples.size()),
+    costs_(samples.size())
+  {
+  }
 
-  std::vector<std::future<std::optional<double>>> futures;
-  futures.reserve(samples.size());
-  for (const auto & sample : samples) {
-    futures.push_back(std::async(std::launch::async, [&sample, &cam, &nid, &t_trajframe_cam] {
-      const Mat4 t_cam_world =
-        rigid_inverse(mat4_multiply(sample.t_world_trajframe, t_trajframe_cam));
-      return nid_cost(sample, cam, t_cam_world, nid);
-    }));
+  // Per-sample costs at `delta`; nullopt for a sample that projects too few
+  // points.
+  std::vector<std::optional<double>> costs(const std::array<double, 6> & delta)
+  {
+    const Mat4 t_trajframe_cam = mat4_multiply(
+      chain_.t_trajframe_parent,
+      mat4_multiply(edge_transform(chain_.edge_bag, delta), chain_.t_child_camoptical));
+    for (std::size_t s = 0; s < samples_.size(); ++s) {
+      poses_[s] = rigid_inverse(mat4_multiply(samples_[s].t_world_trajframe, t_trajframe_cam));
+    }
+    run(samples_.size() * ranges_, [&](std::size_t task) {
+      const std::size_t s = task / ranges_;
+      const std::size_t r = task % ranges_;
+      const std::size_t n = samples_[s].points_world.size();
+      const std::size_t per_range = (n + ranges_ - 1) / ranges_;
+      const std::size_t begin = std::min(n, r * per_range);
+      const std::size_t end = std::min(n, begin + per_range);
+      auto & buffer = buffers_[task];
+      buffer.points.clear();
+      buffer.bins.clear();
+      project_sample_points(
+        samples_[s], cam_, poses_[s], nid_, begin, end, buffer.points, buffer.bins);
+    });
+    run(samples_.size(), [&](std::size_t s) {
+      for (std::size_t r = 0; r < ranges_; ++r) {
+        auto & buffer = buffers_[s * ranges_ + r];
+        chunks_[s][r] = ProjectedChunk{buffer.points, buffer.bins};
+      }
+      costs_[s] = nid_of_projected(samples_[s], nid_, chunks_[s], scratch_[s]);
+    });
+    return costs_;
   }
-  std::vector<std::optional<double>> out;
-  out.reserve(samples.size());
-  for (auto & f : futures) {
-    out.push_back(f.get());
+
+private:
+  struct Buffer
+  {
+    std::vector<DepthCullPoint> points;
+    std::vector<std::uint8_t> bins;
+  };
+
+  void run(std::size_t n, const std::function<void(std::size_t)> & fn)
+  {
+    if (pool_ != nullptr && n > 1) {
+      pool_->parallel_for(n, fn);
+      return;
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+      fn(i);
+    }
   }
-  return out;
-}
+
+  std::span<const CalibSample> samples_;
+  const CameraModel & cam_;
+  const EdgeChain & chain_;
+  const NidParams & nid_;
+  WorkerPool * pool_;
+  std::size_t ranges_;
+  std::vector<Buffer> buffers_;                      // [sample * ranges_ + range]
+  std::vector<std::vector<ProjectedChunk>> chunks_;  // per sample, its ranges' spans
+  std::vector<NidScratch> scratch_;                  // per sample
+  std::vector<Mat4> poses_;                          // per sample, world -> camera at delta
+  std::vector<std::optional<double>> costs_;
+};
 
 // Mean over the valid samples; infinity when none are valid.
 double mean_of_valid(std::span<const std::optional<double>> per_sample, int * valid_out = nullptr)
@@ -117,15 +181,13 @@ std::vector<double> project_coords(
 // The refinement context shared by the optimizer and the analysis probes.
 struct RefineContext
 {
-  std::span<const CalibSample> samples;
-  const CameraModel & cam;
-  const EdgeChain & chain;
+  SampleCostEvaluator & evaluator;
   const RefineParams & params;
 
   std::vector<std::optional<double>> costs_at(
     const std::vector<std::array<double, 6>> & basis, std::span<const double> u) const
   {
-    return sample_costs(samples, cam, chain, compose_delta(basis, u), params.nid);
+    return evaluator.costs(compose_delta(basis, u));
   }
 };
 
@@ -310,12 +372,21 @@ Mat4 edge_transform(const std::array<double, 6> & edge_bag, const std::array<dou
   return make_transform({e[0], e[1], e[2]}, {e[3], e[4], e[5]});
 }
 
+std::vector<std::optional<double>> evaluate_sample_costs(
+  std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,
+  const std::array<double, 6> & delta, const NidParams & nid, WorkerPool * pool)
+{
+  SampleCostEvaluator evaluator{samples, cam, chain, nid, pool};
+  return evaluator.costs(delta);
+}
+
 RefineResult refine_extrinsic(
   std::span<const CalibSample> samples, const CameraModel & cam, const EdgeChain & chain,
-  const RefineParams & params)
+  const RefineParams & params, WorkerPool * pool)
 {
   RefineResult result;
-  const RefineContext ctx{samples, cam, chain, params};
+  SampleCostEvaluator evaluator{samples, cam, chain, params.nid, pool};
+  const RefineContext ctx{evaluator, params};
 
   std::vector<int> free_axes;
   for (int i = 0; i < 6; ++i) {
@@ -329,7 +400,7 @@ RefineResult refine_extrinsic(
   }
 
   int valid = 0;
-  result.nid_before = mean_of_valid(sample_costs(samples, cam, chain, {}, params.nid), &valid);
+  result.nid_before = mean_of_valid(evaluator.costs({}), &valid);
   result.samples_used = valid;
   if (!std::isfinite(result.nid_before)) {
     result.error =
@@ -424,7 +495,7 @@ RefineResult refine_extrinsic(
   // significance test the auto-fix directions used. The costs at the optimum
   // are both the reported nid_after and the center of every probe below, so
   // they are evaluated once.
-  const auto center = sample_costs(samples, cam, chain, delta, params.nid);
+  const auto center = evaluator.costs(delta);
   result.nid_after = mean_of_valid(center);
   for (int axis = 0; axis < 6; ++axis) {
     if (params.fixed[axis]) {
@@ -435,9 +506,7 @@ RefineResult refine_extrinsic(
     auto minus = delta;
     plus[axis] += probe_step(axis);
     minus[axis] -= probe_step(axis);
-    const auto est = paired_curvature(
-      center, sample_costs(samples, cam, chain, plus, params.nid),
-      sample_costs(samples, cam, chain, minus, params.nid));
+    const auto est = paired_curvature(center, evaluator.costs(plus), evaluator.costs(minus));
     result.curvature[axis] = est;
     result.observability[axis] = classify_axis(est);
   }
