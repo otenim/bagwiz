@@ -307,6 +307,32 @@ std::optional<float> read_first_point_x(
   return read_point_x(path, topic, 0);
 }
 
+// The fixture clouds carry a FLOAT32 relative-seconds "t" field; this reads it
+// back off the first point of `topic`'s first message.
+std::optional<float> read_first_point_time(
+  const std::filesystem::path & path, const std::string & topic)
+{
+  auto reader = bagwiz::io::open_read(path);
+  bagwiz::io::ReadFilter filter;
+  filter.topics = {topic};
+  reader->set_filter(filter);
+  bagwiz::io::RawMessage raw;
+  if (!reader->next(raw)) {
+    return std::nullopt;
+  }
+  const auto parsed = pc::parse_pointcloud2(raw.payload);
+  if (!parsed.ok() || parsed.cloud->width == 0) {
+    return std::nullopt;
+  }
+  const auto offset = parsed.cloud->field_offset("t");
+  if (!offset.has_value()) {
+    return std::nullopt;
+  }
+  float t = 0.0f;
+  std::memcpy(&t, parsed.cloud->data.data() + *offset, sizeof(float));
+  return t;
+}
+
 // Raw per-message payload bytes for a topic, in bag order. Used to assert
 // verbatim (byte-identical) copy-through.
 std::vector<std::vector<std::byte>> read_raw_payloads(
@@ -604,6 +630,35 @@ TEST_F(PcdUndistortTest, DeskewsTargetTopicAndPreservesOthers)
 
   EXPECT_EQ(read_raw_payloads(out_, "/other"), other_before);
   EXPECT_EQ(read_raw_payloads(out_, "/pose_tf"), pose_before);
+}
+
+// The default rewrites the per-point time to its t_ref-equivalent value (0
+// for this relative FLOAT32 field), which is what stops a second run from
+// deskewing the cloud again; --keep-point-time opts out of that rewrite while
+// deskewing xyz exactly the same way. Both are asserted here so the contrast
+// between them is one test.
+TEST_F(PcdUndistortTest, KeepPointTimePreservesPerPointTimeAndStillDeskews)
+{
+  write_undistort_input(in_, /*with_time_field=*/true);
+
+  ASSERT_EQ(run_pcd_undistort(base_args(in_, out_)), 0);
+  const auto default_x = read_first_point_x(out_, "/points");
+  const auto default_t = read_first_point_time(out_, "/points");
+  ASSERT_TRUE(default_x.has_value());
+  ASSERT_TRUE(default_t.has_value());
+  EXPECT_NEAR(*default_x, 1.0f, 1e-4f);
+  EXPECT_NEAR(*default_t, 0.0f, 1e-6f);
+
+  const auto kept = tmp_ / "kept.mcap";
+  auto a = base_args(in_, kept);
+  a.keep_point_time = true;
+  ASSERT_EQ(run_pcd_undistort(a), 0);
+  const auto kept_x = read_first_point_x(kept, "/points");
+  const auto kept_t = read_first_point_time(kept, "/points");
+  ASSERT_TRUE(kept_x.has_value());
+  ASSERT_TRUE(kept_t.has_value());
+  EXPECT_NEAR(*kept_x, 1.0f, 1e-4f);  // same deskew as the default run above
+  EXPECT_NEAR(*kept_t, 0.1f, 1e-6f);  // the cloud's own capture time, kept
 }
 
 TEST_F(PcdUndistortTest, MissingPerPointTimeIsFatal)

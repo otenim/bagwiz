@@ -151,9 +151,11 @@ to one reference time per scan. Given the same input, it always produces the
 same output.
 
 This is the per-cloud counterpart to `pcd concat` above, which does not
-compensate for motion at all. Since deskew rewrites only xyz and per-point
-time, running `undistort` before `concat` still leaves per-point timestamps
-intact for the downstream merge.
+compensate for motion at all. Deskew rewrites only xyz and the per-point time
+field, so a cloud stays fully formed for a downstream `concat`. By default the
+per-point times come out re-based on the reference stamp (see
+[Deskew rewrite](#deskew-rewrite)); `--keep-point-time` leaves each point's
+original acquisition time in place instead.
 
 ### Usage
 
@@ -212,6 +214,7 @@ bagwiz pcd undistort -i drive.mcap --pose /localization/kinematic_state \
 | `--max-extrap-duration <val>` | Per-side cap on the trajectory extrapolation. Default: `1s`; `0` is equivalent to `--no-extrap`. Takes an optional unit `ns`/`us`/`ms`/`s` (no unit = ms), e.g. `500ms`. If covering the `--pcd` topics' first clouds needs more extrapolation than this on either side, the run errors out before writing anything.                    |
 | `--compression <codec>`       | MCAP chunk codec for the output: `zstd` (the default), `lz4`, or `none`. Compression is roughly half the command's CPU on typical LiDAR bags, so `lz4` (several times cheaper to encode, larger output) or `none` (no encode cost, largest output) trade output size for speed. Errors on non-mcap outputs.                             |
 | `--compression-level <level>` | Encoder effort for the chosen (or default) codec: `fastest`, `fast`, `default`, `slow`, or `slowest`. When unset, zstd uses `default` and lz4 uses `fastest` — mcap maps lz4's `default` onto LZ4-HC, which measures several times slower than zstd for a larger output. Not combinable with `--compression none`.                      |
+| `--keep-point-time`           | Keep each point's own acquisition time instead of rewriting the per-point time field to the reference time (`header.stamp`). The deskewed xyz is identical either way. Without the rewrite the output carries no marker that it has already been deskewed, so a second `pcd undistort` run over it would deskew it twice.               |
 
 ### Trajectory resolution
 
@@ -298,7 +301,10 @@ For each cloud on a `--pcd` topic:
   warning;
 - the per-point time field is rewritten to the `t_ref`-equivalent value
   (`0` for a relative field, `header.stamp` for an absolute one), so a
-  later `undistort` or `concat` run can't double-deskew the cloud;
+  later `undistort` or `concat` run can't double-deskew the cloud.
+  `--keep-point-time` skips this one rewrite and leaves each point's own
+  acquisition time in the cloud — useful when a downstream consumer needs
+  those times, at the cost of that double-deskew guard;
 - non-finite (NaN/Inf) points are left byte-for-byte unchanged;
 - every other field, the point count, `point_step`/`row_step` (organized
   clouds included), and `frame_id` are unchanged — points never leave

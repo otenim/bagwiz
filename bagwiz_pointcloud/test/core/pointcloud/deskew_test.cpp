@@ -233,6 +233,48 @@ TEST(Deskew, Uint32NanosecondTimeResetsToZero)
   EXPECT_EQ(time_u32_at(*r.cloud, 0), 0u);
 }
 
+TEST(Deskew, KeepPointTimeMovesXyzButLeavesFloatTimeField)
+{
+  // PureTranslationMovesPointToRefPose with keep_point_time: xyz still lands
+  // on the ref pose, but the FLOAT32 relative time keeps its captured value
+  // instead of being reset to 0.
+  auto cloud = make_cloud_xyzt({{0.0f, 0.0f, 0.0f, 0.1f}});
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  auto r = deskew_pointcloud2(cloud, 0, traj, std::nullopt, /*keep_point_time=*/true);
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.points_deskewed, 1u);
+  EXPECT_NEAR(xyz_at(*r.cloud, 0)[0], 2.0f, 1e-4);
+  EXPECT_NEAR(t_at(*r.cloud, 0), 0.1f, 1e-6);
+}
+
+TEST(Deskew, KeepPointTimeLeavesUint32TimeField)
+{
+  // Uint32NanosecondTimeResetsToZero with keep_point_time: the UINT32 branch
+  // of write_ref_time is the one that would otherwise always write 0, so it
+  // is checked separately from the FLOAT32 case above.
+  auto cloud = make_cloud_xyz_u32time(0.0f, 0.0f, 0.0f, 100'000'000u);
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  auto r = deskew_pointcloud2(cloud, 0, traj, std::nullopt, /*keep_point_time=*/true);
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.points_deskewed, 1u);
+  EXPECT_NEAR(xyz_at(*r.cloud, 0)[0], 2.0f, 1e-4);
+  EXPECT_EQ(time_u32_at(*r.cloud, 0), 100'000'000u);
+}
+
+TEST(Deskew, KeepPointTimeLeavesNonFinitePointsUntouched)
+{
+  // A non-finite point is skipped before the time write either way, so
+  // keep_point_time must not change how it is passed through or counted.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  auto cloud = make_cloud_xyzt({{nan, nan, nan, 0.05f}});
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 9, 0, 0, 0, 0, 0, 1}};
+  auto r = deskew_pointcloud2(cloud, 0, traj, std::nullopt, /*keep_point_time=*/true);
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.points_nonfinite, 1u);
+  EXPECT_TRUE(std::isnan(xyz_at(*r.cloud, 0)[0]));
+  EXPECT_NEAR(t_at(*r.cloud, 0), 0.05f, 1e-6);
+}
+
 TEST(Deskew, OrganizedCloudHeightTwoWidthOne)
 {
   // height=2, width=1, row_step=point_step (no row padding): each row is one
@@ -466,19 +508,21 @@ using bagwiz::core::pointcloud::serialize_pointcloud2;
 // cloud.timestamp_ns to match.
 void expect_cdr_matches_struct_path(
   const PointCloud2 & cloud, const std::vector<TrajectoryPose> & traj,
-  const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt)
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt,
+  bool keep_point_time = false)
 {
   const auto payload = serialize_pointcloud2(cloud);
 
   auto parsed = parse_pointcloud2(payload);
   ASSERT_TRUE(parsed.ok());
-  auto ref = deskew_pointcloud2(std::move(*parsed.cloud), cloud.timestamp_ns, traj, extrinsic);
+  auto ref = deskew_pointcloud2(
+    std::move(*parsed.cloud), cloud.timestamp_ns, traj, extrinsic, keep_point_time);
   ASSERT_TRUE(ref.ok());
   const auto want = serialize_pointcloud2(*ref.cloud);
 
   std::vector<std::byte> patched = payload;
-  const auto got =
-    deskew_pointcloud2_cdr(std::span<std::byte>(patched.data(), patched.size()), traj, extrinsic);
+  const auto got = deskew_pointcloud2_cdr(
+    std::span<std::byte>(patched.data(), patched.size()), traj, extrinsic, keep_point_time);
   ASSERT_TRUE(got.ok()) << got.parse_error << " / " << got.error;
   EXPECT_EQ(got.t_ref_ns, cloud.timestamp_ns);
   EXPECT_EQ(patched, want);
@@ -532,6 +576,40 @@ TEST(DeskewCdr, MatchesStructPathWithExtrinsic)
   e.rotation.z = 0.7071068;
   e.rotation.w = 0.7071068;
   expect_cdr_matches_struct_path(cloud, traj, e);
+}
+
+// keep_point_time must reach the shared kernel identically through both
+// entry points -- the command's parallel path runs the CDR variant, the
+// struct variant backs the unit tests above.
+TEST(DeskewCdr, MatchesStructPathWithKeepPointTime)
+{
+  auto cloud = make_cloud_xyzt({{0.0f, 0.0f, 0.0f, 0.1f}, {1.0f, 0.0f, 0.0f, -0.05f}});
+  cloud.timestamp_ns = 2'000'000'000;
+  std::vector<TrajectoryPose> traj{
+    {2'000'000'000, 0, 0, 0, 0, 0, 0, 1}, {2'100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  expect_cdr_matches_struct_path(cloud, traj, std::nullopt, /*keep_point_time=*/true);
+}
+
+// The bytes the flag is about: the patched payload's xyz moved, its per-point
+// time did not. Asserted on the CDR path because that is what the command
+// actually writes into the output bag.
+TEST(DeskewCdr, KeepPointTimeLeavesTimeBytesInPatchedPayload)
+{
+  auto cloud = make_cloud_xyzt({{0.0f, 0.0f, 0.0f, 0.1f}});
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+
+  const auto payload = serialize_pointcloud2(cloud);
+  std::vector<std::byte> patched = payload;
+  const auto got = deskew_pointcloud2_cdr(
+    std::span<std::byte>(patched.data(), patched.size()), traj, std::nullopt,
+    /*keep_point_time=*/true);
+  ASSERT_TRUE(got.ok()) << got.parse_error << " / " << got.error;
+  EXPECT_EQ(got.points_deskewed, 1u);
+
+  auto reparsed = parse_pointcloud2(patched);
+  ASSERT_TRUE(reparsed.ok());
+  EXPECT_NEAR(xyz_at(*reparsed.cloud, 0)[0], 2.0f, 1e-4);
+  EXPECT_NEAR(t_at(*reparsed.cloud, 0), 0.1f, 1e-6);
 }
 
 TEST(DeskewCdr, NoTimeFieldLeavesPayloadVerbatimWithCounter)
