@@ -2131,9 +2131,10 @@ TEST(FlagCompletionTest, GenerateVideoCamDashListsCamFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "cam", "-"}),
-    "--alpha\n--cam-info\n--field\n--grid\n--help\n--input\n--max\n--min\n--no-rectify\n--output\n"
-    "--overwrite\n--pcd\n--point-size\n--rectify\n--resize\n--scheme\n--topic\n--width\n-h\n-i\n-"
-    "o\n-t\n-w\n");
+    "--alpha\n--cam-info\n--field\n--grid\n--help\n--input\n--max\n--min\n--no-label\n--no-"
+    "rectify\n"
+    "--output\n--overwrite\n--pcd\n--point-size\n--rectify\n--resize\n--scheme\n--topic\n--width\n"
+    "-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `--field <TAB>` offers the valid point-cloud field choices, sorted.

@@ -68,6 +68,8 @@ struct GenerateVideoArgs
   // grid columns and the primary frame's aspect ratio. Mutually exclusive
   // with resize_scale.
   std::optional<std::uint32_t> width;
+  // Suppress the per-view topic label drawn at each cell's top-left corner.
+  bool no_label = false;
 
   // Point-cloud overlay options. A bare entry (a literal name or '*' glob)
   // projects onto every view; an "<image_topic>=<pcd_selector>" entry projects

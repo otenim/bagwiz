@@ -372,6 +372,12 @@ private:
   std::vector<std::byte> pixels_;
 };
 
+// Draw `label` (the view's topic name) at the cell's top-left corner: white
+// text with a black outline, font scale following the cell height. The encode
+// loops draw it for every view — including a messageless (black) cell — so a
+// multi-view grid always identifies its cameras. Suppressed by --no-label.
+void draw_cell_label(const CellView & cell, const std::string & label);
+
 // Point-cloud overlay styling, shared by every view.
 struct VideoOverlayParams
 {

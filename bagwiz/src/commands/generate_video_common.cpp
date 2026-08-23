@@ -329,11 +329,14 @@ bool prepare_tick(
 
 // Render every view's selected frame into its cell and encode the composed
 // grid. points_per_view[i] (when non-null) holds view i's projected points.
-// Returns false on a logged failure.
+// With draw_labels, each cell's top-left corner then gets its view's topic
+// name — including a messageless (black) cell, so the grid always identifies
+// its cameras. Returns false on a logged failure.
 bool render_tick(
   std::vector<ViewState> & states, const TickData & tick, GridCanvas & canvas,
   VideoFrameEncoder & encoder,
-  const std::vector<const std::vector<core::pointcloud::ProjectedPoint> *> & points_per_view)
+  const std::vector<const std::vector<core::pointcloud::ProjectedPoint> *> & points_per_view,
+  bool draw_labels)
 {
   canvas.clear();
   for (std::size_t i = 0; i < states.size(); ++i) {
@@ -343,6 +346,11 @@ bool render_tick(
     if (!states[i].renderer.render(
           *tick.frames[i], tick.geometries[i], points_per_view[i], canvas.cell(i))) {
       return false;
+    }
+  }
+  if (draw_labels) {
+    for (std::size_t i = 0; i < states.size(); ++i) {
+      draw_cell_label(canvas.cell(i), states[i].input->topic);
     }
   }
   return encoder.encode(canvas.pixels(), canvas.width(), canvas.height());
@@ -495,7 +503,7 @@ int run_encode_loop_sync(
         points_per_view[i] = &points_storage[i];
       }
     }
-    if (!render_tick(*states, tick, canvas, encoder, points_per_view)) {
+    if (!render_tick(*states, tick, canvas, encoder, points_per_view, !args.no_label)) {
       return 1;
     }
   }
@@ -596,7 +604,7 @@ int run_encode_loop_async(
     for (std::size_t r = 0; r < pending.requests.size(); ++r) {
       points_per_view[pending.requests[r].view_index] = &projected.per_request[r];
     }
-    if (!render_tick(*states, current, canvas, encoder, points_per_view)) {
+    if (!render_tick(*states, current, canvas, encoder, points_per_view, !args.no_label)) {
       return 1;
     }
 
@@ -1287,6 +1295,30 @@ CellView GridCanvas::cell(std::size_t index)
   const std::size_t row = index / grid_.cols;
   return CellView{
     pixels_.data() + row * cell_h_ * stride + col * cell_w_ * 3U, cell_w_, cell_h_, stride};
+}
+
+void draw_cell_label(const CellView & cell, const std::string & label)
+{
+  if (label.empty() || cell.data == nullptr || cell.width == 0 || cell.height == 0) {
+    return;
+  }
+  cv::Mat cell_mat(
+    static_cast<int>(cell.height), static_cast<int>(cell.width), CV_8UC3, cell.data, cell.stride);
+  // The font scale follows the cell height so the label stays readable across
+  // --resize / --width, with a floor that keeps small cells legible.
+  const double scale = std::max(0.4, cell.height / 240.0);
+  const int thickness = std::max(1, static_cast<int>(std::lround(scale)));
+  // putText's origin is the text's bottom-left: place the baseline the text
+  // height plus a small margin below the cell's top edge.
+  const cv::Point origin(4, static_cast<int>(std::lround(scale * 22.0)) + 2);
+  // A black outline under the white fill keeps the label readable on any
+  // frame, bright or dark.
+  cv::putText(
+    cell_mat, label, origin, cv::FONT_HERSHEY_SIMPLEX, scale, cv::Scalar(0, 0, 0), thickness + 2,
+    cv::LINE_8);
+  cv::putText(
+    cell_mat, label, origin, cv::FONT_HERSHEY_SIMPLEX, scale, cv::Scalar(255, 255, 255), thickness,
+    cv::LINE_8);
 }
 
 ViewRenderer::ViewRenderer(
