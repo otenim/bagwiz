@@ -57,11 +57,11 @@ struct GenerateVideoPcdScanArgs
   // output frame rate is the cloud rate times `steps` times this value.
   double speed = 0.1;
   // BEV half-extent in meters. In the 3D view it is not read directly; only
-  // the default dist_m (2.5x the range) derives from it. Unset = auto: the
+  // the default dist_m (1.5x the range) derives from it. Unset = auto: the
   // largest finite XY distance in the first cloud.
   std::optional<double> range_m;
   // Perspective camera (view = kPerspective only): position on a sphere of
-  // radius dist_m around the sensor, looking at it. dist_m unset = 2.5x range.
+  // radius dist_m around the sensor, looking at it. dist_m unset = 1.5x range.
   double elev_deg = 30.0;
   double azim_deg = 180.0;
   std::optional<double> dist_m;

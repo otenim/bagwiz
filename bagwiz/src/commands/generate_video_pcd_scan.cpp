@@ -155,7 +155,7 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
   }
 
   // Resolve the view: --range defaults to the largest finite XY distance in
-  // the first cloud, --dist to 2.5x the range.
+  // the first cloud, --dist to 1.5x the range.
   double range_m = args.range_m.value_or(0.0);
   if (!args.range_m.has_value()) {
     const auto auto_range = auto_range_from_cloud(validation.first_cloud);
@@ -176,7 +176,7 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
   view.range_m = range_m;
   view.elev_deg = args.elev_deg;
   view.azim_deg = args.azim_deg;
-  view.dist_m = args.dist_m.value_or(2.5 * range_m);
+  view.dist_m = args.dist_m.value_or(1.5 * range_m);
 
   // Pass 2: encode to a sibling temp path, renamed into place on success. The
   // guard removes the temp on any error exit, so no partial output and no
