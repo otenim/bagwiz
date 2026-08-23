@@ -113,7 +113,7 @@ PcdScanValidation validate_pcd_scan_inputs(const GenerateVideoPcdScanArgs & args
     BAGWIZ_LOG_ERROR(kLogger, "%s", out.error.c_str());
     return out;
   }
-  if (args.dist_m.has_value() && *args.dist_m <= 0.0) {
+  if (args.dist_m <= 0.0) {
     out.error = "--dist must be positive";
     BAGWIZ_LOG_ERROR(kLogger, "%s", out.error.c_str());
     return out;

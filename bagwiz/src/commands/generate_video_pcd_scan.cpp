@@ -154,10 +154,10 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
     }
   }
 
-  // Resolve the view: --range defaults to the largest finite XY distance in
-  // the first cloud, --dist to 1.5x the range.
+  // Resolve the BEV view extent: --range defaults to the largest finite XY
+  // distance in the first cloud. The perspective view does not use it.
   double range_m = args.range_m.value_or(0.0);
-  if (!args.range_m.has_value()) {
+  if (args.view == core::pointcloud::ScanPatternProjection::kBev && !args.range_m.has_value()) {
     const auto auto_range = auto_range_from_cloud(validation.first_cloud);
     if (!auto_range.has_value() || *auto_range <= 0.0) {
       BAGWIZ_LOG_ERROR(
@@ -176,7 +176,7 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
   view.range_m = range_m;
   view.elev_deg = args.elev_deg;
   view.azim_deg = args.azim_deg;
-  view.dist_m = args.dist_m.value_or(1.5 * range_m);
+  view.dist_m = args.dist_m;
 
   // Pass 2: encode to a sibling temp path, renamed into place on success. The
   // guard removes the temp on any error exit, so no partial output and no

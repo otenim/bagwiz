@@ -235,9 +235,8 @@ private:
     sub
       ->add_option(
         "--range", pcd_scan_args_.range_m,
-        "BEV half-extent in meters: the BEV view spans +-range on both ground axes. In the 3D "
-        "view it only sets the default --dist (1.5x the range). Default: the largest finite XY "
-        "distance in the first cloud.")
+        "BEV half-extent in meters: the BEV view spans +-range on both ground axes. Not used "
+        "by the 3D view. Default: the largest finite XY distance in the first cloud.")
       ->check(CLI::PositiveNumber);
     sub
       ->add_option(
@@ -253,8 +252,8 @@ private:
       ->default_val(180.0);
     sub
       ->add_option(
-        "--dist", pcd_scan_args_.dist_m,
-        "3D view: camera distance from the sensor in meters. Default: 1.5x the range.")
+        "--dist", pcd_scan_args_.dist_m, "3D view: camera distance from the sensor in meters.")
+      ->default_val(30.0)
       ->check(CLI::PositiveNumber);
     const std::map<std::string, core::pointcloud::ColorScheme> scheme_map = {
       {"viridis", core::pointcloud::ColorScheme::kViridis},
