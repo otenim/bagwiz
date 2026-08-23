@@ -214,7 +214,7 @@ private:
         "Projection space: 'bev' is a top-down XY view centered on the sensor, '3d' is a "
         "perspective view from a fixed camera (--elev/--azim/--dist) looking at the sensor.")
       ->transform(CLI::CheckedTransformer{view_map})
-      ->default_val(core::pointcloud::ScanPatternProjection::kBev);
+      ->default_val(core::pointcloud::ScanPatternProjection::kPerspective);
     sub->add_option("--width", pcd_scan_args_.width, "Output width in pixels. Must be even.")
       ->default_val(1280U)
       ->check(CLI::Range(2U, 7680U));

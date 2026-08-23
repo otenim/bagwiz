@@ -132,12 +132,15 @@ bagwiz generate video scan -i <input> -t <topic> -o <output> [OPTIONS]
 ### Examples
 
 ```bash
-# Render a lidar's scan pattern as a top-down (BEV) animation.
+# Render a lidar's scan pattern as a 3D animation (the default view).
 bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4
 
-# Same, from a fixed 3D viewpoint behind and above the sensor.
+# Tune the 3D viewpoint: elevation, azimuth, and camera distance.
 bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 \
-  --view 3d --elev 35 --azim 180 --dist 120
+  --elev 35 --azim 180 --dist 120
+
+# Top-down (BEV) animation instead.
+bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --view bev
 
 # Finer time resolution within each sweep: 20 video frames per sweep instead of 10.
 bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --steps 20
@@ -156,7 +159,7 @@ bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp
 | `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                                                   |
 | `-t`, `--topic <topic>`   | **Required.** `sensor_msgs/msg/PointCloud2` topic to render. A literal topic name, not a glob. The topic must carry a per-point time field (see below).                                                                                                    |
 | `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                                                                    |
-| `--view <view>`           | Projection space: `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y) or `3d` (perspective view from a fixed camera looking at the sensor). Default: `bev`. Long-form only.                                                      |
+| `--view <view>`           | Projection space: `3d` (perspective view from a fixed camera looking at the sensor) or `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y). Default: `3d`. Long-form only.                                                       |
 | `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. Long-form only.                                                                                                                                                                       |
 | `--height <px>`           | Output height in pixels (range: 2-4320). Must be even. Default: 720. Long-form only.                                                                                                                                                                       |
 | `--steps <n>`             | Video frames rendered per sweep (range: 1-100). Default: 10. Long-form only.                                                                                                                                                                               |

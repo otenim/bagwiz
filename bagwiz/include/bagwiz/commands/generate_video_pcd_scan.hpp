@@ -46,7 +46,8 @@ struct GenerateVideoPcdScanArgs
   bool overwrite = false;
 
   // Projection space of the animation.
-  core::pointcloud::ScanPatternProjection view = core::pointcloud::ScanPatternProjection::kBev;
+  core::pointcloud::ScanPatternProjection view =
+    core::pointcloud::ScanPatternProjection::kPerspective;
   // Canvas size in pixels. Both must be even (H.264 requires even dimensions).
   std::uint32_t width = 1280;
   std::uint32_t height = 720;

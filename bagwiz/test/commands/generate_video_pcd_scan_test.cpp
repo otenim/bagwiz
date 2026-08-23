@@ -254,6 +254,7 @@ TEST_F(GenerateVideoPcdScanTest, RunEncodesBevVideo)
   const auto bag = build_bag(dir_, 5);
   const auto out = dir_ / "out.mp4";
   GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
+  args.view = bagwiz::core::pointcloud::ScanPatternProjection::kBev;
   args.steps = 4;
   args.speed = 1.0;
   args.width = 320;
