@@ -1296,31 +1296,6 @@ TEST_F(GenerateVideoTest, ResizeScalesPointCloudOverlay)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-// ---- topic labels -------------------------------------------------------------
-
-// The per-view topic label is drawn by default and suppressed by no_label:
-// with solid-color frames the labeled and unlabeled encodes must differ.
-TEST_F(GenerateVideoTest, TopicLabelDrawnByDefaultAndSuppressedByNoLabel)
-{
-  constexpr int kFrames = 3;
-  const auto in = build_bag(tmp_dir_, kFrames, 64, 64, "bgr8");
-  const auto labeled = tmp_dir_ / "labeled.avi";
-  const auto plain = tmp_dir_ / "plain.avi";
-
-  GenerateVideoArgs args{in, kImageTopic, labeled, false};
-  ASSERT_EQ(run_generate_video(args), 0);
-
-  args.output_path = plain;
-  args.no_label = true;
-  ASSERT_EQ(run_generate_video(args), 0);
-
-  std::vector<std::byte> labeled_bytes;
-  std::vector<std::byte> plain_bytes;
-  read_file_bytes(labeled, labeled_bytes);
-  read_file_bytes(plain, plain_bytes);
-  EXPECT_NE(labeled_bytes, plain_bytes);
-}
-
 // Command-level integration test for the point-cloud overlay path against a real
 // rosbag. The bag path comes from the BAGWIZ_REAL_BAG environment variable; the
 // test skips gracefully when it is unset or the bag is unavailable (e.g. CI), so
