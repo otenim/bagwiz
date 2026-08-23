@@ -326,7 +326,7 @@ own OpenCV. So recomputing a `p` that an older `camera_calibration` wrote
 can give marginally different output on different distros.
 
 This is benign: the recomputed `p` is consistent with the OpenCV that this binary
-will later feed it to (`generate video --rectify`, the point-cloud overlay).
+will later feed it to (`generate video cam --rectify`, the point-cloud overlay).
 The run reports how far `p` moved so a small change is legible as version drift
 rather than a correction:
 

@@ -96,7 +96,7 @@ struct TopicSlotSpec
   // flag is set on, not a guarantee this flag itself makes.
   //
   // Set it ONLY on a slot whose command has no presence check of its own.
-  // Most commands do (generate video --pcd reports "pcd topic '…' not found",
+  // Most commands do (generate video cam --pcd reports "pcd topic '…' not found",
   // map slam --color reports "Topic '…' is not present in …"), and theirs are
   // more specific. The exceptions are topic drop -t, topic keep -t, and
   // trim --align, whose presence check WAS resolve_topic_patterns()'s

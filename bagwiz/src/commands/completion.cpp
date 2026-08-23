@@ -1157,17 +1157,20 @@ std::vector<std::string> complete_stamp(const CompletionRequest & request)
 }
 
 // `generate` is a command group for producing media from a rosbag; its sole
-// subcommand is `video`. At the subcommand slot (word 1) the only candidate is
-// `video`. `-t/--topic` (image topics), `--cam-info` (CameraInfo topics), and
-// `--pcd` (PointCloud2 topics) are all declared topic slots, so
+// subcommand is `video`, itself a nested command group whose only leaf is
+// `cam` (like `tf static`). At the subcommand slot (word 1) the only candidate
+// is `video`; at the leaf slot (word 2, under `video`) the only candidate is
+// `cam`. `cam`'s `-t/--topic` (image topics), `--cam-info` (CameraInfo
+// topics), and `--pcd` (PointCloud2 topics) are all declared topic slots, so
 // try_topic_completion handles their values before this function is reached.
-// Here we surface `video` plus its own flags for any `-` word, and the enum
-// choices for `--field` and `--scheme`.
+// Here we surface `cam`'s own flags for any `-` word, and the enum choices
+// for `--field` and `--scheme`.
 //
-//   video: `generate`(0) `video`(1) -i|--input <bag> -t|--topic <image_topic>
-//          -o|--output <path> [--cam-info <topic>] [--rectify] [--resize <s>]
-//          [--pcd <topic>...] [--field <f>] [--min <v>] [--max <v>]
-//          [--scheme <s>] [--point-size <n>] [--alpha <a>] [-w|--overwrite]
+//   cam: `generate`(0) `video`(1) `cam`(2) -i|--input <bag>
+//        -t|--topic <image_topic> -o|--output <path> [--cam-info <topic>]
+//        [--rectify] [--resize <s>] [--pcd <topic>...] [--field <f>]
+//        [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
+//        [--alpha <a>] [-w|--overwrite]
 std::vector<std::string> complete_generate(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1178,9 +1181,22 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
     return matching({"video"}, current);
   }
 
-  if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
-    const auto & sub = request.words[kFirstCommandArgWord];
-    if (sub == "video") {
+  // Reaching here implies cursor_word > kFirstCommandArgWord, so words[1]
+  // exists (parse_request clamps cursor_word to words.size()).
+  const auto & group = request.words[kFirstCommandArgWord];
+  if (group != "video") {
+    return {};
+  }
+
+  if (request.cursor_word == kSecondCommandArgWord) {
+    if (current.starts_with("-")) {
+      return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
+    }
+    return matching({"cam"}, current);
+  }
+
+  if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
+    if (request.words[kSecondCommandArgWord] == "cam") {
       return matching(
         with_help(
           {"--alpha", "--cam-info", "--field", "--input", "--max", "--min", "--output",

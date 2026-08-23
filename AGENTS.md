@@ -296,7 +296,7 @@ code that is not part of the CLI itself.
   the bag already carries is `-t`/`--topic`, or `-t`/`--topics` when
   it takes several, whenever it is that subcommand's general topic
   operand (`traj dump`, `tf tree`, `topic drop` / `keep`, `cam-info`,
-  `walk`, `generate video`); a selector that fills a named role
+  `walk`, `generate video cam`); a selector that fills a named role
   instead keeps that role's name (`--pcd`, `--pose`, `--cam`,
   `--twist`, `--cam-info`, `--color`), which already reads as
   selecting rather than creating. A subcommand can have no general

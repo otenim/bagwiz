@@ -318,7 +318,7 @@ std::filesystem::path write_twist_topics_fixture(const std::filesystem::path & p
 
 // MCAP carrying one raw image topic (/image), one compressed image topic
 // (/image/compressed), and one non-image topic (/points). Used to verify
-// `generate video` <image_topic> completion offers both image types it operates on
+// `generate video cam` <image_topic> completion offers both image types it operates on
 // (sensor_msgs/msg/Image and sensor_msgs/msg/CompressedImage) while excluding
 // every non-image topic. Topic metadata alone drives completion, so the
 // payloads are arbitrary bytes.
@@ -2100,19 +2100,36 @@ TEST(FlagCompletionTest, GenerateSubcommandListsVideo)
 }
 
 // `bagwiz generate -` is the command-group slot; only the implicit help flags
-// appear (video's own flags live one slot deeper).
+// appear (the `cam` leaf's own flags live two slots deeper).
 TEST(FlagCompletionTest, GenerateParentDashListsHelpFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "generate", "-"}), "--help\n-h\n");
 }
 
-// `generate video -` surfaces the action's flags plus the implicit help flags,
-// sorted.
-TEST(FlagCompletionTest, GenerateVideoDashListsVideoFlags)
+// `bagwiz generate video <TAB>` lists the video group's single leaf
+// subcommand.
+TEST(FlagCompletionTest, GenerateVideoSubcommandListsCam)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "generate", "video", ""}), "cam\n");
+}
+
+// `bagwiz generate video -` is the nested-group slot; only the implicit help
+// flags appear (the `cam` leaf's flags live one slot deeper).
+TEST(FlagCompletionTest, GenerateVideoGroupDashListsHelpFlagsOnly)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "generate", "video", "-"}),
+    "--help\n-h\n");
+}
+
+// `generate video cam -` surfaces the leaf's flags plus the implicit help
+// flags, sorted.
+TEST(FlagCompletionTest, GenerateVideoCamDashListsCamFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "cam", "-"}),
     "--alpha\n--cam-info\n--field\n--help\n--input\n--max\n--min\n--output\n--overwrite\n--pcd\n--"
     "point-size\n--rectify\n--resize\n--scheme\n--topic\n-h\n-i\n-o\n-t\n-w\n");
 }
@@ -2121,7 +2138,7 @@ TEST(FlagCompletionTest, GenerateVideoDashListsVideoFlags)
 TEST(FlagCompletionTest, GenerateVideoFieldFlagListsChoices)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "5", "bagwiz", "generate", "video", "--field"}),
+    run_completion({"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "cam", "--field"}),
     "distance\nintensity\nx\ny\nz\n");
 }
 
@@ -2129,11 +2146,11 @@ TEST(FlagCompletionTest, GenerateVideoFieldFlagListsChoices)
 TEST(FlagCompletionTest, GenerateVideoSchemeFlagListsChoices)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "5", "bagwiz", "generate", "video", "--scheme"}),
+    run_completion({"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "cam", "--scheme"}),
     "inferno\njet\nmagma\nplasma\nrainbow\nturbo\nviridis\n");
 }
 
-// `generate video <bag> <TAB>` (the <image_topic> slot) lists only the bag's image
+// `generate video cam <bag> <TAB>` (the <image_topic> slot) lists only the bag's image
 // topics — /image (Image) and /image/compressed (CompressedImage) here —
 // excluding the non-image /points, sorted.
 TEST_F(CompletionTest, GenerateVideoTopicSlotListsOnlyImageTopics)
@@ -2144,7 +2161,8 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotListsOnlyImageTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "-i", "~/images.mcap", "-t"}),
+      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
+       "-t"}),
     "/image\n/image/compressed\n");
 }
 
@@ -2157,8 +2175,8 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotRespectsPrefix)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "-i", "~/images.mcap", "-t",
-       "/image/"}),
+      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
+       "-t", "/image/"}),
     "/image/compressed\n");
 }
 
@@ -2172,8 +2190,8 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotExcludesUnsupportedTypeOnPrefix)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "-i", "~/images.mcap", "-t",
-       "/p"}),
+      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
+       "-t", "/p"}),
     "");
 }
 
@@ -2187,8 +2205,8 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagListsOnlyCameraInfoTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "10", "bagwiz", "generate", "video", "-i", "~/cameras.mcap", "-t",
-       "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info"}),
+      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
+       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info"}),
     "/cam/camera_info\n");
 }
 
@@ -2201,8 +2219,8 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagRespectsPrefix)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "10", "bagwiz", "generate", "video", "-i", "~/cameras.mcap", "-t",
-       "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info", "/cam/c"}),
+      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
+       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info", "/cam/c"}),
     "/cam/camera_info\n");
 }
 
@@ -2215,8 +2233,8 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagEmptyWhenNoCameraInfoTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "10", "bagwiz", "generate", "video", "-i", "~/images.mcap", "-t",
-       "/image", "-o", "out.avi", "--cam-info"}),
+      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
+       "-t", "/image", "-o", "out.avi", "--cam-info"}),
     "");
 }
 
@@ -2230,7 +2248,8 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotEmptyWhenNoImageTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "-i", "~/no_image.mcap", "-t"}),
+      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "cam", "-i", "~/no_image.mcap",
+       "-t"}),
     "");
 }
 
@@ -2242,11 +2261,12 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotSuppressedWhenInputSlotIsFlag)
 
   write_image_topics_fixture(tmp_dir_ / "images.mcap");
 
-  EXPECT_EQ(run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "-t"}), "");
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "5", "bagwiz", "generate", "video", "cam", "-t"}), "");
 }
 
 // `walk <input> <topic> --cam-info <TAB>` offers only the bag's
-// sensor_msgs/msg/CameraInfo topics, mirroring `generate video --cam-info`.
+// sensor_msgs/msg/CameraInfo topics, mirroring `generate video cam --cam-info`.
 TEST_F(CompletionTest, WalkCameraInfoFlagListsOnlyCameraInfoTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);

@@ -21,11 +21,11 @@ bagwiz walk -i capture.mcap -t /sensing/imu/data
 
 ## Options
 
-| Flag                    | Description                                                                                                                                                                                                                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`). Must exist.                                                                                                                                                                                              |
-| `-t`, `--topic <topic>` | **Required.** Topic name to inspect. Must exist in the bag. A literal topic name, not a glob.                                                                                                                                                                                                  |
-| `--cam-info <topic>`    | Long-form only. Explicit `sensor_msgs/msg/CameraInfo` topic for the preview's rectify toggle and the PointCloud2 projection overlay. A literal topic name, not a glob. When omitted, bagwiz auto-resolves it from `<topic>` using the rules documented for `bagwiz generate video --cam-info`. |
+| Flag                    | Description                                                                                                                                                                                                                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path (rosbag2 directory, `*.mcap`, `*.db3`, `*.db3.zstd`). Must exist.                                                                                                                                                                                                  |
+| `-t`, `--topic <topic>` | **Required.** Topic name to inspect. Must exist in the bag. A literal topic name, not a glob.                                                                                                                                                                                                      |
+| `--cam-info <topic>`    | Long-form only. Explicit `sensor_msgs/msg/CameraInfo` topic for the preview's rectify toggle and the PointCloud2 projection overlay. A literal topic name, not a glob. When omitted, bagwiz auto-resolves it from `<topic>` using the rules documented for `bagwiz generate video cam --cam-info`. |
 
 An explicit empty value (`--cam-info ""`) is a real value, not "omitted": it
 skips auto-resolution and is then rejected as not naming a CameraInfo topic,
@@ -88,7 +88,7 @@ in the preview — `→`/`Space` (next), `←`/`b` (prev), `.` (+1s), `,` (-1s),
 frame — and the view redraws on resize. Press `q` to return to the YAML view
 (`Ctrl-C` / `Ctrl-D` quit walk outright, as on every screen).
 
-- **Supported encodings mirror `bagwiz generate video`:** raw
+- **Supported encodings mirror `bagwiz generate video cam`:** raw
   `sensor_msgs/msg/Image` in `bgr8`/`rgb8`, and `sensor_msgs/msg/CompressedImage`
   carrying JPEG or PNG (decoded via FFmpeg). Other encodings show a short
   "cannot decode" note in place of the image and you can keep navigating.
@@ -168,7 +168,7 @@ reported on the status line.
 Each frame is paired with the point cloud whose `header.stamp` (sensor capture
 time) is nearest the image's own `header.stamp`, rather than the bag record time
 — so overlays stay aligned even when recording latency differs between the
-camera and lidar, and match what `bagwiz generate video --pcd` renders for the
+camera and lidar, and match what `bagwiz generate video cam --pcd` renders for the
 same frame. If either the camera frame or the point-cloud topic leaves
 `header.stamp` unset, that pairing falls back to matching by bag record time on
 both sides, so the two are always compared on the same clock rather than mixing

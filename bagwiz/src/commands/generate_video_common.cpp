@@ -44,7 +44,7 @@ namespace
 {
 constexpr const char * kLogger = "bagwiz.cmd.generate";
 // kImageType / kCompressedImageType mirror topic_types.hpp's kImageTopicTypes
-// (generate video -t's allowed_types) via is_supported_type() below.
+// (generate video cam -t's allowed_types) via is_supported_type() below.
 // kPointCloudType mirrors topic_types.hpp's kPointCloud2Type (--pcd's
 // allowed_types). Keep both in sync by hand.
 constexpr const char * kImageType = "sensor_msgs/msg/Image";
@@ -237,7 +237,7 @@ VideoSourceCheck check_video_source(const std::filesystem::path & input, const s
   if (!is_supported_type(found->type)) {
     check.status = VideoSourceStatus::kUnsupportedType;
     check.message = "topic '" + topic + "' has type '" + found->type +
-                    "', which generate video cannot render; supported types are " + kImageType +
+                    "', which generate video cam cannot render; supported types are " + kImageType +
                     " and " + kCompressedImageType;
     return check;
   }
@@ -842,8 +842,8 @@ void log_video_summary(
 {
   const double fps_value = static_cast<double>(fps.num) / static_cast<double>(fps.den);
   BAGWIZ_LOG_INFO(
-    kLogger, "generate video: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).", written,
-    output_path.string().c_str(), width, height, fps_value);
+    kLogger, "generate video cam: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).",
+    written, output_path.string().c_str(), width, height, fps_value);
 
   if (is_h264_extension(output_path)) {
     if (is_vlc_available()) {

@@ -181,7 +181,7 @@ TEST(TopicOption, OptionalTargetRejectsNonLiteralModeAtDeclaration)
 
 // add_topic_option(std::optional<std::string>&) exists so a slot whose
 // absence is meaningfully different from an empty value (walk --cam-info,
-// generate video --cam-info) can still go through the mechanism. CLI11 must
+// generate video cam --cam-info) can still go through the mechanism. CLI11 must
 // leave `target` untouched — nullopt — when the flag is never given.
 TEST(TopicOption, OptionalTargetStaysNulloptWhenFlagOmitted)
 {

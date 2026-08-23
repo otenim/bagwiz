@@ -158,7 +158,7 @@ source ~/.config/fish/completions/bagwiz.fish
     `--align`, `--stamp`, `--output`/`-o`, `--overwrite`/`-w`
   - `bagwiz <cmd> <subcommand> -<TAB>` for every nested subcommand
     (`cam-info replace`, `cam-info recompute-p`, `cam-info dump`,
-    `convert format`, `generate video`, `map slam`, `map viewer`,
+    `convert format`, `generate video cam`, `map slam`, `map viewer`,
     `pcd concat`, `pcd undistort`, `tf static calc`, `tf static cp`,
     `tf static drop`, `tf static dump`, `tf static join`, `tf static update`,
     `tf tree`, `topic drop`, `topic keep`,
@@ -214,8 +214,8 @@ name only — it offers plain topic names either way, typed as-is.
 
 - Flag values that name a bag topic of a specific type are completed by opening
   `<input>` and offering only topics of that type:
-  - `bagwiz generate video -i <input> ... --cam-info <topic>` — `sensor_msgs/msg/CameraInfo` topics
-  - `bagwiz generate video -i <input> ... --pcd <topic>` — `sensor_msgs/msg/PointCloud2` topics
+  - `bagwiz generate video cam -i <input> ... --cam-info <topic>` — `sensor_msgs/msg/CameraInfo` topics
+  - `bagwiz generate video cam -i <input> ... --pcd <topic>` — `sensor_msgs/msg/PointCloud2` topics
   - `bagwiz map slam -i <input> ... --imu <topic>` — `sensor_msgs/msg/Imu` topics
   - `bagwiz map slam -i <input> ... --color <topic>...` — `sensor_msgs/msg/Image` or
     `sensor_msgs/msg/CompressedImage` topics, offered at every value of the
@@ -288,8 +288,8 @@ name only — it offers plain topic names either way, typed as-is.
     new topic, so it has nothing to suggest
   - `bagwiz topic rename -i <input> --src <src_topic> --dst <dst_topic>` — every topic in the bag
     at the `<src_topic>` slot only; `<dst_topic>` is a new name with nothing to suggest
-  - `bagwiz generate video -i <input> -t <image_topic> -o <output>` — restricted to the image
-    types `generate video` operates on (`sensor_msgs/msg/Image`,
+  - `bagwiz generate video cam -i <input> -t <image_topic> -o <output>` — restricted to the image
+    types `generate video cam` operates on (`sensor_msgs/msg/Image`,
     `sensor_msgs/msg/CompressedImage`); topics of any other type are omitted
   - `bagwiz map slam -i <input> --pcd <pcd_topic> -o <output_root>` — restricted to
     `sensor_msgs/msg/PointCloud2` topics (the only type `map slam` ingests);

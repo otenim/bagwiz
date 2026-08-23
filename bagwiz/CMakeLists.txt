@@ -129,7 +129,7 @@ if(NOT zstd_vendor_FOUND)
 endif()
 find_package(zstd REQUIRED)
 
-# FFmpeg/libav is exercised directly by the `generate video` command test,
+# FFmpeg/libav is exercised directly by the `generate video cam` command test,
 # which synthesizes image fixtures and inspects the encoded output. No
 # ament/CMake package exists for it, so locate the libraries via pkg-config.
 # pkg_check_modules creates the imported target PkgConfig::LIBAV spanning all

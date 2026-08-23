@@ -160,16 +160,18 @@ TEST(CompletionSlotWiring, TopicDropKeepRename)
   expect_slot(slot_for(rename_slots, "dst"), TopicSelectorMode::kLiteral);
 }
 
-TEST(CompletionSlotWiring, GenerateVideo)
+TEST(CompletionSlotWiring, GenerateVideoCam)
 {
   auto * cmd = command_named("generate");
   ASSERT_NE(cmd, nullptr);
   CLI::App app{"generate"};
   cmd->configure(app);
 
-  auto * video = app.get_subcommand_no_throw("video");
-  ASSERT_NE(video, nullptr);
-  const auto slots = topic_slots_of(*video);
+  auto * group = app.get_subcommand_no_throw("video");
+  ASSERT_NE(group, nullptr);
+  auto * cam = group->get_subcommand_no_throw("cam");
+  ASSERT_NE(cam, nullptr);
+  const auto slots = topic_slots_of(*cam);
   expect_slot(
     slot_for(slots, "topic"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
   expect_slot(

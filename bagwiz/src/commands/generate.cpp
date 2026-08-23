@@ -28,9 +28,10 @@ constexpr const char * kLogger = "bagwiz.cmd.generate";
 }  // namespace
 
 // `bagwiz generate` is a command group for producing non-rosbag *media* from a
-// rosbag (rosbag -> media, not rosbag -> rosbag). Its first subcommand `video`
-// renders an image topic to a video file; the group leaves room for further
-// media generators (image sequences, GIFs, ...).
+// rosbag (rosbag -> media, not rosbag -> rosbag). Its first subcommand group
+// `video` holds video renderers: `video cam` renders an image topic to a video
+// file. The nesting leaves room for further media generators (image sequences,
+// GIFs, ...) and further video sources.
 class GenerateCommand : public Command
 {
 public:
@@ -43,13 +44,15 @@ public:
   void configure(CLI::App & app) override
   {
     app.require_subcommand(1);
-    configure_video(app);
+    auto * video = app.add_subcommand("video", "Video rendering");
+    video->require_subcommand(1);
+    configure_cam(*video);
   }
 
   int run() override
   {
     switch (selected_) {
-      case Subcommand::kVideo:
+      case Subcommand::kCam:
         return run_generate_video(video_args_);
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
@@ -59,14 +62,14 @@ public:
   }
 
 private:
-  enum class Subcommand { kNone, kVideo };
+  enum class Subcommand { kNone, kCam };
   Subcommand selected_ = Subcommand::kNone;
   GenerateVideoArgs video_args_;
 
-  void configure_video(CLI::App & app)
+  void configure_cam(CLI::App & video)
   {
     auto * sub =
-      app.add_subcommand("video", "Render an image topic from a rosbag to a video file.");
+      video.add_subcommand("cam", "Render an image topic from a rosbag to a video file.");
     sub->add_option("-i,--input", video_args_.input_path, "Input ROS 2 rosbag (file or directory).")
       ->required()
       ->check(CLI::ExistingPath);
@@ -163,7 +166,7 @@ private:
     sub->footer(
       "Frames stream straight to the encoder (no large temp files); the output is written\n"
       "atomically and a failed run leaves no partial file behind.");
-    sub->callback([this]() { selected_ = Subcommand::kVideo; });
+    sub->callback([this]() { selected_ = Subcommand::kCam; });
   }
 };
 

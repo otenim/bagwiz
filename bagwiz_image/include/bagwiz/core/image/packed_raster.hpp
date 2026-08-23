@@ -20,7 +20,7 @@
 #include <vector>
 
 // One seam that turns any supported image-topic message into a single canonical
-// raster, shared by `generate video` and `walk`'s image preview so both accept
+// raster, shared by `generate video cam` and `walk`'s image preview so both accept
 // exactly the same inputs. The raster is owned, tightly packed (no row padding),
 // and always 8-bit BGR24 — rgb8 source frames are swapped to BGR here so every
 // consumer can assume one channel order. libav stays behind the decoder pimpl;
