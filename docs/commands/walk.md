@@ -118,10 +118,11 @@ frame — and the view redraws on resize. Press `q` to return to the YAML view
   choice, so they always send pixels.
   This changes only how many bytes are sent, never the image's resolution or
   its on-screen size.
-- Pressing `u` toggles **rectification** (lens-distortion correction) when a CameraInfo topic was resolved or
-  explicitly provided. The rectified frame is rendered and saved by `S`. If no
-  CameraInfo is available, `u` shows `rectify: no camera_info` in the status
-  line and leaves the original image on screen.
+- **Rectification** (lens-distortion correction) is on by default whenever a
+  CameraInfo topic was resolved or explicitly provided; pressing `u` toggles
+  it off and back on. The rectified frame is rendered and saved by `S`. If no
+  CameraInfo is available, the preview starts unrectified and `u` shows
+  `rectify: no camera_info` in the status line.
 - Pressing `p` toggles a **PointCloud2 projection overlay** on the image
   preview. The first time it is enabled, bagwiz shows a checkbox list of the
   PointCloud2 topics in the bag; you can select one or more topics to project.

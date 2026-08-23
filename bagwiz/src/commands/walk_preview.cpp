@@ -65,6 +65,10 @@ ImagePreviewSession::ImagePreviewSession(
   image_caps_(image_caps),
   camera_info_(camera_info),
   camera_info_error_(camera_info_error),
+  // Rectification is the default whenever a CameraInfo could be resolved; u
+  // still toggles it off. Without one the preview starts unrectified and u
+  // reports the resolution error, exactly as before.
+  rectify_enabled_(camera_info.has_value()),
   decoded_frames_(kPreviewCacheCapacity),
   rectified_frames_(kRectifiedCacheCapacity)
 {

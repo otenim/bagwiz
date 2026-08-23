@@ -580,16 +580,36 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsWidthTooSmallForTheGridFails)
   EXPECT_NE(v.error.find("too small"), std::string::npos);
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsRectifyWithoutCamInfoFails)
+// Rectification is on by default but degrades to a warning when no
+// camera-info topic can be derived; validation succeeds and the view renders
+// unrectified.
+TEST_F(GenerateVideoCommonTest, ValidateInputsRectifyWithoutCamInfoWarnsAndContinues)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
   bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
-  args.rectify = true;
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  ASSERT_EQ(v.views.size(), 1u);
+  EXPECT_FALSE(v.views[0].camera_info_topic.has_value());
+}
+
+// Point-cloud projection still hard-requires a camera-info topic.
+TEST_F(GenerateVideoCommonTest, ValidateInputsPcdWithoutCamInfoFails)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, mcap_options());
+    declare_topic(*w, "/cam/image", kImageType);
+    declare_topic(*w, "/points", kPointCloudType);
+    w->close();
+  }
+  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  args.pointcloud_topics = {"/points"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(
     v.error,
-    "A camera-info topic is required for --rectify or --pcd, but none could be derived from "
+    "A camera-info topic is required for --pcd, but none could be derived from "
     "'/cam/image'. Pass it explicitly with --cam-info /cam/image=<info_topic>.");
 }
 
