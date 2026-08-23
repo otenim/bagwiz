@@ -42,6 +42,9 @@ struct PcdUndistortArgs
   // "fastest", "fast", "default", "slow", or "slowest". Empty => "default" for
   // zstd, "fastest" for lz4. Rejected together with --compression none.
   std::optional<std::string> compression_level;
+  // --keep-point-time; keep per-point timestamps unchanged instead of rewriting
+  // them to the reference time (header.stamp). Default: false.
+  bool keep_point_time = false;
 };
 
 // Execute `bagwiz pcd undistort`. Returns a process exit code.

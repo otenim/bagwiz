@@ -347,7 +347,7 @@ struct KernelCounters
 void run_deskew_kernel(
   std::byte * data, const KernelLayout & lay, std::uint32_t width, std::uint32_t height,
   std::uint32_t point_step, std::int64_t t_ref_ns, std::span<const core::TrajectoryPose> trajectory,
-  const FrameComposition & fc, KernelCounters & out)
+  const FrameComposition & fc, KernelCounters & out, bool keep_point_time)
 {
   const PointTimeField & time_field = *lay.time_field;
   const std::uint32_t rstep = lay.rstep;
@@ -444,7 +444,11 @@ void run_deskew_kernel(
       store_xyz(base + lay.fx.offset, lay.fx.datatype, p.x);
       store_xyz(base + lay.fy.offset, lay.fy.datatype, p.y);
       store_xyz(base + lay.fz.offset, lay.fz.datatype, p.z);
-      write_ref_time(base + time_field.offset, time_field.datatype, relative, t_ref_ns);
+      // keep_point_time opts out of the re-deskew guard above, leaving each
+      // point's own acquisition time in the cloud.
+      if (!keep_point_time) {
+        write_ref_time(base + time_field.offset, time_field.datatype, relative, t_ref_ns);
+      }
       ++out.deskewed;
     }
   }
@@ -454,7 +458,7 @@ void run_deskew_kernel(
 
 DeskewResult deskew_pointcloud2(
   PointCloud2 input, std::int64_t t_ref_ns, std::span<const core::TrajectoryPose> trajectory,
-  const std::optional<geometry_msgs::msg::Transform> & extrinsic)
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic, bool keep_point_time)
 {
   DeskewResult out;
   const KernelLayout lay = resolve_kernel_layout(
@@ -489,7 +493,7 @@ DeskewResult deskew_pointcloud2(
   KernelCounters counters;
   run_deskew_kernel(
     input.data.data(), lay, input.width, input.height, input.point_step, t_ref_ns, trajectory, fc,
-    counters);
+    counters, keep_point_time);
   out.points_deskewed = counters.deskewed;
   out.points_no_time = counters.no_time;
   out.points_nonfinite = counters.nonfinite;
@@ -500,7 +504,7 @@ DeskewResult deskew_pointcloud2(
 
 DeskewCdrResult deskew_pointcloud2_cdr(
   std::span<std::byte> payload, std::span<const core::TrajectoryPose> trajectory,
-  const std::optional<geometry_msgs::msg::Transform> & extrinsic)
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic, bool keep_point_time)
 {
   DeskewCdrResult out;
   const auto parsed =
@@ -540,7 +544,7 @@ DeskewCdrResult deskew_pointcloud2_cdr(
   KernelCounters counters;
   run_deskew_kernel(
     payload.data() + pl.data_offset, lay, h.width, h.height, h.point_step, h.timestamp_ns,
-    trajectory, fc, counters);
+    trajectory, fc, counters, keep_point_time);
   out.points_deskewed = counters.deskewed;
   out.points_no_time = counters.no_time;
   out.points_nonfinite = counters.nonfinite;

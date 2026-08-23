@@ -125,7 +125,8 @@ void log_out_of_span_warnings(const core::pointcloud::DeskewCdrResult & res, con
 // Deskew a single cloud by patching one owned copy of its CDR payload in
 // place — no parse-side data copy and no re-serialize. Runs on a worker
 // thread and only touches local state plus the read-only trajectory span.
-OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPose> trajectory)
+OutputItem process_deskew_job(
+  DeskewJob job, std::span<const core::TrajectoryPose> trajectory, bool keep_point_time)
 {
   OutputItem item;
   item.topic = job.topic;
@@ -138,7 +139,8 @@ OutputItem process_deskew_job(DeskewJob job, std::span<const core::TrajectoryPos
     // messages in that chunk, so patching it in place is not an option.
     std::vector<std::byte> patched(job.frozen.payload.begin(), job.frozen.payload.end());
     const auto res = core::pointcloud::deskew_pointcloud2_cdr(
-      std::span<std::byte>(patched.data(), patched.size()), trajectory, job.extrinsic);
+      std::span<std::byte>(patched.data(), patched.size()), trajectory, job.extrinsic,
+      keep_point_time);
     if (!res.parse_error.empty()) {
       BAGWIZ_LOG_WARN(
         kLogger, "pcd undistort: skipping undecodable cloud on '%s': %s", job.topic.c_str(),
@@ -176,7 +178,7 @@ int run_parallel_undistort_pass(
   io::BagWriter & writer, const io::BagReader & topic_reader,
   const std::filesystem::path & input_path, const std::unordered_set<std::string> & pcd_set,
   const ExtrinsicMap & extrinsics, std::span<const core::TrajectoryPose> trajectory,
-  int num_threads, std::uint64_t & total_clouds)
+  int num_threads, bool keep_point_time, std::uint64_t & total_clouds)
 {
   for (const auto & t : topic_reader.topics()) {
     writer.declare_topic(t);
@@ -229,7 +231,7 @@ int run_parallel_undistort_pass(
       OutputItem item;
       {
         auto s = prof.time(core::pipeline::Stage::kProcess);
-        item = process_deskew_job(std::move(job), trajectory);
+        item = process_deskew_job(std::move(job), trajectory, keep_point_time);
       }
 
       {
@@ -441,7 +443,7 @@ int run_sync_undistort_pass(
   io::BagWriter & writer, const io::BagReader & topic_reader,
   const std::filesystem::path & input_path, const std::unordered_set<std::string> & pcd_set,
   const ExtrinsicMap & extrinsics, std::span<const core::TrajectoryPose> trajectory,
-  std::uint64_t & total_clouds)
+  bool keep_point_time, std::uint64_t & total_clouds)
 {
   for (const auto & t : topic_reader.topics()) {
     writer.declare_topic(t);
@@ -486,7 +488,8 @@ int run_sync_undistort_pass(
       auto s = prof.time(core::pipeline::Stage::kProcess);
       patch_buf.assign(raw.payload.begin(), raw.payload.end());
       return core::pointcloud::deskew_pointcloud2_cdr(
-        std::span<std::byte>(patch_buf.data(), patch_buf.size()), trajectory, extrinsics.at(name));
+        std::span<std::byte>(patch_buf.data(), patch_buf.size()), trajectory, extrinsics.at(name),
+        keep_point_time);
     }();
     if (!res.parse_error.empty()) {
       BAGWIZ_LOG_WARN(
@@ -550,7 +553,8 @@ int run_sync_undistort_pass(
 int dispatch_undistort_pass(
   const PcdUndistortArgs & args, const io::BagReader & topic_reader,
   const std::unordered_set<std::string> & pcd_set, const ExtrinsicMap & extrinsics,
-  std::span<const core::TrajectoryPose> trajectory, int num_threads, std::uint64_t & total_clouds)
+  std::span<const core::TrajectoryPose> trajectory, int num_threads, bool keep_point_time,
+  std::uint64_t & total_clouds)
 {
   core::BagRewriteOptions rewrite_opts;
   rewrite_opts.logger = kLogger;
@@ -569,11 +573,12 @@ int dispatch_undistort_pass(
       }
       if (num_threads <= 1) {
         return run_sync_undistort_pass(
-          *writer, topic_reader, args.input_path, pcd_set, extrinsics, trajectory, total_clouds);
+          *writer, topic_reader, args.input_path, pcd_set, extrinsics, trajectory, keep_point_time,
+          total_clouds);
       }
       return run_parallel_undistort_pass(
         *writer, topic_reader, args.input_path, pcd_set, extrinsics, trajectory, num_threads,
-        total_clouds);
+        keep_point_time, total_clouds);
     });
 }
 
@@ -781,7 +786,8 @@ int run_pcd_undistort(const PcdUndistortArgs & args)
   const int num_threads =
     resolve_num_threads(args.threads.value_or(0), std::thread::hardware_concurrency());
   const int status = dispatch_undistort_pass(
-    args, *reader, pcd_set, *extrinsics, trajectory, num_threads, total_clouds);
+    args, *reader, pcd_set, *extrinsics, trajectory, num_threads, args.keep_point_time,
+    total_clouds);
   if (status != 0) {
     return status;
   }

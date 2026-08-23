@@ -197,6 +197,11 @@ private:
         "slowest. Unset: default for zstd, fastest for lz4 (lz4's 'default' is the far "
         "slower LZ4-HC mode). Not combinable with --compression none.")
       ->check(CLI::IsMember({"fastest", "fast", "default", "slow", "slowest"}));
+    sub->add_flag(
+      "--keep-point-time", undistort_args_.keep_point_time,
+      "Keep per-point timestamps unchanged instead of rewriting them to the reference time "
+      "(header.stamp). Without that rewrite the output carries no marker that it was already "
+      "deskewed, so a second undistort run over it would deskew it twice.");
     sub->callback([this]() { selected_ = Subcommand::kUndistort; });
   }
 };

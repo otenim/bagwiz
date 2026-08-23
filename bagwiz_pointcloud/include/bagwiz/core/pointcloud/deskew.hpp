@@ -62,13 +62,14 @@ struct DeskewResult
 // `input` is taken by value and rewritten in place (callers can std::move the
 // parsed cloud in to avoid a full data copy). Non-target fields/bytes are
 // preserved; only xyz + one per-point time field are
-// rewritten (time -> t_ref-equivalent to block downstream double-deskew). Time
-// field detected per point_time.hpp. Big-endian input is rejected. A cloud with
-// no usable time field is returned verbatim with points_no_time set (the command
-// treats that as fatal upfront).
+// rewritten (time -> t_ref-equivalent to block downstream double-deskew, unless
+// `keep_point_time` is true). Time field detected per point_time.hpp. Big-endian
+// input is rejected. A cloud with no usable time field is returned verbatim with
+// points_no_time set (the command treats that as fatal upfront).
 DeskewResult deskew_pointcloud2(
   PointCloud2 input, std::int64_t t_ref_ns, std::span<const core::TrajectoryPose> trajectory,
-  const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt);
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt,
+  bool keep_point_time = false);
 
 // Outcome of deskew_pointcloud2_cdr(): the counters and clamp flags of
 // DeskewResult (same meanings), without a materialised cloud -- the points
@@ -104,7 +105,8 @@ struct DeskewCdrResult
 // bytes verbatim with the corresponding counter set.
 DeskewCdrResult deskew_pointcloud2_cdr(
   std::span<std::byte> payload, std::span<const core::TrajectoryPose> trajectory,
-  const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt);
+  const std::optional<geometry_msgs::msg::Transform> & extrinsic = std::nullopt,
+  bool keep_point_time = false);
 
 }  // namespace bagwiz::core::pointcloud
 

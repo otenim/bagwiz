@@ -1587,7 +1587,7 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 //   undistort: `pcd`(0) `undistort`(1) -i|--input <bag> (--pose|--twist) <topic>
 //              --pcd <t...> [--ref <frame>] [--of <frame>] [-o <out>]
 //              [-j|--threads <N>] [-w|--overwrite] [--no-extrap]
-//              [--max-extrap-duration <dur>]
+//              [--max-extrap-duration <dur>] [--keep-point-time]
 std::vector<std::string> complete_pcd(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1610,9 +1610,9 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
     if (sub == "undistort") {
       return matching(
         with_help(
-          {"--compression", "--compression-level", "--input", "--max-extrap-duration",
-           "--no-extrap", "--of", "--output", "--overwrite", "--pcd", "--pose", "--ref",
-           "--threads", "--twist", "-i", "-j", "-o", "-w"}),
+          {"--compression", "--compression-level", "--input", "--keep-point-time",
+           "--max-extrap-duration", "--no-extrap", "--of", "--output", "--overwrite", "--pcd",
+           "--pose", "--ref", "--threads", "--twist", "-i", "-j", "-o", "-w"}),
         current);
     }
   }
