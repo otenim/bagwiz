@@ -221,15 +221,18 @@ private:
     sub->add_option("--height", pcd_scan_args_.height, "Output height in pixels. Must be even.")
       ->default_val(720U)
       ->check(CLI::Range(2U, 4320U));
-    sub->add_option("--steps", pcd_scan_args_.steps, "Video frames rendered per sweep.")
-      ->default_val(50U)
-      ->check(CLI::Range(1U, 100U));
+    sub
+      ->add_option(
+        "--fps", pcd_scan_args_.fps,
+        "Output frame rate in fps. Each sweep spans round(--fps / (cloud rate x --speed)) "
+        "video frames (at least 1), so a higher value gives a smoother animation.")
+      ->default_val(60U)
+      ->check(CLI::Range(1U, 240U));
     sub
       ->add_option(
         "--speed", pcd_scan_args_.speed,
         "Playback speed as a fraction of real time: 1.0 plays each sweep in its recorded "
-        "duration, 0.1 slows the animation to one tenth. The output frame rate is the cloud "
-        "rate times --steps times this value.")
+        "duration, 0.1 slows the animation to one tenth.")
       ->default_val(0.1)
       ->check(CLI::Range(0.001, 100.0));
     sub

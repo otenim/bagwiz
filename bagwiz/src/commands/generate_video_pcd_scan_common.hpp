@@ -46,30 +46,20 @@ struct PcdScanValidation
 };
 
 // The command's pre-flight checks: source topic presence + PointCloud2 type,
-// even canvas dimensions (H.264), positive steps / --range / --dist values,
+// even canvas dimensions (H.264), a valid --fps / --speed / --range / --dist,
 // and — on the topic's first message — x/y/z fields and a recognised
 // per-point time field (required; there is no array-order fallback). Logs the
 // command's errors and returns on the first failure.
 [[nodiscard]] PcdScanValidation validate_pcd_scan_inputs(const GenerateVideoPcdScanArgs & args);
 
-// ---- frame rate -------------------------------------------------------------
+// ---- sweep timing -------------------------------------------------------------
 
-// The output frame rate and the step count that produces it.
-struct ScanFrameRate
-{
-  core::video::FrameRate fps;
-  std::uint32_t steps = 1;  // effective steps; <= the requested count
-};
-
-// fps = cloud_fps * steps * speed, so one sweep spans `steps` video frames
-// and plays at `speed` times real time. When the product would exceed
-// core::video::kMaxFps, the step count is reduced to the largest value that
-// stays within the cap (never below 1); when it would fall below
-// core::video::kMinFps, the frame rate is clamped to kMinFps instead. The
-// result is rounded to milli-fps and reduced, matching derive_frame_rate's
-// convention.
-[[nodiscard]] ScanFrameRate derive_scan_frame_rate(
-  core::video::FrameRate cloud_fps, std::uint32_t requested_steps, double speed);
+// Video frames rendered per sweep: round(fps / (cloud_fps * speed)), never
+// below 1. `cloud_fps` is the topic's message rate from derive_frame_rate.
+// Below 1 (fps < cloud rate * speed) each sweep gets exactly one frame, so
+// the animation plays slower than the requested speed — the caller warns.
+[[nodiscard]] std::uint32_t scan_frames_per_sweep(
+  core::video::FrameRate cloud_fps, std::uint32_t fps, double speed);
 
 // ---- pass 1: topic span + auto range -----------------------------------------
 

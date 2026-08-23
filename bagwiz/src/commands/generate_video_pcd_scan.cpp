@@ -32,7 +32,7 @@ namespace
 constexpr const char * kLogger = "bagwiz.cmd.generate";
 
 // One sweep of the encode loop: sort the cloud's points by firing time, then
-// emit `steps` cumulative frames, drawing only the points that fired since the
+// emit `frames_per_sweep` cumulative frames, drawing only the points that fired since the
 // previous frame onto the persistent canvas.
 //
 // The canvas is reused across write_frame() calls: write_frame() converts the
@@ -40,7 +40,7 @@ constexpr const char * kLogger = "bagwiz.cmd.generate";
 // never retains the caller's buffer.
 int encode_sweep(
   const core::pointcloud::PointCloud2 & cloud, const core::pointcloud::PointTimeField & time_field,
-  const core::pointcloud::ScanPatternView & view, std::uint32_t steps,
+  const core::pointcloud::ScanPatternView & view, std::uint32_t frames_per_sweep,
   core::pointcloud::ColorScheme scheme, std::uint32_t point_size,
   core::video::VideoEncoder & encoder, std::uint64_t & written)
 {
@@ -60,7 +60,7 @@ int encode_sweep(
   if (order.empty()) {
     // No finite per-point time in this sweep: keep the timeline by emitting
     // blank frames.
-    for (std::uint32_t k = 0; k < steps; ++k) {
+    for (std::uint32_t k = 0; k < frames_per_sweep; ++k) {
       if (const auto err = encoder.write_frame(
             canvas.bgr, canvas.width * 3, core::video::SourcePixelFormat::kBgr8);
           !err.empty()) {
@@ -85,8 +85,9 @@ int encode_sweep(
   const double value_max = span;
 
   std::size_t drawn = 0;
-  for (std::uint32_t k = 1; k <= steps; ++k) {
-    const double threshold = t_min + span * static_cast<double>(k) / static_cast<double>(steps);
+  for (std::uint32_t k = 1; k <= frames_per_sweep; ++k) {
+    const double threshold =
+      t_min + span * static_cast<double>(k) / static_cast<double>(frames_per_sweep);
     const std::size_t count = static_cast<std::size_t>(
       std::upper_bound(sorted_times.begin(), sorted_times.end(), threshold) - sorted_times.begin());
     if (count > drawn) {
@@ -136,21 +137,16 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
     return 1;
   }
   const auto cloud_fps = core::video::derive_frame_rate(span.first_ns, span.last_ns, span.count);
-  const auto scan_rate = derive_scan_frame_rate(cloud_fps, args.steps, args.speed);
-  if (scan_rate.steps != args.steps) {
-    BAGWIZ_LOG_WARN(
-      kLogger, "--steps reduced from %u to %u to keep the output frame rate within %d fps.",
-      args.steps, scan_rate.steps, core::video::kMaxFps);
-  }
-  if (scan_rate.fps.num == core::video::kMinFps && scan_rate.fps.den == 1) {
-    const double wanted =
-      static_cast<double>(cloud_fps.num) * scan_rate.steps * args.speed / cloud_fps.den;
-    if (wanted < core::video::kMinFps) {
+  const auto frames_per_sweep = scan_frames_per_sweep(cloud_fps, args.fps, args.speed);
+  {
+    const double cloud_rate =
+      static_cast<double>(cloud_fps.num) / static_cast<double>(cloud_fps.den);
+    if (static_cast<double>(args.fps) < cloud_rate * args.speed) {
       BAGWIZ_LOG_WARN(
         kLogger,
-        "cloud rate x --steps x --speed is %.3g fps, below the %d fps floor; the output "
-        "frame rate is clamped to %d fps and the animation plays faster than requested.",
-        wanted, core::video::kMinFps, core::video::kMinFps);
+        "--fps %u is below the cloud rate x --speed (%.3g fps); each sweep gets exactly one "
+        "frame, so the animation plays slower than the requested speed.",
+        args.fps, cloud_rate * args.speed);
     }
   }
 
@@ -197,7 +193,7 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
   reader->set_filter(filter);
 
   auto opened = core::video::open_video_encoder(
-    tmp_path, args.width, args.height, scan_rate.fps.num, scan_rate.fps.den);
+    tmp_path, args.width, args.height, static_cast<int>(args.fps), 1);
   if (!opened.ok()) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", opened.error.c_str());
     return 1;
@@ -225,7 +221,7 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
       }
       if (
         encode_sweep(
-          *parsed.cloud, *time_field, view, scan_rate.steps, args.colorscheme, args.point_size,
+          *parsed.cloud, *time_field, view, frames_per_sweep, args.colorscheme, args.point_size,
           *opened.encoder, written) != 0) {
         return 1;
       }
@@ -251,11 +247,9 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
     return 1;
   }
 
-  const double fps_value =
-    static_cast<double>(scan_rate.fps.num) / static_cast<double>(scan_rate.fps.den);
   BAGWIZ_LOG_INFO(
-    kLogger, "generate video scan: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).",
-    written, args.output_path.string().c_str(), args.width, args.height, fps_value);
+    kLogger, "generate video scan: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %u fps).",
+    written, args.output_path.string().c_str(), args.width, args.height, args.fps);
   return 0;
 }
 

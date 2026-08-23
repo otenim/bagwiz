@@ -2272,8 +2272,8 @@ TEST(FlagCompletionTest, GenerateVideoScanDashListsScanFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "scan", "-"}),
-    "--azim\n--dist\n--elev\n--height\n--help\n--input\n--output\n--overwrite\n--point-size\n"
-    "--range\n--scheme\n--speed\n--steps\n--topic\n--view\n--width\n-h\n-i\n-o\n-t\n-w\n");
+    "--azim\n--dist\n--elev\n--fps\n--height\n--help\n--input\n--output\n--overwrite\n"
+    "--point-size\n--range\n--scheme\n--speed\n--topic\n--view\n--width\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `--view <TAB>` offers the valid projection choices, sorted.

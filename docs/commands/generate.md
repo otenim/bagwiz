@@ -142,9 +142,8 @@ bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp
 # Top-down (BEV) animation instead.
 bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --view bev
 
-# Coarser time resolution within each sweep (and a smaller file): 20 video
-# frames per sweep instead of 50.
-bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --steps 20
+# Coarser animation (and a smaller file): 30 fps output instead of 60.
+bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --fps 30
 
 # Play in real time instead of the default one-tenth speed.
 bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --speed 1.0
@@ -155,23 +154,23 @@ bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp
 
 ### Options
 
-| Flag                      | Description                                                                                                                                                                                                                                                |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                                                   |
-| `-t`, `--topic <topic>`   | **Required.** `sensor_msgs/msg/PointCloud2` topic to render. A literal topic name, not a glob. The topic must carry a per-point time field (see below).                                                                                                    |
-| `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                                                                    |
-| `--view <view>`           | Projection space: `3d` (perspective view from a fixed camera looking at the sensor) or `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y). Default: `3d`. Long-form only.                                                       |
-| `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. Long-form only.                                                                                                                                                                       |
-| `--height <px>`           | Output height in pixels (range: 2-4320). Must be even. Default: 720. Long-form only.                                                                                                                                                                       |
-| `--steps <n>`             | Video frames rendered per sweep (range: 1-100). Default: 50. Long-form only.                                                                                                                                                                               |
-| `--speed <x>`             | Playback speed as a fraction of real time: 1.0 plays each sweep in its recorded duration, 0.1 slows the animation to one tenth (range: 0.001-100). The output frame rate is the cloud rate times `--steps` times this value. Default: 0.1. Long-form only. |
-| `--range <m>`             | BEV half-extent in meters: the BEV view spans +-range on both ground axes. Not used by the 3D view. Default: auto — the largest finite XY distance in the first cloud. Long-form only.                                                                     |
-| `--elev <deg>`            | 3D view: camera elevation above the XY plane in degrees (range: -89 to 89). Default: 20. Long-form only.                                                                                                                                                   |
-| `--azim <deg>`            | 3D view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks at the scene from behind the sensor. Default: 180. Long-form only.                                                                                                      |
-| `--dist <m>`              | 3D view: camera distance from the sensor in meters. Default: 30. Long-form only.                                                                                                                                                                           |
-| `--scheme <scheme>`       | Color scheme for the sweep-relative time coloring: `viridis`, `turbo`, `jet`, `plasma`, `inferno`, `magma`, `rainbow`. Default: `viridis`. Long-form only.                                                                                                 |
-| `--point-size <px>`       | Side length of drawn square points in pixels (range: 1-64). Default: 2. Long-form only.                                                                                                                                                                    |
-| `-w`, `--overwrite`       | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                                                         |
+| Flag                      | Description                                                                                                                                                                                               |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                  |
+| `-t`, `--topic <topic>`   | **Required.** `sensor_msgs/msg/PointCloud2` topic to render. A literal topic name, not a glob. The topic must carry a per-point time field (see below).                                                   |
+| `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                   |
+| `--view <view>`           | Projection space: `3d` (perspective view from a fixed camera looking at the sensor) or `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y). Default: `3d`. Long-form only.      |
+| `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. Long-form only.                                                                                                                      |
+| `--height <px>`           | Output height in pixels (range: 2-4320). Must be even. Default: 720. Long-form only.                                                                                                                      |
+| `--fps <f>`               | Output frame rate in fps (range: 1-240). Each sweep spans round(`--fps` / (cloud rate x `--speed`)) video frames (at least 1), so a higher value gives a smoother animation. Default: 60. Long-form only. |
+| `--speed <x>`             | Playback speed as a fraction of real time: 1.0 plays each sweep in its recorded duration, 0.1 slows the animation to one tenth (range: 0.001-100). Default: 0.1. Long-form only.                          |
+| `--range <m>`             | BEV half-extent in meters: the BEV view spans +-range on both ground axes. Not used by the 3D view. Default: auto — the largest finite XY distance in the first cloud. Long-form only.                    |
+| `--elev <deg>`            | 3D view: camera elevation above the XY plane in degrees (range: -89 to 89). Default: 20. Long-form only.                                                                                                  |
+| `--azim <deg>`            | 3D view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks at the scene from behind the sensor. Default: 180. Long-form only.                                                     |
+| `--dist <m>`              | 3D view: camera distance from the sensor in meters. Default: 30. Long-form only.                                                                                                                          |
+| `--scheme <scheme>`       | Color scheme for the sweep-relative time coloring: `viridis`, `turbo`, `jet`, `plasma`, `inferno`, `magma`, `rainbow`. Default: `viridis`. Long-form only.                                                |
+| `--point-size <px>`       | Side length of drawn square points in pixels (range: 1-64). Default: 2. Long-form only.                                                                                                                   |
+| `-w`, `--overwrite`       | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                        |
 
 ### Per-point time field
 
@@ -187,15 +186,15 @@ appear.
 ### Animation model
 
 Each sweep clears the canvas and re-accumulates its points in firing order
-over `--steps` video frames; the last frame of a sweep shows the complete
-cloud. A sweep in which no point carries a finite time contributes `--steps`
-blank frames, so the video timeline is not disturbed. The output frame rate is
-the cloud rate times `--steps` times `--speed` (a 10 Hz lidar with the default
-50 steps and the default speed 0.1 yields a 50 fps video), so the animation
-plays at `--speed` times real time. If that product would exceed 240 fps, the
-step count is reduced with a warning; if it would fall below 1 fps, the frame
-rate is clamped to 1 fps with a warning. Dimensions must be even (the 4:2:0
-pixel formats these codecs use require it).
+over round(`--fps` / (cloud rate x `--speed`)) video frames; the last frame of
+a sweep shows the complete cloud. The output frame rate is `--fps` itself (a
+10 Hz lidar with the default 60 fps and the default speed 0.1 gives each sweep
+60 frames), so the animation plays at `--speed` times real time. If `--fps` is
+below the cloud rate times `--speed`, each sweep gets exactly one frame with a
+warning (the animation then plays slower than the requested speed). A sweep in
+which no point carries a finite time contributes the same number of blank
+frames, so the video timeline is not disturbed. Dimensions must be even (the
+4:2:0 pixel formats these codecs use require it).
 
 ### Output
 

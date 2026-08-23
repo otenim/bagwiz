@@ -32,9 +32,9 @@
 
 namespace
 {
-using bagwiz::commands::derive_scan_frame_rate;
 using bagwiz::commands::GenerateVideoPcdScanArgs;
 using bagwiz::commands::run_generate_video_pcd_scan;
+using bagwiz::commands::scan_frames_per_sweep;
 using bagwiz::commands::validate_pcd_scan_inputs;
 
 // Little-endian CDR-1 builder, matching the wire format the production reader
@@ -250,12 +250,13 @@ TEST_F(GenerateVideoPcdScanTest, RunExistingOutputWithoutOverwriteFails)
 
 TEST_F(GenerateVideoPcdScanTest, RunEncodesBevVideo)
 {
-  // 5 clouds at 10 Hz, steps 4, speed 1.0 -> 20 frames at 40 fps = 0.5 s.
+  // 5 clouds at 10 Hz, fps 40, speed 1.0 -> 4 frames/sweep, 20 frames at
+  // 40 fps = 0.5 s.
   const auto bag = build_bag(dir_, 5);
   const auto out = dir_ / "out.mp4";
   GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
   args.view = bagwiz::core::pointcloud::ScanPatternProjection::kBev;
-  args.steps = 4;
+  args.fps = 40;
   args.speed = 1.0;
   args.width = 320;
   args.height = 240;
@@ -272,12 +273,12 @@ TEST_F(GenerateVideoPcdScanTest, RunEncodesBevVideo)
 
 TEST_F(GenerateVideoPcdScanTest, RunDefaultSpeedPlaysAtOneTenthRealTime)
 {
-  // Default speed 0.1: 5 clouds at 10 Hz, steps 4 -> 20 frames at 4 fps = 5 s
-  // (the recording's 0.5 s stretched tenfold).
+  // Default speed 0.1: 5 clouds at 10 Hz, fps 4 -> 4 frames/sweep, 20 frames
+  // at 4 fps = 5 s (the recording's 0.5 s stretched tenfold).
   const auto bag = build_bag(dir_, 5);
   const auto out = dir_ / "out.mp4";
   GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
-  args.steps = 4;
+  args.fps = 4;
   args.width = 320;
   args.height = 240;
   ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
@@ -294,7 +295,7 @@ TEST_F(GenerateVideoPcdScanTest, RunEncodesPerspectiveVideo)
   const auto out = dir_ / "out.mp4";
   GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
   args.view = bagwiz::core::pointcloud::ScanPatternProjection::kPerspective;
-  args.steps = 2;
+  args.fps = 2;  // 2 frames/sweep at 10 Hz and the default speed 0.1
   args.width = 320;
   args.height = 240;
   args.range_m = 50.0;
@@ -320,69 +321,38 @@ TEST_F(GenerateVideoPcdScanTest, RunOverwriteReplacesExistingOutput)
   ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
-  EXPECT_EQ(probe.frame_count, 150);  // 3 clouds * default 50 steps
+  // 3 clouds * 60 frames/sweep (default fps 60 at 10 Hz, default speed 0.1)
+  EXPECT_EQ(probe.frame_count, 180);
 }
 
-TEST(DeriveScanFrameRate, MultipliesStepsIntoTheRate)
+TEST(ScanFramesPerSweep, FramesPerSweepFromFpsAndSpeed)
 {
-  // 10 Hz clouds * 10 steps * speed 1.0 = 100 fps.
-  const auto r = derive_scan_frame_rate({10, 1}, 10, 1.0);
-  EXPECT_EQ(r.steps, 10u);
-  EXPECT_EQ(r.fps.num, 100);
-  EXPECT_EQ(r.fps.den, 1);
+  // 10 Hz clouds, 60 fps, speed 0.1 -> 60 frames per sweep.
+  EXPECT_EQ(scan_frames_per_sweep({10, 1}, 60, 0.1), 60u);
 }
 
-TEST(DeriveScanFrameRate, AppliesSpeedToTheRate)
+TEST(ScanFramesPerSweep, RealTimeSpeed)
 {
-  // 10 Hz clouds * 10 steps * speed 0.1 = 10 fps.
-  const auto r = derive_scan_frame_rate({10, 1}, 10, 0.1);
-  EXPECT_EQ(r.steps, 10u);
-  EXPECT_EQ(r.fps.num, 10);
-  EXPECT_EQ(r.fps.den, 1);
+  // 10 Hz clouds, 30 fps, speed 1.0 -> 3 frames per sweep.
+  EXPECT_EQ(scan_frames_per_sweep({10, 1}, 30, 1.0), 3u);
 }
 
-TEST(DeriveScanFrameRate, ReducesTheFraction)
+TEST(ScanFramesPerSweep, FractionalCloudRate)
 {
-  // 25/2 fps * 4 * 1.0 = 50 fps exactly.
-  const auto r = derive_scan_frame_rate({25, 2}, 4, 1.0);
-  EXPECT_EQ(r.steps, 4u);
-  EXPECT_EQ(r.fps.num, 50);
-  EXPECT_EQ(r.fps.den, 1);
+  // 12.5 Hz clouds, 50 fps, speed 1.0 -> 4 frames per sweep.
+  EXPECT_EQ(scan_frames_per_sweep({25, 2}, 50, 1.0), 4u);
 }
 
-TEST(DeriveScanFrameRate, ClampsToMaxFps)
+TEST(ScanFramesPerSweep, RoundsToNearest)
 {
-  // 30 Hz * 10 * 1.0 = 300 > 240 -> steps reduced to 8 (240 fps).
-  const auto r = derive_scan_frame_rate({30, 1}, 10, 1.0);
-  EXPECT_EQ(r.steps, 8u);
-  EXPECT_EQ(r.fps.num, 240);
-  EXPECT_EQ(r.fps.den, 1);
+  // 3 Hz clouds, 10 fps, speed 1.0 -> 10/3 = 3.33 -> 3 frames per sweep.
+  EXPECT_EQ(scan_frames_per_sweep({3, 1}, 10, 1.0), 3u);
 }
 
-TEST(DeriveScanFrameRate, SpeedFactorsIntoTheStepsClamp)
+TEST(ScanFramesPerSweep, FloorsAtOneFramePerSweep)
 {
-  // 30 Hz * 10 * 0.5 = 150 fps <= 240 -> steps kept.
-  const auto r = derive_scan_frame_rate({30, 1}, 10, 0.5);
-  EXPECT_EQ(r.steps, 10u);
-  EXPECT_EQ(r.fps.num, 150);
-  EXPECT_EQ(r.fps.den, 1);
-}
-
-TEST(DeriveScanFrameRate, ClampsToMinFps)
-{
-  // 1 Hz * 1 * 0.001 = 0.001 fps < 1 -> clamped to 1 fps.
-  const auto r = derive_scan_frame_rate({1, 1}, 1, 0.001);
-  EXPECT_EQ(r.steps, 1u);
-  EXPECT_EQ(r.fps.num, 1);
-  EXPECT_EQ(r.fps.den, 1);
-}
-
-TEST(DeriveScanFrameRate, NeverDropsBelowOneStep)
-{
-  const auto r = derive_scan_frame_rate({240, 1}, 10, 1.0);
-  EXPECT_EQ(r.steps, 1u);
-  EXPECT_EQ(r.fps.num, 240);
-  EXPECT_EQ(r.fps.den, 1);
+  // 100 Hz clouds, 10 fps, speed 1.0 -> 0.1 -> 1 frame per sweep.
+  EXPECT_EQ(scan_frames_per_sweep({100, 1}, 10, 1.0), 1u);
 }
 
 // Exercises the real GenerateCommand::configure_pcd_scan() — reached through
