@@ -1281,10 +1281,10 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
   if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
     if (request.words[kSecondCommandArgWord] == "cam") {
       return matching(
-        with_help({"--alpha",      "--cam-info", "--field",  "--grid",      "--input",
-                   "--max",        "--min",      "--output", "--overwrite", "--pcd",
-                   "--point-size", "--rectify",  "--resize", "--scheme",    "--topic",
-                   "--width",      "-i",         "-o",       "-t",          "-w"}),
+        with_help({"--alpha",   "--cam-info", "--field",  "--grid",      "--input", "--max",
+                   "--min",     "--no-label", "--output", "--overwrite", "--pcd",   "--point-size",
+                   "--rectify", "--resize",   "--scheme", "--topic",     "--width", "-i",
+                   "-o",        "-t",         "-w"}),
         current);
     }
   }

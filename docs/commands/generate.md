@@ -17,6 +17,10 @@ Render one or more image topics from a rosbag to a video file. With several
 The frame rate is derived from the first topic's message timestamps, and the
 container/codec is chosen from the `<output>` extension.
 
+Each view's topic name is drawn as a label at its cell's top-left corner, so a
+multi-view grid identifies which camera each cell shows (single-view included).
+Pass `--no-label` to suppress the labels.
+
 ### Usage
 
 ```text
@@ -116,6 +120,7 @@ bagwiz generate video cam -i drive.mcap -o overlay_each.mp4 \
 | `--alpha <alpha>`          | Point overlay opacity, 0.0-1.0. Default: 1.0. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `--resize <factor>`        | Scale the cell width and height by this factor while preserving aspect ratio. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so `--rectify` and `--pcd` stay aligned (range: 0.01-10.0). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                                                                                                                    |
 | `--width <px>`             | Fix the composed output width in pixels: the cell width is the width split across the grid columns, and the cell height follows the primary frame's aspect ratio (both rounded down to even, so the output can be a few pixels narrower). Mutually exclusive with `--resize`. Long-form only.                                                                                                                                                                                                                                                     |
+| `--no-label`               | Suppress the topic-name label drawn at each view cell's top-left corner (drawn by default, in single-view and multi-view alike). Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `-w`, `--overwrite`        | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ### Multi-view grids
