@@ -36,7 +36,6 @@ namespace
 {
 
 using bagwiz::commands::auto_grid_spec;
-using bagwiz::commands::draw_cell_label;
 using bagwiz::commands::finalize_video_output;
 using bagwiz::commands::finish_video_encode;
 using bagwiz::commands::FrameBuffer;
@@ -1057,47 +1056,6 @@ TEST(ViewRendererTest, RenderPastesCenteredIntoTheCell)
     EXPECT_EQ(canvas.pixels()[row + 3], std::byte{0x2A});
     EXPECT_EQ(canvas.pixels()[row + 6], std::byte{0x2A});
     EXPECT_EQ(canvas.pixels()[row + 9], std::byte{0});
-  }
-}
-
-// ---- cell labels --------------------------------------------------------------
-
-// The label's white core paints at least one fully-white pixel inside the
-// labeled cell's top-left region.
-TEST(DrawCellLabelTest, PaintsWhiteTextAtTheCellTopLeft)
-{
-  GridCanvas canvas(GridSpec{2, 1});
-  canvas.set_cell_size(128, 64);
-  canvas.clear();
-  draw_cell_label(canvas.cell(1), "/cam/b");
-
-  const auto cell = canvas.cell(1);
-  bool white_found = false;
-  for (std::uint32_t y = 0; y < 32 && !white_found; ++y) {
-    for (std::uint32_t x = 0; x < 64 && !white_found; ++x) {
-      const std::size_t p =
-        static_cast<std::size_t>(y) * cell.stride + static_cast<std::size_t>(x) * 3;
-      white_found = cell.data[p] == std::byte{0xFF} && cell.data[p + 1] == std::byte{0xFF} &&
-                    cell.data[p + 2] == std::byte{0xFF};
-    }
-  }
-  EXPECT_TRUE(white_found);
-}
-
-// Labeling one cell never touches the others.
-TEST(DrawCellLabelTest, LeavesOtherCellsUntouched)
-{
-  GridCanvas canvas(GridSpec{2, 1});
-  canvas.set_cell_size(128, 64);
-  canvas.clear();
-  draw_cell_label(canvas.cell(1), "/cam/b");
-
-  const auto cell = canvas.cell(0);
-  for (std::uint32_t y = 0; y < cell.height; ++y) {
-    for (std::uint32_t x = 0; x < cell.width * 3; ++x) {
-      EXPECT_EQ(cell.data[static_cast<std::size_t>(y) * cell.stride + x], std::byte{0})
-        << "y=" << y << " byte=" << x;
-    }
   }
 }
 

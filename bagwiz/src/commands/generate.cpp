@@ -157,10 +157,6 @@ private:
           "exclusive with --resize.")
         ->check(CLI::PositiveNumber);
     width_opt->excludes("--resize");
-    sub->add_flag(
-      "--no-label", video_args_.no_label,
-      "Suppress the topic-name label drawn at each view cell's top-left corner (drawn by "
-      "default, also in multi-view grids).");
     add_topic_option(
       *sub, "--pcd", video_args_.pointcloud_topics,
       "PointCloud2 topic(s) to project onto the frames: a bare value (a literal name or a "
