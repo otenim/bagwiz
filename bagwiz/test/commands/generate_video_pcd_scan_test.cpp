@@ -358,7 +358,7 @@ TEST(GenerateVideoPcdScanCliWiring, TopicOptionIsDeclaredLiteralPointCloud2)
 
   auto * video_group = app.get_subcommand_no_throw("video");
   ASSERT_NE(video_group, nullptr);
-  auto * pcd_scan_sub = video_group->get_subcommand_no_throw("pcd-scan");
+  auto * pcd_scan_sub = video_group->get_subcommand_no_throw("scan");
   ASSERT_NE(pcd_scan_sub, nullptr);
   const auto slots = bagwiz::commands::topic_slots_of(*pcd_scan_sub);
   ASSERT_EQ(slots.size(), 1U);  // -t/--topic only

@@ -26,7 +26,7 @@ namespace bagwiz::commands
 namespace
 {
 constexpr const char * kLogger = "bagwiz.cmd.generate";
-// Mirrors topic_types.hpp's kPointCloud2Type (generate video pcd-scan -t's
+// Mirrors topic_types.hpp's kPointCloud2Type (generate video scan -t's
 // allowed_types). Keep the two in sync by hand.
 constexpr const char * kPointCloud2Type = "sensor_msgs/msg/PointCloud2";
 
@@ -173,7 +173,7 @@ PcdScanValidation validate_pcd_scan_inputs(const GenerateVideoPcdScanArgs & args
   if (!time_field.has_value()) {
     out.error = "topic '" + args.topic +
                 "' has no per-point time field ('t', 'time', 'time_stamp', or 'timestamp'; "
-                "UINT32 nanoseconds or FLOAT32/FLOAT64 seconds), which generate video pcd-scan "
+                "UINT32 nanoseconds or FLOAT32/FLOAT64 seconds), which generate video scan "
                 "requires to order the points by firing time";
     BAGWIZ_LOG_ERROR(kLogger, "%s", out.error.c_str());
     return out;

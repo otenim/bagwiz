@@ -20,7 +20,7 @@
 #include <optional>
 #include <string>
 
-// Internals of `generate video pcd-scan`, split out of
+// Internals of `generate video scan`, split out of
 // generate_video_pcd_scan.cpp so the validation, frame-rate, pass-1 scan, and
 // auto-range units can be unit-tested without driving the full command.
 // CLI-internal: this header lives with the command sources and is not

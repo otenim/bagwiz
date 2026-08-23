@@ -2113,7 +2113,7 @@ TEST(FlagCompletionTest, GenerateVideoSubcommandListsLeaves)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "generate", "video", ""}),
-    "cam\npcd-scan\n");
+    "cam\nscan\n");
 }
 
 // `bagwiz generate video -` is the nested-group slot; only the implicit help
@@ -2266,37 +2266,36 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotSuppressedWhenInputSlotIsFlag)
     run_completion({"bagwiz", "__complete", "5", "bagwiz", "generate", "video", "cam", "-t"}), "");
 }
 
-// `generate video pcd-scan -` surfaces the leaf's flags plus the implicit help
+// `generate video scan -` surfaces the leaf's flags plus the implicit help
 // flags, sorted.
-TEST(FlagCompletionTest, GenerateVideoPcdScanDashListsPcdScanFlags)
+TEST(FlagCompletionTest, GenerateVideoScanDashListsScanFlags)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "pcd-scan", "-"}),
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "scan", "-"}),
     "--azim\n--dist\n--elev\n--height\n--help\n--input\n--output\n--overwrite\n--point-size\n"
     "--range\n--scheme\n--steps\n--topic\n--view\n--width\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `--view <TAB>` offers the valid projection choices, sorted.
-TEST(FlagCompletionTest, GenerateVideoPcdScanViewFlagListsChoices)
+TEST(FlagCompletionTest, GenerateVideoScanViewFlagListsChoices)
 {
   EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "pcd-scan", "--view"}),
+    run_completion({"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "scan", "--view"}),
     "3d\nbev\n");
 }
 
 // `--scheme <TAB>` offers the valid color scheme choices, sorted.
-TEST(FlagCompletionTest, GenerateVideoPcdScanSchemeFlagListsChoices)
+TEST(FlagCompletionTest, GenerateVideoScanSchemeFlagListsChoices)
 {
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "pcd-scan", "--scheme"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "scan", "--scheme"}),
     "inferno\njet\nmagma\nplasma\nrainbow\nturbo\nviridis\n");
 }
 
-// `generate video pcd-scan <bag> <TAB>` (the <pcd_topic> slot) lists only the
+// `generate video scan <bag> <TAB>` (the <pcd_topic> slot) lists only the
 // bag's PointCloud2 topics, excluding the non-PointCloud2 /image.
-TEST_F(CompletionTest, GenerateVideoPcdScanTopicSlotListsOnlyPointCloud2Topics)
+TEST_F(CompletionTest, GenerateVideoScanTopicSlotListsOnlyPointCloud2Topics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2304,8 +2303,8 @@ TEST_F(CompletionTest, GenerateVideoPcdScanTopicSlotListsOnlyPointCloud2Topics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "pcd-scan", "-i",
-       "~/points.mcap", "-t"}),
+      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "scan", "-i", "~/points.mcap",
+       "-t"}),
     "/points\n");
 }
 

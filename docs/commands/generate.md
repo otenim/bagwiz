@@ -4,10 +4,10 @@ Generate non-rosbag **media** from a rosbag. Unlike `convert` or `topic` (which
 read a bag and write another bag), `generate` reads a bag and produces a
 different kind of artifact. Subcommands:
 
-| Subcommand                                          | What it does                                        |
-| --------------------------------------------------- | --------------------------------------------------- |
-| [`video cam`](#bagwiz-generate-video-cam)           | Render an image topic to a video file.              |
-| [`video pcd-scan`](#bagwiz-generate-video-pcd-scan) | Render a point-cloud topic's scan pattern to video. |
+| Subcommand                                  | What it does                                        |
+| ------------------------------------------- | --------------------------------------------------- |
+| [`video cam`](#bagwiz-generate-video-cam)   | Render an image topic to a video file.              |
+| [`video scan`](#bagwiz-generate-video-scan) | Render a point-cloud topic's scan pattern to video. |
 
 ---
 
@@ -115,7 +115,7 @@ no partial output or leftover temporary file.
 
 ---
 
-## `bagwiz generate video pcd-scan`
+## `bagwiz generate video scan`
 
 Render the scan pattern of a point-cloud topic to a video file: within each
 sweep the points appear one by one in firing order, colored by their
@@ -126,24 +126,24 @@ spot timestamp irregularities and motion-distortion behavior.
 ### Usage
 
 ```text
-bagwiz generate video pcd-scan -i <input> -t <topic> -o <output> [OPTIONS]
+bagwiz generate video scan -i <input> -t <topic> -o <output> [OPTIONS]
 ```
 
 ### Examples
 
 ```bash
 # Render a lidar's scan pattern as a top-down (BEV) animation.
-bagwiz generate video pcd-scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4
+bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4
 
 # Same, from a fixed 3D viewpoint behind and above the sensor.
-bagwiz generate video pcd-scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 \
+bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 \
   --view 3d --elev 35 --azim 180 --dist 120
 
 # Finer time resolution within each sweep: 20 video frames per sweep instead of 10.
-bagwiz generate video pcd-scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --steps 20
+bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --steps 20
 
 # Fix the view extent to +-80 m instead of auto-fitting the first cloud.
-bagwiz generate video pcd-scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --range 80
+bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --range 80
 ```
 
 ### Options

@@ -32,7 +32,7 @@ constexpr const char * kLogger = "bagwiz.cmd.generate";
 // `bagwiz generate` is a command group for producing non-rosbag *media* from a
 // rosbag (rosbag -> media, not rosbag -> rosbag). Its first subcommand group
 // `video` holds video renderers: `video cam` renders an image topic to a video
-// file, `video pcd-scan` renders a point-cloud topic's scan pattern (points
+// file, `video scan` renders a point-cloud topic's scan pattern (points
 // appearing in firing order) to a video file. The nesting leaves room for
 // further media generators (image sequences, GIFs, ...) and further video
 // sources.
@@ -180,7 +180,7 @@ private:
   void configure_pcd_scan(CLI::App & video)
   {
     auto * sub = video.add_subcommand(
-      "pcd-scan",
+      "scan",
       "Render a point-cloud topic's scan pattern from a rosbag to a video file. Within each "
       "sweep the points appear in firing order, read from the cloud's per-point time field "
       "('t', 'time', 'time_stamp', or 'timestamp'), colored by their sweep-relative time.");

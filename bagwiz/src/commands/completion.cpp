@@ -1158,25 +1158,25 @@ std::vector<std::string> complete_stamp(const CompletionRequest & request)
 
 // `generate` is a command group for producing media from a rosbag; its sole
 // subcommand is `video`, itself a nested command group whose leaves are `cam`
-// and `pcd-scan` (like `tf static`). At the subcommand slot (word 1) the only
+// and `scan` (like `tf static`). At the subcommand slot (word 1) the only
 // candidate is `video`; at the leaf slot (word 2, under `video`) the
-// candidates are `cam` and `pcd-scan`. `cam`'s `-t/--topic` (image topics),
+// candidates are `cam` and `scan`. `cam`'s `-t/--topic` (image topics),
 // `--cam-info` (CameraInfo topics), and `--pcd` (PointCloud2 topics), and
-// `pcd-scan`'s `-t/--topic` (PointCloud2 topics) are all declared topic slots,
+// `scan`'s `-t/--topic` (PointCloud2 topics) are all declared topic slots,
 // so try_topic_completion handles their values before this function is
 // reached. Here we surface each leaf's own flags for any `-` word, and the
 // enum choices for `--field`, `--scheme`, and `--view`.
 //
-//   cam:      `generate`(0) `video`(1) `cam`(2) -i|--input <bag>
-//             -t|--topic <image_topic> -o|--output <path> [--cam-info <topic>]
-//             [--rectify] [--resize <s>] [--pcd <topic>...] [--field <f>]
-//             [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
-//             [--alpha <a>] [-w|--overwrite]
-//   pcd-scan: `generate`(0) `video`(1) `pcd-scan`(2) -i|--input <bag>
-//             -t|--topic <pcd_topic> -o|--output <path> [--view <bev|3d>]
-//             [--width <px>] [--height <px>] [--steps <n>] [--range <m>]
-//             [--elev <deg>] [--azim <deg>] [--dist <m>] [--scheme <s>]
-//             [--point-size <n>] [-w|--overwrite]
+//   cam:  `generate`(0) `video`(1) `cam`(2) -i|--input <bag>
+//         -t|--topic <image_topic> -o|--output <path> [--cam-info <topic>]
+//         [--rectify] [--resize <s>] [--pcd <topic>...] [--field <f>]
+//         [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
+//         [--alpha <a>] [-w|--overwrite]
+//   scan: `generate`(0) `video`(1) `scan`(2) -i|--input <bag>
+//         -t|--topic <pcd_topic> -o|--output <path> [--view <bev|3d>]
+//         [--width <px>] [--height <px>] [--steps <n>] [--range <m>]
+//         [--elev <deg>] [--azim <deg>] [--dist <m>] [--scheme <s>]
+//         [--point-size <n>] [-w|--overwrite]
 std::vector<std::string> complete_generate(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1198,7 +1198,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
     if (current.starts_with("-")) {
       return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
     }
-    return matching({"cam", "pcd-scan"}, current);
+    return matching({"cam", "scan"}, current);
   }
 
   if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
@@ -1210,7 +1210,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
            "-i", "-o", "-t", "-w"}),
         current);
     }
-    if (request.words[kSecondCommandArgWord] == "pcd-scan") {
+    if (request.words[kSecondCommandArgWord] == "scan") {
       return matching(
         with_help(
           {"--azim", "--dist", "--elev", "--height", "--input", "--output", "--overwrite",

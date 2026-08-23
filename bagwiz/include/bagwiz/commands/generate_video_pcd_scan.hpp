@@ -21,7 +21,7 @@
 namespace bagwiz::commands
 {
 
-// Arguments for `bagwiz generate video pcd-scan`. Populated by GenerateCommand's
+// Arguments for `bagwiz generate video scan`. Populated by GenerateCommand's
 // CLI wiring (src/commands/generate.cpp) and consumed by
 // run_generate_video_pcd_scan. Kept in a header so the run function can be
 // exercised directly from tests without driving the CLI parser.

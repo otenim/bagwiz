@@ -243,7 +243,7 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
   const double fps_value =
     static_cast<double>(scan_rate.fps.num) / static_cast<double>(scan_rate.fps.den);
   BAGWIZ_LOG_INFO(
-    kLogger, "generate video pcd-scan: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).",
+    kLogger, "generate video scan: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).",
     written, args.output_path.string().c_str(), args.width, args.height, fps_value);
   return 0;
 }
