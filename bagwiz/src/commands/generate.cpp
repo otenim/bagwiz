@@ -77,11 +77,11 @@ private:
     add_topic_option(
       *sub, "-t,--topic", video_args_.topics,
       "Image topic(s) to render. Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
-      "sensor_msgs/msg/CompressedImage (JPEG/PNG). Literal names, not globs. List several to "
-      "arrange them in a grid (left to right, top to bottom — see --grid); the first topic "
-      "drives the frame rate and output timing, and its frame size fixes the cell size. "
-      "Repeatable.",
-      TopicSlotSpec{.allowed_types = kImageTopicTypes, .mode = TopicSelectorMode::kLiteral})
+      "sensor_msgs/msg/CompressedImage (JPEG/PNG). A literal name or a '*' glob; a glob's "
+      "matches expand in lexicographic (topic-name) order. List several to arrange them in "
+      "a grid (left to right, top to bottom — see --grid); the first topic drives the frame "
+      "rate and output timing, and its frame size fixes the cell size. Repeatable.",
+      TopicSlotSpec{.allowed_types = kImageTopicTypes})
       ->required()
       ->expected(-1);
     sub

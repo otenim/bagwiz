@@ -1309,10 +1309,10 @@ TEST_F(GenerateVideoTest, PointCloudOverlayOnRealBag)
 // process-wide command registry that generate.cpp's BAGWIZ_REGISTER_COMMAND
 // registrar populates — rather than a hand-mirrored copy of its wiring. The
 // assertions pin down the slot semantics the multi-view surface relies on:
-// -t is a literal multi-value slot (grid placement is positional, so no
-// globs), --cam-info is a literal pair-optional slot (bare value or
-// <image>=<info>), and --pcd is a glob pair slot whose selector is the right
-// half (<image>=<pcd_selector>).
+// -t is a multi-value glob slot (a glob expands to its matches in
+// lexicographic order, so grid placement stays deterministic), --cam-info is
+// a literal pair-optional slot (bare value or <image>=<info>), and --pcd is a
+// glob pair slot whose selector is the right half (<image>=<pcd_selector>).
 TEST(GenerateVideoCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
 {
   bagwiz::commands::Command * generate_cmd = nullptr;
@@ -1336,7 +1336,7 @@ TEST(GenerateVideoCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
 
   const auto * topic_slot = bagwiz::test::slot_for(slots, "topic");
   ASSERT_NE(topic_slot, nullptr);
-  EXPECT_EQ(topic_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_EQ(topic_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
   EXPECT_EQ(topic_slot->spec.allowed_types.size(), 2U);  // Image, CompressedImage
   EXPECT_TRUE(topic_slot->option->get_required());
   EXPECT_NE(topic_slot->multi_target, nullptr);

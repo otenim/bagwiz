@@ -1167,12 +1167,15 @@ std::vector<std::string> complete_stamp(const CompletionRequest & request)
 
 // The -t/--topic values typed so far on a `generate video cam` command line
 // (both spellings collect into one list), used to complete the <image_topic>
-// left half of --pcd / --cam-info pair values.
+// left half of --pcd / --cam-info pair values. Glob values are dropped: a
+// pair's left half must name one already-resolved view topic, which a glob
+// string never does.
 std::vector<std::string_view> collect_video_cam_image_topics(const CompletionRequest & request)
 {
   auto values = collect_flag_values(request, "-t");
   const auto long_values = collect_flag_values(request, "--topic");
   values.insert(values.end(), long_values.begin(), long_values.end());
+  std::erase_if(values, [](std::string_view v) { return v.find('*') != std::string_view::npos; });
   return values;
 }
 
