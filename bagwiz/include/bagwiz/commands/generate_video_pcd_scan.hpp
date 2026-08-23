@@ -52,7 +52,7 @@ struct GenerateVideoPcdScanArgs
   std::uint32_t width = 1280;
   std::uint32_t height = 720;
   // Video frames rendered per sweep.
-  std::uint32_t steps = 10;
+  std::uint32_t steps = 50;
   // Playback speed as a fraction of real time: 1.0 plays each sweep in its
   // recorded duration, 0.1 slows the animation to one tenth of real time. The
   // output frame rate is the cloud rate times `steps` times this value.

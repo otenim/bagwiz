@@ -142,7 +142,8 @@ bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp
 # Top-down (BEV) animation instead.
 bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --view bev
 
-# Finer time resolution within each sweep: 20 video frames per sweep instead of 10.
+# Coarser time resolution within each sweep (and a smaller file): 20 video
+# frames per sweep instead of 50.
 bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --steps 20
 
 # Play in real time instead of the default one-tenth speed.
@@ -162,7 +163,7 @@ bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp
 | `--view <view>`           | Projection space: `3d` (perspective view from a fixed camera looking at the sensor) or `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y). Default: `3d`. Long-form only.                                                       |
 | `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. Long-form only.                                                                                                                                                                       |
 | `--height <px>`           | Output height in pixels (range: 2-4320). Must be even. Default: 720. Long-form only.                                                                                                                                                                       |
-| `--steps <n>`             | Video frames rendered per sweep (range: 1-100). Default: 10. Long-form only.                                                                                                                                                                               |
+| `--steps <n>`             | Video frames rendered per sweep (range: 1-100). Default: 50. Long-form only.                                                                                                                                                                               |
 | `--speed <x>`             | Playback speed as a fraction of real time: 1.0 plays each sweep in its recorded duration, 0.1 slows the animation to one tenth (range: 0.001-100). The output frame rate is the cloud rate times `--steps` times this value. Default: 0.1. Long-form only. |
 | `--range <m>`             | BEV half-extent in meters: the BEV view spans +-range on both ground axes. Not used by the 3D view. Default: auto — the largest finite XY distance in the first cloud. Long-form only.                                                                     |
 | `--elev <deg>`            | 3D view: camera elevation above the XY plane in degrees (range: -89 to 89). Default: 20. Long-form only.                                                                                                                                                   |
@@ -190,7 +191,7 @@ over `--steps` video frames; the last frame of a sweep shows the complete
 cloud. A sweep in which no point carries a finite time contributes `--steps`
 blank frames, so the video timeline is not disturbed. The output frame rate is
 the cloud rate times `--steps` times `--speed` (a 10 Hz lidar with the default
-10 steps and the default speed 0.1 yields a 10 fps video), so the animation
+50 steps and the default speed 0.1 yields a 50 fps video), so the animation
 plays at `--speed` times real time. If that product would exceed 240 fps, the
 step count is reduced with a warning; if it would fall below 1 fps, the frame
 rate is clamped to 1 fps with a warning. Dimensions must be even (the 4:2:0

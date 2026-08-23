@@ -222,7 +222,7 @@ private:
       ->default_val(720U)
       ->check(CLI::Range(2U, 4320U));
     sub->add_option("--steps", pcd_scan_args_.steps, "Video frames rendered per sweep.")
-      ->default_val(10U)
+      ->default_val(50U)
       ->check(CLI::Range(1U, 100U));
     sub
       ->add_option(

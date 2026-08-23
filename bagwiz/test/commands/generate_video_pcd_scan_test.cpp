@@ -320,7 +320,7 @@ TEST_F(GenerateVideoPcdScanTest, RunOverwriteReplacesExistingOutput)
   ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
-  EXPECT_EQ(probe.frame_count, 30);  // 3 clouds * default 10 steps
+  EXPECT_EQ(probe.frame_count, 150);  // 3 clouds * default 50 steps
 }
 
 TEST(DeriveScanFrameRate, MultipliesStepsIntoTheRate)
