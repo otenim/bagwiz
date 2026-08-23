@@ -737,16 +737,38 @@ TEST_F(GenerateVideoTest, AutoResolvesCameraInfoForImageRectColorCompressed)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(GenerateVideoTest, RectifyFailsWhenAutoResolutionCannotFindCameraInfo)
+// With rectification on by default, a bag without a derivable CameraInfo
+// still renders: the view is left unrectified with a warning rather than
+// failing the run.
+TEST_F(GenerateVideoTest, RectifyWithoutCameraInfoWarnsAndRendersUnrectified)
 {
   constexpr int kFrames = 2;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");  // /cam/image, no /cam/camera_info
   const auto out = tmp_dir_ / "out.avi";
 
   GenerateVideoArgs args{in, kImageTopic, out, false};
-  args.rectify = true;
-  EXPECT_EQ(run_generate_video(args), 1);
-  EXPECT_FALSE(std::filesystem::exists(out));
+  ASSERT_EQ(run_generate_video(args), 0);
+
+  const auto probe = bagwiz::core::video::probe_video(out);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, kFrames);
+}
+
+// --no-rectify opts out even when a CameraInfo is available.
+TEST_F(GenerateVideoTest, NoRectifyOptsOut)
+{
+  constexpr int kFrames = 2;
+  const auto in =
+    build_bag_with_camera_info(tmp_dir_, "/cam/image_rect_color", false, kFrames, 16, 16);
+  const auto out = tmp_dir_ / "out.avi";
+
+  GenerateVideoArgs args{in, "/cam/image_rect_color", out, false};
+  args.rectify = false;
+  ASSERT_EQ(run_generate_video(args), 0);
+
+  const auto probe = bagwiz::core::video::probe_video(out);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, kFrames);
 }
 
 TEST_F(GenerateVideoTest, ExplicitCameraInfoTopicWorksForRectify)

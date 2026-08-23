@@ -199,9 +199,11 @@ std::optional<std::vector<ViewState>> build_view_states(
       (i < geometry.camera_infos.size() && geometry.camera_infos[i].has_value())
         ? &*geometry.camera_infos[i]
         : nullptr;
-    // A view rectifies when asked to, or when it projects point clouds (the
-    // projection assumes a rectified image) — the single-view rule, per view.
-    const bool rectify = args.rectify || !view.pcd_topics.empty();
+    // A view rectifies when rectification is enabled and its camera info
+    // resolved (validation already warned when it could not), or when it
+    // projects point clouds (the projection assumes a rectified image).
+    const bool rectify =
+      (args.rectify && view.camera_info_topic.has_value()) || !view.pcd_topics.empty();
     ViewState state{
       .input = &view,
       .normalizer = FrameNormalizer(view.topic_type),
@@ -889,18 +891,29 @@ VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args)
           core::camera_info::resolve_camera_info_topic(view.topic, reader->topics()).topic;
       }
 
-      const bool needs_camera_info = args.rectify || !view.pcd_topics.empty();
-      if (needs_camera_info && !view.camera_info_topic.has_value()) {
+      // Rectification is on by default but degrades to a warning: a view
+      // whose camera info cannot be resolved simply renders unrectified.
+      // Point-cloud projection still hard-requires one.
+      if (view.camera_info_topic.has_value()) {
+        continue;
+      }
+      if (!view.pcd_topics.empty()) {
         BAGWIZ_LOG_ERROR(
           kLogger,
-          "A camera-info topic is required for --rectify or --pcd, but none could be derived from "
+          "A camera-info topic is required for --pcd, but none could be derived from "
           "'%s'. Pass it explicitly with --cam-info %s=<info_topic>.",
           view.topic.c_str(), view.topic.c_str());
-        out.error =
-          "A camera-info topic is required for --rectify or --pcd, but none could be derived from "
-          "'" +
-          view.topic + "'. Pass it explicitly with --cam-info " + view.topic + "=<info_topic>.";
+        out.error = "A camera-info topic is required for --pcd, but none could be derived from '" +
+                    view.topic + "'. Pass it explicitly with --cam-info " + view.topic +
+                    "=<info_topic>.";
         return out;
+      }
+      if (args.rectify) {
+        BAGWIZ_LOG_WARN(
+          kLogger,
+          "no camera-info topic could be derived for '%s'; rendering it unrectified (pass "
+          "--cam-info %s=<info_topic>, or --no-rectify to disable rectification).",
+          view.topic.c_str(), view.topic.c_str());
       }
     }
   }

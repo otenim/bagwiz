@@ -123,10 +123,14 @@ private:
         return std::string{};
       })
       ->expected(-1);
-    sub->add_flag(
-      "--rectify", video_args_.rectify,
-      "Apply distortion correction to each frame using each view's resolved CameraInfo. "
-      "Requires a camera-info topic per view; use --cam-info if auto-resolution fails.");
+    sub
+      ->add_flag(
+        "--rectify,!--no-rectify", video_args_.rectify,
+        "Apply distortion correction to each frame using each view's resolved CameraInfo "
+        "(on by default; --no-rectify opts out). A view whose camera-info topic cannot be "
+        "derived renders unrectified with a warning — pass --cam-info to name it "
+        "explicitly. Point-cloud projection always requires a camera-info topic.")
+      ->default_val(true);
     sub
       ->add_option(
         "--resize", video_args_.resize_scale,
