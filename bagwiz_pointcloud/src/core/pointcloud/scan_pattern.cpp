@@ -145,7 +145,7 @@ void perspective_camera(const ScanPatternView & view, double (&basis)[9], double
   for (auto & c : right) {
     c /= rlen;
   }
-  double up[3] = {
+  const double up[3] = {
     right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2],
     right[0] * fwd[1] - right[1] * fwd[0]};
 
