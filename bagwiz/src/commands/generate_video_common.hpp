@@ -397,7 +397,7 @@ struct ViewRenderGeometry
 
 // One view's render pipeline: fixes the view's scale from its first frame,
 // scales/rectifies/overlays each selected frame, and pastes it centered into
-// the view's grid cell (letterboxing when the aspect ratios differ).
+// the view's grid cell (with black bars when the aspect ratios differ).
 class ViewRenderer
 {
 public:

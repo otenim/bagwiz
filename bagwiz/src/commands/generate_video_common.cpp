@@ -175,7 +175,7 @@ struct ViewState
 struct TickData
 {
   std::vector<std::shared_ptr<const FrameBuffer>> frames;
-  std::vector<ViewRenderGeometry> geoms;
+  std::vector<ViewRenderGeometry> geometries;
 };
 
 // Build the per-view runtime state shared by both encode loops. Returns
@@ -244,7 +244,7 @@ bool prepare_tick(
   std::uint64_t frame_index, TickData & out)
 {
   out.frames.assign(states.size(), nullptr);
-  out.geoms.assign(states.size(), ViewRenderGeometry{});
+  out.geometries.assign(states.size(), ViewRenderGeometry{});
 
   auto primary = states[0].normalizer.decode(raw.timestamp_ns, raw.payload, frame_index);
   if (!primary.has_value()) {
@@ -280,7 +280,7 @@ bool prepare_tick(
     if (!resize_frame(*primary, geom->width, geom->height)) {
       return false;
     }
-    out.geoms[0] = *geom;
+    out.geometries[0] = *geom;
     out.frames[0] = std::make_shared<const FrameBuffer>(std::move(*primary));
   }
 
@@ -319,7 +319,7 @@ bool prepare_tick(
     }
     if (state.cache) {
       out.frames[i] = state.cache;
-      out.geoms[i] = state.cache_geom;
+      out.geometries[i] = state.cache_geom;
     }
   }
   return true;
@@ -339,7 +339,7 @@ bool render_tick(
       continue;
     }
     if (!states[i].renderer.render(
-          *tick.frames[i], tick.geoms[i], points_per_view[i], canvas.cell(i))) {
+          *tick.frames[i], tick.geometries[i], points_per_view[i], canvas.cell(i))) {
       return false;
     }
   }
@@ -357,7 +357,7 @@ bool project_view_sync(
   std::uint64_t frame_index)
 {
   out.clear();
-  const auto & geom = tick.geoms[view_index];
+  const auto & geom = tick.geometries[view_index];
   for (const auto idx : state.pcd_indexes) {
     std::string pcd_error;
     const auto match = core::pointcloud::choose_frame_match(
@@ -541,7 +541,7 @@ int run_encode_loop_async(
       }
       ViewProjectionRequest req;
       req.view_index = i;
-      req.geom = tick.geoms[i];
+      req.geom = tick.geometries[i];
       req.pcd_indexes = (*states)[i].pcd_indexes;
       req.frame_header_stamp_ns = tick.frames[i]->header_stamp_ns;
       req.frame_record_ns = tick.frames[i]->timestamp_ns;
