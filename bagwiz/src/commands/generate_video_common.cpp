@@ -162,6 +162,10 @@ struct ViewState
   ViewRenderGeometry cache_geom;                 // the geometry `cache` was prepared at
   std::int64_t cached_record_ns = -1;
   std::vector<std::size_t> pcd_indexes;
+  // Primary only: the --width output-width constraint and the grid's column
+  // count, combined into the pinned cell size on the first tick.
+  std::optional<std::uint32_t> total_width;
+  std::uint32_t grid_cols = 0;
   bool warned_empty = false;
 };
 
@@ -214,7 +218,10 @@ std::optional<std::vector<ViewState>> build_view_states(
       }
       state.pcd_indexes.push_back(static_cast<std::size_t>(it - scan.pcd_topics.begin()));
     }
-    if (i > 0) {
+    if (i == 0) {
+      state.total_width = args.width;
+      state.grid_cols = validation.grid.cols;
+    } else {
       std::string error;
       state.source = NearestMessageSource::open(args.input_path, view.topic, error);
       if (!state.source) {
@@ -244,8 +251,22 @@ bool prepare_tick(
     return false;
   }
   {
+    if (!canvas.ready() && states[0].total_width.has_value()) {
+      // --width: pin the primary's render size from the output width — the
+      // cell width is the width split across the grid columns, the height
+      // follows the primary frame's aspect ratio. Both are rounded down to
+      // even (the codecs' 4:2:0 formats require even dimensions), so the
+      // output can be a few pixels narrower than requested. Validation
+      // guarantees the cell width is at least 2.
+      const std::uint32_t cell_w = (*states[0].total_width / states[0].grid_cols) & ~1U;
+      const auto cell_h = static_cast<std::uint32_t>(std::lround(
+                            primary->height * (static_cast<double>(cell_w) / primary->width))) &
+                          ~1U;
+      states[0].renderer.set_fixed_render_size(cell_w, cell_h);
+    }
     // The cell size does not exist yet on the first tick; the primary's
-    // fixed scale does not read it, so the zero cell dimensions are harmless.
+    // fixed scale/size does not read it, so the zero cell dimensions are
+    // harmless.
     const auto geom = states[0].renderer.prepare(
       primary->width, primary->height, canvas.cell_width(), canvas.cell_height());
     if (!geom.has_value()) {
@@ -753,6 +774,24 @@ VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args)
   }
   out.grid = grid.grid;
 
+  // --width fixes the composed output width; it replaces --resize as the
+  // cell-size constraint.
+  if (args.width.has_value()) {
+    if (args.resize_scale != 1.0f) {
+      BAGWIZ_LOG_ERROR(kLogger, "--width and --resize are mutually exclusive.");
+      out.error = "--width and --resize are mutually exclusive.";
+      return out;
+    }
+    const std::uint32_t cell_w = (*args.width / out.grid.cols) & ~1U;
+    if (cell_w < 2U) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "--width %u is too small for %u grid column(s).", *args.width, out.grid.cols);
+      out.error = "--width " + std::to_string(*args.width) + " is too small for " +
+                  std::to_string(out.grid.cols) + " grid column(s).";
+      return out;
+    }
+  }
+
   // A topic listed more than once is an error: grid placement is positional,
   // so a duplicate would be two cells showing the same stream.
   std::unordered_set<std::string> seen_topics;
@@ -1247,7 +1286,8 @@ ViewRenderer::ViewRenderer(
 std::optional<ViewRenderGeometry> ViewRenderer::prepare(
   std::uint32_t native_w, std::uint32_t native_h, std::uint32_t cell_w, std::uint32_t cell_h)
 {
-  if (fixed_scale_.has_value()) {
+  const bool size_locked = fixed_scale_.has_value() || fixed_size_.has_value();
+  if (size_locked) {
     // The primary view's native size is locked to its first frame, exactly as
     // the single-view encoder locked its geometry.
     if (native_w_ != 0 && (native_w != native_w_ || native_h != native_h_)) {
@@ -1258,14 +1298,23 @@ std::optional<ViewRenderGeometry> ViewRenderer::prepare(
     }
   }
   double scale = 1.0;
-  if (fixed_scale_.has_value()) {
+  std::uint32_t render_w = 0;
+  std::uint32_t render_h = 0;
+  if (fixed_size_.has_value()) {
+    // --width: exact target dims derived from the output width.
+    render_w = fixed_size_->first;
+    render_h = fixed_size_->second;
+    scale = static_cast<double>(render_w) / native_w;
+  } else if (fixed_scale_.has_value()) {
     scale = *fixed_scale_;
+    render_w = static_cast<std::uint32_t>(std::lround(native_w * scale));
+    render_h = static_cast<std::uint32_t>(std::lround(native_h * scale));
   } else {
     scale =
       std::min(static_cast<double>(cell_w) / native_w, static_cast<double>(cell_h) / native_h);
+    render_w = static_cast<std::uint32_t>(std::lround(native_w * scale));
+    render_h = static_cast<std::uint32_t>(std::lround(native_h * scale));
   }
-  const auto render_w = static_cast<std::uint32_t>(std::lround(native_w * scale));
-  const auto render_h = static_cast<std::uint32_t>(std::lround(native_h * scale));
   if (render_w == 0 || render_h == 0) {
     BAGWIZ_LOG_ERROR(
       kLogger, "scale %.3g would produce a zero-size frame (%ux%u)", scale, render_w, render_h);
@@ -1281,9 +1330,18 @@ std::optional<ViewRenderGeometry> ViewRenderer::prepare(
   if (camera_info_ != nullptr) {
     // The same two-step chain the single-view path applied: pre-scale by the
     // view's scale, then match the render size (a verbatim copy when the two
-    // already agree, which they do by construction).
-    geom.camera_info = core::image::camera_info_for_size(
-      core::image::scale_camera_info(*camera_info_, scale), render_w, render_h);
+    // already agree, which they do by construction). A --width-pinned size
+    // pre-scales per axis, since its height is rounded independently.
+    if (fixed_size_.has_value()) {
+      geom.camera_info = core::image::camera_info_for_size(
+        core::image::scale_camera_info(
+          *camera_info_, static_cast<double>(render_w) / native_w,
+          static_cast<double>(render_h) / native_h),
+        render_w, render_h);
+    } else {
+      geom.camera_info = core::image::camera_info_for_size(
+        core::image::scale_camera_info(*camera_info_, scale), render_w, render_h);
+    }
     geom.has_camera_info = true;
   }
   return geom;

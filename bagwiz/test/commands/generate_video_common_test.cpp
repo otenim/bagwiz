@@ -552,6 +552,34 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsGridTooSmallFails)
   EXPECT_NE(v.error.find("1x1"), std::string::npos);
 }
 
+TEST_F(GenerateVideoCommonTest, ValidateInputsWidthConflictsWithResize)
+{
+  const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
+  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  args.width = 640;
+  args.resize_scale = 0.5f;
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(v.error, "--width and --resize are mutually exclusive.");
+}
+
+TEST_F(GenerateVideoCommonTest, ValidateInputsWidthTooSmallForTheGridFails)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, mcap_options());
+    declare_topic(*w, "/cam/a", kImageType);
+    declare_topic(*w, "/cam/b", kImageType);
+    w->close();
+  }
+  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
+  args.topics.push_back("/cam/b");
+  args.width = 2;  // 2 px across 2 auto-grid columns leaves a sub-2-px cell
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_NE(v.error.find("too small"), std::string::npos);
+}
+
 TEST_F(GenerateVideoCommonTest, ValidateInputsRectifyWithoutCamInfoFails)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);

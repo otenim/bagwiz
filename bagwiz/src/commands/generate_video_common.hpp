@@ -417,6 +417,14 @@ public:
   [[nodiscard]] std::optional<ViewRenderGeometry> prepare(
     std::uint32_t native_w, std::uint32_t native_h, std::uint32_t cell_w, std::uint32_t cell_h);
 
+  // Pin the render size to exact pixel dimensions, derived from the --width
+  // output-width constraint rather than a scale factor. Must be called before
+  // the first prepare(); the fixed-view native-size lock still applies.
+  void set_fixed_render_size(std::uint32_t width, std::uint32_t height)
+  {
+    fixed_size_ = {width, height};
+  }
+
   // Render `frame` (already at geom's size — the encode loop resizes right
   // after decode) into `cell`: rectify, overlay `projected` when non-null,
   // and paste centered. Returns false after logging on failure.
@@ -429,6 +437,7 @@ private:
   bool rectify_;
   VideoOverlayParams params_;
   std::optional<double> fixed_scale_;
+  std::optional<std::pair<std::uint32_t, std::uint32_t>> fixed_size_;
   std::uint32_t native_w_ = 0;
   std::uint32_t native_h_ = 0;
   std::unique_ptr<core::image::RectifyHelper> rectify_helper_;

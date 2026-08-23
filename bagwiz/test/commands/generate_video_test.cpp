@@ -1164,6 +1164,59 @@ TEST_F(GenerateVideoTest, ThreadedTwoViewOverlayMatchesSynchronous)
   EXPECT_EQ(threaded_bytes, sync_bytes);
 }
 
+// ---- --width ------------------------------------------------------------------
+
+// --width fixes the composed output width: with two views on the auto 2x1
+// grid, a 16 px width leaves an 8 px cell, and the cell height follows the
+// primary frame's aspect ratio.
+TEST_F(GenerateVideoTest, WidthDerivesTheCellSizeFromTheOutputWidth)
+{
+  constexpr int kFrames = 3;
+  const auto in = build_two_camera_bag(tmp_dir_, kFrames, 2);
+  const auto out = tmp_dir_ / "out.avi";
+
+  GenerateVideoArgs args{in, "/cam/a", out, false};
+  args.topics.push_back("/cam/b");
+  args.width = 16;
+  ASSERT_EQ(run_generate_video(args), 0);
+
+  const auto probe = bagwiz::core::video::probe_video(out);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.width, 16U);
+  EXPECT_EQ(probe.height, 8U);
+  EXPECT_EQ(probe.frame_count, kFrames);
+}
+
+// Single-view, --width behaves like a plain output-width constraint.
+TEST_F(GenerateVideoTest, WidthUpscalesASingleView)
+{
+  constexpr int kFrames = 2;
+  const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");
+  const auto out = tmp_dir_ / "out.avi";
+
+  GenerateVideoArgs args{in, kImageTopic, out, false};
+  args.width = 32;
+  ASSERT_EQ(run_generate_video(args), 0);
+
+  const auto probe = bagwiz::core::video::probe_video(out);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.width, 32U);
+  EXPECT_EQ(probe.height, 32U);
+  EXPECT_EQ(probe.frame_count, kFrames);
+}
+
+TEST_F(GenerateVideoTest, WidthConflictsWithResize)
+{
+  const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
+  const auto out = tmp_dir_ / "out.avi";
+
+  GenerateVideoArgs args{in, kImageTopic, out, false};
+  args.width = 32;
+  args.resize_scale = 0.5f;
+  EXPECT_EQ(run_generate_video(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(out));
+}
+
 // A raw image topic can be down-scaled while preserving aspect ratio.
 TEST_F(GenerateVideoTest, ResizeScalesRawImageDimensions)
 {

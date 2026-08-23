@@ -135,6 +135,16 @@ private:
         "Single-view: scales the output directly.")
       ->default_val(1.0f)
       ->check(CLI::Range(0.01f, 10.0f));
+    auto * width_opt =
+      sub
+        ->add_option(
+          "--width", video_args_.width,
+          "Fix the composed output width in pixels: the cell width is the width split across "
+          "the grid columns, and the cell height follows the primary frame's aspect ratio "
+          "(both rounded down to even, so the output can be a few pixels narrower). Mutually "
+          "exclusive with --resize.")
+        ->check(CLI::PositiveNumber);
+    width_opt->excludes("--resize");
     add_topic_option(
       *sub, "--pcd", video_args_.pointcloud_topics,
       "PointCloud2 topic(s) to project onto the frames: a bare value (a literal name or a "

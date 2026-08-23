@@ -1247,6 +1247,7 @@ std::vector<std::string> complete_video_cam_pair_value(
 //   cam: `generate`(0) `video`(1) `cam`(2) -i|--input <bag>
 //        -t|--topic <image_topic>... -o|--output <path> [--grid <cols>x<rows>]
 //        [--cam-info <topic>|<image>=<info>] [--rectify] [--resize <s>]
+//        [--width <px>]
 //        [--pcd <topic>|<image>=<topic>...] [--field <f>]
 //        [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
 //        [--alpha <a>] [-w|--overwrite]
@@ -1277,10 +1278,10 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
   if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
     if (request.words[kSecondCommandArgWord] == "cam") {
       return matching(
-        with_help(
-          {"--alpha", "--cam-info", "--field", "--grid", "--input", "--max", "--min", "--output",
-           "--overwrite", "--pcd", "--point-size", "--rectify", "--resize", "--scheme", "--topic",
-           "-i", "-o", "-t", "-w"}),
+        with_help({"--alpha",      "--cam-info", "--field",  "--grid",      "--input",
+                   "--max",        "--min",      "--output", "--overwrite", "--pcd",
+                   "--point-size", "--rectify",  "--resize", "--scheme",    "--topic",
+                   "--width",      "-i",         "-o",       "-t",          "-w"}),
         current);
     }
   }

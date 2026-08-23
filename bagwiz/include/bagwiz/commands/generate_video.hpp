@@ -61,6 +61,10 @@ struct GenerateVideoArgs
   bool rectify = false;
   // Scale output dimensions by this factor while preserving aspect ratio.
   float resize_scale = 1.0f;
+  // Fix the composed output width in pixels, deriving the cell size from the
+  // grid columns and the primary frame's aspect ratio. Mutually exclusive
+  // with resize_scale.
+  std::optional<std::uint32_t> width;
 
   // Point-cloud overlay options. A bare entry (a literal name or '*' glob)
   // projects onto every view; an "<image_topic>=<pcd_selector>" entry projects

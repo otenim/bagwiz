@@ -63,6 +63,13 @@ bagwiz generate video cam -i drive.mcap -o front_rear.mp4 \
   -t /sensing/camera/front/image_raw/compressed \
      /sensing/camera/rear/image_raw/compressed
 
+# Multi-view at a fixed output width: three cameras on an auto 2x2 grid, the
+# composed video exactly 1920 px wide (cells 960x540 for 16:9 inputs).
+bagwiz generate video cam -i drive.mcap -o surround.mp4 --width 1920 \
+  -t /sensing/camera/front/image_raw/compressed \
+     /sensing/camera/rear/image_raw/compressed \
+     /sensing/camera/left/image_raw/compressed
+
 # Multi-view with an explicit 2x2 grid (three cameras; the fourth cell stays
 # black).
 bagwiz generate video cam -i drive.mcap -o surround.mp4 --grid 2x2 \
@@ -102,7 +109,8 @@ bagwiz generate video cam -i drive.mcap -o overlay_each.mp4 \
 | `--scheme <scheme>`        | Color scheme for point coloring: `viridis`, `turbo`, `jet`, `plasma`, `inferno`, `magma`, `rainbow`. Default: `viridis`. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `--point-size <px>`        | Side length of drawn square points in pixels (range: 1-64). Default: 2. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `--alpha <alpha>`          | Point overlay opacity, 0.0-1.0. Default: 1.0. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--resize <factor>`        | Scale the cell width and height by this factor while preserving aspect ratio. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so `--rectify` and `--pcd` stay aligned (range: 0.01-10.0). Default: 1.0. Long-form only.                                                                                                                                                                                                                                                    |
+| `--resize <factor>`        | Scale the cell width and height by this factor while preserving aspect ratio. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so `--rectify` and `--pcd` stay aligned (range: 0.01-10.0). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                                                                                                                 |
+| `--width <px>`             | Fix the composed output width in pixels: the cell width is the width split across the grid columns, and the cell height follows the primary frame's aspect ratio (both rounded down to even, so the output can be a few pixels narrower). Mutually exclusive with `--resize`. Long-form only.                                                                                                                                                                                                                                                  |
 | `-w`, `--overwrite`        | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ### Multi-view grids
@@ -115,9 +123,10 @@ With several `-t` topics, each topic occupies one grid cell in argument order
   topic's message whose bag record time is nearest the primary frame's (a
   frame is simply repeated while its topic is slower, and a topic that has not
   produced a message yet renders as a black cell).
-- The cell size is the primary topic's frame size after `--resize`. Every
-  other view is scaled uniformly to fit the cell, preserving aspect ratio, and
-  centered with black bars when the aspect ratios differ.
+- The cell size is the primary topic's frame size after `--resize` — or, when
+  `--width` is given, the size derived from the output width and the grid
+  columns. Every other view is scaled uniformly to fit the cell, preserving
+  aspect ratio, and centered with black bars when the aspect ratios differ.
 - The primary topic's frame size must not change mid-bag (a change aborts the
   run, as in the single-view case); secondary views re-fit automatically.
 - A topic that carries no messages at all stops the run with an error, rather
