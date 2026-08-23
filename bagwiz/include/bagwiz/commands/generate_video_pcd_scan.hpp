@@ -62,7 +62,7 @@ struct GenerateVideoPcdScanArgs
   std::optional<double> range_m;
   // Perspective camera (view = kPerspective only): position on a sphere of
   // radius dist_m around the sensor, looking at it.
-  double elev_deg = 30.0;
+  double elev_deg = 20.0;
   double azim_deg = 180.0;
   double dist_m = 30.0;
 

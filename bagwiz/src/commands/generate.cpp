@@ -242,7 +242,7 @@ private:
       ->add_option(
         "--elev", pcd_scan_args_.elev_deg,
         "3D view: camera elevation above the XY plane in degrees.")
-      ->default_val(30.0)
+      ->default_val(20.0)
       ->check(CLI::Range(-89.0, 89.0));
     sub
       ->add_option(
