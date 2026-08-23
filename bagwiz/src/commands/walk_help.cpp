@@ -91,7 +91,7 @@ std::vector<std::string> preview_help_lines()
     "  > / <          forward / back 10s",
     "  g / G          first / last frame (G scans to the end)",
     "View",
-    "  u              toggle rectify (needs camera_info)",
+    "  u              toggle rectify (on by default with camera_info)",
     "  S              save the frame as PNG",
     "PCD overlay",
     "  p              toggle the projection overlay",

@@ -176,6 +176,7 @@ private:
   const std::optional<core::image::CameraInfo> & camera_info_;
   const std::string & camera_info_error_;
 
+  // Rectification starts on whenever a CameraInfo is available (u toggles).
   bool rectify_enabled_ = false;
   // '?' overlay state: while shown, the scroll keys move the reference, q
   // closes it, and every other key is swallowed — except Ctrl-C /
