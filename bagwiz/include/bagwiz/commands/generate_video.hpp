@@ -33,29 +33,42 @@ struct GenerateVideoArgs
     std::filesystem::path input_path_arg, std::string topic_arg,
     std::filesystem::path output_path_arg, bool overwrite_arg)
   : input_path(std::move(input_path_arg)),
-    topic(std::move(topic_arg)),
+    topics{std::move(topic_arg)},
     output_path(std::move(output_path_arg)),
     overwrite(overwrite_arg)
   {
   }
 
   std::filesystem::path input_path;
-  std::string topic;
+  // Image topics to render, in grid order (left to right, top to bottom). The
+  // first topic is primary: it drives the frame rate and the output timing,
+  // and its (resized) frame size fixes the grid's cell size.
+  std::vector<std::string> topics;
   std::filesystem::path output_path;
   // Replace a pre-existing <output>. Without it, an existing output path stops
   // the run before any work is done.
   bool overwrite = false;
-  // Explicit camera-info topic. When absent, run_generate_video tries to
-  // derive it from the image topic name.
-  std::optional<std::string> camera_info_topic;
+  // Grid layout as "<cols>x<rows>" (e.g. "2x2"). Empty derives a near-square
+  // grid from the topic count.
+  std::string grid;
+  // Camera-info entries: a bare value applies to every view, an
+  // "<image_topic>=<info_topic>" entry overrides one view. Views without an
+  // entry derive the topic from the image topic name.
+  std::vector<std::string> camera_info_entries;
   // Rectify each frame (OpenCV lens-distortion remap) using the resolved
   // camera info. "rectify" is the image-side term throughout bagwiz; the
   // point-cloud motion correction keeps the name `pcd undistort`.
   bool rectify = false;
   // Scale output dimensions by this factor while preserving aspect ratio.
   float resize_scale = 1.0f;
+  // Fix the composed output width in pixels, deriving the cell size from the
+  // grid columns and the primary frame's aspect ratio. Mutually exclusive
+  // with resize_scale.
+  std::optional<std::uint32_t> width;
 
-  // Point-cloud overlay options.
+  // Point-cloud overlay options. A bare entry (a literal name or '*' glob)
+  // projects onto every view; an "<image_topic>=<pcd_selector>" entry projects
+  // onto that view only.
   std::vector<std::string> pointcloud_topics;
   core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
   std::optional<double> property_min;
@@ -95,11 +108,14 @@ struct VideoSourceCheck
 [[nodiscard]] VideoSourceCheck check_video_source(
   const std::filesystem::path & input, const std::string & topic);
 
-// Render `args.topic` from `args.input_path` to a video at `args.output_path`,
+// Render `args.topics` from `args.input_path` to a video at `args.output_path`,
 // inferring the container/codec from the output extension and the frame rate
-// from the message timestamps. Returns a process exit code: 0 on success, 1 on
-// any error. Renders raw sensor_msgs/msg/Image (bgr8 / rgb8) and
-// sensor_msgs/msg/CompressedImage (JPEG / PNG, decoded to BGR before encoding).
+// from the first (primary) topic's message timestamps. With several topics the
+// views are arranged in a grid (see `grid`); each non-primary view shows the
+// frame whose bag record time is nearest the primary frame's. Returns a process
+// exit code: 0 on success, 1 on any error. Renders raw sensor_msgs/msg/Image
+// (bgr8 / rgb8) and sensor_msgs/msg/CompressedImage (JPEG / PNG, decoded to BGR
+// before encoding).
 int run_generate_video(const GenerateVideoArgs & args);
 
 }  // namespace bagwiz::commands

@@ -8,7 +8,8 @@
 
 // Tests for expand_topic_selectors() (topic_expand.cpp) covering cross-slot
 // behavior: TopicSlotSpec::pair_value (splitting a "<topic>=<rhs>" value at
-// '=') and TopicSlotSpec::scope (a slot resolving against another slot's
+// '='), its pair_selector_rhs variant (the selector is the right half), and
+// TopicSlotSpec::scope (a slot resolving against another slot's
 // already-expanded result instead of the bag), including the optional-target
 // overload's interaction with both. Independent-slot behavior — plain glob
 // expansion, literal pass-through, require_present, dedupe, and the
@@ -282,4 +283,109 @@ TEST_F(ExpandTopicSelectorsTest, OptionalTargetLiteralSlotPassesALiteralThrough)
   ASSERT_TRUE(expand_topic_selectors(app));
   ASSERT_TRUE(cam_info.has_value());
   EXPECT_EQ(*cam_info, "/not/checked");
+}
+
+// pair_selector_rhs (generate video cam --pcd's <image_topic>=<pcd_selector>):
+// the selector is the RIGHT half, so the glob expands there and the literal
+// left half is reattached to every match. A bare value in the same slot is an
+// ordinary selector and stays bare — that mix is what lets one flag carry
+// global topics and per-view bindings.
+TEST_F(ExpandTopicSelectorsTest, PairSelectorRhsGlobsOnlyTheRightHalf)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{
+      .allowed_types = bagwiz::commands::kPointCloud2Type,
+      .pair_value = true,
+      .pair_selector_rhs = true});
+
+  app.parse(
+    std::vector<std::string>{
+      "/lidar/left/points", "--pcd", "/camera/image_raw=/lidar/*", "--pcd", bag.string(), "-i",
+      "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+
+  EXPECT_EQ(
+    pcd, (std::vector<std::string>{
+           "/camera/image_raw=/lidar/left/points", "/camera/image_raw=/lidar/right/points",
+           "/lidar/left/points"}));
+}
+
+TEST_F(ExpandTopicSelectorsTest, PairSelectorRhsRejectsAnUnmatchedRightHalfGlob)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{
+      .allowed_types = bagwiz::commands::kPointCloud2Type,
+      .pair_value = true,
+      .pair_selector_rhs = true});
+
+  app.parse(
+    std::vector<std::string>{"/camera/image_raw=/nope/*", "--pcd", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
+}
+
+// require_present combined with pair_value + pair_selector_rhs: the presence
+// check runs against the split RIGHT half (the selector), never the raw
+// "<image>=<selector>" value and never the left half, which names no topic in
+// the bag (the command validates it against the -t list instead).
+TEST_F(ExpandTopicSelectorsTest, PairSelectorRhsWithRequirePresentChecksOnlyTheRightHalf)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{
+      .mode = TopicSelectorMode::kLiteral,
+      .pair_value = true,
+      .pair_selector_rhs = true,
+      .require_present = true});
+
+  // The left half is deliberately NOT a bag topic; the right half is.
+  app.parse(
+    std::vector<std::string>{
+      "/not/a/bag/topic=/lidar/left/points", "--pcd", bag.string(), "-i", "cmd"});
+  ASSERT_TRUE(expand_topic_selectors(app));
+  EXPECT_EQ(pcd, (std::vector<std::string>{"/not/a/bag/topic=/lidar/left/points"}));
+}
+
+TEST_F(ExpandTopicSelectorsTest, PairSelectorRhsWithRequirePresentRejectsAnAbsentRightHalf)
+{
+  const auto bag = make_bag(tmp_dir_ / "bag");
+  CLI::App app{"bagwiz"};
+  auto * sub = app.add_subcommand("cmd", "");
+  std::filesystem::path input;
+  std::vector<std::string> pcd;
+  set_topic_input(*sub, input);
+  sub->add_option("-i,--input", input, "");
+  add_topic_option(
+    *sub, "--pcd", pcd, "Clouds.",
+    TopicSlotSpec{
+      .mode = TopicSelectorMode::kLiteral,
+      .pair_value = true,
+      .pair_selector_rhs = true,
+      .require_present = true});
+
+  app.parse(
+    std::vector<std::string>{"/camera/image_raw=/not/here", "--pcd", bag.string(), "-i", "cmd"});
+  EXPECT_FALSE(expand_topic_selectors(app));
 }
