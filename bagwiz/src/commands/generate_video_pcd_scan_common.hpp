@@ -61,12 +61,15 @@ struct ScanFrameRate
   std::uint32_t steps = 1;  // effective steps; <= the requested count
 };
 
-// fps = cloud_fps * steps, so one sweep spans `steps` video frames and the
-// animation plays in real time. When the product would exceed
+// fps = cloud_fps * steps * speed, so one sweep spans `steps` video frames
+// and plays at `speed` times real time. When the product would exceed
 // core::video::kMaxFps, the step count is reduced to the largest value that
-// stays within the cap (never below 1).
+// stays within the cap (never below 1); when it would fall below
+// core::video::kMinFps, the frame rate is clamped to kMinFps instead. The
+// result is rounded to milli-fps and reduced, matching derive_frame_rate's
+// convention.
 [[nodiscard]] ScanFrameRate derive_scan_frame_rate(
-  core::video::FrameRate cloud_fps, std::uint32_t requested_steps);
+  core::video::FrameRate cloud_fps, std::uint32_t requested_steps, double speed);
 
 // ---- pass 1: topic span + auto range -----------------------------------------
 

@@ -1174,9 +1174,9 @@ std::vector<std::string> complete_stamp(const CompletionRequest & request)
 //         [--alpha <a>] [-w|--overwrite]
 //   scan: `generate`(0) `video`(1) `scan`(2) -i|--input <bag>
 //         -t|--topic <pcd_topic> -o|--output <path> [--view <bev|3d>]
-//         [--width <px>] [--height <px>] [--steps <n>] [--range <m>]
-//         [--elev <deg>] [--azim <deg>] [--dist <m>] [--scheme <s>]
-//         [--point-size <n>] [-w|--overwrite]
+//         [--width <px>] [--height <px>] [--steps <n>] [--speed <x>]
+//         [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>]
+//         [--scheme <s>] [--point-size <n>] [-w|--overwrite]
 std::vector<std::string> complete_generate(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1214,8 +1214,8 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
       return matching(
         with_help(
           {"--azim", "--dist", "--elev", "--height", "--input", "--output", "--overwrite",
-           "--point-size", "--range", "--scheme", "--steps", "--topic", "--view", "--width", "-i",
-           "-o", "-t", "-w"}),
+           "--point-size", "--range", "--scheme", "--speed", "--steps", "--topic", "--view",
+           "--width", "-i", "-o", "-t", "-w"}),
         current);
     }
   }

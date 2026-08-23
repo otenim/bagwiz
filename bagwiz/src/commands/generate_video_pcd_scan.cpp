@@ -136,11 +136,22 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
     return 1;
   }
   const auto cloud_fps = core::video::derive_frame_rate(span.first_ns, span.last_ns, span.count);
-  const auto scan_rate = derive_scan_frame_rate(cloud_fps, args.steps);
+  const auto scan_rate = derive_scan_frame_rate(cloud_fps, args.steps, args.speed);
   if (scan_rate.steps != args.steps) {
     BAGWIZ_LOG_WARN(
       kLogger, "--steps reduced from %u to %u to keep the output frame rate within %d fps.",
       args.steps, scan_rate.steps, core::video::kMaxFps);
+  }
+  if (scan_rate.fps.num == core::video::kMinFps && scan_rate.fps.den == 1) {
+    const double wanted =
+      static_cast<double>(cloud_fps.num) * scan_rate.steps * args.speed / cloud_fps.den;
+    if (wanted < core::video::kMinFps) {
+      BAGWIZ_LOG_WARN(
+        kLogger,
+        "cloud rate x --steps x --speed is %.3g fps, below the %d fps floor; the output "
+        "frame rate is clamped to %d fps and the animation plays faster than requested.",
+        wanted, core::video::kMinFps, core::video::kMinFps);
+    }
   }
 
   // Resolve the view: --range defaults to the largest finite XY distance in

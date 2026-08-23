@@ -103,6 +103,11 @@ PcdScanValidation validate_pcd_scan_inputs(const GenerateVideoPcdScanArgs & args
     BAGWIZ_LOG_ERROR(kLogger, "%s", out.error.c_str());
     return out;
   }
+  if (!(args.speed > 0.0) || !std::isfinite(args.speed)) {
+    out.error = "--speed must be a positive, finite value";
+    BAGWIZ_LOG_ERROR(kLogger, "%s", out.error.c_str());
+    return out;
+  }
   if (args.range_m.has_value() && *args.range_m <= 0.0) {
     out.error = "--range must be positive";
     BAGWIZ_LOG_ERROR(kLogger, "%s", out.error.c_str());
@@ -183,20 +188,26 @@ PcdScanValidation validate_pcd_scan_inputs(const GenerateVideoPcdScanArgs & args
 }
 
 ScanFrameRate derive_scan_frame_rate(
-  core::video::FrameRate cloud_fps, std::uint32_t requested_steps)
+  core::video::FrameRate cloud_fps, std::uint32_t requested_steps, double speed)
 {
   ScanFrameRate out;
-  const std::uint64_t num = static_cast<std::uint64_t>(std::max(cloud_fps.num, 1));
-  const std::uint64_t den = static_cast<std::uint64_t>(std::max(cloud_fps.den, 1));
+  const double num = std::max(cloud_fps.num, 1);
+  const double den = std::max(cloud_fps.den, 1);
 
-  // Largest step count keeping cloud_fps * steps <= kMaxFps.
-  std::uint64_t max_steps = (static_cast<std::uint64_t>(core::video::kMaxFps) * den) / num;
-  max_steps = std::max<std::uint64_t>(max_steps, 1);
+  // Largest step count keeping cloud_fps * steps * speed <= kMaxFps.
+  const double max_steps_d = core::video::kMaxFps * den / (num * speed);
+  const std::uint64_t max_steps =
+    std::max<std::uint64_t>(static_cast<std::uint64_t>(max_steps_d), 1);
   const std::uint64_t requested = std::max<std::uint32_t>(requested_steps, 1);
   out.steps = static_cast<std::uint32_t>(std::min(requested, max_steps));
 
-  std::uint64_t n = num * out.steps;
-  std::uint64_t d = den;
+  // fps = cloud_fps * steps * speed, rounded to milli-fps and reduced
+  // (derive_frame_rate's convention), clamped to kMinFps from below.
+  std::uint64_t milli =
+    static_cast<std::uint64_t>(std::llround(num * out.steps * speed * 1000.0 / den));
+  milli = std::max<std::uint64_t>(milli, static_cast<std::uint64_t>(core::video::kMinFps) * 1000);
+  std::uint64_t n = milli;
+  std::uint64_t d = 1000;
   const std::uint64_t g = std::gcd(n, d);
   out.fps.num = static_cast<int>(n / g);
   out.fps.den = static_cast<int>(d / g);

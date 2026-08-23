@@ -250,11 +250,12 @@ TEST_F(GenerateVideoPcdScanTest, RunExistingOutputWithoutOverwriteFails)
 
 TEST_F(GenerateVideoPcdScanTest, RunEncodesBevVideo)
 {
-  // 5 clouds at 10 Hz, steps 4 -> 20 frames at 40 fps = 0.5 s.
+  // 5 clouds at 10 Hz, steps 4, speed 1.0 -> 20 frames at 40 fps = 0.5 s.
   const auto bag = build_bag(dir_, 5);
   const auto out = dir_ / "out.mp4";
   GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
   args.steps = 4;
+  args.speed = 1.0;
   args.width = 320;
   args.height = 240;
   ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
@@ -266,6 +267,24 @@ TEST_F(GenerateVideoPcdScanTest, RunEncodesBevVideo)
   EXPECT_EQ(probe.height, 240u);
   EXPECT_EQ(probe.frame_count, 20);
   EXPECT_NEAR(probe.duration_s, 0.5, 0.5);
+}
+
+TEST_F(GenerateVideoPcdScanTest, RunDefaultSpeedPlaysAtOneTenthRealTime)
+{
+  // Default speed 0.1: 5 clouds at 10 Hz, steps 4 -> 20 frames at 4 fps = 5 s
+  // (the recording's 0.5 s stretched tenfold).
+  const auto bag = build_bag(dir_, 5);
+  const auto out = dir_ / "out.mp4";
+  GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
+  args.steps = 4;
+  args.width = 320;
+  args.height = 240;
+  ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
+
+  const auto probe = bagwiz::core::video::probe_video(out);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 20);
+  EXPECT_NEAR(probe.duration_s, 5.0, 1.0);
 }
 
 TEST_F(GenerateVideoPcdScanTest, RunEncodesPerspectiveVideo)
@@ -305,17 +324,26 @@ TEST_F(GenerateVideoPcdScanTest, RunOverwriteReplacesExistingOutput)
 
 TEST(DeriveScanFrameRate, MultipliesStepsIntoTheRate)
 {
-  // 10 Hz clouds * 10 steps = 100 fps.
-  const auto r = derive_scan_frame_rate({10, 1}, 10);
+  // 10 Hz clouds * 10 steps * speed 1.0 = 100 fps.
+  const auto r = derive_scan_frame_rate({10, 1}, 10, 1.0);
   EXPECT_EQ(r.steps, 10u);
   EXPECT_EQ(r.fps.num, 100);
   EXPECT_EQ(r.fps.den, 1);
 }
 
+TEST(DeriveScanFrameRate, AppliesSpeedToTheRate)
+{
+  // 10 Hz clouds * 10 steps * speed 0.1 = 10 fps.
+  const auto r = derive_scan_frame_rate({10, 1}, 10, 0.1);
+  EXPECT_EQ(r.steps, 10u);
+  EXPECT_EQ(r.fps.num, 10);
+  EXPECT_EQ(r.fps.den, 1);
+}
+
 TEST(DeriveScanFrameRate, ReducesTheFraction)
 {
-  // 25/2 fps * 4 = 50 fps exactly.
-  const auto r = derive_scan_frame_rate({25, 2}, 4);
+  // 25/2 fps * 4 * 1.0 = 50 fps exactly.
+  const auto r = derive_scan_frame_rate({25, 2}, 4, 1.0);
   EXPECT_EQ(r.steps, 4u);
   EXPECT_EQ(r.fps.num, 50);
   EXPECT_EQ(r.fps.den, 1);
@@ -323,16 +351,34 @@ TEST(DeriveScanFrameRate, ReducesTheFraction)
 
 TEST(DeriveScanFrameRate, ClampsToMaxFps)
 {
-  // 30 Hz * 10 = 300 > 240 -> steps reduced to 8 (240 fps).
-  const auto r = derive_scan_frame_rate({30, 1}, 10);
+  // 30 Hz * 10 * 1.0 = 300 > 240 -> steps reduced to 8 (240 fps).
+  const auto r = derive_scan_frame_rate({30, 1}, 10, 1.0);
   EXPECT_EQ(r.steps, 8u);
   EXPECT_EQ(r.fps.num, 240);
   EXPECT_EQ(r.fps.den, 1);
 }
 
+TEST(DeriveScanFrameRate, SpeedFactorsIntoTheStepsClamp)
+{
+  // 30 Hz * 10 * 0.5 = 150 fps <= 240 -> steps kept.
+  const auto r = derive_scan_frame_rate({30, 1}, 10, 0.5);
+  EXPECT_EQ(r.steps, 10u);
+  EXPECT_EQ(r.fps.num, 150);
+  EXPECT_EQ(r.fps.den, 1);
+}
+
+TEST(DeriveScanFrameRate, ClampsToMinFps)
+{
+  // 1 Hz * 1 * 0.001 = 0.001 fps < 1 -> clamped to 1 fps.
+  const auto r = derive_scan_frame_rate({1, 1}, 1, 0.001);
+  EXPECT_EQ(r.steps, 1u);
+  EXPECT_EQ(r.fps.num, 1);
+  EXPECT_EQ(r.fps.den, 1);
+}
+
 TEST(DeriveScanFrameRate, NeverDropsBelowOneStep)
 {
-  const auto r = derive_scan_frame_rate({240, 1}, 10);
+  const auto r = derive_scan_frame_rate({240, 1}, 10, 1.0);
   EXPECT_EQ(r.steps, 1u);
   EXPECT_EQ(r.fps.num, 240);
   EXPECT_EQ(r.fps.den, 1);

@@ -50,9 +50,12 @@ struct GenerateVideoPcdScanArgs
   // Canvas size in pixels. Both must be even (H.264 requires even dimensions).
   std::uint32_t width = 1280;
   std::uint32_t height = 720;
-  // Video frames rendered per sweep. The output frame rate is the cloud rate
-  // times this, so the animation plays in real time.
+  // Video frames rendered per sweep.
   std::uint32_t steps = 10;
+  // Playback speed as a fraction of real time: 1.0 plays each sweep in its
+  // recorded duration, 0.1 slows the animation to one tenth of real time. The
+  // output frame rate is the cloud rate times `steps` times this value.
+  double speed = 0.1;
   // BEV half-extent in meters. In the 3D view it is not read directly; only
   // the default dist_m (2.5x the range) derives from it. Unset = auto: the
   // largest finite XY distance in the first cloud.
@@ -71,8 +74,9 @@ struct GenerateVideoPcdScanArgs
 // `args.input_path` to a video at `args.output_path`: within each sweep the
 // points appear in firing order — read from the cloud's per-point time field,
 // which is required — colored by their sweep-relative time. The output frame
-// rate is the cloud rate times `args.steps`, so the animation plays in real
-// time. Returns a process exit code: 0 on success, 1 on any error.
+// rate is the cloud rate times `args.steps` times `args.speed`, so a sweep
+// spans `args.steps` frames and plays at `args.speed` times real time. Returns
+// a process exit code: 0 on success, 1 on any error.
 int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args);
 
 }  // namespace bagwiz::commands
