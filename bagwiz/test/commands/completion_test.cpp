@@ -2107,12 +2107,13 @@ TEST(FlagCompletionTest, GenerateParentDashListsHelpFlags)
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "generate", "-"}), "--help\n-h\n");
 }
 
-// `bagwiz generate video <TAB>` lists the video group's single leaf
-// subcommand.
-TEST(FlagCompletionTest, GenerateVideoSubcommandListsCam)
+// `bagwiz generate video <TAB>` lists the video group's leaf subcommands,
+// sorted.
+TEST(FlagCompletionTest, GenerateVideoSubcommandListsLeaves)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "generate", "video", ""}), "cam\n");
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "generate", "video", ""}),
+    "cam\npcd-scan\n");
 }
 
 // `bagwiz generate video -` is the nested-group slot; only the implicit help
@@ -2263,6 +2264,49 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotSuppressedWhenInputSlotIsFlag)
 
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "5", "bagwiz", "generate", "video", "cam", "-t"}), "");
+}
+
+// `generate video pcd-scan -` surfaces the leaf's flags plus the implicit help
+// flags, sorted.
+TEST(FlagCompletionTest, GenerateVideoPcdScanDashListsPcdScanFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "pcd-scan", "-"}),
+    "--azim\n--dist\n--elev\n--height\n--help\n--input\n--output\n--overwrite\n--point-size\n"
+    "--range\n--scheme\n--steps\n--topic\n--view\n--width\n-h\n-i\n-o\n-t\n-w\n");
+}
+
+// `--view <TAB>` offers the valid projection choices, sorted.
+TEST(FlagCompletionTest, GenerateVideoPcdScanViewFlagListsChoices)
+{
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "pcd-scan", "--view"}),
+    "3d\nbev\n");
+}
+
+// `--scheme <TAB>` offers the valid color scheme choices, sorted.
+TEST(FlagCompletionTest, GenerateVideoPcdScanSchemeFlagListsChoices)
+{
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "pcd-scan", "--scheme"}),
+    "inferno\njet\nmagma\nplasma\nrainbow\nturbo\nviridis\n");
+}
+
+// `generate video pcd-scan <bag> <TAB>` (the <pcd_topic> slot) lists only the
+// bag's PointCloud2 topics, excluding the non-PointCloud2 /image.
+TEST_F(CompletionTest, GenerateVideoPcdScanTopicSlotListsOnlyPointCloud2Topics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_pointcloud2_fixture(tmp_dir_ / "points.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "pcd-scan", "-i",
+       "~/points.mcap", "-t"}),
+    "/points\n");
 }
 
 // `walk <input> <topic> --cam-info <TAB>` offers only the bag's

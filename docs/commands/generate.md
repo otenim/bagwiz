@@ -4,9 +4,10 @@ Generate non-rosbag **media** from a rosbag. Unlike `convert` or `topic` (which
 read a bag and write another bag), `generate` reads a bag and produces a
 different kind of artifact. Subcommands:
 
-| Subcommand                                | What it does                           |
-| ----------------------------------------- | -------------------------------------- |
-| [`video cam`](#bagwiz-generate-video-cam) | Render an image topic to a video file. |
+| Subcommand                                          | What it does                                        |
+| --------------------------------------------------- | --------------------------------------------------- |
+| [`video cam`](#bagwiz-generate-video-cam)           | Render an image topic to a video file.              |
+| [`video pcd-scan`](#bagwiz-generate-video-pcd-scan) | Render a point-cloud topic's scan pattern to video. |
 
 ---
 
@@ -109,6 +110,86 @@ different resolution or pixel encoding stops the run. Dimensions must be even
 ### Output
 
 Frames are decoded and encoded one at a time; the video is written to a
+temporary file and atomically moved into place on success. A failed run leaves
+no partial output or leftover temporary file.
+
+---
+
+## `bagwiz generate video pcd-scan`
+
+Render the scan pattern of a point-cloud topic to a video file: within each
+sweep the points appear one by one in firing order, colored by their
+sweep-relative time. This makes the sensor's firing sequence visible — the
+rotating sweep of a spinning lidar, or a non-repetitive pattern — and helps
+spot timestamp irregularities and motion-distortion behavior.
+
+### Usage
+
+```text
+bagwiz generate video pcd-scan -i <input> -t <topic> -o <output> [OPTIONS]
+```
+
+### Examples
+
+```bash
+# Render a lidar's scan pattern as a top-down (BEV) animation.
+bagwiz generate video pcd-scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4
+
+# Same, from a fixed 3D viewpoint behind and above the sensor.
+bagwiz generate video pcd-scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 \
+  --view 3d --elev 35 --azim 180 --dist 120
+
+# Finer time resolution within each sweep: 20 video frames per sweep instead of 10.
+bagwiz generate video pcd-scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --steps 20
+
+# Fix the view extent to +-80 m instead of auto-fitting the first cloud.
+bagwiz generate video pcd-scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --range 80
+```
+
+### Options
+
+| Flag                      | Description                                                                                                                                                                                                                      |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                         |
+| `-t`, `--topic <topic>`   | **Required.** `sensor_msgs/msg/PointCloud2` topic to render. A literal topic name, not a glob. The topic must carry a per-point time field (see below).                                                                          |
+| `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                                          |
+| `--view <view>`           | Projection space: `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y) or `3d` (perspective view from a fixed camera looking at the sensor). Default: `bev`. Long-form only.                            |
+| `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. Long-form only.                                                                                                                                             |
+| `--height <px>`           | Output height in pixels (range: 2-4320). Must be even. Default: 720. Long-form only.                                                                                                                                             |
+| `--steps <n>`             | Video frames rendered per sweep (range: 1-100). The output frame rate is the cloud rate times this value, so the animation plays in real time. Default: 10. Long-form only.                                                      |
+| `--range <m>`             | BEV half-extent in meters: the BEV view spans +-range on both ground axes. In the 3D view it only sets the default `--dist` (2.5x the range). Default: auto — the largest finite XY distance in the first cloud. Long-form only. |
+| `--elev <deg>`            | 3D view: camera elevation above the XY plane in degrees (range: -89 to 89). Default: 30. Long-form only.                                                                                                                         |
+| `--azim <deg>`            | 3D view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks at the scene from behind the sensor. Default: 180. Long-form only.                                                                            |
+| `--dist <m>`              | 3D view: camera distance from the sensor in meters. Default: 2.5x the range. Long-form only.                                                                                                                                     |
+| `--scheme <scheme>`       | Color scheme for the sweep-relative time coloring: `viridis`, `turbo`, `jet`, `plasma`, `inferno`, `magma`, `rainbow`. Default: `viridis`. Long-form only.                                                                       |
+| `--point-size <px>`       | Side length of drawn square points in pixels (range: 1-64). Default: 2. Long-form only.                                                                                                                                          |
+| `-w`, `--overwrite`       | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                               |
+
+### Per-point time field
+
+The firing order is read from the cloud's per-point time field: the first
+field named `t`, `time`, `time_stamp`, or `timestamp` with element count 1 and
+datatype UINT32 (nanoseconds) or FLOAT32 / FLOAT64 (seconds). A topic without
+one stops the run — there is no array-order fallback, because array order does
+not reliably match firing order across drivers. Whether the values are
+sweep-relative or epoch-absolute does not matter: each sweep is normalized by
+its own earliest and latest point time. Points with a non-finite time never
+appear.
+
+### Animation model
+
+Each sweep clears the canvas and re-accumulates its points in firing order
+over `--steps` video frames; the last frame of a sweep shows the complete
+cloud. A sweep in which no point carries a finite time contributes `--steps`
+blank frames, so the video timeline is not disturbed. The output frame rate is
+the cloud rate times `--steps` (a 10 Hz lidar with the default 10 steps yields
+a 100 fps video), so the animation plays in real time. If that product would
+exceed 240 fps, the step count is reduced with a warning. Dimensions must be
+even (the 4:2:0 pixel formats these codecs use require it).
+
+### Output
+
+Clouds are parsed and encoded one at a time; the video is written to a
 temporary file and atomically moved into place on success. A failed run leaves
 no partial output or leftover temporary file.
 
