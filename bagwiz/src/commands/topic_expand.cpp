@@ -228,29 +228,50 @@ void log_selector_matched_nothing(
 }
 
 // Expand one slot's values against `ctx.universe`, filtered by `ctx.allowed`.
-// Splits pair values at '=' before resolving so only the left half is a
-// selector, and expands one value at a time so each keeps its own right
-// half. CROSS-SELECTOR dedup is deliberately not delegated to a single
-// batched call into core::resolve_topic_selectors() — that function already
-// dedupes literals internally, but only within one call, and this loop calls
-// it once per selector so that path is never exercised. The CLI layer owns
-// the cross-selector rule (see dedupe()); do not "simplify" this into one
-// batched call, which would silently reintroduce whole-list deduplication.
+// Splits pair values at '=' before resolving so only the selector half is
+// resolved — the left half, or the right half when the slot sets
+// pair_selector_rhs — and expands one value at a time so each keeps its own
+// non-selector half. CROSS-SELECTOR dedup is deliberately not delegated to a
+// single batched call into core::resolve_topic_selectors() — that function
+// already dedupes literals internally, but only within one call, and this
+// loop calls it once per selector so that path is never exercised. The CLI
+// layer owns the cross-selector rule (see dedupe()); do not "simplify" this
+// into one batched call, which would silently reintroduce whole-list
+// deduplication.
 std::optional<std::vector<ExpandedValue>> resolve_values(
   const CLI::App & app, const TopicSlot & slot, const std::vector<std::string> & values,
   const ResolutionContext & ctx)
 {
   std::vector<std::string> selectors;
+  // The halves each resolved name is reattached between: an ordinary
+  // pair_value slot keeps its non-selector half as a suffix ("=<rhs>"), a
+  // pair_selector_rhs slot keeps it as a prefix ("<lhs>="); both are empty
+  // for non-pair slots and bare values either way.
+  std::vector<std::string> prefixes;
   std::vector<std::string> suffixes;
   selectors.reserve(values.size());
+  prefixes.reserve(values.size());
   suffixes.reserve(values.size());
   for (const auto & value : values) {
     if (slot.spec.pair_value) {
-      auto [lhs, rhs] = split_pair(value);
-      selectors.push_back(std::move(lhs));
-      suffixes.push_back(std::move(rhs));
+      auto [lhs, rhs] = split_pair(value);  // rhs keeps its leading '='
+      if (slot.spec.pair_selector_rhs && !rhs.empty()) {
+        selectors.push_back(rhs.substr(1));
+        prefixes.push_back(lhs + '=');
+        suffixes.emplace_back();
+      } else if (slot.spec.pair_selector_rhs) {
+        // Bare value on a rhs-selector slot: an ordinary global selector.
+        selectors.push_back(std::move(lhs));
+        prefixes.emplace_back();
+        suffixes.emplace_back();
+      } else {
+        selectors.push_back(std::move(lhs));
+        prefixes.emplace_back();
+        suffixes.push_back(std::move(rhs));
+      }
     } else {
       selectors.push_back(value);
+      prefixes.emplace_back();
       suffixes.emplace_back();
     }
   }
@@ -272,7 +293,7 @@ std::optional<std::vector<ExpandedValue>> resolve_values(
       return std::nullopt;
     }
     for (const auto & name : resolved.matched) {
-      result.push_back(ExpandedValue{name + suffixes[i], from_glob});
+      result.push_back(ExpandedValue{prefixes[i] + name + suffixes[i], from_glob});
     }
   }
   return result;
@@ -348,13 +369,19 @@ bool expand_slot(
       if (!ctx) {
         continue;
       }
-      // pair_value: check presence of the split selector (the left half),
-      // never the raw "<topic>=<rhs>" value — a pair value is never itself a
-      // topic name, so testing the whole string would reject every value
-      // unconditionally. This mirrors resolve_values()'s kGlob-mode behavior,
-      // which also splits before checking presence; see TopicSlotSpec's
-      // pair_value/require_present doc comments.
-      const std::string selector = slot.spec.pair_value ? split_pair(value).first : value;
+      // pair_value: check presence of the split selector half, never the raw
+      // "<topic>=<rhs>" value — a pair value is never itself a topic name, so
+      // testing the whole string would reject every value unconditionally.
+      // The selector is the left half, or the right half when the slot sets
+      // pair_selector_rhs. This mirrors resolve_values()'s kGlob-mode
+      // behavior, which also splits before checking presence; see
+      // TopicSlotSpec's pair_value/pair_selector_rhs/require_present doc
+      // comments.
+      std::string selector = value;
+      if (slot.spec.pair_value) {
+        const auto [lhs, rhs] = split_pair(value);
+        selector = (slot.spec.pair_selector_rhs && !rhs.empty()) ? rhs.substr(1) : lhs;
+      }
       if (!topic_is_present(ctx->universe, selector)) {
         log_selector_matched_nothing(app, slot, selector);
         return false;

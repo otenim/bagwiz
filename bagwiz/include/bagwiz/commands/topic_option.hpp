@@ -58,9 +58,32 @@ struct TopicSlotSpec
   // still scans the whole raw value, deliberately more conservative than
   // kGlob mode — a kLiteral slot rejects '*' anywhere in the value, not just
   // the left half, since nothing in it should ever be a selector. The
-  // require_present presence check, by contrast, always checks the split left
-  // half in both modes; see its own doc comment.
+  // require_present presence check, by contrast, always checks the split
+  // selector half in both modes; see its own doc comment.
   bool pair_value{false};
+
+  // Only meaningful with pair_value: moves the selector to the half AFTER the
+  // first '=', i.e. the value is `<lhs>=<topic_selector>`. The left half is a
+  // literal annotation that is never expanded, presence-checked, or
+  // type-filtered by the expansion pass — the command owns its validation
+  // (generate video cam --pcd takes <image_topic>=<pcd_selector>, where the
+  // left half must name one of the -t topics). Expansion glob-resolves the
+  // right half against allowed_types exactly as a bare value would be, then
+  // reattaches the left half, so the command always sees
+  // "<lhs>=<resolved_topic>". A bare value (no '=') stays bare: it expands as
+  // an ordinary value, which is what lets one flag mix global selectors and
+  // per-target bindings.
+  bool pair_selector_rhs{false};
+
+  // Only meaningful with pair_value: a bare value (no '=') is valid alongside
+  // pair values. This changes no expansion behavior — the split of a bare
+  // value is the value itself, which both modes already handle — it marks the
+  // slot so shell completion defers its value completion to the command (see
+  // completion_defers_to_command()): the generic pair handling would append
+  // '=' to every candidate as if both halves were mandatory (map slam
+  // --cam-info), which is wrong for a slot whose bare value applies to every
+  // target (generate video cam --cam-info).
+  bool pair_optional{false};
 
   // When set, selectors resolve against this option's expanded result instead
   // of the bag's topic list. Used where a value must name one of another
@@ -81,10 +104,11 @@ struct TopicSlotSpec
   // reaches the command and still gets that command's type error.
   //
   // Safe to combine with pair_value in either mode: the presence check always
-  // runs against the split left half (the selector), never the raw
-  // "<topic>=<rhs>" value, which is never itself a topic name and would
-  // otherwise reject every value unconditionally. The right half is never
-  // presence-checked either, even when it names a topic — as in
+  // runs against the split selector half (the left half, or the right half
+  // when pair_selector_rhs is set), never the raw "<topic>=<rhs>" value, which
+  // is never itself a topic name and would otherwise reject every value
+  // unconditionally. The non-selector half is never presence-checked, even
+  // when it names a topic — as in
   // `map slam --cam-info <image_topic>=<info_topic>` — because it is not a
   // selector, and the command owns a more specific error for it.
   //

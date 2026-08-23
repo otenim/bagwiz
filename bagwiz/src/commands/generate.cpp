@@ -77,17 +77,21 @@ private:
   void configure_cam(CLI::App & video)
   {
     auto * sub =
-      video.add_subcommand("cam", "Render an image topic from a rosbag to a video file.");
+      video.add_subcommand("cam", "Render image topic(s) from a rosbag to a video file.");
     sub->add_option("-i,--input", video_args_.input_path, "Input ROS 2 rosbag (file or directory).")
       ->required()
       ->check(CLI::ExistingPath);
     set_topic_input(*sub, video_args_.input_path);
     add_topic_option(
-      *sub, "-t,--topic", video_args_.topic,
-      "Image topic to render. Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
-      "sensor_msgs/msg/CompressedImage (JPEG/PNG).",
-      TopicSlotSpec{.allowed_types = kImageTopicTypes, .mode = TopicSelectorMode::kLiteral})
-      ->required();
+      *sub, "-t,--topic", video_args_.topics,
+      "Image topic(s) to render. Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
+      "sensor_msgs/msg/CompressedImage (JPEG/PNG). A literal name or a '*' glob; a glob's "
+      "matches expand in lexicographic (topic-name) order. List several to arrange them in "
+      "a grid (left to right, top to bottom — see --grid); the first topic drives the frame "
+      "rate and output timing, and its frame size fixes the cell size. Repeatable.",
+      TopicSlotSpec{.allowed_types = kImageTopicTypes})
+      ->required()
+      ->expected(-1);
     sub
       ->add_option(
         "-o,--output", video_args_.output_path,
@@ -97,34 +101,75 @@ private:
     sub->add_flag(
       "-w,--overwrite", video_args_.overwrite,
       "Replace an existing <output>. Without it, an existing output path stops the run.");
+    sub
+      ->add_option(
+        "--grid", video_args_.grid,
+        "Grid layout for multiple -t topics, as <cols>x<rows> (e.g. 2x2). Must hold at least "
+        "as many cells as topics; extra cells stay black. When omitted, a near-square grid is "
+        "derived from the topic count.")
+      ->check([](const std::string & grid) {
+        if (grid.empty()) {
+          return std::string{"grid must not be empty; omit --grid for the automatic layout"};
+        }
+        return std::string{};
+      });
     add_topic_option(
-      *sub, "--cam-info", video_args_.camera_info_topic,
-      "CameraInfo topic for --rectify and --pcd. When omitted, it is derived from "
-      "<img_topic> following the standard /camera_info suffix rules.",
-      TopicSlotSpec{.allowed_types = kCameraInfoType, .mode = TopicSelectorMode::kLiteral})
+      *sub, "--cam-info", video_args_.camera_info_entries,
+      "CameraInfo topic for --rectify and --pcd: a bare <info_topic> applies to every view, "
+      "an <image_topic>=<info_topic> entry overrides one view. Both halves are literal topic "
+      "names. Views without an entry derive it from the image topic name following the "
+      "standard /camera_info suffix rules. Repeatable.",
+      TopicSlotSpec{
+        .allowed_types = kImageTopicTypes,
+        .mode = TopicSelectorMode::kLiteral,
+        .pair_value = true,
+        .pair_optional = true})
       ->check([](const std::string & topic) {
         if (topic.empty()) {
           return std::string{"cam-info topic must not be empty"};
         }
         return std::string{};
-      });
-    sub->add_flag(
-      "--rectify", video_args_.rectify,
-      "Apply distortion correction to each frame using the resolved CameraInfo. "
-      "Requires a camera-info topic; use --cam-info if auto-resolution fails.");
+      })
+      ->expected(-1);
+    sub
+      ->add_flag(
+        "--rectify,!--no-rectify", video_args_.rectify,
+        "Apply distortion correction to each frame using each view's resolved CameraInfo "
+        "(on by default; --no-rectify opts out). A view whose camera-info topic cannot be "
+        "derived renders unrectified with a warning — pass --cam-info to name it "
+        "explicitly. Point-cloud projection always requires a camera-info topic.")
+      ->default_val(true);
     sub
       ->add_option(
         "--resize", video_args_.resize_scale,
-        "Scale output width and height by this factor while preserving aspect ratio. "
-        "1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them.")
+        "Scale the cell width and height by this factor while preserving aspect ratio. "
+        "1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. "
+        "Single-view: scales the output directly.")
       ->default_val(1.0f)
       ->check(CLI::Range(0.01f, 10.0f));
+    auto * width_opt =
+      sub
+        ->add_option(
+          "--width", video_args_.width,
+          "Fix the composed output width in pixels: the cell width is the width split across "
+          "the grid columns, and the cell height follows the primary frame's aspect ratio "
+          "(both rounded down to even, so the output can be a few pixels narrower). Mutually "
+          "exclusive with --resize.")
+        ->check(CLI::PositiveNumber);
+    width_opt->excludes("--resize");
+    sub->add_flag(
+      "--no-label", video_args_.no_label,
+      "Suppress the topic-name label drawn at each view cell's top-left corner (drawn by "
+      "default, also in multi-view grids).");
     add_topic_option(
       *sub, "--pcd", video_args_.pointcloud_topics,
-      "PointCloud2 topic(s) to project onto each frame; a literal name or a '*' glob. "
-      "Repeatable. Implies distortion correction and requires a CameraInfo topic and a TF chain "
-      "from each cloud frame to the camera frame.",
-      TopicSlotSpec{.allowed_types = kPointCloud2Type})
+      "PointCloud2 topic(s) to project onto the frames: a bare value (a literal name or a "
+      "'*' glob) projects onto every view, an <image_topic>=<pcd_selector> entry projects "
+      "onto that view only. Repeatable. Projecting implies distortion correction for that "
+      "view and requires a CameraInfo topic and a TF chain from each cloud frame to the "
+      "camera frame.",
+      TopicSlotSpec{
+        .allowed_types = kPointCloud2Type, .pair_value = true, .pair_selector_rhs = true})
       ->check([](const std::string & topic) {
         if (topic.empty()) {
           return std::string{"pcd topic must not be empty"};

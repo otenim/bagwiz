@@ -173,9 +173,12 @@ TEST(CompletionSlotWiring, GenerateVideoCam)
   ASSERT_NE(cam, nullptr);
   const auto slots = topic_slots_of(*cam);
   expect_slot(
-    slot_for(slots, "topic"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
+    slot_for(slots, "topic"), TopicSelectorMode::kGlob, bagwiz::commands::kImageTopicTypes);
+  // --cam-info takes a bare CameraInfo topic or an <image>=<info> pair; its
+  // allowed_types name the pair's left half (like map slam --cam-info), and
+  // its value completion defers to complete_generate() (pair_optional).
   expect_slot(
-    slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, bagwiz::commands::kCameraInfoType);
+    slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
   expect_slot(slot_for(slots, "pcd"), TopicSelectorMode::kGlob, bagwiz::commands::kPointCloud2Type);
 }
 
