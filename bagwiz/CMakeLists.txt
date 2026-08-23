@@ -169,6 +169,8 @@ set(bagwiz_command_sources
   src/commands/generate.cpp
   src/commands/generate_video.cpp
   src/commands/generate_video_common.cpp
+  src/commands/generate_video_pcd_scan.cpp
+  src/commands/generate_video_pcd_scan_common.cpp
   src/commands/joke.cpp
   src/commands/ls.cpp
   src/commands/pcd.cpp
@@ -678,17 +680,41 @@ if(BUILD_TESTING)
   # configure_video() through Registry::instance() (walk_test.cpp idiom) —
   # generate.cpp is the production call site for
   # add_topic_option(std::optional<std::string>&) (--cam-info).
+  # generate.cpp's run() dispatches to both video leaves, so the pcd-scan
+  # sources are compiled in too.
   ament_add_gtest(bagwiz_generate_video_test
     test/commands/generate_video_test.cpp
     src/commands/generate.cpp
     src/commands/generate_video.cpp
     src/commands/generate_video_common.cpp
+    src/commands/generate_video_pcd_scan.cpp
+    src/commands/generate_video_pcd_scan_common.cpp
     src/commands/topic_option.cpp
     src/commands/registry.cpp)
   target_include_directories(bagwiz_generate_video_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(
     bagwiz_generate_video_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV ${OpenCV_LIBS})
+
+  # generate_video_pcd_scan_common.hpp lives in src/commands (CLI-internal,
+  # not installed), so this test adds src/commands to its include path
+  # (pcd_concat_common idiom). generate.cpp is compiled in so the CLI wiring
+  # test can drive the real configure() through Registry::instance()
+  # (generate_video_test idiom).
+  ament_add_gtest(bagwiz_generate_video_pcd_scan_test
+    test/commands/generate_video_pcd_scan_test.cpp
+    src/commands/generate.cpp
+    src/commands/generate_video.cpp
+    src/commands/generate_video_common.cpp
+    src/commands/generate_video_pcd_scan.cpp
+    src/commands/generate_video_pcd_scan_common.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
+  target_include_directories(bagwiz_generate_video_pcd_scan_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(
+    bagwiz_generate_video_pcd_scan_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
+    PkgConfig::LIBAV ${OpenCV_LIBS})
 
   # generate_video_common.hpp lives in src/commands (CLI-internal, not
   # installed), so this test adds src/commands to its include path
