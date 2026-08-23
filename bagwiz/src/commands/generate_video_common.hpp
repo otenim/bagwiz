@@ -30,7 +30,7 @@
 #include <utility>
 #include <vector>
 
-// Internals of `generate video`, split out of generate_video.cpp so the
+// Internals of `generate video cam`, split out of generate_video.cpp so the
 // validation, pass-1 scan, tmp-file lifecycle, and frame pipeline units can be
 // unit-tested without driving the full command. CLI-internal: this header
 // lives with the command sources and is not installed.

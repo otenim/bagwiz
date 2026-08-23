@@ -45,7 +45,7 @@ namespace bagwiz::commands
 
 // Overlay key-handling state. The default view is distance coloured with the
 // viridis scheme, 2px points at full opacity over an auto-computed range —
-// the same defaults `generate video --pcd` renders with, so the preview and
+// the same defaults `generate video cam --pcd` renders with, so the preview and
 // the encoded video agree without touching any key.
 struct PcdOverlayState
 {

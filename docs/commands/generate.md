@@ -4,13 +4,13 @@ Generate non-rosbag **media** from a rosbag. Unlike `convert` or `topic` (which
 read a bag and write another bag), `generate` reads a bag and produces a
 different kind of artifact. Subcommands:
 
-| Subcommand                        | What it does                           |
-| --------------------------------- | -------------------------------------- |
-| [`video`](#bagwiz-generate-video) | Render an image topic to a video file. |
+| Subcommand                                | What it does                           |
+| ----------------------------------------- | -------------------------------------- |
+| [`video cam`](#bagwiz-generate-video-cam) | Render an image topic to a video file. |
 
 ---
 
-## `bagwiz generate video`
+## `bagwiz generate video cam`
 
 Render an image topic from a rosbag to a video file. The frame rate is derived
 from message timestamps, and the container/codec is chosen from the `<output>`
@@ -19,42 +19,42 @@ extension.
 ### Usage
 
 ```text
-bagwiz generate video -i <input> -t <topic> -o <output> [OPTIONS]
+bagwiz generate video cam -i <input> -t <topic> -o <output> [OPTIONS]
 ```
 
 ### Examples
 
 ```bash
 # Render a camera topic to an MP4 (H.264).
-bagwiz generate video -i drive.mcap -t /sensing/camera/image_raw -o out.mp4
+bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4
 
 # Render to MJPEG AVI, replacing an existing file.
-bagwiz generate video -i drive_dir/ -t /sensing/camera/image_raw -o clip.avi -w
+bagwiz generate video cam -i drive_dir/ -t /sensing/camera/image_raw -o clip.avi -w
 
 # Render with distortion correction.
-bagwiz generate video -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --rectify
+bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --rectify
 
 # Render with distortion correction using an explicit CameraInfo topic.
-bagwiz generate video -i drive.mcap -t /sensing/camera/image_raw -o out.mp4 \
+bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4 \
   --rectify --cam-info /sensing/camera/camera_info
 
 # Render with a point-cloud overlay colored by distance.
-bagwiz generate video -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
+bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
   --pcd /sensing/lidar/front/points --field distance --scheme turbo --point-size 3 --alpha 0.8
 
 # Render with multiple point-cloud overlays in the same camera view.
-bagwiz generate video -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
+bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
   --pcd /sensing/lidar/front/points \
         /sensing/lidar/rear/points \
   --field distance --scheme turbo --point-size 3 --alpha 0.8
 
 # Render with every lidar point cloud under /sensing/lidar overlaid, via a
 # glob (quoted so the shell doesn't expand it).
-bagwiz generate video -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
+bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
   --pcd '/sensing/lidar/*/points'
 
 # Render at half resolution to reduce output file size.
-bagwiz generate video -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --resize 0.5
+bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --resize 0.5
 ```
 
 ### Options

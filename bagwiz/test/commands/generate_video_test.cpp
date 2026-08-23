@@ -1060,7 +1060,7 @@ TEST_F(GenerateVideoTest, PointCloudOverlayOnRealBag)
   EXPECT_NEAR(probe.duration_s, 30.0, 1.0);
 }
 
-// Exercises the real GenerateCommand::configure_video() — reached through the
+// Exercises the real GenerateCommand::configure_cam() — reached through the
 // process-wide command registry that generate.cpp's BAGWIZ_REGISTER_COMMAND
 // registrar populates — rather than a hand-mirrored copy of its wiring.
 // --cam-info is the production call site for
@@ -1083,9 +1083,11 @@ TEST(GenerateVideoCliWiring, TopicOptionsAreDeclaredLiteralOnly)
   CLI::App app{"generate"};
   generate_cmd->configure(app);
 
-  auto * video_sub = app.get_subcommand_no_throw("video");
-  ASSERT_NE(video_sub, nullptr);
-  const auto slots = bagwiz::commands::topic_slots_of(*video_sub);
+  auto * video_group = app.get_subcommand_no_throw("video");
+  ASSERT_NE(video_group, nullptr);
+  auto * cam_sub = video_group->get_subcommand_no_throw("cam");
+  ASSERT_NE(cam_sub, nullptr);
+  const auto slots = bagwiz::commands::topic_slots_of(*cam_sub);
   ASSERT_EQ(slots.size(), 3U);  // -t/--topic, --cam-info, --pcd
 
   const auto * topic_slot = bagwiz::test::slot_for(slots, "topic");

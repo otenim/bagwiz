@@ -22,7 +22,7 @@
 namespace bagwiz::commands
 {
 
-// Arguments for `bagwiz generate video`. Populated by GenerateCommand's CLI
+// Arguments for `bagwiz generate video cam`. Populated by GenerateCommand's CLI
 // wiring (src/commands/generate.cpp) and consumed by run_generate_video. Kept
 // in a header so the run function and the source check can be exercised
 // directly from tests without driving the CLI parser.
