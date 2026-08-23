@@ -18,8 +18,8 @@ namespace bagwiz::commands
 
 int run_generate_video(const GenerateVideoArgs & args)
 {
-  // Validate the source topic, camera info, point-cloud topics, and the output
-  // path before touching anything expensive.
+  // Validate the source topics, camera infos, point-cloud topics, the grid,
+  // and the output path before touching anything expensive.
   const auto validation = validate_video_inputs(args);
   if (!validation.ok()) {
     return 1;
@@ -29,15 +29,14 @@ int run_generate_video(const GenerateVideoArgs & args)
   }
 
   // Pass 1: derive the frame rate and scan the point-cloud overlay topics.
-  auto scan = scan_video_inputs(args);
+  auto scan = scan_video_inputs(args, validation);
   if (!scan.ok()) {
     return 1;
   }
 
-  // Load camera info + TF before pass 2 so a failure aborts before the encode.
+  // Load camera infos + TF before pass 2 so a failure aborts before the encode.
   VideoGeometry geometry;
-  if (const auto err = load_video_geometry(args, validation.camera_info_topic, geometry);
-      !err.empty()) {
+  if (const auto err = load_video_geometry(args, validation, geometry); !err.empty()) {
     return 1;
   }
 
@@ -51,18 +50,12 @@ int run_generate_video(const GenerateVideoArgs & args)
     return 1;
   }
 
-  FrameNormalizer normalizer(validation.check.topic_type, args.resize_scale);
-  VideoFrameEncoder encoder(
-    tmp_path, scan.fps, args, geometry.camera_info ? &*geometry.camera_info : nullptr,
-    scan.global_property_min, scan.global_property_max);
-  if (
-    run_encode_pass(
-      *reader, args, scan, geometry.camera_info ? &*geometry.camera_info : nullptr,
-      geometry.tf_buffer ? &*geometry.tf_buffer : nullptr, normalizer, encoder) != 0) {
+  VideoFrameEncoder encoder(tmp_path, scan.fps);
+  if (run_encode_pass(*reader, args, validation, scan, geometry, encoder) != 0) {
     return 1;
   }
-  if (const auto err =
-        finish_video_encode(encoder, args.topic, tmp_path, args.output_path, args.overwrite);
+  if (const auto err = finish_video_encode(
+        encoder, args.topics.front(), tmp_path, args.output_path, args.overwrite);
       !err.empty()) {
     return 1;
   }

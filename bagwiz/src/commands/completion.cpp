@@ -654,9 +654,18 @@ const TopicSlot * slot_for_cursor(const CLI::App & app, const CompletionRequest 
 //    so there is nothing here to filter against. `pcd concat --stamp-offset`
 //    is the one slot this applies to today (scoped to --pcd); its completion
 //    stays command-specific for exactly this reason.
+//  - a pair slot whose selector is the RIGHT half (TopicSlotSpec::
+//    pair_selector_rhs) has a literal left half that must name one of another
+//    flag's values and a topic right half — two candidate sets the generic
+//    pair handling cannot express. `generate video cam --pcd` is the one slot
+//    this applies to today; complete_generate() completes both halves.
+//  - a pair-optional slot (TopicSlotSpec::pair_optional) accepts a bare value
+//    alongside pairs, so the generic "append '=' to every candidate" pair
+//    handling would mangle its bare-value completion. `generate video cam
+//    --cam-info` is the one slot this applies to today.
 bool completion_defers_to_command(const TopicSlotSpec & spec)
 {
-  if (spec.scope != nullptr) {
+  if (spec.scope != nullptr || spec.pair_selector_rhs || spec.pair_optional) {
     return true;
   }
   return spec.mode == TopicSelectorMode::kLiteral && !spec.pair_value &&
@@ -1156,19 +1165,89 @@ std::vector<std::string> complete_stamp(const CompletionRequest & request)
   return {};
 }
 
+// The -t/--topic values typed so far on a `generate video cam` command line
+// (both spellings collect into one list), used to complete the <image_topic>
+// left half of --pcd / --cam-info pair values.
+std::vector<std::string_view> collect_video_cam_image_topics(const CompletionRequest & request)
+{
+  auto values = collect_flag_values(request, "-t");
+  const auto long_values = collect_flag_values(request, "--topic");
+  values.insert(values.end(), long_values.begin(), long_values.end());
+  return values;
+}
+
+// Where the cursor sits within a possible "<lhs>=<rhs>" pair value: the
+// "<lhs>=" prefix to re-attach to right-half candidates (empty when the
+// cursor is not on a right half) and the typed right-half prefix to filter
+// them with. The current word carries '=' when the shell keeps the value
+// unsplit (zsh/fish); a bare '=' as the previous word is bash's split form.
+struct PairRhsContext
+{
+  std::string lhs_prefix;
+  std::string rhs_prefix;
+};
+
+PairRhsContext pair_rhs_context(const CompletionRequest & request)
+{
+  const auto current = current_word(request);
+  if (const auto eq = current.find('='); eq != std::string::npos) {
+    return PairRhsContext{current.substr(0, eq + 1), current.substr(eq + 1)};
+  }
+  if (
+    request.cursor_word >= 2 && request.cursor_word <= request.words.size() &&
+    request.words[request.cursor_word - 1] == "=") {
+    return PairRhsContext{
+      std::string{request.words[request.cursor_word - 2]} + "=", std::string{current}};
+  }
+  return PairRhsContext{{}, std::string{current}};
+}
+
+// Value completion for generate video cam's deferred pair slots (see
+// completion_defers_to_command). A bare value completes topics of
+// `rhs_types`; a pair value completes the -t topics on the left half ('='
+// appended, so the shell drops the auto-space) and topics of `rhs_types` on
+// the right half.
+std::vector<std::string> complete_video_cam_pair_value(
+  const CompletionRequest & request, std::span<const std::string_view> rhs_types)
+{
+  const auto input_path = find_input_bag(request);
+  if (!input_path) {
+    return {};
+  }
+  const auto rhs = pair_rhs_context(request);
+  if (!rhs.lhs_prefix.empty()) {
+    auto candidates =
+      complete_topics(std::filesystem::path{*input_path}, rhs.rhs_prefix, rhs_types);
+    for (auto & candidate : candidates) {
+      candidate = rhs.lhs_prefix + candidate;
+    }
+    return candidates;
+  }
+  const auto current = current_word(request);
+  auto candidates = complete_topics(std::filesystem::path{*input_path}, current, rhs_types);
+  for (const auto & topic : collect_video_cam_image_topics(request)) {
+    if (topic.starts_with(current)) {
+      candidates.push_back(std::string{topic} + "=");
+    }
+  }
+  std::sort(candidates.begin(), candidates.end());
+  return candidates;
+}
+
 // `generate` is a command group for producing media from a rosbag; its sole
 // subcommand is `video`, itself a nested command group whose only leaf is
 // `cam` (like `tf static`). At the subcommand slot (word 1) the only candidate
 // is `video`; at the leaf slot (word 2, under `video`) the only candidate is
-// `cam`. `cam`'s `-t/--topic` (image topics), `--cam-info` (CameraInfo
-// topics), and `--pcd` (PointCloud2 topics) are all declared topic slots, so
-// try_topic_completion handles their values before this function is reached.
-// Here we surface `cam`'s own flags for any `-` word, and the enum choices
-// for `--field` and `--scheme`.
+// `cam`. `cam`'s `-t/--topic` (image topics) is a declared topic slot, so
+// try_topic_completion handles its values before this function is reached;
+// `--pcd` and `--cam-info` are pair-valued slots whose completion defers here
+// (see completion_defers_to_command). Here we surface `cam`'s own flags for
+// any `-` word, and the enum choices for `--field` and `--scheme`.
 //
 //   cam: `generate`(0) `video`(1) `cam`(2) -i|--input <bag>
-//        -t|--topic <image_topic> -o|--output <path> [--cam-info <topic>]
-//        [--rectify] [--resize <s>] [--pcd <topic>...] [--field <f>]
+//        -t|--topic <image_topic>... -o|--output <path> [--grid <cols>x<rows>]
+//        [--cam-info <topic>|<image>=<info>] [--rectify] [--resize <s>]
+//        [--pcd <topic>|<image>=<topic>...] [--field <f>]
 //        [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
 //        [--alpha <a>] [-w|--overwrite]
 std::vector<std::string> complete_generate(const CompletionRequest & request)
@@ -1199,10 +1278,22 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
     if (request.words[kSecondCommandArgWord] == "cam") {
       return matching(
         with_help(
-          {"--alpha", "--cam-info", "--field", "--input", "--max", "--min", "--output",
+          {"--alpha", "--cam-info", "--field", "--grid", "--input", "--max", "--min", "--output",
            "--overwrite", "--pcd", "--point-size", "--rectify", "--resize", "--scheme", "--topic",
            "-i", "-o", "-t", "-w"}),
         current);
+    }
+  }
+
+  if (
+    request.cursor_word >= kThirdCommandArgWord && request.words[kSecondCommandArgWord] == "cam") {
+    // The deferred pair slots' values: --pcd takes PointCloud2 topics (bare or
+    // <image>=<pcd>), --cam-info CameraInfo topics (bare or <image>=<info>).
+    if (is_value_slot_of(request, "--pcd")) {
+      return complete_video_cam_pair_value(request, kPointCloud2Type);
+    }
+    if (is_value_slot_of(request, "--cam-info")) {
+      return complete_video_cam_pair_value(request, kCameraInfoType);
     }
   }
 

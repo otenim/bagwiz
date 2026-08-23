@@ -345,8 +345,9 @@ std::filesystem::path write_image_topics_fixture(const std::filesystem::path & p
 }
 
 // MCAP carrying an image topic (/cam/image_raw/compressed) and its sibling
-// CameraInfo topic (/cam/camera_info), plus an unrelated topic (/points). Used to
-// verify `--cam-info` completion offers only the CameraInfo topic.
+// CameraInfo topic (/cam/camera_info), plus an unrelated topic (/points). Used
+// to verify `--cam-info` completion offers only CameraInfo topics (plus pair
+// targets), and `generate video cam --pcd` completion the PointCloud2 ones.
 std::filesystem::path write_camera_info_fixture(const std::filesystem::path & path)
 {
   bagwiz::io::CreateOptions options;
@@ -2130,8 +2131,8 @@ TEST(FlagCompletionTest, GenerateVideoCamDashListsCamFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "cam", "-"}),
-    "--alpha\n--cam-info\n--field\n--help\n--input\n--max\n--min\n--output\n--overwrite\n--pcd\n--"
-    "point-size\n--rectify\n--resize\n--scheme\n--topic\n-h\n-i\n-o\n-t\n-w\n");
+    "--alpha\n--cam-info\n--field\n--grid\n--help\n--input\n--max\n--min\n--output\n--overwrite\n"
+    "--pcd\n--point-size\n--rectify\n--resize\n--scheme\n--topic\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `--field <TAB>` offers the valid point-cloud field choices, sorted.
@@ -2195,9 +2196,10 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotExcludesUnsupportedTypeOnPrefix)
     "");
 }
 
-// `--cam-info <TAB>` after a bag offers only sensor_msgs/msg/CameraInfo
-// topics, excluding image and non-CameraInfo topics.
-TEST_F(CompletionTest, GenerateVideoCameraInfoFlagListsOnlyCameraInfoTopics)
+// `--cam-info <TAB>` after a bag offers the bag's sensor_msgs/msg/CameraInfo
+// topics (for a bare, all-views value) plus each -t topic with '=' appended
+// (the pair form's left half), excluding other topics, sorted.
+TEST_F(CompletionTest, GenerateVideoCameraInfoFlagListsCameraInfoTopicsAndPairTargets)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2207,7 +2209,39 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagListsOnlyCameraInfoTopics)
     run_completion(
       {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
        "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info"}),
-    "/cam/camera_info\n");
+    "/cam/camera_info\n/cam/image_raw/compressed=\n");
+}
+
+// Once the --cam-info value word contains '=', the view is chosen and the
+// right half completes CameraInfo topics with the left half kept.
+TEST_F(CompletionTest, GenerateVideoCameraInfoPairCompletesCameraInfoOnTheRightHalf)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
+       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info",
+       "/cam/image_raw/compressed=/cam"}),
+    "/cam/image_raw/compressed=/cam/camera_info\n");
+}
+
+// bash splits a typed --cam-info value at '=', leaving a bare '=' as the word
+// before the cursor; the right half still completes CameraInfo topics.
+TEST_F(CompletionTest, GenerateVideoCameraInfoPairCompletesAfterSplitEquals)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "13", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
+       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info",
+       "/cam/image_raw/compressed", "=", ""}),
+    "/cam/image_raw/compressed=/cam/camera_info\n");
 }
 
 // A typed prefix narrows the `--cam-info` candidates within the CameraInfo set.
@@ -2224,8 +2258,9 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagRespectsPrefix)
     "/cam/camera_info\n");
 }
 
-// A bag with no CameraInfo topic yields no `--cam-info` candidates.
-TEST_F(CompletionTest, GenerateVideoCameraInfoFlagEmptyWhenNoCameraInfoTopics)
+// A bag with no CameraInfo topic yields only the pair-form candidates (the -t
+// topics with '=' appended).
+TEST_F(CompletionTest, GenerateVideoCameraInfoFlagOffersOnlyPairTargetsWhenNoCameraInfoTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2235,7 +2270,39 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagEmptyWhenNoCameraInfoTopics)
     run_completion(
       {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
        "-t", "/image", "-o", "out.avi", "--cam-info"}),
-    "");
+    "/image=\n");
+}
+
+// `--pcd <TAB>` after a bag offers the bag's PointCloud2 topics (bare,
+// all-views form) plus each -t topic with '=' appended (per-view binding),
+// sorted.
+TEST_F(CompletionTest, GenerateVideoPcdFlagListsPointCloudsAndPairTargets)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");  // declares /points
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
+       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--pcd"}),
+    "/cam/image_raw/compressed=\n/points\n");
+}
+
+// Once the --pcd value word contains '=', the view is chosen and the right
+// half completes PointCloud2 topics with the left half kept.
+TEST_F(CompletionTest, GenerateVideoPcdPairCompletesPointCloudsOnTheRightHalf)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_camera_info_fixture(tmp_dir_ / "cameras.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
+       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--pcd",
+       "/cam/image_raw/compressed=/p"}),
+    "/cam/image_raw/compressed=/points\n");
 }
 
 // A bag with no image topic yields no <image_topic> candidates, so the shell's default
