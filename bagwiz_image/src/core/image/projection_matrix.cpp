@@ -114,11 +114,11 @@ template <typename Range>
     d4[i] = input.d[i];
   }
   std::array<double, 9> k = input.k;
-  std::array<double, 9> identity{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
   const cv::Size size{static_cast<int>(input.width), static_cast<int>(input.height)};
 
   cv::Mat new_k;
   try {
+    std::array<double, 9> identity{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
       cv::Mat(3, 3, CV_64F, k.data()), cv::Mat(4, 1, CV_64F, d4.data()), size,
       cv::Mat(3, 3, CV_64F, identity.data()), new_k, balance);
