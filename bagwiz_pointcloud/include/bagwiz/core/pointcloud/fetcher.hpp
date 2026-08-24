@@ -149,7 +149,7 @@ public:
     std::int64_t target_ns, PointCloudMatchKey key, std::string & error);
 
   // fetch() with shared ownership: the returned cloud stays valid no matter
-  // what is fetched later, so concurrent consumers (generate video's per-view
+  // what is fetched later, so concurrent consumers (movify's per-view
   // workers) can hold clouds simultaneously. Recently matched clouds are
   // cached keyed by record time, so alternating between a few clouds — e.g.
   // views matching either side of a cloud boundary, or a camera rate above
@@ -166,7 +166,7 @@ public:
 
 private:
   // Bound on the number of parsed clouds held at once. Two covers the working
-  // set of a generate-video tick: the views' match targets span at most one
+  // set of a movify tick: the views' match targets span at most one
   // frame interval, so they land on at most two adjacent clouds.
   static constexpr std::size_t kCacheCapacity = 2;
 

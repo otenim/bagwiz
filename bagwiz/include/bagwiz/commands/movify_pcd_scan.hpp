@@ -6,8 +6,8 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef BAGWIZ__COMMANDS__GENERATE_VIDEO_PCD_SCAN_HPP_
-#define BAGWIZ__COMMANDS__GENERATE_VIDEO_PCD_SCAN_HPP_
+#ifndef BAGWIZ__COMMANDS__MOVIFY_PCD_SCAN_HPP_
+#define BAGWIZ__COMMANDS__MOVIFY_PCD_SCAN_HPP_
 
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/scan_pattern.hpp"
@@ -21,14 +21,14 @@
 namespace bagwiz::commands
 {
 
-// Arguments for `bagwiz generate video scan`. Populated by GenerateCommand's
-// CLI wiring (src/commands/generate.cpp) and consumed by
-// run_generate_video_pcd_scan. Kept in a header so the run function can be
+// Arguments for `bagwiz movify scan`. Populated by MovifyCommand's
+// CLI wiring (src/commands/movify.cpp) and consumed by
+// run_movify_pcd_scan. Kept in a header so the run function can be
 // exercised directly from tests without driving the CLI parser.
-struct GenerateVideoPcdScanArgs
+struct MovifyPcdScanArgs
 {
-  GenerateVideoPcdScanArgs() = default;
-  GenerateVideoPcdScanArgs(
+  MovifyPcdScanArgs() = default;
+  MovifyPcdScanArgs(
     std::filesystem::path input_path_arg, std::string topic_arg,
     std::filesystem::path output_path_arg, bool overwrite_arg)
   : input_path(std::move(input_path_arg)),
@@ -77,8 +77,8 @@ struct GenerateVideoPcdScanArgs
 // rate is `args.fps`; a sweep spans max(1, round(args.fps / (cloud rate *
 // args.speed))) frames, so the animation plays at `args.speed` times real
 // time. Returns a process exit code: 0 on success, 1 on any error.
-int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args);
+int run_movify_pcd_scan(const MovifyPcdScanArgs & args);
 
 }  // namespace bagwiz::commands
 
-#endif  // BAGWIZ__COMMANDS__GENERATE_VIDEO_PCD_SCAN_HPP_
+#endif  // BAGWIZ__COMMANDS__MOVIFY_PCD_SCAN_HPP_

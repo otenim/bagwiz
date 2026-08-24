@@ -66,7 +66,7 @@ struct TopicSlotSpec
   // first '=', i.e. the value is `<lhs>=<topic_selector>`. The left half is a
   // literal annotation that is never expanded, presence-checked, or
   // type-filtered by the expansion pass — the command owns its validation
-  // (generate video cam --pcd takes <image_topic>=<pcd_selector>, where the
+  // (movify cam --pcd takes <image_topic>=<pcd_selector>, where the
   // left half must name one of the -t topics). Expansion glob-resolves the
   // right half against allowed_types exactly as a bare value would be, then
   // reattaches the left half, so the command always sees
@@ -82,7 +82,7 @@ struct TopicSlotSpec
   // completion_defers_to_command()): the generic pair handling would append
   // '=' to every candidate as if both halves were mandatory (map slam
   // --cam-info), which is wrong for a slot whose bare value applies to every
-  // target (generate video cam --cam-info).
+  // target (movify cam --cam-info).
   bool pair_optional{false};
 
   // When set, selectors resolve against this option's expanded result instead
@@ -120,7 +120,7 @@ struct TopicSlotSpec
   // flag is set on, not a guarantee this flag itself makes.
   //
   // Set it ONLY on a slot whose command has no presence check of its own.
-  // Most commands do (generate video cam --pcd reports "pcd topic '…' not found",
+  // Most commands do (movify cam --pcd reports "pcd topic '…' not found",
   // map slam --color reports "Topic '…' is not present in …"), and theirs are
   // more specific. The exceptions are topic drop -t, topic keep -t, and
   // trim --align, whose presence check WAS resolve_topic_patterns()'s

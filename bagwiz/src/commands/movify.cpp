@@ -8,8 +8,8 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
-#include "bagwiz/commands/generate_video.hpp"
-#include "bagwiz/commands/generate_video_pcd_scan.hpp"
+#include "bagwiz/commands/movify_pcd_scan.hpp"
+#include "bagwiz/commands/movify_video.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
@@ -26,41 +26,33 @@ namespace bagwiz::commands
 
 namespace
 {
-constexpr const char * kLogger = "bagwiz.cmd.generate";
+constexpr const char * kLogger = "bagwiz.cmd.movify";
 }  // namespace
 
-// `bagwiz generate` is a command group for producing non-rosbag *media* from a
-// rosbag (rosbag -> media, not rosbag -> rosbag). Its first subcommand group
-// `video` holds video renderers: `video cam` renders an image topic to a video
-// file, `video scan` renders a point-cloud topic's scan pattern (points
-// appearing in firing order) to a video file. The nesting leaves room for
-// further media generators (image sequences, GIFs, ...) and further video
-// sources.
-class GenerateCommand : public Command
+// `bagwiz movify` renders a rosbag to video. Its subcommands are `cam`, which
+// renders image topic(s) to a video file, and `scan`, which renders a
+// point-cloud topic's scan pattern (points appearing in firing order) to a
+// video file.
+class MovifyCommand : public Command
 {
 public:
-  [[nodiscard]] std::string_view name() const override { return "generate"; }
-  [[nodiscard]] std::string_view description() const override
-  {
-    return "Generate non-rosbag media from a rosbag";
-  }
+  [[nodiscard]] std::string_view name() const override { return "movify"; }
+  [[nodiscard]] std::string_view description() const override { return "Render a rosbag to video"; }
 
   void configure(CLI::App & app) override
   {
     app.require_subcommand(1);
-    auto * video = app.add_subcommand("video", "Video rendering");
-    video->require_subcommand(1);
-    configure_cam(*video);
-    configure_pcd_scan(*video);
+    configure_cam(app);
+    configure_pcd_scan(app);
   }
 
   int run() override
   {
     switch (selected_) {
       case Subcommand::kCam:
-        return run_generate_video(video_args_);
+        return run_movify_video(video_args_);
       case Subcommand::kPcdScan:
-        return run_generate_video_pcd_scan(pcd_scan_args_);
+        return run_movify_pcd_scan(pcd_scan_args_);
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
@@ -71,13 +63,12 @@ public:
 private:
   enum class Subcommand { kNone, kCam, kPcdScan };
   Subcommand selected_ = Subcommand::kNone;
-  GenerateVideoArgs video_args_;
-  GenerateVideoPcdScanArgs pcd_scan_args_;
+  MovifyVideoArgs video_args_;
+  MovifyPcdScanArgs pcd_scan_args_;
 
-  void configure_cam(CLI::App & video)
+  void configure_cam(CLI::App & app)
   {
-    auto * sub =
-      video.add_subcommand("cam", "Render image topic(s) from a rosbag to a video file.");
+    auto * sub = app.add_subcommand("cam", "Render image topic(s) from a rosbag to a video file.");
     sub->add_option("-i,--input", video_args_.input_path, "Input ROS 2 rosbag (file or directory).")
       ->required()
       ->check(CLI::ExistingPath);
@@ -219,9 +210,9 @@ private:
     sub->callback([this]() { selected_ = Subcommand::kCam; });
   }
 
-  void configure_pcd_scan(CLI::App & video)
+  void configure_pcd_scan(CLI::App & app)
   {
-    auto * sub = video.add_subcommand(
+    auto * sub = app.add_subcommand(
       "scan",
       "Render a point-cloud topic's scan pattern from a rosbag to a video file. Within each "
       "sweep the points appear in firing order, read from the cloud's per-point time field "
@@ -326,6 +317,6 @@ private:
   }
 };
 
-BAGWIZ_REGISTER_COMMAND(GenerateCommand)
+BAGWIZ_REGISTER_COMMAND(MovifyCommand)
 
 }  // namespace bagwiz::commands

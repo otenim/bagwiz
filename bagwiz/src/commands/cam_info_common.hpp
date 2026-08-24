@@ -37,7 +37,7 @@ namespace bagwiz::commands
 
 // The message type `cam-info replace` and `cam-info recompute-p` validate
 // against. Mirrors topic_types.hpp's kCameraInfoType (used for those two
-// subcommands' allowed_types, plus `cam-info dump`'s, `generate video cam
+// subcommands' allowed_types, plus `cam-info dump`'s, `movify cam
 // --cam-info`'s, and `walk --cam-info`'s — see that header for the full
 // mirror list). Keep both in sync by hand.
 inline constexpr const char * kCameraInfoType = "sensor_msgs/msg/CameraInfo";

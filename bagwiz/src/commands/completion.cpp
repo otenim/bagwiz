@@ -657,11 +657,11 @@ const TopicSlot * slot_for_cursor(const CLI::App & app, const CompletionRequest 
 //  - a pair slot whose selector is the RIGHT half (TopicSlotSpec::
 //    pair_selector_rhs) has a literal left half that must name one of another
 //    flag's values and a topic right half — two candidate sets the generic
-//    pair handling cannot express. `generate video cam --pcd` is the one slot
-//    this applies to today; complete_generate() completes both halves.
+//    pair handling cannot express. `movify cam --pcd` is the one slot
+//    this applies to today; complete_movify() completes both halves.
 //  - a pair-optional slot (TopicSlotSpec::pair_optional) accepts a bare value
 //    alongside pairs, so the generic "append '=' to every candidate" pair
-//    handling would mangle its bare-value completion. `generate video cam
+//    handling would mangle its bare-value completion. `movify cam
 //    --cam-info` is the one slot this applies to today.
 bool completion_defers_to_command(const TopicSlotSpec & spec)
 {
@@ -1165,7 +1165,7 @@ std::vector<std::string> complete_stamp(const CompletionRequest & request)
   return {};
 }
 
-// The -t/--topic values typed so far on a `generate video cam` command line
+// The -t/--topic values typed so far on a `movify cam` command line
 // (both spellings collect into one list), used to complete the <image_topic>
 // left half of --pcd / --cam-info pair values. Glob values are dropped: a
 // pair's left half must name one already-resolved view topic, which a glob
@@ -1205,7 +1205,7 @@ PairRhsContext pair_rhs_context(const CompletionRequest & request)
   return PairRhsContext{{}, std::string{current}};
 }
 
-// Value completion for generate video cam's deferred pair slots (see
+// Value completion for movify cam's deferred pair slots (see
 // completion_defers_to_command). A bare value completes topics of
 // `rhs_types`; a pair value completes the -t topics on the left half ('='
 // appended, so the shell drops the auto-space) and topics of `rhs_types` on
@@ -1237,56 +1237,42 @@ std::vector<std::string> complete_video_cam_pair_value(
   return candidates;
 }
 
-// `generate` is a command group for producing media from a rosbag; its sole
-// subcommand is `video`, itself a nested command group whose leaves are `cam`
-// and `scan` (like `tf static`). At the subcommand slot (word 1) the only
-// candidate is `video`; at the leaf slot (word 2, under `video`) the
-// candidates are `cam` and `scan`. `cam`'s `-t/--topic` (image topics) and
-// `scan`'s `-t/--topic` (PointCloud2 topics) are declared topic slots, so
-// try_topic_completion handles their values before this function is reached;
-// `cam`'s `--pcd` and `--cam-info` are pair-valued slots whose completion
-// defers here (see completion_defers_to_command). Here we surface each leaf's
-// own flags for any `-` word, and the enum choices for `--field`, `--scheme`,
-// and `--view`.
+// `movify` renders a rosbag to video. Its subcommands are `cam` and `scan`.
+// `cam`'s `-t/--topic` (image topics) and `scan`'s `-t/--topic` (PointCloud2
+// topics) are declared topic slots, so try_topic_completion handles their
+// values before this function is reached; `cam`'s `--pcd` and `--cam-info` are
+// pair-valued slots whose completion defers here (see
+// completion_defers_to_command). Here we surface each leaf's own flags for any
+// `-` word, and the enum choices for `--field`, `--scheme`, and `--view`.
 //
-//   cam:  `generate`(0) `video`(1) `cam`(2) -i|--input <bag>
+//   cam:  `movify`(0) `cam`(1) -i|--input <bag>
 //         -t|--topic <image_topic>... -o|--output <path> [--grid <cols>x<rows>]
 //         [--cam-info <topic>|<image>=<info>] [--no-rectify] [--resize <s>]
 //         [--width <px>]
 //         [--pcd <topic>|<image>=<topic>...] [--field <f>]
 //         [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
 //         [--alpha <a>] [-w|--overwrite]
-//   scan: `generate`(0) `video`(1) `scan`(2) -i|--input <bag>
+//   scan: `movify`(0) `scan`(1) -i|--input <bag>
 //         -t|--topic <pcd_topic> -o|--output <path> [--view <bev|3d>]
 //         [--width <px>] [--height <px>] [--fps <f>] [--speed <x>]
 //         [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>]
 //         [--scheme <s>] [--point-size <n>] [-w|--overwrite]
-std::vector<std::string> complete_generate(const CompletionRequest & request)
+std::vector<std::string> complete_movify(const CompletionRequest & request)
 {
   const auto current = current_word(request);
   if (request.cursor_word == kFirstCommandArgWord) {
     if (current.starts_with("-")) {
       return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
     }
-    return matching({"video"}, current);
+    return matching({"cam", "scan"}, current);
   }
 
   // Reaching here implies cursor_word > kFirstCommandArgWord, so words[1]
   // exists (parse_request clamps cursor_word to words.size()).
-  const auto & group = request.words[kFirstCommandArgWord];
-  if (group != "video") {
-    return {};
-  }
+  const auto & verb = request.words[kFirstCommandArgWord];
 
-  if (request.cursor_word == kSecondCommandArgWord) {
-    if (current.starts_with("-")) {
-      return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
-    }
-    return matching({"cam", "scan"}, current);
-  }
-
-  if (request.cursor_word >= kThirdCommandArgWord && current.starts_with("-")) {
-    if (request.words[kSecondCommandArgWord] == "cam") {
+  if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
+    if (verb == "cam") {
       return matching(
         with_help({"--alpha", "--cam-info",   "--field",      "--grid",   "--input",
                    "--max",   "--min",        "--no-rectify", "--output", "--overwrite",
@@ -1295,7 +1281,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
                    "-w"}),
         current);
     }
-    if (request.words[kSecondCommandArgWord] == "scan") {
+    if (verb == "scan") {
       return matching(
         with_help(
           {"--azim", "--dist", "--elev", "--fps", "--height", "--input", "--output", "--overwrite",
@@ -1305,8 +1291,7 @@ std::vector<std::string> complete_generate(const CompletionRequest & request)
     }
   }
 
-  if (
-    request.cursor_word >= kThirdCommandArgWord && request.words[kSecondCommandArgWord] == "cam") {
+  if (request.cursor_word >= kSecondCommandArgWord && verb == "cam") {
     // The deferred pair slots' values: --pcd takes PointCloud2 topics (bare or
     // <image>=<pcd>), --cam-info CameraInfo topics (bare or <image>=<info>).
     if (is_value_slot_of(request, "--pcd")) {
@@ -1757,8 +1742,8 @@ std::vector<std::string> complete_request(const CLI::App & app, const Completion
   if (command == "stamp") {
     return complete_stamp(request);
   }
-  if (command == "generate") {
-    return complete_generate(request);
+  if (command == "movify") {
+    return complete_movify(request);
   }
   if (command == "map") {
     return complete_map(request);

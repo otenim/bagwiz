@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-// Rendering core behind `bagwiz generate video scan`: turns one point
+// Rendering core behind `bagwiz movify scan`: turns one point
 // cloud into a firing-order animation by (1) reading every point's per-point
 // time, (2) sorting points by that time, and (3) projecting a cumulative
 // prefix of the sorted points onto a 2D canvas — either a top-down BEV view

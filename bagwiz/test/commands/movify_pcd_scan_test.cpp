@@ -6,15 +6,15 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/commands/generate_video_pcd_scan.hpp"
+#include "bagwiz/commands/movify_pcd_scan.hpp"
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/video/video_encoder.hpp"
 #include "bagwiz/io/bag_io.hpp"
-#include "generate_video_pcd_scan_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
-#include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_pcd_scan_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "topic_slot_test_util.hpp"    // NOLINT(build/include_subdir) src-local shared header
 
 #include <gtest/gtest.h>
 
@@ -32,13 +32,13 @@
 
 namespace
 {
-using bagwiz::commands::GenerateVideoPcdScanArgs;
-using bagwiz::commands::run_generate_video_pcd_scan;
+using bagwiz::commands::MovifyPcdScanArgs;
+using bagwiz::commands::run_movify_pcd_scan;
 using bagwiz::commands::scan_frames_per_sweep;
 using bagwiz::commands::validate_pcd_scan_inputs;
 
 // Little-endian CDR-1 builder, matching the wire format the production reader
-// consumes (generate_video_test.cpp's CdrBuilder idiom).
+// consumes (movify_video_test.cpp's CdrBuilder idiom).
 class CdrBuilder
 {
 public:
@@ -176,7 +176,7 @@ std::filesystem::path build_bag(
   return path;
 }
 
-class GenerateVideoPcdScanTest : public ::testing::Test
+class MovifyPcdScanTest : public ::testing::Test
 {
 protected:
   void SetUp() override
@@ -196,47 +196,47 @@ protected:
   std::filesystem::path dir_;
 };
 
-TEST_F(GenerateVideoPcdScanTest, ValidateDetectsTimeField)
+TEST_F(MovifyPcdScanTest, ValidateDetectsTimeField)
 {
   const auto bag = build_bag(dir_, 3);
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
+  MovifyPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
   const auto validation = validate_pcd_scan_inputs(args);
   ASSERT_TRUE(validation.ok()) << validation.error;
   EXPECT_EQ(validation.time_field.offset, 12u);
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunTopicNotFoundFails)
+TEST_F(MovifyPcdScanTest, RunTopicNotFoundFails)
 {
   const auto bag = build_bag(dir_, 3);
-  GenerateVideoPcdScanArgs args{bag, "/no/such/topic", dir_ / "out.mp4", false};
-  EXPECT_EQ(run_generate_video_pcd_scan(args), 1);
+  MovifyPcdScanArgs args{bag, "/no/such/topic", dir_ / "out.mp4", false};
+  EXPECT_EQ(run_movify_pcd_scan(args), 1);
   EXPECT_FALSE(std::filesystem::exists(dir_ / "out.mp4"));
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunWrongTypeFails)
+TEST_F(MovifyPcdScanTest, RunWrongTypeFails)
 {
   const auto bag = build_bag(dir_, 3, true, "sensor_msgs/msg/Image");
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
-  EXPECT_EQ(run_generate_video_pcd_scan(args), 1);
+  MovifyPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
+  EXPECT_EQ(run_movify_pcd_scan(args), 1);
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunMissingTimeFieldFails)
+TEST_F(MovifyPcdScanTest, RunMissingTimeFieldFails)
 {
   const auto bag = build_bag(dir_, 3, /*with_time=*/false);
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
-  EXPECT_EQ(run_generate_video_pcd_scan(args), 1);
+  MovifyPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
+  EXPECT_EQ(run_movify_pcd_scan(args), 1);
   EXPECT_FALSE(std::filesystem::exists(dir_ / "out.mp4"));
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunOddDimensionsFails)
+TEST_F(MovifyPcdScanTest, RunOddDimensionsFails)
 {
   const auto bag = build_bag(dir_, 3);
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
+  MovifyPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
   args.width = 321;
-  EXPECT_EQ(run_generate_video_pcd_scan(args), 1);
+  EXPECT_EQ(run_movify_pcd_scan(args), 1);
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunExistingOutputWithoutOverwriteFails)
+TEST_F(MovifyPcdScanTest, RunExistingOutputWithoutOverwriteFails)
 {
   const auto bag = build_bag(dir_, 3);
   const auto out = dir_ / "out.mp4";
@@ -244,23 +244,23 @@ TEST_F(GenerateVideoPcdScanTest, RunExistingOutputWithoutOverwriteFails)
     std::ofstream f(out);
     f << "pre-existing";
   }
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
-  EXPECT_EQ(run_generate_video_pcd_scan(args), 1);
+  MovifyPcdScanArgs args{bag, kPcdTopic, out, false};
+  EXPECT_EQ(run_movify_pcd_scan(args), 1);
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunEncodesBevVideo)
+TEST_F(MovifyPcdScanTest, RunEncodesBevVideo)
 {
   // 5 clouds at 10 Hz, fps 40, speed 1.0 -> 4 frames/sweep, 20 frames at
   // 40 fps = 0.5 s.
   const auto bag = build_bag(dir_, 5);
   const auto out = dir_ / "out.mp4";
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
+  MovifyPcdScanArgs args{bag, kPcdTopic, out, false};
   args.view = bagwiz::core::pointcloud::ScanPatternProjection::kBev;
   args.fps = 40;
   args.speed = 1.0;
   args.width = 320;
   args.height = 240;
-  ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
+  ASSERT_EQ(run_movify_pcd_scan(args), 0);
   ASSERT_TRUE(std::filesystem::exists(out));
 
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -271,17 +271,17 @@ TEST_F(GenerateVideoPcdScanTest, RunEncodesBevVideo)
   EXPECT_NEAR(probe.duration_s, 0.5, 0.5);
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunDefaultSpeedPlaysAtOneTenthRealTime)
+TEST_F(MovifyPcdScanTest, RunDefaultSpeedPlaysAtOneTenthRealTime)
 {
   // Default speed 0.1: 5 clouds at 10 Hz, fps 4 -> 4 frames/sweep, 20 frames
   // at 4 fps = 5 s (the recording's 0.5 s stretched tenfold).
   const auto bag = build_bag(dir_, 5);
   const auto out = dir_ / "out.mp4";
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
+  MovifyPcdScanArgs args{bag, kPcdTopic, out, false};
   args.fps = 4;
   args.width = 320;
   args.height = 240;
-  ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
+  ASSERT_EQ(run_movify_pcd_scan(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -289,25 +289,25 @@ TEST_F(GenerateVideoPcdScanTest, RunDefaultSpeedPlaysAtOneTenthRealTime)
   EXPECT_NEAR(probe.duration_s, 5.0, 1.0);
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunEncodesPerspectiveVideo)
+TEST_F(MovifyPcdScanTest, RunEncodesPerspectiveVideo)
 {
   const auto bag = build_bag(dir_, 5);
   const auto out = dir_ / "out.mp4";
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, false};
+  MovifyPcdScanArgs args{bag, kPcdTopic, out, false};
   args.view = bagwiz::core::pointcloud::ScanPatternProjection::kPerspective;
   args.fps = 2;  // 2 frames/sweep at 10 Hz and the default speed 0.1
   args.width = 320;
   args.height = 240;
   args.range_m = 50.0;
   args.dist_m = 100.0;
-  ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
+  ASSERT_EQ(run_movify_pcd_scan(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
   EXPECT_EQ(probe.frame_count, 10);
 }
 
-TEST_F(GenerateVideoPcdScanTest, RunOverwriteReplacesExistingOutput)
+TEST_F(MovifyPcdScanTest, RunOverwriteReplacesExistingOutput)
 {
   const auto bag = build_bag(dir_, 3);
   const auto out = dir_ / "out.mp4";
@@ -315,10 +315,10 @@ TEST_F(GenerateVideoPcdScanTest, RunOverwriteReplacesExistingOutput)
     std::ofstream f(out);
     f << "pre-existing";
   }
-  GenerateVideoPcdScanArgs args{bag, kPcdTopic, out, true};
+  MovifyPcdScanArgs args{bag, kPcdTopic, out, true};
   args.width = 64;
   args.height = 64;
-  ASSERT_EQ(run_generate_video_pcd_scan(args), 0);
+  ASSERT_EQ(run_movify_pcd_scan(args), 0);
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
   // 3 clouds * 60 frames/sweep (default fps 60 at 10 Hz, default speed 0.1)
@@ -355,27 +355,25 @@ TEST(ScanFramesPerSweep, FloorsAtOneFramePerSweep)
   EXPECT_EQ(scan_frames_per_sweep({100, 1}, 10, 1.0), 1u);
 }
 
-// Exercises the real GenerateCommand::configure_pcd_scan() — reached through
-// the process-wide command registry that generate.cpp's BAGWIZ_REGISTER_COMMAND
+// Exercises the real MovifyCommand::configure_pcd_scan() — reached through
+// the process-wide command registry that movify.cpp's BAGWIZ_REGISTER_COMMAND
 // registrar populates — rather than a hand-mirrored copy of its wiring
-// (GenerateVideoCliWiring idiom).
-TEST(GenerateVideoPcdScanCliWiring, TopicOptionIsDeclaredLiteralPointCloud2)
+// (MovifyVideoCliWiring idiom).
+TEST(MovifyPcdScanCliWiring, TopicOptionIsDeclaredLiteralPointCloud2)
 {
-  bagwiz::commands::Command * generate_cmd = nullptr;
+  bagwiz::commands::Command * movify_cmd = nullptr;
   for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
-    if (cmd->name() == "generate") {
-      generate_cmd = cmd.get();
+    if (cmd->name() == "movify") {
+      movify_cmd = cmd.get();
       break;
     }
   }
-  ASSERT_NE(generate_cmd, nullptr);
+  ASSERT_NE(movify_cmd, nullptr);
 
-  CLI::App app{"generate"};
-  generate_cmd->configure(app);
+  CLI::App app{"movify"};
+  movify_cmd->configure(app);
 
-  auto * video_group = app.get_subcommand_no_throw("video");
-  ASSERT_NE(video_group, nullptr);
-  auto * pcd_scan_sub = video_group->get_subcommand_no_throw("scan");
+  auto * pcd_scan_sub = app.get_subcommand_no_throw("scan");
   ASSERT_NE(pcd_scan_sub, nullptr);
   const auto slots = bagwiz::commands::topic_slots_of(*pcd_scan_sub);
   ASSERT_EQ(slots.size(), 1U);  // -t/--topic only

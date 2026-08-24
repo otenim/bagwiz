@@ -285,7 +285,7 @@ TEST_F(ExpandTopicSelectorsTest, OptionalTargetLiteralSlotPassesALiteralThrough)
   EXPECT_EQ(*cam_info, "/not/checked");
 }
 
-// pair_selector_rhs (generate video cam --pcd's <image_topic>=<pcd_selector>):
+// pair_selector_rhs (movify cam --pcd's <image_topic>=<pcd_selector>):
 // the selector is the RIGHT half, so the glob expands there and the literal
 // left half is reattached to every match. A bare value in the same slot is an
 // ordinary selector and stays bare — that mix is what lets one flag carry

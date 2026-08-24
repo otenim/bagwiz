@@ -1,17 +1,15 @@
-# `bagwiz generate`
+# `bagwiz movify`
 
-Generate non-rosbag **media** from a rosbag. Unlike `convert` or `topic` (which
-read a bag and write another bag), `generate` reads a bag and produces a
-different kind of artifact. Subcommands:
+Render a rosbag to video. Subcommands:
 
-| Subcommand                                  | What it does                                            |
-| ------------------------------------------- | ------------------------------------------------------- |
-| [`video cam`](#bagwiz-generate-video-cam)   | Render image topic(s) to a video file (single or grid). |
-| [`video scan`](#bagwiz-generate-video-scan) | Render a point-cloud topic's scan pattern to video.     |
+| Subcommand                    | What it does                                            |
+| ----------------------------- | ------------------------------------------------------- |
+| [`cam`](#bagwiz-movify-cam)   | Render image topic(s) to a video file (single or grid). |
+| [`scan`](#bagwiz-movify-scan) | Render a point-cloud topic's scan pattern to video.     |
 
 ---
 
-## `bagwiz generate video cam`
+## `bagwiz movify cam`
 
 Render one or more image topics from a rosbag to a video file. With several
 `-t` topics the views are arranged in a grid, producing a multi-view video.
@@ -21,83 +19,83 @@ container/codec is chosen from the `<output>` extension.
 ### Usage
 
 ```text
-bagwiz generate video cam -i <input> -t <topic>... -o <output> [OPTIONS]
+bagwiz movify cam -i <input> -t <topic>... -o <output> [OPTIONS]
 ```
 
 ### Examples
 
 ```bash
 # Render a camera topic to an MP4 (H.264).
-bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4
 
 # Render to MJPEG AVI, replacing an existing file.
-bagwiz generate video cam -i drive_dir/ -t /sensing/camera/image_raw -o clip.avi -w
+bagwiz movify cam -i drive_dir/ -t /sensing/camera/image_raw -o clip.avi -w
 
 # Render with distortion correction.
-bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --rectify
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --rectify
 
 # Render with distortion correction using an explicit CameraInfo topic.
-bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4 \
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4 \
   --rectify --cam-info /sensing/camera/camera_info
 
 # Render with a point-cloud overlay colored by distance.
-bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
   --pcd /sensing/lidar/front/points --field distance --scheme turbo --point-size 3 --alpha 0.8
 
 # Render with multiple point-cloud overlays in the same camera view.
-bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
   --pcd /sensing/lidar/front/points \
         /sensing/lidar/rear/points \
   --field distance --scheme turbo --point-size 3 --alpha 0.8
 
 # Render with every lidar point cloud under /sensing/lidar overlaid, via a
 # glob (quoted so the shell doesn't expand it).
-bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
   --pcd '/sensing/lidar/*/points'
 
 # Project the point cloud onto the raw (unrectified) frame: the camera's lens
 # distortion is applied to the projected points, keeping them aligned with the
 # distorted image.
-bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
   --pcd /sensing/lidar/front/points --no-rectify
 
 # Render at half resolution to reduce output file size.
-bagwiz generate video cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --resize 0.5
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --resize 0.5
 
 # Multi-view: two cameras side by side (auto grid), front camera driving the
 # frame rate.
-bagwiz generate video cam -i drive.mcap -o front_rear.mp4 \
+bagwiz movify cam -i drive.mcap -o front_rear.mp4 \
   -t /sensing/camera/front/image_raw/compressed \
      /sensing/camera/rear/image_raw/compressed
 
 # Multi-view from a glob (quoted so the shell doesn't expand it): every
 # matching camera topic, expanded in topic-name order, at a fixed width.
-bagwiz generate video cam -i drive.mcap -o all_cams.mp4 --width 3840 \
+bagwiz movify cam -i drive.mcap -o all_cams.mp4 --width 3840 \
   -t '/sensing/camera/camera*/image_raw/compressed'
 
 # Multi-view at a fixed output width: three cameras on an auto 2x2 grid, the
 # composed video exactly 1920 px wide (cells 960x540 for 16:9 inputs).
-bagwiz generate video cam -i drive.mcap -o surround.mp4 --width 1920 \
+bagwiz movify cam -i drive.mcap -o surround.mp4 --width 1920 \
   -t /sensing/camera/front/image_raw/compressed \
      /sensing/camera/rear/image_raw/compressed \
      /sensing/camera/left/image_raw/compressed
 
 # Multi-view with an explicit 2x2 grid (three cameras; the fourth cell stays
 # black).
-bagwiz generate video cam -i drive.mcap -o surround.mp4 --grid 2x2 \
+bagwiz movify cam -i drive.mcap -o surround.mp4 --grid 2x2 \
   -t /sensing/camera/front/image_raw/compressed \
      /sensing/camera/rear/image_raw/compressed \
      /sensing/camera/left/image_raw/compressed
 
 # Multi-view with a point cloud projected onto every view (bare --pcd value).
-bagwiz generate video cam -i drive.mcap -o overlay_all.mp4 \
+bagwiz movify cam -i drive.mcap -o overlay_all.mp4 \
   -t /sensing/camera/front/image_raw/compressed \
      /sensing/camera/rear/image_raw/compressed \
   --pcd /sensing/lidar/top/points
 
 # Multi-view with per-view point-cloud bindings: each camera gets its own
 # lidar's projection.
-bagwiz generate video cam -i drive.mcap -o overlay_each.mp4 \
+bagwiz movify cam -i drive.mcap -o overlay_each.mp4 \
   -t /sensing/camera/front/image_raw/compressed \
      /sensing/camera/rear/image_raw/compressed \
   --pcd /sensing/camera/front/image_raw/compressed=/sensing/lidar/front/points \
@@ -187,7 +185,7 @@ no partial output or leftover temporary file.
 
 ---
 
-## `bagwiz generate video scan`
+## `bagwiz movify scan`
 
 Render the scan pattern of a point-cloud topic to a video file: within each
 sweep the points appear one by one in firing order, colored by their
@@ -198,30 +196,30 @@ spot timestamp irregularities and motion-distortion behavior.
 ### Usage
 
 ```text
-bagwiz generate video scan -i <input> -t <topic> -o <output> [OPTIONS]
+bagwiz movify scan -i <input> -t <topic> -o <output> [OPTIONS]
 ```
 
 ### Examples
 
 ```bash
 # Render a lidar's scan pattern as a 3D animation (the default view).
-bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4
+bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4
 
 # Tune the 3D viewpoint: elevation, azimuth, and camera distance.
-bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 \
+bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 \
   --elev 35 --azim 180 --dist 120
 
 # Top-down (BEV) animation instead.
-bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --view bev
+bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --view bev
 
 # Coarser animation (and a smaller file): 30 fps output instead of 60.
-bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --fps 30
+bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --fps 30
 
 # Play in real time instead of the default one-tenth speed.
-bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --speed 1.0
+bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --speed 1.0
 
 # Fix the view extent to +-80 m instead of auto-fitting the first cloud.
-bagwiz generate video scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --range 80
+bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --range 80
 ```
 
 ### Options

@@ -265,7 +265,7 @@ TEST_F(PointCloudFetcherTest, CachedRecordNsIdentifiesTheCloud)
 }
 
 // fetch_shared hands out shared ownership of the matched cloud, so a caller
-// (generate video's per-view workers) can hold a cloud across later fetches
+// (movify's per-view workers) can hold a cloud across later fetches
 // without it being replaced under it. The cache keeps the last few clouds
 // keyed by record time, so alternating between two clouds — adjacent views
 // matching either side of a cloud boundary — does not reload either one.

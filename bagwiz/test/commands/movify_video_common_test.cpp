@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "generate_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
+#include "movify_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
 #include "bagwiz/io/bag_io.hpp"
 
@@ -25,11 +25,11 @@
 #include <utility>
 #include <vector>
 
-// Unit tests for the generate-video internals: tmp-path handling, the RAII
+// Unit tests for the movify internals: tmp-path handling, the RAII
 // partial-file guard, finalize (rename/clobber), grid + per-view binding
 // parsing, input validation, the pass-1 scan, the threading decision, frame
 // decode / resize, the secondary-frame nearest matcher, the grid canvas, and
-// the per-view renderer. Exercises generate_video_common.hpp directly without
+// the per-view renderer. Exercises movify_video_common.hpp directly without
 // driving the CLI.
 
 namespace
@@ -65,7 +65,7 @@ constexpr const char * kPointCloudType = "sensor_msgs/msg/PointCloud2";
 
 // ---- tmp dir fixture --------------------------------------------------------
 
-class GenerateVideoCommonTest : public ::testing::Test
+class MovifyVideoCommonTest : public ::testing::Test
 {
 protected:
   void SetUp() override
@@ -440,7 +440,7 @@ TEST(ViewRectifies, NoRectifyWinsOverPcd)
 
 // ---- PartialFileGuard -------------------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, PartialFileGuardCtorRemovesStaleFile)
+TEST_F(MovifyVideoCommonTest, PartialFileGuardCtorRemovesStaleFile)
 {
   const auto tmp = tmp_dir_ / "out.bagwiz-partial.avi";
   write_file(tmp, "stale");
@@ -450,7 +450,7 @@ TEST_F(GenerateVideoCommonTest, PartialFileGuardCtorRemovesStaleFile)
   EXPECT_FALSE(std::filesystem::exists(tmp));
 }
 
-TEST_F(GenerateVideoCommonTest, PartialFileGuardDtorRemovesLeftover)
+TEST_F(MovifyVideoCommonTest, PartialFileGuardDtorRemovesLeftover)
 {
   const auto tmp = tmp_dir_ / "out.bagwiz-partial.avi";
   {
@@ -460,7 +460,7 @@ TEST_F(GenerateVideoCommonTest, PartialFileGuardDtorRemovesLeftover)
   EXPECT_FALSE(std::filesystem::exists(tmp));
 }
 
-TEST_F(GenerateVideoCommonTest, PartialFileGuardDtorLeavesRenamedAwayOutput)
+TEST_F(MovifyVideoCommonTest, PartialFileGuardDtorLeavesRenamedAwayOutput)
 {
   const auto tmp = tmp_dir_ / "out.bagwiz-partial.avi";
   const auto out = tmp_dir_ / "out.avi";
@@ -475,7 +475,7 @@ TEST_F(GenerateVideoCommonTest, PartialFileGuardDtorLeavesRenamedAwayOutput)
 
 // ---- finalize_video_output --------------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, FinalizeRenamesTmpIntoPlace)
+TEST_F(MovifyVideoCommonTest, FinalizeRenamesTmpIntoPlace)
 {
   const auto tmp = tmp_dir_ / "out.bagwiz-partial.avi";
   const auto out = tmp_dir_ / "out.avi";
@@ -486,7 +486,7 @@ TEST_F(GenerateVideoCommonTest, FinalizeRenamesTmpIntoPlace)
   EXPECT_EQ(read_file(out), "video");
 }
 
-TEST_F(GenerateVideoCommonTest, FinalizeRejectsExistingOutputWithoutOverwrite)
+TEST_F(MovifyVideoCommonTest, FinalizeRejectsExistingOutputWithoutOverwrite)
 {
   const auto tmp = tmp_dir_ / "out.bagwiz-partial.avi";
   const auto out = tmp_dir_ / "out.avi";
@@ -500,7 +500,7 @@ TEST_F(GenerateVideoCommonTest, FinalizeRejectsExistingOutputWithoutOverwrite)
   EXPECT_EQ(read_file(out), "old");
 }
 
-TEST_F(GenerateVideoCommonTest, FinalizeOverwriteReplacesExistingOutput)
+TEST_F(MovifyVideoCommonTest, FinalizeOverwriteReplacesExistingOutput)
 {
   const auto tmp = tmp_dir_ / "out.bagwiz-partial.avi";
   const auto out = tmp_dir_ / "out.avi";
@@ -513,7 +513,7 @@ TEST_F(GenerateVideoCommonTest, FinalizeOverwriteReplacesExistingOutput)
 
 // ---- validate_video_output_path ---------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, ValidateOutputPathRejectsCollisionWithoutOverwrite)
+TEST_F(MovifyVideoCommonTest, ValidateOutputPathRejectsCollisionWithoutOverwrite)
 {
   const auto out = tmp_dir_ / "out.avi";
   write_file(out, "old");
@@ -524,14 +524,14 @@ TEST_F(GenerateVideoCommonTest, ValidateOutputPathRejectsCollisionWithoutOverwri
     "output path '" + out.string() + "' already exists; pass -w/--overwrite to replace it");
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateOutputPathAcceptsCollisionWithOverwrite)
+TEST_F(MovifyVideoCommonTest, ValidateOutputPathAcceptsCollisionWithOverwrite)
 {
   const auto out = tmp_dir_ / "out.avi";
   write_file(out, "old");
   EXPECT_EQ(validate_video_output_path(out, true), "");
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateOutputPathCreatesMissingParentDirectories)
+TEST_F(MovifyVideoCommonTest, ValidateOutputPathCreatesMissingParentDirectories)
 {
   const auto out = tmp_dir_ / "a" / "b" / "out.avi";
   EXPECT_EQ(validate_video_output_path(out, false), "");
@@ -540,28 +540,28 @@ TEST_F(GenerateVideoCommonTest, ValidateOutputPathCreatesMissingParentDirectorie
 
 // ---- validate_video_inputs --------------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsUnopenableInput)
+TEST_F(MovifyVideoCommonTest, ValidateInputsUnopenableInput)
 {
-  bagwiz::commands::GenerateVideoArgs args(
+  bagwiz::commands::MovifyVideoArgs args(
     tmp_dir_ / "does_not_exist.mcap", "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_NE(v.error.find("failed to open"), std::string::npos);
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsTopicNotFound)
+TEST_F(MovifyVideoCommonTest, ValidateInputsTopicNotFound)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/nope", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/nope", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(v.error, "topic '/nope' not found in " + bag.string());
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsPlainImageTopicOk)
+TEST_F(MovifyVideoCommonTest, ValidateInputsPlainImageTopicOk)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   ASSERT_EQ(v.views.size(), 1u);
@@ -571,17 +571,17 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPlainImageTopicOk)
   EXPECT_EQ(v.grid.rows, 1u);
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsDuplicateTopicFails)
+TEST_F(MovifyVideoCommonTest, ValidateInputsDuplicateTopicFails)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   args.topics.push_back("/cam/image");
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(v.error, "topic '/cam/image' given more than once");
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsGridTooSmallFails)
+TEST_F(MovifyVideoCommonTest, ValidateInputsGridTooSmallFails)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -590,7 +590,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsGridTooSmallFails)
     declare_topic(*w, "/cam/b", kImageType);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
   args.topics.push_back("/cam/b");
   args.grid = "1x1";
   const auto v = validate_video_inputs(args);
@@ -598,10 +598,10 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsGridTooSmallFails)
   EXPECT_NE(v.error.find("1x1"), std::string::npos);
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsWidthConflictsWithResize)
+TEST_F(MovifyVideoCommonTest, ValidateInputsWidthConflictsWithResize)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   args.width = 640;
   args.resize_scale = 0.5f;
   const auto v = validate_video_inputs(args);
@@ -609,7 +609,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsWidthConflictsWithResize)
   EXPECT_EQ(v.error, "--width and --resize are mutually exclusive.");
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsWidthTooSmallForTheGridFails)
+TEST_F(MovifyVideoCommonTest, ValidateInputsWidthTooSmallForTheGridFails)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -618,7 +618,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsWidthTooSmallForTheGridFails)
     declare_topic(*w, "/cam/b", kImageType);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
   args.topics.push_back("/cam/b");
   args.width = 2;  // 2 px across 2 auto-grid columns leaves a sub-2-px cell
   const auto v = validate_video_inputs(args);
@@ -629,10 +629,10 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsWidthTooSmallForTheGridFails)
 // Rectification is on by default but degrades to a warning when no
 // camera-info topic can be derived; validation succeeds and the view renders
 // unrectified.
-TEST_F(GenerateVideoCommonTest, ValidateInputsRectifyWithoutCamInfoWarnsAndContinues)
+TEST_F(MovifyVideoCommonTest, ValidateInputsRectifyWithoutCamInfoWarnsAndContinues)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   ASSERT_EQ(v.views.size(), 1u);
@@ -640,7 +640,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsRectifyWithoutCamInfoWarnsAndConti
 }
 
 // Point-cloud projection still hard-requires a camera-info topic.
-TEST_F(GenerateVideoCommonTest, ValidateInputsPcdWithoutCamInfoFails)
+TEST_F(MovifyVideoCommonTest, ValidateInputsPcdWithoutCamInfoFails)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -649,7 +649,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPcdWithoutCamInfoFails)
     declare_topic(*w, "/points", kPointCloudType);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   args.pointcloud_topics = {"/points"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
@@ -659,7 +659,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPcdWithoutCamInfoFails)
     "'/cam/image'. Pass it explicitly with --cam-info /cam/image=<info_topic>.");
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsDerivesCamInfoAndAcceptsPcd)
+TEST_F(MovifyVideoCommonTest, ValidateInputsDerivesCamInfoAndAcceptsPcd)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -669,7 +669,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsDerivesCamInfoAndAcceptsPcd)
     declare_topic(*w, "/points", kPointCloudType);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
   args.pointcloud_topics = {"/points"};
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
@@ -678,7 +678,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsDerivesCamInfoAndAcceptsPcd)
   EXPECT_EQ(v.views[0].pcd_topics, std::vector<std::string>({"/points"}));
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsPerViewPcdBinding)
+TEST_F(MovifyVideoCommonTest, ValidateInputsPerViewPcdBinding)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -691,7 +691,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPerViewPcdBinding)
     declare_topic(*w, "/points/a_only", kPointCloudType);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/a/image_raw", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/a/image_raw", tmp_dir_ / "out.avi", false);
   args.topics.push_back("/cam/b/image_raw");
   args.pointcloud_topics = {"/points/shared", "/cam/a/image_raw=/points/a_only"};
   const auto v = validate_video_inputs(args);
@@ -703,7 +703,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPerViewPcdBinding)
   EXPECT_EQ(v.views[1].camera_info_topic, "/cam/b/camera_info");
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsPerViewCamInfoOverride)
+TEST_F(MovifyVideoCommonTest, ValidateInputsPerViewCamInfoOverride)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -714,7 +714,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPerViewCamInfoOverride)
     declare_topic(*w, "/custom/b_info", kCameraInfoType);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/a/image_raw", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/a/image_raw", tmp_dir_ / "out.avi", false);
   args.topics.push_back("/cam/b/image_raw");
   args.camera_info_entries = {"/cam/b/image_raw=/custom/b_info"};
   args.rectify = true;
@@ -724,7 +724,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPerViewCamInfoOverride)
   EXPECT_EQ(v.views[1].camera_info_topic, "/custom/b_info");
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsPcdTopicNotFoundFails)
+TEST_F(MovifyVideoCommonTest, ValidateInputsPcdTopicNotFoundFails)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -733,14 +733,14 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPcdTopicNotFoundFails)
     declare_topic(*w, "/cam/camera_info", kCameraInfoType);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
   args.pointcloud_topics = {"/points"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(v.error, "pcd topic '/points' not found in " + bag.string());
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsPcdTopicWrongTypeFails)
+TEST_F(MovifyVideoCommonTest, ValidateInputsPcdTopicWrongTypeFails)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -750,7 +750,7 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPcdTopicWrongTypeFails)
     declare_topic(*w, "/points", kImageType);  // wrong type
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
   args.pointcloud_topics = {"/points"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
@@ -759,10 +759,10 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsPcdTopicWrongTypeFails)
     "pcd topic '/points' has type 'sensor_msgs/msg/Image', expected sensor_msgs/msg/PointCloud2");
 }
 
-TEST_F(GenerateVideoCommonTest, ValidateInputsExplicitCamInfoMissingFails)
+TEST_F(MovifyVideoCommonTest, ValidateInputsExplicitCamInfoMissingFails)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   args.camera_info_entries = {"/cam/camera_info"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
@@ -771,10 +771,10 @@ TEST_F(GenerateVideoCommonTest, ValidateInputsExplicitCamInfoMissingFails)
 
 // ---- scan_video_inputs ------------------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, ScanEmptyTopicFails)
+TEST_F(MovifyVideoCommonTest, ScanEmptyTopicFails)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 0);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   const auto s = scan_video_inputs(args, v);
@@ -782,7 +782,7 @@ TEST_F(GenerateVideoCommonTest, ScanEmptyTopicFails)
   EXPECT_EQ(s.error, "topic '/cam/image' has no messages to render.");
 }
 
-TEST_F(GenerateVideoCommonTest, ScanEmptySecondaryTopicFails)
+TEST_F(MovifyVideoCommonTest, ScanEmptySecondaryTopicFails)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -794,7 +794,7 @@ TEST_F(GenerateVideoCommonTest, ScanEmptySecondaryTopicFails)
     w->write("/cam/a", 1'000'000'000LL, garbage);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
   args.topics.push_back("/cam/b");
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
@@ -803,10 +803,10 @@ TEST_F(GenerateVideoCommonTest, ScanEmptySecondaryTopicFails)
   EXPECT_EQ(s.error, "topic '/cam/b' has no messages to render.");
 }
 
-TEST_F(GenerateVideoCommonTest, ScanDerivesSpanAndFps)
+TEST_F(MovifyVideoCommonTest, ScanDerivesSpanAndFps)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 3);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   const auto s = scan_video_inputs(args, v);
@@ -825,10 +825,10 @@ TEST_F(GenerateVideoCommonTest, ScanDerivesSpanAndFps)
 
 // ---- load_video_geometry ----------------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, LoadVideoGeometryDefaultsToEmpty)
+TEST_F(MovifyVideoCommonTest, LoadVideoGeometryDefaultsToEmpty)
 {
   const auto bag = write_image_bag(tmp_dir_, "in.mcap", 1);
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   bagwiz::commands::VideoGeometry g;
@@ -838,7 +838,7 @@ TEST_F(GenerateVideoCommonTest, LoadVideoGeometryDefaultsToEmpty)
   EXPECT_FALSE(g.tf_buffer.has_value());
 }
 
-TEST_F(GenerateVideoCommonTest, LoadVideoGeometryFailsWhenCamInfoUnreadable)
+TEST_F(MovifyVideoCommonTest, LoadVideoGeometryFailsWhenCamInfoUnreadable)
 {
   // The cam-info topic is declared but carries no message to load.
   const auto bag = tmp_dir_ / "in.mcap";
@@ -848,7 +848,7 @@ TEST_F(GenerateVideoCommonTest, LoadVideoGeometryFailsWhenCamInfoUnreadable)
     declare_topic(*w, "/cam/camera_info", kCameraInfoType);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
   args.rectify = true;
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
@@ -858,14 +858,14 @@ TEST_F(GenerateVideoCommonTest, LoadVideoGeometryFailsWhenCamInfoUnreadable)
 
 // ---- open_encode_reader -----------------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, OpenEncodeReaderMissingBagReturnsNull)
+TEST_F(MovifyVideoCommonTest, OpenEncodeReaderMissingBagReturnsNull)
 {
-  bagwiz::commands::GenerateVideoArgs args(
+  bagwiz::commands::MovifyVideoArgs args(
     tmp_dir_ / "does_not_exist.mcap", "/cam/image", tmp_dir_ / "out.avi", false);
   EXPECT_EQ(open_encode_reader(args), nullptr);
 }
 
-TEST_F(GenerateVideoCommonTest, OpenEncodeReaderFiltersToThePrimaryTopic)
+TEST_F(MovifyVideoCommonTest, OpenEncodeReaderFiltersToThePrimaryTopic)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -878,7 +878,7 @@ TEST_F(GenerateVideoCommonTest, OpenEncodeReaderFiltersToThePrimaryTopic)
     w->write("/other", 1'000'000'000LL, garbage);
     w->close();
   }
-  bagwiz::commands::GenerateVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  bagwiz::commands::MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   args.topics.push_back("/other");
   auto reader = open_encode_reader(args);
   ASSERT_NE(reader, nullptr);
@@ -890,9 +890,9 @@ TEST_F(GenerateVideoCommonTest, OpenEncodeReaderFiltersToThePrimaryTopic)
 
 // ---- finish_video_encode ----------------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, FinishEncodeRequiresAStartedEncoder)
+TEST_F(MovifyVideoCommonTest, FinishEncodeRequiresAStartedEncoder)
 {
-  bagwiz::commands::GenerateVideoArgs args(
+  bagwiz::commands::MovifyVideoArgs args(
     tmp_dir_ / "in.mcap", "/cam/image", tmp_dir_ / "out.avi", false);
   bagwiz::commands::VideoFrameEncoder encoder(
     partial_tmp_path_for(args.output_path), bagwiz::core::video::FrameRate{10, 1});
@@ -973,7 +973,7 @@ TEST(ResizeFrame, RejectsZeroSizeResult)
 
 // ---- NearestMessageSource ---------------------------------------------------
 
-TEST_F(GenerateVideoCommonTest, NearestMessageSourceMatchesByRecordTime)
+TEST_F(MovifyVideoCommonTest, NearestMessageSourceMatchesByRecordTime)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -1011,7 +1011,7 @@ TEST_F(GenerateVideoCommonTest, NearestMessageSourceMatchesByRecordTime)
   EXPECT_EQ(m->record_ns, 400);
 }
 
-TEST_F(GenerateVideoCommonTest, NearestMessageSourceEmptyTopicYieldsNull)
+TEST_F(MovifyVideoCommonTest, NearestMessageSourceEmptyTopicYieldsNull)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
