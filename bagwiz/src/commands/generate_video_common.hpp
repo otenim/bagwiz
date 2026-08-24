@@ -11,6 +11,7 @@
 
 #include "bagwiz/commands/generate_video.hpp"
 #include "bagwiz/core/image/camera_info.hpp"
+#include "bagwiz/core/image/image_decoder.hpp"
 #include "bagwiz/core/image/rectify.hpp"
 #include "bagwiz/core/pointcloud/fetcher.hpp"
 #include "bagwiz/core/pointcloud/projector.hpp"
@@ -189,11 +190,12 @@ struct VideoInputScan
 [[nodiscard]] VideoInputScan scan_video_inputs(
   const GenerateVideoArgs & args, const VideoInputValidation & validation);
 
-// Threading is only worthwhile when there is enough work to hide the overhead
-// of launching a thread and opening a fresh BagReader per frame.
-[[nodiscard]] bool should_use_threaded_projection(
-  bool has_pointcloud_topics, bool enable_threaded, std::uint64_t frame_count,
-  unsigned int hardware_concurrency);
+// The parallel per-view pipeline is only worthwhile when there is work to
+// spread across workers (several views, or point-cloud projection) and enough
+// frames to hide the per-tick job-launch overhead.
+[[nodiscard]] bool should_use_parallel_pipeline(
+  std::size_t view_count, bool has_pointcloud_topics, bool enable_parallel,
+  std::uint64_t frame_count, unsigned int hardware_concurrency);
 
 // ---- pass-2 geometry ---------------------------------------------------------
 
@@ -292,6 +294,11 @@ public:
 
 private:
   std::string topic_type_;
+  // libav decode handles kept across frames so the codec context and its
+  // buffers are not reopened per frame. mutable because decode() is logically
+  // const; each view owns its FrameNormalizer, so there is no cross-thread
+  // sharing.
+  mutable core::image::ImageDecoder decoder_;
 };
 
 // Resize a decoded frame in place to exactly out_w x out_h (INTER_AREA when
@@ -487,8 +494,8 @@ private:
   std::uint64_t written_ = 0;
 };
 
-// Dispatch the encode pass: the threaded projection pipeline when it can pay
-// for itself (should_use_threaded_projection), otherwise the synchronous loop.
+// Dispatch the encode pass: the parallel per-view pipeline when it can pay
+// for itself (should_use_parallel_pipeline), otherwise the synchronous loop.
 // Per tick (one primary message) each view selects its frame — the primary
 // view the message itself, a secondary the one nearest by bag record time —
 // projects its point clouds, renders its cell, and the composed grid is

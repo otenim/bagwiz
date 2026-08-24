@@ -915,11 +915,11 @@ TEST_F(GenerateVideoTest, ThreadedPointCloudOverlayMatchesSynchronous)
 
   GenerateVideoArgs args{in, "/cam/image_rect_color", out_threaded, false};
   args.pointcloud_topics = {"/points"};
-  args.enable_threaded_projection = true;
+  args.enable_parallel_pipeline = true;
   ASSERT_EQ(run_generate_video(args), 0);
 
   args.output_path = out_sync;
-  args.enable_threaded_projection = false;
+  args.enable_parallel_pipeline = false;
   ASSERT_EQ(run_generate_video(args), 0);
 
   std::vector<std::byte> threaded_bytes;
@@ -980,11 +980,11 @@ TEST_F(GenerateVideoTest, ThreadedMultiPointCloudOverlayMatchesSynchronous)
 
   GenerateVideoArgs args{in, "/cam/image_rect_color", out_threaded, false};
   args.pointcloud_topics = {"/points/front", "/points/rear"};
-  args.enable_threaded_projection = true;
+  args.enable_parallel_pipeline = true;
   ASSERT_EQ(run_generate_video(args), 0);
 
   args.output_path = out_sync;
-  args.enable_threaded_projection = false;
+  args.enable_parallel_pipeline = false;
   ASSERT_EQ(run_generate_video(args), 0);
 
   std::vector<std::byte> threaded_bytes;
@@ -1172,11 +1172,37 @@ TEST_F(GenerateVideoTest, ThreadedTwoViewOverlayMatchesSynchronous)
   GenerateVideoArgs args{in, "/cam/a/image_rect_color", out_threaded, false};
   args.topics.push_back("/cam/b/image_rect_color");
   args.pointcloud_topics = {"/cam/a/image_rect_color=/points"};
-  args.enable_threaded_projection = true;
+  args.enable_parallel_pipeline = true;
   ASSERT_EQ(run_generate_video(args), 0);
 
   args.output_path = out_sync;
-  args.enable_threaded_projection = false;
+  args.enable_parallel_pipeline = false;
+  ASSERT_EQ(run_generate_video(args), 0);
+
+  std::vector<std::byte> threaded_bytes;
+  std::vector<std::byte> sync_bytes;
+  read_file_bytes(out_threaded, threaded_bytes);
+  read_file_bytes(out_sync, sync_bytes);
+  EXPECT_EQ(threaded_bytes, sync_bytes);
+}
+
+// Multiple views without --pcd also run the parallel pipeline; it must produce
+// the same bytes as the synchronous loop there too.
+TEST_F(GenerateVideoTest, ThreadedMultiViewWithoutPointCloudMatchesSynchronous)
+{
+  // Use enough frames to satisfy the internal threshold for the parallel pipeline.
+  constexpr int kFrames = 6;
+  const auto in = build_two_camera_bag(tmp_dir_, kFrames, kFrames);
+  const auto out_threaded = tmp_dir_ / "out_threaded.avi";
+  const auto out_sync = tmp_dir_ / "out_sync.avi";
+
+  GenerateVideoArgs args{in, "/cam/a", out_threaded, false};
+  args.topics.push_back("/cam/b");
+  args.enable_parallel_pipeline = true;
+  ASSERT_EQ(run_generate_video(args), 0);
+
+  args.output_path = out_sync;
+  args.enable_parallel_pipeline = false;
   ASSERT_EQ(run_generate_video(args), 0);
 
   std::vector<std::byte> threaded_bytes;

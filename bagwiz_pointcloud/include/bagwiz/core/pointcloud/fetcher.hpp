@@ -16,8 +16,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -141,19 +143,33 @@ public:
 
   // Fetch the cloud whose `key` clock is closest to target_ns; target_ns must be
   // expressed in that same clock (a header.stamp for kHeaderStamp, a bag record
-  // time for kRecordTime).
+  // time for kRecordTime). The returned pointer stays valid until the next
+  // fetch() call; use fetch_shared() when the cloud must outlive later fetches.
   [[nodiscard]] const PointCloud2 * fetch(
+    std::int64_t target_ns, PointCloudMatchKey key, std::string & error);
+
+  // fetch() with shared ownership: the returned cloud stays valid no matter
+  // what is fetched later, so concurrent consumers (generate video's per-view
+  // workers) can hold clouds simultaneously. Recently matched clouds are
+  // cached keyed by record time, so alternating between a few clouds — e.g.
+  // views matching either side of a cloud boundary, or a camera rate above
+  // the cloud rate re-matching the same cloud — does not reload them.
+  [[nodiscard]] std::shared_ptr<const PointCloud2> fetch_shared(
     std::int64_t target_ns, PointCloudMatchKey key, std::string & error);
 
   // Bag record time of the cloud the last successful fetch() returned, which
   // identifies that message uniquely within the topic. Callers that must act
-  // once per distinct cloud need this: the returned pointer is NOT an identity,
-  // because the cache is an inline optional that is move-assigned in place, so
-  // its address is the same for every cloud this fetcher ever returns. Zero
-  // before the first successful fetch.
+  // once per distinct cloud need this: the pointer fetch() returns is not a
+  // stable identity across fetches (a cache entry can be evicted and its
+  // address reused by a later load). Zero before the first successful fetch.
   [[nodiscard]] std::int64_t cached_record_ns() const noexcept { return cached_record_ns_; }
 
 private:
+  // Bound on the number of parsed clouds held at once. Two covers the working
+  // set of a generate-video tick: the views' match targets span at most one
+  // frame interval, so they land on at most two adjacent clouds.
+  static constexpr std::size_t kCacheCapacity = 2;
+
   [[nodiscard]] static std::size_t find_nearest_index(
     const std::vector<PointCloudIndexEntry> & entries, std::int64_t target_ns,
     PointCloudMatchKey key);
@@ -166,7 +182,10 @@ private:
   // record_ns.
   const std::vector<PointCloudIndexEntry> by_stamp_;
   const std::vector<PointCloudIndexEntry> by_record_;
-  std::optional<PointCloud2> cached_cloud_;
+  // Recently loaded clouds keyed by their bag record time, bounded to
+  // kCacheCapacity; the oldest (smallest record time) is evicted first because
+  // match targets are non-decreasing within a view.
+  std::unordered_map<std::int64_t, std::shared_ptr<const PointCloud2>> cache_;
   std::int64_t cached_record_ns_ = 0;
 };
 

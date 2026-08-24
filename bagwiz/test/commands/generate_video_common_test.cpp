@@ -52,7 +52,7 @@ using bagwiz::commands::partial_tmp_path_for;
 using bagwiz::commands::PartialFileGuard;
 using bagwiz::commands::resize_frame;
 using bagwiz::commands::scan_video_inputs;
-using bagwiz::commands::should_use_threaded_projection;
+using bagwiz::commands::should_use_parallel_pipeline;
 using bagwiz::commands::validate_video_inputs;
 using bagwiz::commands::validate_video_output_path;
 using bagwiz::commands::VideoOverlayParams;
@@ -369,28 +369,40 @@ TEST(ParseCamInfoEntries, RejectsUnknownImageTopicAndEmptyHalves)
   }
 }
 
-// ---- should_use_threaded_projection -----------------------------------------
+// ---- should_use_parallel_pipeline ---------------------------------------------
 
-TEST(ShouldUseThreadedProjection, RequiresPointClouds)
+TEST(ShouldUseParallelPipeline, SingleViewWithoutPointCloudsStaysSynchronous)
 {
-  EXPECT_FALSE(should_use_threaded_projection(false, true, 100, 8));
+  // One view and no projection work: there is nothing to spread across workers.
+  EXPECT_FALSE(should_use_parallel_pipeline(1, false, true, 100, 8));
 }
 
-TEST(ShouldUseThreadedProjection, RespectsDisableFlag)
+TEST(ShouldUseParallelPipeline, MultipleViewsRunInParallelWithoutPointClouds)
 {
-  EXPECT_FALSE(should_use_threaded_projection(true, false, 100, 8));
+  EXPECT_TRUE(should_use_parallel_pipeline(2, false, true, 100, 8));
+  EXPECT_TRUE(should_use_parallel_pipeline(8, false, true, 100, 8));
 }
 
-TEST(ShouldUseThreadedProjection, RequiresEnoughFrames)
+TEST(ShouldUseParallelPipeline, PointCloudsRunInParallelWithOneView)
 {
-  EXPECT_FALSE(should_use_threaded_projection(true, true, 3, 8));
-  EXPECT_TRUE(should_use_threaded_projection(true, true, 4, 8));
+  EXPECT_TRUE(should_use_parallel_pipeline(1, true, true, 100, 8));
 }
 
-TEST(ShouldUseThreadedProjection, RequiresParallelHardware)
+TEST(ShouldUseParallelPipeline, RespectsDisableFlag)
 {
-  EXPECT_FALSE(should_use_threaded_projection(true, true, 100, 1));
-  EXPECT_FALSE(should_use_threaded_projection(true, true, 100, 0));
+  EXPECT_FALSE(should_use_parallel_pipeline(2, true, false, 100, 8));
+}
+
+TEST(ShouldUseParallelPipeline, RequiresEnoughFrames)
+{
+  EXPECT_FALSE(should_use_parallel_pipeline(2, true, true, 3, 8));
+  EXPECT_TRUE(should_use_parallel_pipeline(2, true, true, 4, 8));
+}
+
+TEST(ShouldUseParallelPipeline, RequiresParallelHardware)
+{
+  EXPECT_FALSE(should_use_parallel_pipeline(2, true, true, 100, 1));
+  EXPECT_FALSE(should_use_parallel_pipeline(2, true, true, 100, 0));
 }
 
 // ---- view_rectifies -----------------------------------------------------------
