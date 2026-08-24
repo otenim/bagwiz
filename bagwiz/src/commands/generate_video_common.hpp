@@ -134,6 +134,13 @@ struct VideoInputValidation
 // command's errors and returns on the first failure.
 [[nodiscard]] VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args);
 
+// Whether a validated view renders rectified: rectification must be requested
+// (--rectify, the default) and the view's camera info must have resolved.
+// --no-rectify wins even with --pcd — the projection then targets the raw
+// image, applying the camera's lens distortion model instead of assuming a
+// rectified one.
+[[nodiscard]] bool view_rectifies(bool rectify_requested, const ViewInput & view) noexcept;
+
 // Fail-fast output checks run before the expensive encode: an existing
 // `output_path` without --overwrite stops the run, and the output's parent
 // directory is created when missing. Returns "" on success; on failure logs

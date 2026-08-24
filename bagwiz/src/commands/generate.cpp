@@ -135,9 +135,10 @@ private:
       ->add_flag(
         "--rectify,!--no-rectify", video_args_.rectify,
         "Apply distortion correction to each frame using each view's resolved CameraInfo "
-        "(on by default; --no-rectify opts out). A view whose camera-info topic cannot be "
-        "derived renders unrectified with a warning — pass --cam-info to name it "
-        "explicitly. Point-cloud projection always requires a camera-info topic.")
+        "(on by default; --no-rectify opts out, including for --pcd views). A view whose "
+        "camera-info topic cannot be derived renders unrectified with a warning — pass "
+        "--cam-info to name it explicitly. Point-cloud projection always requires a "
+        "camera-info topic.")
       ->default_val(true);
     sub
       ->add_option(
@@ -161,9 +162,9 @@ private:
       *sub, "--pcd", video_args_.pointcloud_topics,
       "PointCloud2 topic(s) to project onto the frames: a bare value (a literal name or a "
       "'*' glob) projects onto every view, an <image_topic>=<pcd_selector> entry projects "
-      "onto that view only. Repeatable. Projecting implies distortion correction for that "
-      "view and requires a CameraInfo topic and a TF chain from each cloud frame to the "
-      "camera frame.",
+      "onto that view only. Repeatable. Points project onto the rectified image, or onto "
+      "the raw image with lens distortion applied when --no-rectify is given. Requires a "
+      "CameraInfo topic and a TF chain from each cloud frame to the camera frame.",
       TopicSlotSpec{
         .allowed_types = kPointCloud2Type, .pair_value = true, .pair_selector_rhs = true})
       ->check([](const std::string & topic) {
