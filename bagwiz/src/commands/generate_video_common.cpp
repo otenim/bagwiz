@@ -30,6 +30,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -54,8 +55,8 @@ constexpr const char * kImageType = "sensor_msgs/msg/Image";
 constexpr const char * kCompressedImageType = "sensor_msgs/msg/CompressedImage";
 constexpr const char * kPointCloudType = "sensor_msgs/msg/PointCloud2";
 
-// Below this many frames the threaded projection pipeline cannot hide the
-// overhead of launching a thread and opening a fresh BagReader per frame.
+// Below this many frames the parallel pipeline cannot hide the per-tick job
+// launch overhead.
 constexpr std::uint64_t kThreadingMinFrames = 4;
 
 bool is_supported_type(const std::string & type)
@@ -380,75 +381,6 @@ bool project_view_sync(
   return true;
 }
 
-// One view's projection job for the threaded path: which point-cloud topics
-// (indexes into the shared topic list), the render geometry to project at,
-// and the selected frame's two clocks.
-struct ViewProjectionRequest
-{
-  std::size_t view_index = 0;
-  ViewRenderGeometry geom;
-  std::vector<std::size_t> pcd_indexes;
-  std::int64_t frame_header_stamp_ns = 0;
-  std::int64_t frame_record_ns = 0;
-};
-
-// Result of point-cloud transform/projection work: one point set per request,
-// parallel to the requests. Kept separate from ProjectionResult so callers
-// can return an error string without throwing.
-struct ProjectionWorkResult
-{
-  std::vector<std::vector<core::pointcloud::ProjectedPoint>> per_request;
-  std::string error;
-
-  [[nodiscard]] bool ok() const noexcept { return error.empty(); }
-};
-
-// Fetch, parse, transform, and project the point clouds nearest each view's
-// selected frame. Each topic is matched in its own clock (see
-// core::pointcloud::choose_frame_match). Each call opens its own BagReader(s)
-// so the work can safely run on a background thread; the caller supplies the
-// read-only camera infos (baked into the requests) and TF buffer.
-ProjectionWorkResult run_projection_work(
-  const std::filesystem::path & input, const std::vector<std::string> & pointcloud_topics,
-  const std::vector<std::vector<core::pointcloud::PointCloudIndexEntry>> & entries_per_topic,
-  const std::vector<bool> & topic_has_stamps, const std::vector<ViewProjectionRequest> & requests,
-  tf2::BufferCore & tf_buffer, core::pointcloud::PointCloudProperty property)
-{
-  try {
-    ProjectionWorkResult combined;
-    for (const auto & req : requests) {
-      std::vector<core::pointcloud::ProjectedPoint> points;
-      for (const auto idx : req.pcd_indexes) {
-        core::pointcloud::PointCloudFetcher fetcher(
-          input, pointcloud_topics[idx], entries_per_topic[idx]);
-        std::string error;
-        const auto match = core::pointcloud::choose_frame_match(
-          req.frame_header_stamp_ns, req.frame_record_ns, topic_has_stamps[idx]);
-        const auto * cloud = fetcher.fetch(match.target_ns, match.key, error);
-        if (cloud == nullptr) {
-          return {{}, std::move(error)};
-        }
-        // The matched time doubles as the TF-lookup time, exactly as walk's
-        // overlay does it. The TF buffer is keyed by each transform's own
-        // header.stamp, so querying at the frame's time keeps a dynamic
-        // cloud->camera chain correct; passing nothing would resolve every frame
-        // against the last transform in the bag.
-        const auto projected = core::pointcloud::project_cloud_for_frame(
-          *cloud, req.geom.camera_info, tf_buffer, req.geom.width, req.geom.height, property,
-          req.geom.rectify, match.target_ns);
-        if (!projected.ok()) {
-          return {{}, std::move(projected.error)};
-        }
-        points.insert(points.end(), projected.points.begin(), projected.points.end());
-      }
-      combined.per_request.push_back(std::move(points));
-    }
-    return combined;
-  } catch (const std::exception & e) {
-    return {{}, std::string("point-cloud projection failed: ") + e.what()};
-  }
-}
-
 int run_encode_loop_sync(
   io::BagReader & reader, const GenerateVideoArgs & args, const VideoInputValidation & validation,
   VideoInputScan & scan, VideoGeometry & geometry, VideoFrameEncoder & encoder)
@@ -500,59 +432,174 @@ int run_encode_loop_sync(
   return 0;
 }
 
-int run_encode_loop_async(
+// One point-cloud topic's shared fetcher plus the mutex serializing it: the
+// parallel loop's view jobs fetch concurrently, and PointCloudFetcher is not
+// thread-safe.
+struct SharedCloudFetcher
+{
+  SharedCloudFetcher(
+    const std::filesystem::path & input, std::string topic,
+    std::vector<core::pointcloud::PointCloudIndexEntry> entries)
+  : fetcher(input, std::move(topic), std::move(entries))
+  {
+  }
+
+  core::pointcloud::PointCloudFetcher fetcher;
+  std::mutex mutex;
+};
+
+int run_encode_loop_parallel(
   io::BagReader & reader, const GenerateVideoArgs & args, const VideoInputValidation & validation,
   VideoInputScan & scan, VideoGeometry & geometry, VideoFrameEncoder & encoder)
 {
-  // The async path needs the per-topic index entries after moving them out of
-  // the scan; collect them before the encode loop.
-  std::vector<std::vector<core::pointcloud::PointCloudIndexEntry>> entries_per_topic;
-  entries_per_topic.reserve(scan.pcd_spans.size());
-  for (auto & pcd_span : scan.pcd_spans) {
-    entries_per_topic.push_back(std::move(pcd_span.entries));
-  }
-  const std::vector<std::string> pcd_topics = scan.pcd_topics;
-  const std::vector<bool> topic_has_stamps = scan.pcd_topic_has_stamps;
-
   auto states = build_view_states(args, validation, scan, geometry);
   if (!states.has_value()) {
     return 1;
   }
-  tf2::BufferCore & tf_buffer = *geometry.tf_buffer;
 
-  GridCanvas canvas(validation.grid);
+  // One shared fetcher per unique topic: every view's job matches through it,
+  // so each distinct cloud is loaded from the bag at most once per run (the
+  // fetcher's cache covers both cross-view and cross-tick reuse).
+  std::vector<std::unique_ptr<SharedCloudFetcher>> clouds;
+  clouds.reserve(scan.pcd_topics.size());
+  for (std::size_t i = 0; i < scan.pcd_topics.size(); ++i) {
+    clouds.push_back(
+      std::make_unique<SharedCloudFetcher>(
+        args.input_path, scan.pcd_topics[i], std::move(scan.pcd_spans[i].entries)));
+  }
+  const std::vector<bool> topic_has_stamps = scan.pcd_topic_has_stamps;
+  tf2::BufferCore * const tf_buffer =
+    geometry.tf_buffer.has_value() ? &*geometry.tf_buffer : nullptr;
 
-  // One tick's in-flight projection: the requests (which map each result back
-  // to its view) plus the future holding the point sets.
-  struct PendingProjection
-  {
-    std::vector<ViewProjectionRequest> requests;
-    std::future<ProjectionWorkResult> future;
-  };
+  // Two canvases in alternation: one being composed by the current tick's
+  // jobs, one being drained by the encoder for the previous tick. A tick's
+  // jobs never touch the canvas the encoder reads.
+  GridCanvas canvases[2] = {GridCanvas(validation.grid), GridCanvas(validation.grid)};
 
-  // Keep one tick of projection work running ahead so that fetch/parse/project
-  // for tick N+1 overlaps with rendering and encoding tick N. Runs right after
-  // a prepare_tick(), snapshotting that tick's frames and geometries.
-  auto launch_projection = [&](const TickData & tick) {
-    PendingProjection pending;
-    for (std::size_t i = 0; i < states->size(); ++i) {
-      if (!tick.frames[i] || (*states)[i].pcd_indexes.empty()) {
-        continue;
+  // One view's work for one tick, run on a worker thread: select and decode
+  // the view's frame, resize it to the render size, project the view's point
+  // clouds onto it, and render the result into the view's cell of `canvas`.
+  // The primary's payload arrives as a copy owned by the caller (the reader's
+  // raw span does not outlive the next read). Returns "" on success, else the
+  // error the main thread logs with the tick's frame index.
+  auto run_view_job = [&](
+                        std::size_t view_index, GridCanvas & canvas, std::int64_t primary_record_ns,
+                        const std::vector<std::byte> & primary_payload, std::uint64_t frame_index,
+                        bool pin_cell_size) -> std::string {
+    try {
+      ViewState & state = (*states)[view_index];
+
+      // Select + decode the view's frame and compute its render geometry.
+      std::shared_ptr<const FrameBuffer> frame;
+      ViewRenderGeometry geom;
+      if (view_index == 0) {
+        auto decoded = state.normalizer.decode(primary_record_ns, primary_payload, frame_index);
+        if (!decoded.has_value()) {
+          return "failed to decode the primary frame";
+        }
+        if (pin_cell_size && state.total_width.has_value()) {
+          // --width: pin the primary's render size from the output width (the
+          // same rule the synchronous loop applies in prepare_tick).
+          const std::uint32_t cell_w = (*state.total_width / state.grid_cols) & ~1U;
+          const auto cell_h = static_cast<std::uint32_t>(std::lround(
+                                decoded->height * (static_cast<double>(cell_w) / decoded->width))) &
+                              ~1U;
+          state.renderer.set_fixed_render_size(cell_w, cell_h);
+        }
+        auto prepared = state.renderer.prepare(
+          decoded->width, decoded->height, canvas.cell_width(), canvas.cell_height());
+        if (!prepared.has_value()) {
+          return "failed to prepare the primary frame";
+        }
+        if (pin_cell_size) {
+          // The first tick's primary render size fixes the grid's cell size —
+          // and with it the composed output size for the whole run — before
+          // any other view's job starts (the caller waits for this job first).
+          canvas.set_cell_size(prepared->width, prepared->height);
+          canvas.clear();
+        }
+        if (!resize_frame(*decoded, prepared->width, prepared->height)) {
+          return "failed to resize the primary frame";
+        }
+        geom = *prepared;
+        frame = std::make_shared<const FrameBuffer>(std::move(*decoded));
+      } else {
+        std::string error;
+        const auto * msg = state.source->fetch(primary_record_ns, error);
+        if (!error.empty()) {
+          return error;
+        }
+        if (msg == nullptr) {
+          if (!state.warned_empty) {
+            BAGWIZ_LOG_WARN(
+              kLogger, "topic '%s' has no messages; its cell stays black.",
+              state.input->topic.c_str());
+            state.warned_empty = true;
+          }
+          return "";
+        }
+        if (msg->record_ns != state.cached_record_ns) {
+          auto decoded = state.normalizer.decode(msg->record_ns, msg->payload, frame_index);
+          if (!decoded.has_value()) {
+            return "failed to decode a secondary frame";
+          }
+          auto prepared = state.renderer.prepare(
+            decoded->width, decoded->height, canvas.cell_width(), canvas.cell_height());
+          if (!prepared.has_value()) {
+            return "failed to prepare a secondary frame";
+          }
+          if (!resize_frame(*decoded, prepared->width, prepared->height)) {
+            return "failed to resize a secondary frame";
+          }
+          state.cache_geom = *prepared;
+          state.cache = std::make_shared<const FrameBuffer>(std::move(*decoded));
+          state.cached_record_ns = msg->record_ns;
+        }
+        frame = state.cache;
+        geom = state.cache_geom;
       }
-      ViewProjectionRequest req;
-      req.view_index = i;
-      req.geom = tick.geometries[i];
-      req.pcd_indexes = (*states)[i].pcd_indexes;
-      req.frame_header_stamp_ns = tick.frames[i]->header_stamp_ns;
-      req.frame_record_ns = tick.frames[i]->timestamp_ns;
-      pending.requests.push_back(std::move(req));
+      if (!frame) {
+        // A secondary whose topic has not yielded a message yet renders as a
+        // black cell (the canvas was cleared).
+        return "";
+      }
+
+      // Project the view's point clouds onto the selected frame. The matched
+      // time doubles as the TF-lookup time (see project_view_sync); the lookup
+      // itself is serialized inside project_cloud_for_frame.
+      std::vector<core::pointcloud::ProjectedPoint> points;
+      const std::vector<core::pointcloud::ProjectedPoint> * points_ptr = nullptr;
+      if (!state.pcd_indexes.empty()) {
+        for (const auto idx : state.pcd_indexes) {
+          const auto match = core::pointcloud::choose_frame_match(
+            frame->header_stamp_ns, frame->timestamp_ns, topic_has_stamps[idx]);
+          std::shared_ptr<const core::pointcloud::PointCloud2> cloud;
+          {
+            std::lock_guard<std::mutex> lock(clouds[idx]->mutex);
+            std::string error;
+            cloud = clouds[idx]->fetcher.fetch_shared(match.target_ns, match.key, error);
+            if (!cloud) {
+              return error;
+            }
+          }
+          const auto projected = core::pointcloud::project_cloud_for_frame(
+            *cloud, geom.camera_info, *tf_buffer, geom.width, geom.height, args.property,
+            geom.rectify, match.target_ns);
+          if (!projected.ok()) {
+            return projected.error;
+          }
+          points.insert(points.end(), projected.points.begin(), projected.points.end());
+        }
+        points_ptr = &points;
+      }
+
+      if (!state.renderer.render(*frame, geom, points_ptr, canvas.cell(view_index))) {
+        return "failed to render a view";
+      }
+      return "";
+    } catch (const std::exception & e) {
+      return std::string("view render failed: ") + e.what();
     }
-    pending.future = std::async(std::launch::async, [&, requests = pending.requests]() {
-      return run_projection_work(
-        args.input_path, pcd_topics, entries_per_topic, topic_has_stamps, requests, tf_buffer,
-        args.property);
-    });
-    return pending;
   };
 
   io::RawMessage raw;
@@ -562,49 +609,98 @@ int run_encode_loop_async(
       validation.views.front().topic.c_str());
     return 1;
   }
-  TickData current;
-  if (!prepare_tick(raw, *states, canvas, encoder.written(), current)) {
-    return 1;
+
+  std::vector<std::optional<std::future<std::string>>> pending(states->size());
+
+  // Tick 0: the primary's job fixes the grid's cell size, so it runs first and
+  // completes before any other view's job starts.
+  {
+    const std::string error = run_view_job(
+      0, canvases[0], raw.timestamp_ns,
+      std::vector<std::byte>(raw.payload.begin(), raw.payload.end()), 0, true);
+    if (!error.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "frame 0: %s", error.c_str());
+      return 1;
+    }
+    // The cell size is fixed for the whole run; the second canvas renders its
+    // first tick before it would otherwise learn the size.
+    canvases[1].set_cell_size(canvases[0].cell_width(), canvases[0].cell_height());
+    const std::int64_t record_ns = raw.timestamp_ns;
+    for (std::size_t i = 1; i < states->size(); ++i) {
+      pending[i] = std::async(std::launch::async, [&, i, record_ns] {
+        return run_view_job(i, canvases[0], record_ns, std::vector<std::byte>{}, 0, false);
+      });
+    }
   }
-  auto pending = launch_projection(current);
+
+  // Wait for the current tick's jobs; on the first error (lowest view index)
+  // log it and stop. Every job is always collected, so an error return never
+  // leaves a job running past the locals it captured by reference.
+  std::uint64_t tick = 0;
+  auto wait_jobs = [&]() -> bool {
+    std::string first_error;
+    for (auto & job : pending) {
+      if (!job.has_value()) {
+        continue;
+      }
+      const std::string error = job->get();
+      job.reset();
+      if (first_error.empty()) {
+        first_error = error;
+      }
+    }
+    if (!first_error.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", tick, first_error.c_str());
+      return false;
+    }
+    return true;
+  };
 
   while (true) {
-    auto projected = pending.future.get();
-    if (!projected.ok()) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "frame %" PRIu64 ": %s", encoder.written(), projected.error.c_str());
+    if (!wait_jobs()) {
       return 1;
     }
-
-    // Prepare the next tick and launch its projection before rendering this
-    // one, so the projection overlaps the render/encode below.
     io::RawMessage next_raw;
-    const bool has_next = reader.next(next_raw);
-    TickData next;
-    std::optional<PendingProjection> next_pending;
-    if (has_next) {
-      if (!prepare_tick(next_raw, *states, canvas, encoder.written(), next)) {
-        return 1;
-      }
-      next_pending = launch_projection(next);
-    }
-
-    std::vector<const std::vector<core::pointcloud::ProjectedPoint> *> points_per_view(
-      states->size(), nullptr);
-    for (std::size_t r = 0; r < pending.requests.size(); ++r) {
-      points_per_view[pending.requests[r].view_index] = &projected.per_request[r];
-    }
-    if (!render_tick(*states, current, canvas, encoder, points_per_view)) {
-      return 1;
-    }
-
-    if (!has_next) {
+    if (!reader.next(next_raw)) {
       break;
     }
-    current = std::move(next);
-    pending = std::move(*next_pending);
+    const std::uint64_t next_tick = tick + 1;
+    GridCanvas & next_canvas = canvases[next_tick % 2];
+    // Clear before launch: this canvas's previous tick finished two iterations
+    // ago — its jobs were waited and its frame encoded.
+    next_canvas.clear();
+    const std::int64_t next_record_ns = next_raw.timestamp_ns;
+    pending[0] = std::async(
+      std::launch::async,
+      [&, next_record_ns, next_tick,
+       payload = std::vector<std::byte>(next_raw.payload.begin(), next_raw.payload.end())] {
+        return run_view_job(0, next_canvas, next_record_ns, payload, next_tick, false);
+      });
+    for (std::size_t i = 1; i < states->size(); ++i) {
+      pending[i] = std::async(std::launch::async, [&, i, next_record_ns, next_tick] {
+        return run_view_job(
+          i, next_canvas, next_record_ns, std::vector<std::byte>{}, next_tick, false);
+      });
+    }
+    // Encode the finished tick's canvas while the new tick's jobs run.
+    const GridCanvas & done_canvas = canvases[tick % 2];
+    if (!encoder.encode(done_canvas.pixels(), done_canvas.width(), done_canvas.height())) {
+      // Drain the in-flight jobs before returning (see wait_jobs).
+      for (auto & job : pending) {
+        if (job.has_value()) {
+          (void)job->get();
+        }
+      }
+      return 1;
+    }
+    tick = next_tick;
   }
-  return 0;
+  // The last tick was never encoded inside the loop.
+  if (!wait_jobs()) {
+    return 1;
+  }
+  const GridCanvas & last_canvas = canvases[tick % 2];
+  return encoder.encode(last_canvas.pixels(), last_canvas.width(), last_canvas.height()) ? 0 : 1;
 }
 
 }  // namespace
@@ -1060,11 +1156,12 @@ VideoInputScan scan_video_inputs(
   return out;
 }
 
-bool should_use_threaded_projection(
-  bool has_pointcloud_topics, bool enable_threaded, std::uint64_t frame_count,
-  unsigned int hardware_concurrency)
+bool should_use_parallel_pipeline(
+  std::size_t view_count, bool has_pointcloud_topics, bool enable_parallel,
+  std::uint64_t frame_count, unsigned int hardware_concurrency)
 {
-  return has_pointcloud_topics && enable_threaded && frame_count >= kThreadingMinFrames &&
+  const bool has_parallel_work = view_count > 1 || has_pointcloud_topics;
+  return has_parallel_work && enable_parallel && frame_count >= kThreadingMinFrames &&
          hardware_concurrency > 1;
 }
 
@@ -1164,8 +1261,9 @@ std::optional<FrameBuffer> FrameNormalizer::decode(
 {
   // Normalize either message type to a canonical packed BGR24 raster via the
   // shared core::image::to_packed_raster seam; rgb8 inputs are swapped so
-  // every frame the encoder sees is BGR24.
-  auto pr = core::image::to_packed_raster(topic_type_, payload);
+  // every frame the encoder sees is BGR24. The member decoder carries the
+  // codec context across frames instead of reopening it per frame.
+  auto pr = core::image::to_packed_raster(topic_type_, payload, decoder_);
   if (!pr.ok()) {
     BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", frame_index, pr.error.c_str());
     return std::nullopt;
@@ -1469,10 +1567,10 @@ int run_encode_pass(
   VideoInputScan & scan, VideoGeometry & geometry, VideoFrameEncoder & encoder)
 {
   try {
-    if (should_use_threaded_projection(
-          !scan.pcd_topics.empty(), args.enable_threaded_projection, scan.span.count,
-          std::thread::hardware_concurrency())) {
-      return run_encode_loop_async(reader, args, validation, scan, geometry, encoder);
+    if (should_use_parallel_pipeline(
+          validation.views.size(), !scan.pcd_topics.empty(), args.enable_parallel_pipeline,
+          scan.span.count, std::thread::hardware_concurrency())) {
+      return run_encode_loop_parallel(reader, args, validation, scan, geometry, encoder);
     }
     return run_encode_loop_sync(reader, args, validation, scan, geometry, encoder);
   } catch (const std::exception & e) {

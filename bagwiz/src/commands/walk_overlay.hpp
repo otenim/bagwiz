@@ -216,9 +216,8 @@ private:
   std::vector<core::pointcloud::PointCloudFetcher> fetchers_;
   // Parallel to `fetchers_`: the bag record time of the last cloud of each
   // one already folded into pcd_.ranges, so repeated display of the same
-  // cloud does not re-accumulate. Record time, not the cloud pointer: the
-  // fetcher's cache is an inline optional move-assigned in place, so every
-  // cloud it returns has the same address (see
+  // cloud does not re-accumulate. Record time, not the cloud pointer: a
+  // pointer is not a stable identity across fetches (see
   // PointCloudFetcher::cached_record_ns). Empty until the fetchers are built.
   std::vector<std::optional<std::int64_t>> ranged_record_ns_;
   // See composition_generation().

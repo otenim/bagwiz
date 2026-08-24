@@ -79,10 +79,10 @@ struct GenerateVideoArgs
   core::pointcloud::ColorScheme colorscheme = core::pointcloud::ColorScheme::kViridis;
   std::uint32_t point_size = 2;
   float alpha = 1.0f;
-  // Internal toggle for the threaded point-cloud projection pipeline. When false
-  // the synchronous path is used, which keeps output bit-for-bit identical to the
+  // Internal toggle for the parallel per-view pipeline. When false the
+  // synchronous loop is used, which keeps output bit-for-bit identical to the
   // pre-threading implementation. Not exposed on the CLI; tests set this directly.
-  bool enable_threaded_projection = true;
+  bool enable_parallel_pipeline = true;
 };
 
 // Classification of whether a topic can be rendered to video.

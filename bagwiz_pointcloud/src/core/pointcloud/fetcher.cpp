@@ -388,6 +388,12 @@ PointCloudFetcher::PointCloudFetcher(
 const PointCloud2 * PointCloudFetcher::fetch(
   std::int64_t target_ns, PointCloudMatchKey key, std::string & error)
 {
+  return fetch_shared(target_ns, key, error).get();
+}
+
+std::shared_ptr<const PointCloud2> PointCloudFetcher::fetch_shared(
+  std::int64_t target_ns, PointCloudMatchKey key, std::string & error)
+{
   const auto & entries = key == PointCloudMatchKey::kHeaderStamp ? by_stamp_ : by_record_;
   if (entries.empty()) {
     error = "no point-cloud messages available";
@@ -397,17 +403,27 @@ const PointCloud2 * PointCloudFetcher::fetch(
   const std::size_t idx = find_nearest_index(entries, target_ns, key);
   const std::int64_t record_ns = entries[idx].record_ns;
 
-  if (cached_cloud_.has_value() && cached_record_ns_ == record_ns) {
-    return &*cached_cloud_;
+  if (const auto it = cache_.find(record_ns); it != cache_.end()) {
+    cached_record_ns_ = record_ns;
+    return it->second;
   }
 
   auto cloud = load_at(record_ns, error);
   if (!cloud.has_value()) {
     return nullptr;
   }
-  cached_cloud_ = std::move(*cloud);
+  // Bounded cache: match targets are non-decreasing within a view, so the
+  // earliest entry is the least likely to be matched again.
+  if (cache_.size() >= kCacheCapacity) {
+    const auto oldest = std::min_element(
+      cache_.begin(), cache_.end(),
+      [](const auto & a, const auto & b) { return a.first < b.first; });
+    cache_.erase(oldest);
+  }
+  auto shared = std::make_shared<const PointCloud2>(std::move(*cloud));
+  cache_.emplace(record_ns, shared);
   cached_record_ns_ = record_ns;
-  return &*cached_cloud_;
+  return shared;
 }
 
 std::size_t PointCloudFetcher::find_nearest_index(
