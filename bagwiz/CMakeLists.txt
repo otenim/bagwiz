@@ -129,7 +129,7 @@ if(NOT zstd_vendor_FOUND)
 endif()
 find_package(zstd REQUIRED)
 
-# FFmpeg/libav is exercised directly by the `generate video cam` command test,
+# FFmpeg/libav is exercised directly by the `movify cam` command test,
 # which synthesizes image fixtures and inspects the encoded output. No
 # ament/CMake package exists for it, so locate the libraries via pkg-config.
 # pkg_check_modules creates the imported target PkgConfig::LIBAV spanning all
@@ -166,11 +166,11 @@ set(bagwiz_command_sources
   src/commands/cam_info_replace.cpp
   src/commands/completion.cpp
   src/commands/convert.cpp
-  src/commands/generate.cpp
-  src/commands/generate_video.cpp
-  src/commands/generate_video_common.cpp
-  src/commands/generate_video_pcd_scan.cpp
-  src/commands/generate_video_pcd_scan_common.cpp
+  src/commands/movify.cpp
+  src/commands/movify_video.cpp
+  src/commands/movify_video_common.cpp
+  src/commands/movify_pcd_scan.cpp
+  src/commands/movify_pcd_scan_common.cpp
   src/commands/joke.cpp
   src/commands/ls.cpp
   src/commands/pcd.cpp
@@ -675,57 +675,57 @@ if(BUILD_TESTING)
     bagwiz_cam_info_common_test ${bagwiz_test_libs} fmt::fmt
     ${sensor_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
 
-  # Also compiles generate.cpp (GenerateCommand's CLI11 wiring) plus
+  # Also compiles movify.cpp (MovifyCommand's CLI11 wiring) plus
   # topic_option.cpp + registry.cpp so a test can drive the real
   # configure_video() through Registry::instance() (walk_test.cpp idiom) —
-  # generate.cpp is the production call site for
+  # movify.cpp is the production call site for
   # add_topic_option(std::optional<std::string>&) (--cam-info).
-  # generate.cpp's run() dispatches to both video leaves, so the pcd-scan
+  # movify.cpp's run() dispatches to both video leaves, so the pcd-scan
   # sources are compiled in too.
-  ament_add_gtest(bagwiz_generate_video_test
-    test/commands/generate_video_test.cpp
-    src/commands/generate.cpp
-    src/commands/generate_video.cpp
-    src/commands/generate_video_common.cpp
-    src/commands/generate_video_pcd_scan.cpp
-    src/commands/generate_video_pcd_scan_common.cpp
+  ament_add_gtest(bagwiz_movify_video_test
+    test/commands/movify_video_test.cpp
+    src/commands/movify.cpp
+    src/commands/movify_video.cpp
+    src/commands/movify_video_common.cpp
+    src/commands/movify_pcd_scan.cpp
+    src/commands/movify_pcd_scan_common.cpp
     src/commands/topic_option.cpp
     src/commands/registry.cpp)
-  target_include_directories(bagwiz_generate_video_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_include_directories(bagwiz_movify_video_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(
-    bagwiz_generate_video_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
+    bagwiz_movify_video_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV ${OpenCV_LIBS})
 
-  # generate_video_pcd_scan_common.hpp lives in src/commands (CLI-internal,
+  # movify_pcd_scan_common.hpp lives in src/commands (CLI-internal,
   # not installed), so this test adds src/commands to its include path
-  # (pcd_concat_common idiom). generate.cpp is compiled in so the CLI wiring
+  # (pcd_concat_common idiom). movify.cpp is compiled in so the CLI wiring
   # test can drive the real configure() through Registry::instance()
-  # (generate_video_test idiom).
-  ament_add_gtest(bagwiz_generate_video_pcd_scan_test
-    test/commands/generate_video_pcd_scan_test.cpp
-    src/commands/generate.cpp
-    src/commands/generate_video.cpp
-    src/commands/generate_video_common.cpp
-    src/commands/generate_video_pcd_scan.cpp
-    src/commands/generate_video_pcd_scan_common.cpp
+  # (movify_video_test idiom).
+  ament_add_gtest(bagwiz_movify_pcd_scan_test
+    test/commands/movify_pcd_scan_test.cpp
+    src/commands/movify.cpp
+    src/commands/movify_video.cpp
+    src/commands/movify_video_common.cpp
+    src/commands/movify_pcd_scan.cpp
+    src/commands/movify_pcd_scan_common.cpp
     src/commands/topic_option.cpp
     src/commands/registry.cpp)
-  target_include_directories(bagwiz_generate_video_pcd_scan_test
+  target_include_directories(bagwiz_movify_pcd_scan_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(
-    bagwiz_generate_video_pcd_scan_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
+    bagwiz_movify_pcd_scan_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     PkgConfig::LIBAV ${OpenCV_LIBS})
 
-  # generate_video_common.hpp lives in src/commands (CLI-internal, not
+  # movify_video_common.hpp lives in src/commands (CLI-internal, not
   # installed), so this test adds src/commands to its include path
   # (pcd_concat_common idiom).
-  ament_add_gtest(bagwiz_generate_video_common_test
-    test/commands/generate_video_common_test.cpp
-    src/commands/generate_video_common.cpp)
-  target_include_directories(bagwiz_generate_video_common_test
+  ament_add_gtest(bagwiz_movify_video_common_test
+    test/commands/movify_video_common_test.cpp
+    src/commands/movify_video_common.cpp)
+  target_include_directories(bagwiz_movify_video_common_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(
-    bagwiz_generate_video_common_test ${bagwiz_test_libs} fmt::fmt ${OpenCV_LIBS})
+    bagwiz_movify_video_common_test ${bagwiz_test_libs} fmt::fmt ${OpenCV_LIBS})
 
   # The walk_*.hpp headers live in src/commands (CLI-internal, not installed),
   # so the walk unit tests add src/commands to their include path

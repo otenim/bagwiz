@@ -6,10 +6,10 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef COMMANDS__GENERATE_VIDEO_COMMON_HPP_
-#define COMMANDS__GENERATE_VIDEO_COMMON_HPP_
+#ifndef COMMANDS__MOVIFY_VIDEO_COMMON_HPP_
+#define COMMANDS__MOVIFY_VIDEO_COMMON_HPP_
 
-#include "bagwiz/commands/generate_video.hpp"
+#include "bagwiz/commands/movify_video.hpp"
 #include "bagwiz/core/image/camera_info.hpp"
 #include "bagwiz/core/image/image_decoder.hpp"
 #include "bagwiz/core/image/rectify.hpp"
@@ -32,7 +32,7 @@
 #include <utility>
 #include <vector>
 
-// Internals of `generate video cam`, split out of generate_video.cpp so the
+// Internals of `movify cam`, split out of movify_video.cpp so the
 // validation, pass-1 scan, tmp-file lifecycle, and frame pipeline units can be
 // unit-tested without driving the full command. CLI-internal: this header
 // lives with the command sources and is not installed.
@@ -133,7 +133,7 @@ struct VideoInputValidation
 // derivation from the image topic name) and the cam-info requirement of
 // --rectify / --pcd, and every point-cloud topic's presence + type. Logs the
 // command's errors and returns on the first failure.
-[[nodiscard]] VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args);
+[[nodiscard]] VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args);
 
 // Whether a validated view renders rectified: rectification must be requested
 // (--rectify, the default) and the view's camera info must have resolved.
@@ -188,7 +188,7 @@ struct VideoInputScan
 // selected property's global min/max. Logs the command's errors and returns
 // with !ok() on the first failure.
 [[nodiscard]] VideoInputScan scan_video_inputs(
-  const GenerateVideoArgs & args, const VideoInputValidation & validation);
+  const MovifyVideoArgs & args, const VideoInputValidation & validation);
 
 // The parallel per-view pipeline is only worthwhile when there is work to
 // spread across workers (several views, or point-cloud projection) and enough
@@ -215,7 +215,7 @@ struct VideoGeometry
 // topic, and the bag's TF when point-cloud overlay topics are present.
 // Returns "" on success; on failure logs and returns the message.
 [[nodiscard]] std::string load_video_geometry(
-  const GenerateVideoArgs & args, const VideoInputValidation & validation, VideoGeometry & out);
+  const MovifyVideoArgs & args, const VideoInputValidation & validation, VideoGeometry & out);
 
 // ---- partial tmp output -------------------------------------------------------
 
@@ -260,7 +260,7 @@ private:
 // Open the input bag for the encode pass, restricted to the primary image
 // topic (secondary views read through their own NearestMessageSource). Logs
 // "failed to open ..." and returns nullptr on failure.
-[[nodiscard]] std::unique_ptr<io::BagReader> open_encode_reader(const GenerateVideoArgs & args);
+[[nodiscard]] std::unique_ptr<io::BagReader> open_encode_reader(const MovifyVideoArgs & args);
 
 // Owned decode buffer that survives across BagReader::next() calls, which
 // invalidate raw payload spans. Used by every view's frame cache.
@@ -502,7 +502,7 @@ private:
 // encoded. Moves the pcd index entries out of `scan`. Returns a process exit
 // code; errors are logged inside.
 [[nodiscard]] int run_encode_pass(
-  io::BagReader & reader, const GenerateVideoArgs & args, const VideoInputValidation & validation,
+  io::BagReader & reader, const MovifyVideoArgs & args, const VideoInputValidation & validation,
   VideoInputScan & scan, VideoGeometry & geometry, VideoFrameEncoder & encoder);
 
 // Close out the encode: require at least one rendered frame (pass 1 saw
@@ -523,4 +523,4 @@ void log_video_summary(
 
 }  // namespace bagwiz::commands
 
-#endif  // COMMANDS__GENERATE_VIDEO_COMMON_HPP_
+#endif  // COMMANDS__MOVIFY_VIDEO_COMMON_HPP_

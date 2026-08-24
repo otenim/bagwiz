@@ -160,23 +160,21 @@ TEST(CompletionSlotWiring, TopicDropKeepRename)
   expect_slot(slot_for(rename_slots, "dst"), TopicSelectorMode::kLiteral);
 }
 
-TEST(CompletionSlotWiring, GenerateVideoCam)
+TEST(CompletionSlotWiring, MovifyCam)
 {
-  auto * cmd = command_named("generate");
+  auto * cmd = command_named("movify");
   ASSERT_NE(cmd, nullptr);
-  CLI::App app{"generate"};
+  CLI::App app{"movify"};
   cmd->configure(app);
 
-  auto * group = app.get_subcommand_no_throw("video");
-  ASSERT_NE(group, nullptr);
-  auto * cam = group->get_subcommand_no_throw("cam");
+  auto * cam = app.get_subcommand_no_throw("cam");
   ASSERT_NE(cam, nullptr);
   const auto slots = topic_slots_of(*cam);
   expect_slot(
     slot_for(slots, "topic"), TopicSelectorMode::kGlob, bagwiz::commands::kImageTopicTypes);
   // --cam-info takes a bare CameraInfo topic or an <image>=<info> pair; its
   // allowed_types name the pair's left half (like map slam --cam-info), and
-  // its value completion defers to complete_generate() (pair_optional).
+  // its value completion defers to complete_movify() (pair_optional).
   expect_slot(
     slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
   expect_slot(slot_for(slots, "pcd"), TopicSelectorMode::kGlob, bagwiz::commands::kPointCloud2Type);

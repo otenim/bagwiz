@@ -6,26 +6,26 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef COMMANDS__GENERATE_VIDEO_PCD_SCAN_COMMON_HPP_
-#define COMMANDS__GENERATE_VIDEO_PCD_SCAN_COMMON_HPP_
+#ifndef COMMANDS__MOVIFY_PCD_SCAN_COMMON_HPP_
+#define COMMANDS__MOVIFY_PCD_SCAN_COMMON_HPP_
 
-#include "bagwiz/commands/generate_video_pcd_scan.hpp"
+#include "bagwiz/commands/movify_pcd_scan.hpp"
 #include "bagwiz/core/pointcloud/point_time.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/video/frame_rate.hpp"
 #include "bagwiz/io/bag_io.hpp"
-#include "generate_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <cstdint>
 #include <optional>
 #include <string>
 
-// Internals of `generate video scan`, split out of
-// generate_video_pcd_scan.cpp so the validation, frame-rate, pass-1 scan, and
+// Internals of `movify scan`, split out of
+// movify_pcd_scan.cpp so the validation, frame-rate, pass-1 scan, and
 // auto-range units can be unit-tested without driving the full command.
 // CLI-internal: this header lives with the command sources and is not
 // installed. The tmp-file lifecycle, output-path validation, and summary line
-// are shared with `generate video cam` through generate_video_common.hpp.
+// are shared with `movify cam` through movify_video_common.hpp.
 namespace bagwiz::commands
 {
 
@@ -50,7 +50,7 @@ struct PcdScanValidation
 // and — on the topic's first message — x/y/z fields and a recognised
 // per-point time field (required; there is no array-order fallback). Logs the
 // command's errors and returns on the first failure.
-[[nodiscard]] PcdScanValidation validate_pcd_scan_inputs(const GenerateVideoPcdScanArgs & args);
+[[nodiscard]] PcdScanValidation validate_pcd_scan_inputs(const MovifyPcdScanArgs & args);
 
 // ---- sweep timing -------------------------------------------------------------
 
@@ -76,4 +76,4 @@ struct PcdScanValidation
 
 }  // namespace bagwiz::commands
 
-#endif  // COMMANDS__GENERATE_VIDEO_PCD_SCAN_COMMON_HPP_
+#endif  // COMMANDS__MOVIFY_PCD_SCAN_COMMON_HPP_

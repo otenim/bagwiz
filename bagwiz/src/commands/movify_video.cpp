@@ -6,9 +6,9 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/commands/generate_video.hpp"
+#include "bagwiz/commands/movify_video.hpp"
 
-#include "generate_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <filesystem>
 #include <string>
@@ -16,7 +16,7 @@
 namespace bagwiz::commands
 {
 
-int run_generate_video(const GenerateVideoArgs & args)
+int run_movify_video(const MovifyVideoArgs & args)
 {
   // Validate the source topics, camera infos, point-cloud topics, the grid,
   // and the output path before touching anything expensive.

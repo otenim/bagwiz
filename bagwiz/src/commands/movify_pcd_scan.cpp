@@ -6,15 +6,15 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/commands/generate_video_pcd_scan.hpp"
+#include "bagwiz/commands/movify_pcd_scan.hpp"
 
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/image/packed_raster.hpp"
 #include "bagwiz/core/pointcloud/overlay.hpp"
 #include "bagwiz/core/pointcloud/scan_pattern.hpp"
 #include "bagwiz/core/video/video_encoder.hpp"
-#include "generate_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
-#include "generate_video_pcd_scan_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_pcd_scan_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_video_common.hpp"     // NOLINT(build/include_subdir) src-local shared header
 
 #include <algorithm>
 #include <cinttypes>
@@ -29,7 +29,7 @@ namespace bagwiz::commands
 
 namespace
 {
-constexpr const char * kLogger = "bagwiz.cmd.generate";
+constexpr const char * kLogger = "bagwiz.cmd.movify";
 
 // One sweep of the encode loop: sort the cloud's points by firing time, then
 // emit `frames_per_sweep` cumulative frames, drawing only the points that fired since the
@@ -119,7 +119,7 @@ int encode_sweep(
 
 }  // namespace
 
-int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
+int run_movify_pcd_scan(const MovifyPcdScanArgs & args)
 {
   // Validate the source topic, its point layout, and the numeric options
   // before touching anything expensive.
@@ -248,8 +248,8 @@ int run_generate_video_pcd_scan(const GenerateVideoPcdScanArgs & args)
   }
 
   BAGWIZ_LOG_INFO(
-    kLogger, "generate video scan: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %u fps).",
-    written, args.output_path.string().c_str(), args.width, args.height, args.fps);
+    kLogger, "movify scan: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %u fps).", written,
+    args.output_path.string().c_str(), args.width, args.height, args.fps);
   return 0;
 }
 

@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "generate_video_pcd_scan_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_pcd_scan_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/io/topics.hpp"
@@ -24,8 +24,8 @@ namespace bagwiz::commands
 
 namespace
 {
-constexpr const char * kLogger = "bagwiz.cmd.generate";
-// Mirrors topic_types.hpp's kPointCloud2Type (generate video scan -t's
+constexpr const char * kLogger = "bagwiz.cmd.movify";
+// Mirrors topic_types.hpp's kPointCloud2Type (movify scan -t's
 // allowed_types). Keep the two in sync by hand.
 constexpr const char * kPointCloud2Type = "sensor_msgs/msg/PointCloud2";
 
@@ -85,7 +85,7 @@ std::optional<double> max_xy_distance(const core::pointcloud::PointCloud2 & clou
 
 }  // namespace
 
-PcdScanValidation validate_pcd_scan_inputs(const GenerateVideoPcdScanArgs & args)
+PcdScanValidation validate_pcd_scan_inputs(const MovifyPcdScanArgs & args)
 {
   PcdScanValidation out;
 
@@ -177,7 +177,7 @@ PcdScanValidation validate_pcd_scan_inputs(const GenerateVideoPcdScanArgs & args
   if (!time_field.has_value()) {
     out.error = "topic '" + args.topic +
                 "' has no per-point time field ('t', 'time', 'time_stamp', or 'timestamp'; "
-                "UINT32 nanoseconds or FLOAT32/FLOAT64 seconds), which generate video scan "
+                "UINT32 nanoseconds or FLOAT32/FLOAT64 seconds), which movify scan "
                 "requires to order the points by firing time";
     BAGWIZ_LOG_ERROR(kLogger, "%s", out.error.c_str());
     return out;

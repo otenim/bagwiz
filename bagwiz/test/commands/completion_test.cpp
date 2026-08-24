@@ -318,7 +318,7 @@ std::filesystem::path write_twist_topics_fixture(const std::filesystem::path & p
 
 // MCAP carrying one raw image topic (/image), one compressed image topic
 // (/image/compressed), and one non-image topic (/points). Used to verify
-// `generate video cam` <image_topic> completion offers both image types it operates on
+// `movify cam` <image_topic> completion offers both image types it operates on
 // (sensor_msgs/msg/Image and sensor_msgs/msg/CompressedImage) while excluding
 // every non-image topic. Topic metadata alone drives completion, so the
 // payloads are arbitrary bytes.
@@ -347,7 +347,7 @@ std::filesystem::path write_image_topics_fixture(const std::filesystem::path & p
 // MCAP carrying an image topic (/cam/image_raw/compressed) and its sibling
 // CameraInfo topic (/cam/camera_info), plus an unrelated topic (/points). Used
 // to verify `--cam-info` completion offers only CameraInfo topics (plus pair
-// targets), and `generate video cam --pcd` completion the PointCloud2 ones.
+// targets), and `movify cam --pcd` completion the PointCloud2 ones.
 std::filesystem::path write_camera_info_fixture(const std::filesystem::path & path)
 {
   bagwiz::io::CreateOptions options;
@@ -2092,69 +2092,50 @@ TEST(FlagCompletionTest, TopicKeepDashListsKeepFlags)
     "--help\n--input\n--output\n--overwrite\n--topics\n-h\n-i\n-o\n-t\n-w\n");
 }
 
-// `bagwiz generate <TAB>` lists the command group's single subcommand.
-TEST(FlagCompletionTest, GenerateSubcommandListsVideo)
+// `bagwiz movify <TAB>` lists the command group's leaf subcommands, sorted.
+TEST(FlagCompletionTest, MovifySubcommandListsLeaves)
 {
-  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "generate", ""}), "video\n");
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "movify", ""}), "cam\nscan\n");
 }
 
-// `bagwiz generate -` is the command-group slot; only the implicit help flags
-// appear (the `cam` leaf's own flags live two slots deeper).
-TEST(FlagCompletionTest, GenerateParentDashListsHelpFlags)
+// `bagwiz movify -` is the command-group slot; only the implicit help flags
+// appear (the `cam` leaf's own flags live one slot deeper).
+TEST(FlagCompletionTest, MovifyParentDashListsHelpFlags)
 {
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "2", "bagwiz", "generate", "-"}), "--help\n-h\n");
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "movify", "-"}), "--help\n-h\n");
 }
 
-// `bagwiz generate video <TAB>` lists the video group's leaf subcommands,
-// sorted.
-TEST(FlagCompletionTest, GenerateVideoSubcommandListsLeaves)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "generate", "video", ""}),
-    "cam\nscan\n");
-}
-
-// `bagwiz generate video -` is the nested-group slot; only the implicit help
-// flags appear (the `cam` leaf's flags live one slot deeper).
-TEST(FlagCompletionTest, GenerateVideoGroupDashListsHelpFlagsOnly)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "generate", "video", "-"}),
-    "--help\n-h\n");
-}
-
-// `generate video cam -` surfaces the leaf's flags plus the implicit help
+// `movify cam -` surfaces the leaf's flags plus the implicit help
 // flags, sorted.
-TEST(FlagCompletionTest, GenerateVideoCamDashListsCamFlags)
+TEST(FlagCompletionTest, MovifyCamDashListsCamFlags)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "cam", "-"}),
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "cam", "-"}),
     "--alpha\n--cam-info\n--field\n--grid\n--help\n--input\n--max\n--min\n--no-rectify\n"
     "--output\n--overwrite\n--pcd\n--point-size\n--rectify\n--resize\n--scheme\n--topic\n--width\n"
     "-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `--field <TAB>` offers the valid point-cloud field choices, sorted.
-TEST(FlagCompletionTest, GenerateVideoFieldFlagListsChoices)
+TEST(FlagCompletionTest, MovifyFieldFlagListsChoices)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "cam", "--field"}),
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "movify", "cam", "--field"}),
     "distance\nintensity\nx\ny\nz\n");
 }
 
 // `--scheme <TAB>` offers the valid color scheme choices, sorted.
-TEST(FlagCompletionTest, GenerateVideoSchemeFlagListsChoices)
+TEST(FlagCompletionTest, MovifySchemeFlagListsChoices)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "cam", "--scheme"}),
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "movify", "cam", "--scheme"}),
     "inferno\njet\nmagma\nplasma\nrainbow\nturbo\nviridis\n");
 }
 
-// `generate video cam <bag> <TAB>` (the <image_topic> slot) lists only the bag's image
+// `movify cam <bag> <TAB>` (the <image_topic> slot) lists only the bag's image
 // topics — /image (Image) and /image/compressed (CompressedImage) here —
 // excluding the non-image /points, sorted.
-TEST_F(CompletionTest, GenerateVideoTopicSlotListsOnlyImageTopics)
+TEST_F(CompletionTest, MovifyTopicSlotListsOnlyImageTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2162,13 +2143,12 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotListsOnlyImageTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
-       "-t"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "movify", "cam", "-i", "~/images.mcap", "-t"}),
     "/image\n/image/compressed\n");
 }
 
 // A typed prefix narrows the <image_topic> candidates within the image-type set.
-TEST_F(CompletionTest, GenerateVideoTopicSlotRespectsPrefix)
+TEST_F(CompletionTest, MovifyTopicSlotRespectsPrefix)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2176,14 +2156,14 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotRespectsPrefix)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
-       "-t", "/image/"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "movify", "cam", "-i", "~/images.mcap", "-t",
+       "/image/"}),
     "/image/compressed\n");
 }
 
 // A prefix that matches only a non-image topic (/points) yields nothing: the
 // type filter excludes it even though the name matches.
-TEST_F(CompletionTest, GenerateVideoTopicSlotExcludesUnsupportedTypeOnPrefix)
+TEST_F(CompletionTest, MovifyTopicSlotExcludesUnsupportedTypeOnPrefix)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2191,15 +2171,14 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotExcludesUnsupportedTypeOnPrefix)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
-       "-t", "/p"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "movify", "cam", "-i", "~/images.mcap", "-t", "/p"}),
     "");
 }
 
 // `--cam-info <TAB>` after a bag offers the bag's sensor_msgs/msg/CameraInfo
 // topics (for a bare, all-views value) plus each -t topic with '=' appended
 // (the pair form's left half), excluding other topics, sorted.
-TEST_F(CompletionTest, GenerateVideoCameraInfoFlagListsCameraInfoTopicsAndPairTargets)
+TEST_F(CompletionTest, MovifyCameraInfoFlagListsCameraInfoTopicsAndPairTargets)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2207,14 +2186,14 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagListsCameraInfoTopicsAndPairTa
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
-       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info"}),
+      {"bagwiz", "__complete", "10", "bagwiz", "movify", "cam", "-i", "~/cameras.mcap", "-t",
+       "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info"}),
     "/cam/camera_info\n/cam/image_raw/compressed=\n");
 }
 
 // Once the --cam-info value word contains '=', the view is chosen and the
 // right half completes CameraInfo topics with the left half kept.
-TEST_F(CompletionTest, GenerateVideoCameraInfoPairCompletesCameraInfoOnTheRightHalf)
+TEST_F(CompletionTest, MovifyCameraInfoPairCompletesCameraInfoOnTheRightHalf)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2222,15 +2201,15 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoPairCompletesCameraInfoOnTheRightH
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
-       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info",
+      {"bagwiz", "__complete", "10", "bagwiz", "movify", "cam", "-i", "~/cameras.mcap", "-t",
+       "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info",
        "/cam/image_raw/compressed=/cam"}),
     "/cam/image_raw/compressed=/cam/camera_info\n");
 }
 
 // bash splits a typed --cam-info value at '=', leaving a bare '=' as the word
 // before the cursor; the right half still completes CameraInfo topics.
-TEST_F(CompletionTest, GenerateVideoCameraInfoPairCompletesAfterSplitEquals)
+TEST_F(CompletionTest, MovifyCameraInfoPairCompletesAfterSplitEquals)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2238,14 +2217,14 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoPairCompletesAfterSplitEquals)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "13", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
-       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info",
-       "/cam/image_raw/compressed", "=", ""}),
+      {"bagwiz", "__complete", "12", "bagwiz", "movify", "cam", "-i", "~/cameras.mcap", "-t",
+       "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info", "/cam/image_raw/compressed", "=",
+       ""}),
     "/cam/image_raw/compressed=/cam/camera_info\n");
 }
 
 // A typed prefix narrows the `--cam-info` candidates within the CameraInfo set.
-TEST_F(CompletionTest, GenerateVideoCameraInfoFlagRespectsPrefix)
+TEST_F(CompletionTest, MovifyCameraInfoFlagRespectsPrefix)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2253,14 +2232,14 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagRespectsPrefix)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
-       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info", "/cam/c"}),
+      {"bagwiz", "__complete", "10", "bagwiz", "movify", "cam", "-i", "~/cameras.mcap", "-t",
+       "/cam/image_raw/compressed", "-o", "out.avi", "--cam-info", "/cam/c"}),
     "/cam/camera_info\n");
 }
 
 // A bag with no CameraInfo topic yields only the pair-form candidates (the -t
 // topics with '=' appended).
-TEST_F(CompletionTest, GenerateVideoCameraInfoFlagOffersOnlyPairTargetsWhenNoCameraInfoTopics)
+TEST_F(CompletionTest, MovifyCameraInfoFlagOffersOnlyPairTargetsWhenNoCameraInfoTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2268,15 +2247,15 @@ TEST_F(CompletionTest, GenerateVideoCameraInfoFlagOffersOnlyPairTargetsWhenNoCam
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/images.mcap",
-       "-t", "/image", "-o", "out.avi", "--cam-info"}),
+      {"bagwiz", "__complete", "10", "bagwiz", "movify", "cam", "-i", "~/images.mcap", "-t",
+       "/image", "-o", "out.avi", "--cam-info"}),
     "/image=\n");
 }
 
 // `--pcd <TAB>` after a bag offers the bag's PointCloud2 topics (bare,
 // all-views form) plus each -t topic with '=' appended (per-view binding),
 // sorted.
-TEST_F(CompletionTest, GenerateVideoPcdFlagListsPointCloudsAndPairTargets)
+TEST_F(CompletionTest, MovifyPcdFlagListsPointCloudsAndPairTargets)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2284,14 +2263,14 @@ TEST_F(CompletionTest, GenerateVideoPcdFlagListsPointCloudsAndPairTargets)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
-       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--pcd"}),
+      {"bagwiz", "__complete", "10", "bagwiz", "movify", "cam", "-i", "~/cameras.mcap", "-t",
+       "/cam/image_raw/compressed", "-o", "out.avi", "--pcd"}),
     "/cam/image_raw/compressed=\n/points\n");
 }
 
 // Once the --pcd value word contains '=', the view is chosen and the right
 // half completes PointCloud2 topics with the left half kept.
-TEST_F(CompletionTest, GenerateVideoPcdPairCompletesPointCloudsOnTheRightHalf)
+TEST_F(CompletionTest, MovifyPcdPairCompletesPointCloudsOnTheRightHalf)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2299,15 +2278,14 @@ TEST_F(CompletionTest, GenerateVideoPcdPairCompletesPointCloudsOnTheRightHalf)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "11", "bagwiz", "generate", "video", "cam", "-i", "~/cameras.mcap",
-       "-t", "/cam/image_raw/compressed", "-o", "out.avi", "--pcd",
-       "/cam/image_raw/compressed=/p"}),
+      {"bagwiz", "__complete", "10", "bagwiz", "movify", "cam", "-i", "~/cameras.mcap", "-t",
+       "/cam/image_raw/compressed", "-o", "out.avi", "--pcd", "/cam/image_raw/compressed=/p"}),
     "/cam/image_raw/compressed=/points\n");
 }
 
 // A bag with no image topic yields no <image_topic> candidates, so the shell's default
 // file completion takes over (matches walk/traj/tf behavior).
-TEST_F(CompletionTest, GenerateVideoTopicSlotEmptyWhenNoImageTopics)
+TEST_F(CompletionTest, MovifyTopicSlotEmptyWhenNoImageTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2315,53 +2293,50 @@ TEST_F(CompletionTest, GenerateVideoTopicSlotEmptyWhenNoImageTopics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "cam", "-i", "~/no_image.mcap",
-       "-t"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "movify", "cam", "-i", "~/no_image.mcap", "-t"}),
     "");
 }
 
 // A flag in the input slot must not cause the topic binding to call the bag
 // reader on a flag-shaped path; the binding's earlier-slot guard bails out.
-TEST_F(CompletionTest, GenerateVideoTopicSlotSuppressedWhenInputSlotIsFlag)
+TEST_F(CompletionTest, MovifyTopicSlotSuppressedWhenInputSlotIsFlag)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
   write_image_topics_fixture(tmp_dir_ / "images.mcap");
 
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "5", "bagwiz", "generate", "video", "cam", "-t"}), "");
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "4", "bagwiz", "movify", "cam", "-t"}), "");
 }
 
-// `generate video scan -` surfaces the leaf's flags plus the implicit help
+// `movify scan -` surfaces the leaf's flags plus the implicit help
 // flags, sorted.
-TEST(FlagCompletionTest, GenerateVideoScanDashListsScanFlags)
+TEST(FlagCompletionTest, MovifyScanDashListsScanFlags)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "generate", "video", "scan", "-"}),
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "scan", "-"}),
     "--azim\n--dist\n--elev\n--fps\n--height\n--help\n--input\n--output\n--overwrite\n"
     "--point-size\n--range\n--scheme\n--speed\n--topic\n--view\n--width\n-h\n-i\n-o\n-t\n-w\n");
 }
 
 // `--view <TAB>` offers the valid projection choices, sorted.
-TEST(FlagCompletionTest, GenerateVideoScanViewFlagListsChoices)
+TEST(FlagCompletionTest, MovifyScanViewFlagListsChoices)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "scan", "--view"}),
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "movify", "scan", "--view"}),
     "3d\nbev\n");
 }
 
 // `--scheme <TAB>` offers the valid color scheme choices, sorted.
-TEST(FlagCompletionTest, GenerateVideoScanSchemeFlagListsChoices)
+TEST(FlagCompletionTest, MovifyScanSchemeFlagListsChoices)
 {
   EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "generate", "video", "scan", "--scheme"}),
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "movify", "scan", "--scheme"}),
     "inferno\njet\nmagma\nplasma\nrainbow\nturbo\nviridis\n");
 }
 
-// `generate video scan <bag> <TAB>` (the <pcd_topic> slot) lists only the
+// `movify scan <bag> <TAB>` (the <pcd_topic> slot) lists only the
 // bag's PointCloud2 topics, excluding the non-PointCloud2 /image.
-TEST_F(CompletionTest, GenerateVideoScanTopicSlotListsOnlyPointCloud2Topics)
+TEST_F(CompletionTest, MovifyScanTopicSlotListsOnlyPointCloud2Topics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);
 
@@ -2369,13 +2344,12 @@ TEST_F(CompletionTest, GenerateVideoScanTopicSlotListsOnlyPointCloud2Topics)
 
   EXPECT_EQ(
     run_completion(
-      {"bagwiz", "__complete", "7", "bagwiz", "generate", "video", "scan", "-i", "~/points.mcap",
-       "-t"}),
+      {"bagwiz", "__complete", "6", "bagwiz", "movify", "scan", "-i", "~/points.mcap", "-t"}),
     "/points\n");
 }
 
 // `walk <input> <topic> --cam-info <TAB>` offers only the bag's
-// sensor_msgs/msg/CameraInfo topics, mirroring `generate video cam --cam-info`.
+// sensor_msgs/msg/CameraInfo topics, mirroring `movify cam --cam-info`.
 TEST_F(CompletionTest, WalkCameraInfoFlagListsOnlyCameraInfoTopics)
 {
   const HomeEnvGuard home_guard(tmp_dir_);

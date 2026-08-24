@@ -6,8 +6,8 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef BAGWIZ__COMMANDS__GENERATE_VIDEO_HPP_
-#define BAGWIZ__COMMANDS__GENERATE_VIDEO_HPP_
+#ifndef BAGWIZ__COMMANDS__MOVIFY_VIDEO_HPP_
+#define BAGWIZ__COMMANDS__MOVIFY_VIDEO_HPP_
 
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
@@ -22,14 +22,14 @@
 namespace bagwiz::commands
 {
 
-// Arguments for `bagwiz generate video cam`. Populated by GenerateCommand's CLI
-// wiring (src/commands/generate.cpp) and consumed by run_generate_video. Kept
+// Arguments for `bagwiz movify cam`. Populated by MovifyCommand's CLI
+// wiring (src/commands/movify.cpp) and consumed by run_movify_video. Kept
 // in a header so the run function and the source check can be exercised
 // directly from tests without driving the CLI parser.
-struct GenerateVideoArgs
+struct MovifyVideoArgs
 {
-  GenerateVideoArgs() = default;
-  GenerateVideoArgs(
+  MovifyVideoArgs() = default;
+  MovifyVideoArgs(
     std::filesystem::path input_path_arg, std::string topic_arg,
     std::filesystem::path output_path_arg, bool overwrite_arg)
   : input_path(std::move(input_path_arg)),
@@ -119,8 +119,8 @@ struct VideoSourceCheck
 // exit code: 0 on success, 1 on any error. Renders raw sensor_msgs/msg/Image
 // (bgr8 / rgb8) and sensor_msgs/msg/CompressedImage (JPEG / PNG, decoded to BGR
 // before encoding).
-int run_generate_video(const GenerateVideoArgs & args);
+int run_movify_video(const MovifyVideoArgs & args);
 
 }  // namespace bagwiz::commands
 
-#endif  // BAGWIZ__COMMANDS__GENERATE_VIDEO_HPP_
+#endif  // BAGWIZ__COMMANDS__MOVIFY_VIDEO_HPP_

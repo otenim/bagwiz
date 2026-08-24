@@ -80,7 +80,7 @@ target_link_libraries(
 
 # bagwiz_image_test_fixture is a shared test utility, not production code: it
 # synthesizes JPEG/PNG fixtures with libav and is used by this package's
-# image_decoder_test and by the CLI package's generate_video_test. It is built
+# image_decoder_test and by the CLI package's movify_video_test. It is built
 # unconditionally and installed/exported (unlike a BUILD_TESTING-only helper)
 # so the CLI package can link it after find_package(bagwiz_image). libav is
 # again linked by absolute path to keep target references out of the export.

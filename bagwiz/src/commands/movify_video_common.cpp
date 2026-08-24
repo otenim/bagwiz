@@ -6,7 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "generate_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/base/output_path.hpp"
@@ -46,9 +46,9 @@ namespace bagwiz::commands
 
 namespace
 {
-constexpr const char * kLogger = "bagwiz.cmd.generate";
+constexpr const char * kLogger = "bagwiz.cmd.movify";
 // kImageType / kCompressedImageType mirror topic_types.hpp's kImageTopicTypes
-// (generate video cam -t's allowed_types) via is_supported_type() below.
+// (movify cam -t's allowed_types) via is_supported_type() below.
 // kPointCloudType mirrors topic_types.hpp's kPointCloud2Type (--pcd's
 // allowed_types). Keep both in sync by hand.
 constexpr const char * kImageType = "sensor_msgs/msg/Image";
@@ -182,7 +182,7 @@ struct TickData
 // Build the per-view runtime state shared by both encode loops. Returns
 // nullopt after logging when a secondary source fails to open.
 std::optional<std::vector<ViewState>> build_view_states(
-  const GenerateVideoArgs & args, const VideoInputValidation & validation,
+  const MovifyVideoArgs & args, const VideoInputValidation & validation,
   const VideoInputScan & scan, VideoGeometry & geometry)
 {
   VideoOverlayParams params;
@@ -354,7 +354,7 @@ bool project_view_sync(
   const ViewState & state, const TickData & tick, std::size_t view_index,
   std::vector<core::pointcloud::PointCloudFetcher> & fetchers,
   const std::vector<bool> & topic_has_stamps, tf2::BufferCore & tf_buffer,
-  const GenerateVideoArgs & args, std::vector<core::pointcloud::ProjectedPoint> & out,
+  const MovifyVideoArgs & args, std::vector<core::pointcloud::ProjectedPoint> & out,
   std::uint64_t frame_index)
 {
   out.clear();
@@ -382,7 +382,7 @@ bool project_view_sync(
 }
 
 int run_encode_loop_sync(
-  io::BagReader & reader, const GenerateVideoArgs & args, const VideoInputValidation & validation,
+  io::BagReader & reader, const MovifyVideoArgs & args, const VideoInputValidation & validation,
   VideoInputScan & scan, VideoGeometry & geometry, VideoFrameEncoder & encoder)
 {
   auto states = build_view_states(args, validation, scan, geometry);
@@ -449,7 +449,7 @@ struct SharedCloudFetcher
 };
 
 int run_encode_loop_parallel(
-  io::BagReader & reader, const GenerateVideoArgs & args, const VideoInputValidation & validation,
+  io::BagReader & reader, const MovifyVideoArgs & args, const VideoInputValidation & validation,
   VideoInputScan & scan, VideoGeometry & geometry, VideoFrameEncoder & encoder)
 {
   auto states = build_view_states(args, validation, scan, geometry);
@@ -735,7 +735,7 @@ VideoSourceCheck check_video_source(const std::filesystem::path & input, const s
   if (!is_supported_type(found->type)) {
     check.status = VideoSourceStatus::kUnsupportedType;
     check.message = "topic '" + topic + "' has type '" + found->type +
-                    "', which generate video cam cannot render; supported types are " + kImageType +
+                    "', which movify cam cannot render; supported types are " + kImageType +
                     " and " + kCompressedImageType;
     return check;
   }
@@ -861,7 +861,7 @@ bool view_rectifies(bool rectify_requested, const ViewInput & view) noexcept
   return rectify_requested && view.camera_info_topic.has_value();
 }
 
-VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args)
+VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args)
 {
   VideoInputValidation out;
 
@@ -1086,7 +1086,7 @@ std::string validate_video_output_path(const std::filesystem::path & output_path
 }
 
 VideoInputScan scan_video_inputs(
-  const GenerateVideoArgs & args, const VideoInputValidation & validation)
+  const MovifyVideoArgs & args, const VideoInputValidation & validation)
 {
   VideoInputScan out;
 
@@ -1166,7 +1166,7 @@ bool should_use_parallel_pipeline(
 }
 
 std::string load_video_geometry(
-  const GenerateVideoArgs & args, const VideoInputValidation & validation, VideoGeometry & out)
+  const MovifyVideoArgs & args, const VideoInputValidation & validation, VideoGeometry & out)
 {
   out.camera_infos.resize(validation.views.size());
   bool any_pcd = false;
@@ -1240,7 +1240,7 @@ std::string finalize_video_output(
   return "";
 }
 
-std::unique_ptr<io::BagReader> open_encode_reader(const GenerateVideoArgs & args)
+std::unique_ptr<io::BagReader> open_encode_reader(const MovifyVideoArgs & args)
 {
   std::unique_ptr<io::BagReader> reader;
   try {
@@ -1563,7 +1563,7 @@ std::string VideoFrameEncoder::finish()
 }
 
 int run_encode_pass(
-  io::BagReader & reader, const GenerateVideoArgs & args, const VideoInputValidation & validation,
+  io::BagReader & reader, const MovifyVideoArgs & args, const VideoInputValidation & validation,
   VideoInputScan & scan, VideoGeometry & geometry, VideoFrameEncoder & encoder)
 {
   try {
@@ -1602,8 +1602,8 @@ void log_video_summary(
 {
   const double fps_value = static_cast<double>(fps.num) / static_cast<double>(fps.den);
   BAGWIZ_LOG_INFO(
-    kLogger, "generate video cam: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).",
-    written, output_path.string().c_str(), width, height, fps_value);
+    kLogger, "movify cam: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).", written,
+    output_path.string().c_str(), width, height, fps_value);
 
   if (is_h264_extension(output_path)) {
     if (is_vlc_available()) {
