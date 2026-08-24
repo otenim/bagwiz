@@ -199,10 +199,8 @@ std::optional<std::vector<ViewState>> build_view_states(
       (i < geometry.camera_infos.size() && geometry.camera_infos[i].has_value())
         ? &*geometry.camera_infos[i]
         : nullptr;
-    // A view rectifies only when rectification is requested and its camera
-    // info resolved (validation already warned when it could not). --no-rectify
-    // wins even with --pcd: the projection then targets the raw image, applying
-    // the camera's lens distortion (see view_rectifies).
+    // --no-rectify wins even with --pcd; the projection then targets the raw,
+    // distortion-aware path (see view_rectifies).
     const bool rectify = view_rectifies(args.rectify, view);
     ViewState state{
       .input = &view,
@@ -758,7 +756,7 @@ CamInfoEntries parse_cam_info_entries(
   return out;
 }
 
-bool view_rectifies(bool rectify_requested, const ViewInput & view)
+bool view_rectifies(bool rectify_requested, const ViewInput & view) noexcept
 {
   // --pcd hard-requires a resolved camera-info topic (validate_video_inputs
   // fails the run otherwise), so a projecting view always has one; honoring

@@ -139,7 +139,7 @@ struct VideoInputValidation
 // --no-rectify wins even with --pcd — the projection then targets the raw
 // image, applying the camera's lens distortion model instead of assuming a
 // rectified one.
-[[nodiscard]] bool view_rectifies(bool rectify_requested, const ViewInput & view);
+[[nodiscard]] bool view_rectifies(bool rectify_requested, const ViewInput & view) noexcept;
 
 // Fail-fast output checks run before the expensive encode: an existing
 // `output_path` without --overwrite stops the run, and the output's parent
