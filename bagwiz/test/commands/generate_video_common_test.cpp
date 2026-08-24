@@ -56,6 +56,7 @@ using bagwiz::commands::should_use_threaded_projection;
 using bagwiz::commands::validate_video_inputs;
 using bagwiz::commands::validate_video_output_path;
 using bagwiz::commands::VideoOverlayParams;
+using bagwiz::commands::view_rectifies;
 using bagwiz::commands::ViewRenderer;
 
 constexpr const char * kImageType = "sensor_msgs/msg/Image";
@@ -390,6 +391,39 @@ TEST(ShouldUseThreadedProjection, RequiresParallelHardware)
 {
   EXPECT_FALSE(should_use_threaded_projection(true, true, 100, 1));
   EXPECT_FALSE(should_use_threaded_projection(true, true, 100, 0));
+}
+
+// ---- view_rectifies -----------------------------------------------------------
+
+TEST(ViewRectifies, RequiresRectifyRequested)
+{
+  bagwiz::commands::ViewInput view;
+  view.camera_info_topic = "/cam/camera_info";
+  EXPECT_FALSE(view_rectifies(false, view));
+}
+
+TEST(ViewRectifies, RequiresResolvedCamInfo)
+{
+  bagwiz::commands::ViewInput view;
+  EXPECT_FALSE(view_rectifies(true, view));
+}
+
+TEST(ViewRectifies, RectifiesWhenRequestedAndCamInfoResolved)
+{
+  bagwiz::commands::ViewInput view;
+  view.camera_info_topic = "/cam/camera_info";
+  EXPECT_TRUE(view_rectifies(true, view));
+}
+
+TEST(ViewRectifies, NoRectifyWinsOverPcd)
+{
+  // --pcd no longer forces rectification: with --no-rectify the points are
+  // projected onto the raw image using the camera's lens distortion instead.
+  bagwiz::commands::ViewInput view;
+  view.camera_info_topic = "/cam/camera_info";
+  view.pcd_topics = {"/points"};
+  EXPECT_TRUE(view_rectifies(true, view));
+  EXPECT_FALSE(view_rectifies(false, view));
 }
 
 // ---- PartialFileGuard -------------------------------------------------------
@@ -1030,6 +1064,32 @@ TEST(ViewRendererTest, FitViewScalesIntoTheCellPreservingAspect)
   ASSERT_TRUE(geom.has_value());
   EXPECT_EQ(geom->width, 2u);
   EXPECT_EQ(geom->height, 2u);
+}
+
+// --no-rectify on a view that still has camera info (the --pcd case): the
+// render geometry must keep the camera info, now at the render scale and with
+// its distortion coefficients intact, so the projection can take the raw,
+// distortion-aware path instead of assuming a rectified image.
+TEST(ViewRendererTest, NoRectifyKeepsScaledCameraInfoForRawProjection)
+{
+  bagwiz::core::image::CameraInfo info;
+  info.width = 4;
+  info.height = 2;
+  info.distortion_model = "plumb_bob";
+  info.d = {0.1, -0.05, 0.001, -0.002, 0.0};
+  info.k = {100.0, 0.0, 2.0, 0.0, 100.0, 1.0, 0.0, 0.0, 1.0};
+  info.p = {90.0, 0.0, 2.0, 0.0, 0.0, 90.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+  ViewRenderer renderer(&info, /*rectify=*/false, VideoOverlayParams{}, 0.5);
+  const auto geom = renderer.prepare(4, 2, 0, 0);
+  ASSERT_TRUE(geom.has_value());
+  EXPECT_FALSE(geom->rectify);
+  EXPECT_TRUE(geom->has_camera_info);
+  EXPECT_EQ(geom->camera_info.width, 2u);
+  EXPECT_EQ(geom->camera_info.height, 1u);
+  EXPECT_DOUBLE_EQ(geom->camera_info.k[0], 50.0);
+  EXPECT_DOUBLE_EQ(geom->camera_info.k[2], 1.0);
+  EXPECT_EQ(geom->camera_info.distortion_model, "plumb_bob");
+  EXPECT_EQ(geom->camera_info.d, info.d);
 }
 
 TEST(ViewRendererTest, RenderPastesCenteredIntoTheCell)

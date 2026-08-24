@@ -199,11 +199,11 @@ std::optional<std::vector<ViewState>> build_view_states(
       (i < geometry.camera_infos.size() && geometry.camera_infos[i].has_value())
         ? &*geometry.camera_infos[i]
         : nullptr;
-    // A view rectifies when rectification is enabled and its camera info
-    // resolved (validation already warned when it could not), or when it
-    // projects point clouds (the projection assumes a rectified image).
-    const bool rectify =
-      (args.rectify && view.camera_info_topic.has_value()) || !view.pcd_topics.empty();
+    // A view rectifies only when rectification is requested and its camera
+    // info resolved (validation already warned when it could not). --no-rectify
+    // wins even with --pcd: the projection then targets the raw image, applying
+    // the camera's lens distortion (see view_rectifies).
+    const bool rectify = view_rectifies(args.rectify, view);
     ViewState state{
       .input = &view,
       .normalizer = FrameNormalizer(view.topic_type),
@@ -756,6 +756,15 @@ CamInfoEntries parse_cam_info_entries(
     }
   }
   return out;
+}
+
+bool view_rectifies(bool rectify_requested, const ViewInput & view)
+{
+  // --pcd hard-requires a resolved camera-info topic (validate_video_inputs
+  // fails the run otherwise), so a projecting view always has one; honoring
+  // --no-rectify here is what lets the projection fall back to the raw,
+  // distortion-aware path in core::pointcloud::project_pointcloud.
+  return rectify_requested && view.camera_info_topic.has_value();
 }
 
 VideoInputValidation validate_video_inputs(const GenerateVideoArgs & args)
