@@ -21,6 +21,9 @@ namespace bagwiz::core::image
 
 // OpenCV-based rectification helper. Initializes distortion/rectification maps
 // from CameraInfo and the target image size, then remaps subsequent frames.
+// The distortion_model selects the map builder: Brown-Conrady models
+// (plumb_bob / rational_polynomial) go through cv::initUndistortRectifyMap and
+// equidistant/fisheye through cv::fisheye::initUndistortRectifyMap.
 // Implementation is hidden with a pimpl so OpenCV headers do not leak into
 // bagwiz_image's public interface.
 class RectifyHelper

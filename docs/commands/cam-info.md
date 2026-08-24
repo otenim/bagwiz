@@ -170,7 +170,10 @@ so `k`, `d`, and the image size are the **inputs** — everything else in the fi
 or message is preserved. This is the same computation the `camera_calibration`
 package performs when it writes a monocular calibration, so it reconstructs a
 `projection_matrix` that is missing, was hand-edited to something wrong, or has
-gone stale after `k` changed.
+gone stale after `k` changed. For a fisheye (`equidistant`) calibration the new
+camera matrix comes from `cv::fisheye::estimateNewCameraMatrixForUndistortRectify`
+instead — see
+[Supported `distortion_model` values](#supported-distortion_model-values).
 
 Note `p` is **not** `[k | 0]`: rectification re-maps pixels, so the rectified
 image needs its own focal length and principal point. `alpha` chooses how.
@@ -213,7 +216,7 @@ bagwiz cam-info recompute-p -i camera_info.yaml
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `-i`, `--input <input>` | **Required.** Calibration YAML (`camera_calibration` / `camera_info_manager` format) **or** an input ROS 2 rosbag. Must exist.                                                                                                 |
 | `-t`, `--topics <t>...` | Bag input only: one or more `sensor_msgs/msg/CameraInfo` topic selectors whose `p` to recompute — a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). **Required** for a bag, rejected for a YAML. |
-| `-a`, `--alpha <a>`     | OpenCV free-scaling parameter in `[0, 1]`. Default: `0`.                                                                                                                                                                       |
+| `-a`, `--alpha <a>`     | OpenCV free-scaling parameter in `[0, 1]`; for a fisheye calibration it is passed to `cv::fisheye` as its `balance`. Default: `0`.                                                                                             |
 | `-o`, `--output <p>`    | Write the result to a new path instead of rewriting `<input>` in place.                                                                                                                                                        |
 | `-w`, `--overwrite`     | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                                          |
 
@@ -275,33 +278,33 @@ normalized. Use `-o` to keep the original file untouched.
 
 ### Supported `distortion_model` values
 
-`p` can only be recomputed for the Brown–Conrady family that
-`cv::getOptimalNewCameraMatrix` implements:
+| `distortion_model`        | Supported | Behavior                                                                                                                |
+| ------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `plumb_bob`               | ✅        | Brown–Conrady, 5 coefficients. The ROS default. `cv::getOptimalNewCameraMatrix`.                                        |
+| `rational_polynomial`     | ✅        | The same model with 8 coefficients.                                                                                     |
+| `equidistant` / `fisheye` | ✅        | Fisheye: `cv::fisheye::estimateNewCameraMatrixForUndistortRectify`, with `--alpha` passed as its `balance` — see below. |
+| `""` (empty) / `none`     | ✅        | Declares no lens distortion, so `p` is `[k \| 0]` whatever `d` holds.                                                   |
+| anything else             | ❌        | Error.                                                                                                                  |
 
-| `distortion_model`    | Supported | Behavior                                                              |
-| --------------------- | --------- | --------------------------------------------------------------------- |
-| `plumb_bob`           | ✅        | Brown–Conrady, 5 coefficients. The ROS default.                       |
-| `rational_polynomial` | ✅        | The same model with 8 coefficients.                                   |
-| `""` (empty) / `none` | ✅        | Declares no lens distortion, so `p` is `[k \| 0]` whatever `d` holds. |
-| `equidistant`         | ❌        | Fisheye — see below.                                                  |
-| `fisheye`             | ❌        | Fisheye — see below.                                                  |
-| anything else         | ❌        | Error.                                                                |
-
-Any other model **stops the run with an error** rather than producing a
+An unsupported model **stops the run with an error** rather than producing a
 best-effort `p`. The model is validated _before_ `d` is examined, so an
 unsupported model is refused even when its coefficients happen to be all zero:
 
 ```console
-$ bagwiz cam-info recompute-p -i fisheye_cam.yaml
-[ERROR] Cannot recompute p for 'fisheye_cam.yaml': distortion_model 'equidistant' is a fisheye
-model; its projection matrix comes from cv::fisheye::estimateNewCameraMatrixForUndistortRectify
-(which takes a `balance`, not an alpha) and is not supported yet
+$ bagwiz cam-info recompute-p -i ds_cam.yaml
+[ERROR] Cannot recompute p for 'ds_cam.yaml': distortion_model 'double_sphere' is not supported; p
+can be recomputed for 'plumb_bob', 'rational_polynomial', or the fisheye models
+'equidistant'/'fisheye' (an empty model or 'none' is treated as distortion-free)
 ```
 
-Fisheye is a known gap, not an oversight: its projection matrix comes from
-`cv::fisheye::estimateNewCameraMatrixForUndistortRectify`, which is different
-maths parameterized by a `balance` rather than an `alpha`. (`bagwiz`'s
-point-cloud projector does handle `equidistant`, so the asymmetry is deliberate.)
+For a fisheye calibration the projection matrix comes from
+`cv::fisheye::estimateNewCameraMatrixForUndistortRectify`, which is
+parameterized by a `balance` rather than an `alpha`. The two knobs mean the
+same thing to a user — `0` crops to valid pixels, `1` keeps every source pixel
+— so `--alpha`'s value is passed through as the `balance`. `cv::fisheye` takes
+exactly four coefficients, so the first four of `d` are used and missing ones
+are treated as zero, matching the point-cloud projector's `equidistant`
+handling.
 Nothing is written when a model is rejected in YAML mode or in place; with
 `-o`, messages streamed before the first offending CameraInfo may already have
 been written, leaving a partial output bag.
@@ -315,6 +318,9 @@ been written, leaving a partial output bag.
 | `0`     | Keep only valid pixels — zoom until no black border remains. The `camera_calibration` default, and this command's. |
 | `1`     | Retain every source pixel — nothing is cropped, but the edges show black borders.                                  |
 | between | A linear trade-off between the two.                                                                                |
+
+For a fisheye calibration the same value is passed to `cv::fisheye` as its
+`balance`, which implements the same trade-off.
 
 ### Sub-pixel changes are expected
 

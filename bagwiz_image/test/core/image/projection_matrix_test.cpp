@@ -8,6 +8,9 @@
 
 #include "bagwiz/core/image/projection_matrix.hpp"
 
+#include <opencv2/calib3d.hpp>
+#include <opencv2/core.hpp>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -80,6 +83,40 @@ double max_deviation_from_golden(const std::array<double, 12> & p)
     worst = std::max(worst, std::abs(p[i] - kGoldenP[i]));
   }
   return worst;
+}
+
+// A fisheye (equidistant) calibration on the same body as the golden one.
+ProjectionMatrixInput fisheye_input()
+{
+  ProjectionMatrixInput in = golden_input();
+  in.distortion_model = "equidistant";
+  in.d = {-0.05, 0.012, -0.003, 0.001};
+  return in;
+}
+
+// What cv::fisheye::estimateNewCameraMatrixForUndistortRectify produces for
+// `in` at this `balance`, as [newK | 0] -- computed with this build's OpenCV,
+// like the golden-file anchor, because the value is version-dependent.
+std::array<double, 12> expected_fisheye_p(const ProjectionMatrixInput & in, double balance)
+{
+  std::array<double, 9> k = in.k;
+  std::array<double, 9> identity = kIdentityR;
+  std::array<double, 4> d{};
+  for (std::size_t i = 0; i < d.size() && i < in.d.size(); ++i) {
+    d[i] = in.d[i];
+  }
+  cv::Mat new_k;
+  cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
+    cv::Mat(3, 3, CV_64F, k.data()), cv::Mat(4, 1, CV_64F, d.data()),
+    cv::Size{static_cast<int>(in.width), static_cast<int>(in.height)},
+    cv::Mat(3, 3, CV_64F, identity.data()), new_k, balance);
+  std::array<double, 12> p{};
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      p[static_cast<std::size_t>(row * 4 + col)] = new_k.at<double>(row, col);
+    }
+  }
+  return p;
 }
 
 TEST(ProjectionMatrixTest, ReproducesCameraCalibrationOutputAtAlphaZero)
@@ -213,16 +250,67 @@ TEST(ProjectionMatrixTest, RejectsStereoBaselineInProjectionMatrix)
   EXPECT_NE(result.error.find("baseline"), std::string::npos) << result.error;
 }
 
-TEST(ProjectionMatrixTest, RejectsFisheyeDistortionModel)
+TEST(ProjectionMatrixTest, ComputesFisheyeProjectionMatrix)
 {
   for (const char * model : {"equidistant", "fisheye"}) {
-    auto in = golden_input();
+    auto in = fisheye_input();
     in.distortion_model = model;
 
     const auto result = compute_projection_matrix(in, 0.0);
 
-    EXPECT_FALSE(result.ok()) << model;
-    EXPECT_NE(result.error.find(model), std::string::npos) << result.error;
+    ASSERT_TRUE(result.ok()) << model << ": " << result.error;
+    const auto want = expected_fisheye_p(in, 0.0);
+    for (std::size_t i = 0; i < 12; ++i) {
+      EXPECT_NEAR((*result.p)[i], want[i], kExactTol) << model << " p[" << i << "]";
+    }
+  }
+}
+
+// For fisheye the alpha argument is passed to OpenCV as its `balance`, the
+// same 0 = crop-to-valid / 1 = keep-every-pixel trade-off.
+TEST(ProjectionMatrixTest, FisheyeBalanceOneZoomsOutFurtherThanBalanceZero)
+{
+  const auto tight = compute_projection_matrix(fisheye_input(), 0.0);
+  const auto wide = compute_projection_matrix(fisheye_input(), 1.0);
+
+  ASSERT_TRUE(tight.ok()) << tight.error;
+  ASSERT_TRUE(wide.ok()) << wide.error;
+  EXPECT_LT((*wide.p)[0], (*tight.p)[0]);
+  EXPECT_LT((*wide.p)[5], (*tight.p)[5]);
+}
+
+TEST(ProjectionMatrixTest, FisheyeIgnoresExtraCoefficients)
+{
+  // cv::fisheye takes exactly 4 coefficients; a 5-element d (from tools that
+  // always emit 5) must behave as its first four rather than error.
+  auto in4 = fisheye_input();
+  auto in5 = fisheye_input();
+  in5.d.push_back(0.123);
+
+  const auto from4 = compute_projection_matrix(in4, 0.0);
+  const auto from5 = compute_projection_matrix(in5, 0.0);
+
+  ASSERT_TRUE(from4.ok()) << from4.error;
+  ASSERT_TRUE(from5.ok()) << from5.error;
+  for (std::size_t i = 0; i < 12; ++i) {
+    EXPECT_NEAR((*from5.p)[i], (*from4.p)[i], kExactTol) << "p[" << i << "]";
+  }
+}
+
+// Zero (or absent) coefficients declare a distortion-free camera whatever the
+// model, fisheye included, so p short-circuits to [k | 0] as for Brown-Conrady.
+TEST(ProjectionMatrixTest, TreatsZeroDistortionFisheyeAsDistortionFree)
+{
+  for (const bool empty : {true, false}) {
+    auto in = fisheye_input();
+    in.d = empty ? std::vector<double>{} : std::vector<double>{0.0, 0.0, 0.0, 0.0};
+
+    const auto result = compute_projection_matrix(in, 0.0);
+
+    ASSERT_TRUE(result.ok()) << result.error;
+    EXPECT_DOUBLE_EQ((*result.p)[0], in.k[0]);
+    EXPECT_DOUBLE_EQ((*result.p)[2], in.k[2]);
+    EXPECT_DOUBLE_EQ((*result.p)[3], 0.0);
   }
 }
 
@@ -256,21 +344,19 @@ TEST(ProjectionMatrixTest, RejectsUnknownDistortionModel)
 // accepting a camera whose p this function cannot compute.
 TEST(ProjectionMatrixTest, RejectsUnsupportedModelEvenWithZeroCoefficients)
 {
-  for (const char * model : {"equidistant", "fisheye", "double_sphere"}) {
-    auto in = golden_input();
-    in.distortion_model = model;
-    in.d = {0.0, 0.0, 0.0, 0.0, 0.0};
+  auto in = golden_input();
+  in.distortion_model = "double_sphere";
+  in.d = {0.0, 0.0, 0.0, 0.0, 0.0};
 
-    const auto result = compute_projection_matrix(in, 0.0);
+  const auto result = compute_projection_matrix(in, 0.0);
 
-    EXPECT_FALSE(result.ok()) << model << " with all-zero d must still be refused";
-  }
+  EXPECT_FALSE(result.ok()) << "double_sphere with all-zero d must still be refused";
 }
 
 TEST(ProjectionMatrixTest, RejectsUnsupportedModelEvenWithEmptyCoefficients)
 {
   auto in = golden_input();
-  in.distortion_model = "equidistant";
+  in.distortion_model = "double_sphere";
   in.d.clear();
 
   const auto result = compute_projection_matrix(in, 0.0);

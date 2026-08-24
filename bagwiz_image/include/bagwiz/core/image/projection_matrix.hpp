@@ -57,6 +57,13 @@ struct ProjectionMatrixResult
 // recomputes the p that tool would write), 1 retains every source pixel and
 // leaves black borders. Values between trade the two off.
 //
+// For a fisheye (`equidistant`/`fisheye`) calibration newK comes from
+// cv::fisheye::estimateNewCameraMatrixForUndistortRectify instead, with `alpha`
+// passed through as that function's `balance` -- a differently named knob for
+// the same 0 = crop-to-valid / 1 = keep-every-pixel trade-off. cv::fisheye
+// takes exactly four coefficients, so the first four of `d` are used and
+// missing ones are treated as zero (camera_distortion's convention).
+//
 // Expect a sub-pixel difference from a p that `camera_calibration` wrote
 // earlier, rather than a bit-identical match: cv::getOptimalNewCameraMatrix's
 // result shifts slightly across OpenCV versions (4.5.4 -> 4.13.0 moves
@@ -65,19 +72,19 @@ struct ProjectionMatrixResult
 // with the OpenCV this binary links -- which is the one RectifyHelper then
 // feeds it to -- not with whatever version produced the original file.
 //
-// Supported `distortion_model` values -- p can only be recomputed for the
-// Brown-Conrady family cv::getOptimalNewCameraMatrix implements:
+// Supported `distortion_model` values:
 //
 //   plumb_bob            Brown-Conrady, 5 coefficients. The ROS default.
 //   rational_polynomial  The same model with 8 coefficients.
+//   equidistant/fisheye  The fisheye model; see the balance note above.
 //   "" / none            Declares no lens distortion; p is [k | 0] whatever d holds.
 //
-// Any other model is an error (never a silent best-effort), including the
-// fisheye family below. The model is validated before `d` is examined, so an
-// unsupported model is refused even when its coefficients are all zero.
+// Any other model is an error (never a silent best-effort). The model is
+// validated before `d` is examined, so an unsupported model is refused even
+// when its coefficients are all zero.
 //
-// When the model is Brown-Conrady but `d` is empty or all-zero there is nothing
-// to correct, so the result is exactly [k | 0] and OpenCV is not consulted (it
+// When `d` is empty or all-zero there is nothing to correct whatever the
+// model, so the result is exactly [k | 0] and OpenCV is not consulted (it
 // rejects an empty distCoeffs).
 //
 // Refused, because recomputing p from k alone would be wrong rather than merely
@@ -87,9 +94,6 @@ struct ProjectionMatrixResult
 //     all-zero (unset) r is treated as identity, matching RectifyHelper.
 //   - a non-zero p[3]/p[7]: p carries a stereo baseline (p[3] = -fx*baseline),
 //     which [newK | 0] would silently zero out.
-//   - a fisheye/equidistant `distortion_model`: needs
-//     cv::fisheye::estimateNewCameraMatrixForUndistortRectify and a `balance`
-//     parameter, which is different maths, not a different alpha.
 //   - a zero width/height, a non-finite/degenerate k, or an out-of-range alpha.
 [[nodiscard]] ProjectionMatrixResult compute_projection_matrix(
   const ProjectionMatrixInput & input, double alpha);

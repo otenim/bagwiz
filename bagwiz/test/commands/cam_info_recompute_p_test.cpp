@@ -67,6 +67,23 @@ std::array<double, 12> expected_p(double alpha)
   return *result.p;
 }
 
+// The fisheye counterpart of expected_p(): the p the command must produce once
+// the same calibration declares distortion_model equidistant (whose extra 5th
+// coefficient is ignored -- cv::fisheye takes exactly four).
+std::array<double, 12> expected_fisheye_p(double balance)
+{
+  bagwiz::core::image::ProjectionMatrixInput in;
+  in.k = kRealK;
+  in.r = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  in.d = kRealD;
+  in.distortion_model = "equidistant";
+  in.width = kRealWidth;
+  in.height = kRealHeight;
+  const auto result = bagwiz::core::image::compute_projection_matrix(in, balance);
+  EXPECT_TRUE(result.ok()) << result.error;
+  return *result.p;
+}
+
 bagwiz::io::CreateOptions mcap_options()
 {
   bagwiz::io::CreateOptions options;
@@ -345,7 +362,9 @@ TEST_F(CamInfoRecomputePTest, YamlModeRejectsTopicsFlag)
   EXPECT_NE(run_cam_info_recompute_p(args), 0);
 }
 
-TEST_F(CamInfoRecomputePTest, YamlModeRefusesFisheyeWithoutWritingAnything)
+// A fisheye calibration is supported: --alpha reaches cv::fisheye as its
+// `balance` parameter (the same 0 = crop / 1 = keep-all trade-off).
+TEST_F(CamInfoRecomputePTest, YamlModeRecomputesFisheyeP)
 {
   std::string yaml = kRealCalibYaml;
   const auto at = yaml.find("plumb_bob");
@@ -355,12 +374,15 @@ TEST_F(CamInfoRecomputePTest, YamlModeRefusesFisheyeWithoutWritingAnything)
 
   CamInfoRecomputePArgs args;
   args.input_path = path;
-  EXPECT_NE(run_cam_info_recompute_p(args), 0);
+  ASSERT_EQ(run_cam_info_recompute_p(args), 0);
 
-  // The file must be untouched: p is still the identity it started as.
   const auto after = bagwiz::core::image::parse_camera_calibration_yaml(path);
   ASSERT_TRUE(after.ok()) << after.error;
-  EXPECT_DOUBLE_EQ(after.calibration->p[0], 1.0);
+  EXPECT_EQ(after.calibration->distortion_model, "equidistant");
+  const auto want = expected_fisheye_p(0.0);
+  for (std::size_t i = 0; i < 12; ++i) {
+    EXPECT_NEAR(after.calibration->p[i], want[i], 1e-6) << "p[" << i << "]";
+  }
 }
 
 // -o names where the result goes, not what it is: a YAML input writes a YAML,

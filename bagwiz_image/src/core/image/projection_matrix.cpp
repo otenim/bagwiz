@@ -83,6 +83,72 @@ template <typename Range>
   return std::all_of(values.begin(), values.end(), [](double v) { return std::isfinite(v); });
 }
 
+// The fisheye counterpart of the Brown-Conrady path in
+// compute_projection_matrix(): [newK | 0] from
+// cv::fisheye::estimateNewCameraMatrixForUndistortRectify with identity R.
+// `balance` is that function's crop/keep-all trade-off in [0, 1], fed from the
+// caller's alpha, which means the same thing to a user.
+[[nodiscard]] ProjectionMatrixResult compute_fisheye_projection_matrix(
+  const ProjectionMatrixInput & input, const double balance)
+{
+  ProjectionMatrixResult result;
+
+  // Zero (or absent) coefficients declare a distortion-free camera, so p is
+  // [k | 0] exactly as on the Brown-Conrady path.
+  const bool has_distortion =
+    !input.d.empty() &&
+    std::any_of(input.d.begin(), input.d.end(), [](double v) { return v != 0.0; });
+  if (!has_distortion) {
+    result.p = k_with_zero_column(input.k);
+    return result;
+  }
+  if (!all_finite(input.d)) {
+    result.error = "distortion coefficients d contain a non-finite value";
+    return result;
+  }
+
+  // cv::fisheye takes exactly four coefficients; use the first four and pad
+  // missing ones with zero, matching camera_distortion's convention.
+  std::array<double, 4> d4{};
+  for (std::size_t i = 0; i < d4.size() && i < input.d.size(); ++i) {
+    d4[i] = input.d[i];
+  }
+  std::array<double, 9> k = input.k;
+  const cv::Size size{static_cast<int>(input.width), static_cast<int>(input.height)};
+
+  cv::Mat new_k;
+  try {
+    std::array<double, 9> identity{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
+      cv::Mat(3, 3, CV_64F, k.data()), cv::Mat(4, 1, CV_64F, d4.data()), size,
+      cv::Mat(3, 3, CV_64F, identity.data()), new_k, balance);
+  } catch (const cv::Exception & e) {
+    result.error =
+      std::string("cv::fisheye::estimateNewCameraMatrixForUndistortRectify failed: ") + e.what();
+    return result;
+  }
+  if (new_k.empty() || new_k.rows != 3 || new_k.cols != 3) {
+    result.error =
+      "cv::fisheye::estimateNewCameraMatrixForUndistortRectify returned an unusable matrix";
+    return result;
+  }
+
+  std::array<double, 9> flat{};
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      flat[static_cast<std::size_t>(row * 3 + col)] = new_k.at<double>(row, col);
+    }
+  }
+  if (!all_finite(flat)) {
+    result.error =
+      "cv::fisheye::estimateNewCameraMatrixForUndistortRectify produced a non-finite value";
+    return result;
+  }
+
+  result.p = k_with_zero_column(flat);
+  return result;
+}
+
 }  // namespace
 
 ProjectionMatrixResult compute_projection_matrix(
@@ -132,17 +198,10 @@ ProjectionMatrixResult compute_projection_matrix(
     return result;
   }
 
-  // Validate the model before looking at d, so an unsupported model is always an
-  // error. Checking it only on the has-distortion path would let a fisheye file
-  // whose coefficients happen to be zero through as if it were supported, which
-  // silently answers a question this function cannot answer for that camera.
+  // Fisheye: different maths, same guardrails (the stereo checks above ran
+  // already). The caller's alpha reaches cv::fisheye as its `balance`.
   if (is_fisheye(input.distortion_model)) {
-    result.error =
-      "distortion_model '" + input.distortion_model +
-      "' is a fisheye model; its projection matrix comes from "
-      "cv::fisheye::estimateNewCameraMatrixForUndistortRectify (which takes a `balance`, not an "
-      "alpha) and is not supported yet";
-    return result;
+    return compute_fisheye_projection_matrix(input, alpha);
   }
 
   // An explicit "no distortion" declaration: p is [k | 0] whatever d holds,
@@ -154,8 +213,9 @@ ProjectionMatrixResult compute_projection_matrix(
 
   if (!is_brown_conrady(input.distortion_model)) {
     result.error = "distortion_model '" + input.distortion_model +
-                   "' is not supported; p can only be recomputed for 'plumb_bob' or "
-                   "'rational_polynomial' (an empty model or 'none' is treated as distortion-free)";
+                   "' is not supported; p can be recomputed for 'plumb_bob', "
+                   "'rational_polynomial', or the fisheye models 'equidistant'/'fisheye' (an "
+                   "empty model or 'none' is treated as distortion-free)";
     return result;
   }
 
