@@ -140,7 +140,8 @@ private:
         "-a,--alpha", recompute_p_args_.alpha,
         "OpenCV free-scaling parameter passed to getOptimalNewCameraMatrix. 0 keeps only valid "
         "pixels (the camera_calibration default); 1 retains every source pixel, leaving black "
-        "borders.")
+        "borders. For a fisheye (equidistant) calibration the value is passed to cv::fisheye as "
+        "its equivalent `balance` parameter.")
       ->check(CLI::Range(0.0, 1.0))
       ->capture_default_str();
     sub->add_option(

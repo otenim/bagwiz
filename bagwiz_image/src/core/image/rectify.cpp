@@ -8,6 +8,7 @@
 
 #include "bagwiz/core/image/rectify.hpp"
 
+#include "bagwiz/core/image/camera_distortion.hpp"
 #include "bagwiz/core/image/camera_info.hpp"
 
 #include <opencv2/calib3d.hpp>
@@ -66,14 +67,27 @@ public:
       r = cv::Mat(3, 3, CV_64F, effective_info_.r.data());
     }
 
-    cv::Mat d;
-    if (!effective_info_.d.empty()) {
-      d = cv::Mat(static_cast<int>(effective_info_.d.size()), 1, CV_64F, effective_info_.d.data());
+    const cv::Size size{static_cast<int>(width), static_cast<int>(height)};
+    if (
+      select_distortion_model(effective_info_.distortion_model) == DistortionModel::kEquidistant) {
+      // A fisheye camera: the Brown-Conrady map builder would misread its
+      // coefficients as [k1, k2, p1, p2], so build the maps with cv::fisheye.
+      // That API takes exactly four coefficients; use the first four and pad
+      // missing ones with zero, matching camera_distortion's convention.
+      std::array<double, 4> d4{};
+      for (std::size_t i = 0; i < d4.size() && i < effective_info_.d.size(); ++i) {
+        d4[i] = effective_info_.d[i];
+      }
+      cv::fisheye::initUndistortRectifyMap(
+        k, cv::Mat(4, 1, CV_64F, d4.data()), r, p, size, CV_32FC1, map1_, map2_);
+    } else {
+      cv::Mat d;
+      if (!effective_info_.d.empty()) {
+        d =
+          cv::Mat(static_cast<int>(effective_info_.d.size()), 1, CV_64F, effective_info_.d.data());
+      }
+      cv::initUndistortRectifyMap(k, d, r, p, size, CV_32FC1, map1_, map2_);
     }
-
-    cv::initUndistortRectifyMap(
-      k, d, r, p, cv::Size{static_cast<int>(width), static_cast<int>(height)}, CV_32FC1, map1_,
-      map2_);
 
     output_.resize(static_cast<std::size_t>(width) * height * 3, std::byte{0});
   }

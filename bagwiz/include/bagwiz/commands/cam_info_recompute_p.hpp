@@ -22,6 +22,10 @@ namespace bagwiz::commands
 //
 //   p = [ cv::getOptimalNewCameraMatrix(k, d, (width, height), alpha) | 0 ]
 //
+// (or, for a fisheye calibration,
+// cv::fisheye::estimateNewCameraMatrixForUndistortRectify with alpha passed as
+// its `balance`)
+//
 // `input_path` selects the mode, and the result always has the same shape as it:
 // a `.yaml`/`.yml` file is a camera_calibration YAML, so its projection_matrix
 // block is recomputed and the file re-emitted, and `topics` must be empty (a
@@ -49,8 +53,8 @@ struct CamInfoRecomputePArgs
 
 // Run the recomputation. Returns the process exit code: 0 on success, 1 on any
 // error (unreadable YAML or bag, a topic that is missing or not a CameraInfo
-// topic, a calibration whose p cannot be recomputed from k -- stereo-rectified,
-// carrying a baseline, or fisheye -- or an I/O failure). Kept as a free function
+// topic, a calibration whose p cannot be recomputed from k -- stereo-rectified or
+// carrying a baseline -- or an I/O failure). Kept as a free function
 // in its own translation unit so the CamInfoCommand dispatcher in cam_info.cpp
 // stays small; declared here so cam_info.cpp can call it.
 int run_cam_info_recompute_p(const CamInfoRecomputePArgs & args);
