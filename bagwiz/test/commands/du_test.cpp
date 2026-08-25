@@ -136,20 +136,20 @@ TEST_F(DuTest, ReportsEveryTopicSortedBySizeWithTotal)
   EXPECT_EQ(
     out,
     "SIZE TOPIC\n"
-    "2048 /lidar\n"
-    "1536 /camera\n"
+    "2.0K /lidar\n"
+    "1.5K /camera\n"
     "   4 /objects\n"
     "   0 /silent\n"
-    "3588 total\n");
+    "3.5K total\n");
 }
 
-TEST_F(DuTest, HumanReadableSizes)
+TEST_F(DuTest, RawByteSizes)
 {
   const auto in_path = build_input(tmp_dir_);
 
   bagwiz::commands::DuArgs args;
   args.input_path = in_path;
-  args.human = true;
+  args.bytes = true;
 
   int exit_code = -1;
   const auto out = run_captured(args, exit_code);
@@ -158,11 +158,11 @@ TEST_F(DuTest, HumanReadableSizes)
   EXPECT_EQ(
     out,
     "SIZE TOPIC\n"
-    "2.0K /lidar\n"
-    "1.5K /camera\n"
+    "2048 /lidar\n"
+    "1536 /camera\n"
     "   4 /objects\n"
     "   0 /silent\n"
-    "3.5K total\n");
+    "3588 total\n");
 }
 
 TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
@@ -180,8 +180,8 @@ TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
   EXPECT_EQ(
     out,
     "SIZE TOPIC\n"
-    "1536 /camera\n"
-    "1536 total\n");
+    "1.5K /camera\n"
+    "1.5K total\n");
 }
 
 TEST_F(DuTest, TopicFilterKeepsZeroMessageTopic)

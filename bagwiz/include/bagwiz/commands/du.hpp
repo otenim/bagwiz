@@ -27,9 +27,9 @@ struct DuArgs
   // the CLI's topic-slot pass (see commands/topic_option.hpp). Empty: report
   // every topic in the bag.
   std::vector<std::string> topics;
-  // Print sizes in human-readable units (1024-based, e.g. "4.0K", "1.2M")
-  // instead of raw byte counts.
-  bool human = false;
+  // Print sizes as raw byte counts instead of the default human-readable
+  // units (1024-based, e.g. "4.0K", "1.2M").
+  bool bytes = false;
 };
 
 // Report each topic's total serialized payload size in `args.input_path`,

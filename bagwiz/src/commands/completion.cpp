@@ -1434,17 +1434,16 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
 // `du -i|--input <bag>` reports per-topic payload sizes. `-t|--topics` is a
 // declared topic slot (glob, every topic in the bag), so try_topic_completion
 // handles its values before this function is reached; <input> is a path that
-// falls through to the shell's file completion. `-h` is du's own
-// human-readable flag, NOT help (DuCommand drops -h from the help flag to
-// keep du(1)'s binding), so the help flags are not prepended via with_help
-// here — only `--help` is offered.
+// falls through to the shell's file completion. We surface `-b`/`--bytes`
+// (raw byte counts; sizes are human-readable by default) plus `-i`/`--input`,
+// `-t`/`--topics`, and the implicit help flags for any `-` word.
 //
-//   du: `du`(0) -i|--input <bag> [-t|--topics <topic>...] [-h|--human]
+//   du: `du`(0) -i|--input <bag> [-t|--topics <topic>...] [-b|--bytes]
 std::vector<std::string> complete_du(const CompletionRequest & request)
 {
   const auto current = current_word(request);
   if (current.starts_with("-")) {
-    return matching({"--help", "--human", "--input", "--topics", "-h", "-i", "-t"}, current);
+    return matching(with_help({"--bytes", "--input", "--topics", "-b", "-i", "-t"}), current);
   }
   return {};
 }

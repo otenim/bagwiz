@@ -136,29 +136,30 @@ int run_du(const DuArgs & args)
   int size_w = kMinSizeWidth;
   int topic_w = kMinTopicWidth;
   for (const auto & row : rows) {
-    size_w = std::max(size_w, static_cast<int>(format_size(row.bytes, args.human).size()));
+    size_w = std::max(size_w, static_cast<int>(format_size(row.bytes, !args.bytes).size()));
     topic_w = std::max(topic_w, static_cast<int>(row.topic.size()));
   }
-  size_w = std::max(size_w, static_cast<int>(format_size(total, args.human).size()));
+  size_w = std::max(size_w, static_cast<int>(format_size(total, !args.bytes).size()));
   topic_w = std::max(topic_w, 5);  // "total"
 
   fmt::print(stdout, "{:>{}} {:<{}}\n", "SIZE", size_w, "TOPIC", topic_w);
   for (const auto & row : rows) {
     fmt::print(
-      stdout, "{:>{}} {:<{}}\n", format_size(row.bytes, args.human), size_w, row.topic, topic_w);
+      stdout, "{:>{}} {:<{}}\n", format_size(row.bytes, !args.bytes), size_w, row.topic, topic_w);
   }
-  fmt::print(stdout, "{:>{}} {:<{}}\n", format_size(total, args.human), size_w, "total", topic_w);
+  fmt::print(stdout, "{:>{}} {:<{}}\n", format_size(total, !args.bytes), size_w, "total", topic_w);
   return 0;
 }
 
 // `bagwiz du -i <input>` reports each topic's total serialized payload size,
 // in the spirit of du(1): a size column first, the topic name after it, rows
-// sorted by size descending, and a closing `total` row. The size is the sum
-// of the uncompressed serialized payload bytes (the logical message size),
-// not the on-disk footprint — per-topic chunk compression makes the latter
-// unrecoverable — so a compressed bag's reported total can exceed its file
-// size. Computing it requires a full scan of the bag's messages, on every
-// storage format.
+// sorted by size descending, and a closing `total` row. Sizes print in
+// 1024-based human-readable units by default (`-b/--bytes` switches to raw
+// byte counts, du(1)'s own `-b`). The size is the sum of the uncompressed
+// serialized payload bytes (the logical message size), not the on-disk
+// footprint — per-topic chunk compression makes the latter unrecoverable —
+// so a compressed bag's reported total can exceed its file size. Computing
+// it requires a full scan of the bag's messages, on every storage format.
 class DuCommand : public Command
 {
 public:
@@ -170,9 +171,6 @@ public:
 
   void configure(CLI::App & app) override
   {
-    // Drop -h from the help flag so it can carry du(1)'s meaning instead:
-    // human-readable sizes. --help keeps working.
-    app.set_help_flag("--help", "Show this help message and exit");
     app.add_option("-i,--input", args_.input_path, "Bag path (file or directory)")
       ->required()
       ->check(CLI::ExistingPath);
@@ -183,8 +181,9 @@ public:
       "Omit to report every topic.",
       TopicSlotSpec{.require_present = true});
     app.add_flag(
-      "-h,--human", args_.human,
-      "Print sizes in human-readable units (1024-based, e.g. 4.0K, 1.2M) instead of raw bytes.");
+      "-b,--bytes", args_.bytes,
+      "Print sizes as raw byte counts instead of human-readable units (the default, e.g. "
+      "4.0K, 1.2M).");
   }
 
   int run() override { return run_du(args_); }

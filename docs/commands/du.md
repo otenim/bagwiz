@@ -2,7 +2,8 @@
 
 Report each topic's total serialized payload size in a single ROS 2 rosbag,
 in the spirit of du(1): one row per topic sorted by size descending, plus a
-closing `total` row. ROS 1 `*.bag` inputs are not supported.
+closing `total` row. Sizes print in 1024-based human-readable units by
+default (`-b` for raw byte counts). ROS 1 `*.bag` inputs are not supported.
 
 ## Usage
 
@@ -13,11 +14,11 @@ bagwiz du -i <input> [OPTIONS]
 ## Examples
 
 ```bash
-# Every topic, raw byte counts, largest first.
+# Every topic, human-readable sizes, largest first.
 bagwiz du -i capture.mcap
 
-# Human-readable sizes (1024-based), like `du -h`.
-bagwiz du -i capture.mcap -h
+# Raw byte counts, like `du -b`.
+bagwiz du -i capture.mcap -b
 
 # Restrict the report to selected topics (globs quoted against the shell).
 bagwiz du -i capture.mcap -t '/sensing/*' /tf_static
@@ -25,11 +26,11 @@ bagwiz du -i capture.mcap -t '/sensing/*' /tf_static
 
 ## Options
 
-| Flag                        | Description                                                                                                                                                                                                                                                                                 |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>`     | **Required.** ROS 2 rosbag path: a rosbag2 directory or a single-file `*.mcap` / `*.db3`. zstd-compressed `*.db3.zstd` inputs are also accepted.                                                                                                                                            |
-| `-t`, `--topics <topic>...` | Topic selector(s) to report: a literal topic name or a `*` glob. Repeat for several. Omit to report every topic in the bag. A selector that matches no topic is an error. Selecting fewer topics also narrows the message scan (see Performance).                                           |
-| `-h`, `--human`             | Print sizes in human-readable units (1024-based, one decimal and a `K`/`M`/`G`/`T` suffix, e.g. `4.0K`, `1.2M`; values below 1 KiB stay raw bytes) instead of raw byte counts. Note: unlike every other bagwiz command, `-h` here is NOT help — `du` follows du(1)'s binding; use `--help`. |
+| Flag                        | Description                                                                                                                                                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>`     | **Required.** ROS 2 rosbag path: a rosbag2 directory or a single-file `*.mcap` / `*.db3`. zstd-compressed `*.db3.zstd` inputs are also accepted.                                                                                                  |
+| `-t`, `--topics <topic>...` | Topic selector(s) to report: a literal topic name or a `*` glob. Repeat for several. Omit to report every topic in the bag. A selector that matches no topic is an error. Selecting fewer topics also narrows the message scan (see Performance). |
+| `-b`, `--bytes`             | Print sizes as raw byte counts instead of the default human-readable units (1024-based, one decimal and a `K`/`M`/`G`/`T` suffix, e.g. `4.0K`, `1.2M`; values below 1 KiB stay raw bytes).                                                        |
 
 ## Output
 
@@ -37,11 +38,11 @@ A table written to `stdout`, sorted by size descending (ties broken by topic
 name), with a `total` row last:
 
 ```text
-      SIZE  TOPIC
- 805306368  /sensing/lidar
- 104857600  /sensing/camera
-       512  /tf_static
- 909455360  total
+  SIZE TOPIC
+768.0M /sensing/lidar
+100.0M /sensing/camera
+   512 /tf_static
+868.0M total
 ```
 
 - `SIZE` is the sum of the topic's uncompressed serialized payload bytes —
