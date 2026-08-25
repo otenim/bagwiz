@@ -18,6 +18,7 @@
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -48,7 +49,7 @@ std::string format_size(std::uint64_t bytes, bool human)
   if (!human) {
     return fmt::format("{}", bytes);
   }
-  constexpr std::string_view kSuffixes = "KMGTPE";
+  constexpr std::array<char, 6> kSuffixes{'K', 'M', 'G', 'T', 'P', 'E'};
   double value = static_cast<double>(bytes);
   std::size_t idx = 0;
   while (value >= 1024.0 && idx < kSuffixes.size()) {
