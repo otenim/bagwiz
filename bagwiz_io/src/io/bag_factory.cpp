@@ -14,6 +14,7 @@
 #include "bagwiz/io/message_decompressor.hpp"
 #include "bagwiz/io/metadata_computer.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
+#include "bagwiz/io/sqlite3_helpers.hpp"
 #include "bagwiz/io/sqlite3_reader.hpp"
 #include "bagwiz/io/sqlite3_writer.hpp"
 
@@ -23,6 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -93,6 +95,50 @@ std::shared_ptr<MessageDecompressor> select_decompressor(
   }
 
   throw std::runtime_error("unknown compression_mode '" + mode + "' in " + path.string());
+}
+
+// The single-file counterpart of select_decompressor(). A bare `.db3` has no
+// metadata.yaml, but it does carry the same summary in its own `metadata`
+// table — rosbag2 iron+ writes it, and so does every bagwiz sqlite3 writer —
+// and that summary names the compression. A shard lifted out of a MESSAGE-mode
+// directory bag is exactly such a file, so the declaration is read from where
+// it actually lives. Without this the reader would hand back the stored zstd
+// frames as if they were payloads: callers see plausible message counts and
+// topics, then decode garbage, and anything re-encoding the stream writes a
+// bag that claims plain storage while holding compressed bytes.
+//
+// Anything unusable — no `metadata` table (humble recordings have none), no
+// rows, an unparseable document, or the open-time template row rosbag2 writes
+// before recording starts — yields no decompressor, which is the historical
+// behavior and the right answer for a plain shard.
+std::shared_ptr<MessageDecompressor> sqlite3_file_decompressor(const std::filesystem::path & path)
+{
+  std::string yaml;
+  try {
+    auto db = detail::sqlite_open_or_throw(
+      path.string(), SQLITE_OPEN_READONLY, "sqlite3 open for compression metadata");
+    auto stmt = detail::sqlite_prepare_or_throw(
+      db.get(), "SELECT metadata FROM metadata ORDER BY id DESC LIMIT 1");
+    if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+      return nullptr;
+    }
+    const auto * text = sqlite3_column_text(stmt.get(), 0);
+    if (text == nullptr) {
+      return nullptr;
+    }
+    yaml.assign(
+      reinterpret_cast<const char *>(text));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+  } catch (const std::exception &) {
+    return nullptr;
+  }
+
+  const auto md = parse_metadata_yaml_body(yaml);
+  if (!md.has_value()) {
+    return nullptr;
+  }
+  // Reuse the directory path's decision so both layouts agree on what a
+  // declaration means — including its errors for an unsupported format.
+  return select_decompressor(*md, path);
 }
 
 // True when `md` describes a rosbag2 `compression_mode: FILE` whole-database
@@ -313,7 +359,7 @@ std::unique_ptr<BagReader> open_read(const std::filesystem::path & path, OpenOpt
     case Format::Mcap:
       return detail::open_mcap_file(path);
     case Format::Sqlite3:
-      return detail::open_sqlite3_file(path);
+      return detail::open_sqlite3_file(path, sqlite3_file_decompressor(path));
     case Format::Auto:
       throw std::runtime_error("unable to detect bag format: " + path.string());
   }

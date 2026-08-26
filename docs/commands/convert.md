@@ -75,8 +75,11 @@ The target storage backend is resolved in this order (first match wins):
 
 ### Compression handling
 
-rosbag2-layer compression handling on directory inputs (driven by
-`compression_mode` / `compression_format` in `metadata.yaml`):
+rosbag2-layer compression handling, driven by the `compression_mode` /
+`compression_format` pair the input declares — in `metadata.yaml` for a
+directory bag, or in the file's own `metadata` table for a single `.db3`,
+which is how a shard lifted out of a MESSAGE-mode directory bag still reads
+correctly:
 
 - `MESSAGE` + `zstd`: payloads are transparently decompressed on
   read; an `[INFO]` line announces the path. The output bag is

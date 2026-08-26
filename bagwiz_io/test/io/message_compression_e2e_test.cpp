@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -300,6 +301,59 @@ TEST_F(MessageCompressionE2ETest, RejectsMessageModeWithNonZstdFormat)
 // FILE-mode zstd over sqlite3 (the whole-database `.db3.zstd` envelope) is now
 // accepted and transparently decompressed on read — see
 // file_compression_e2e_test.cpp for the full coverage of that path.
+
+// A shard lifted out of a MESSAGE-mode directory bag is a bare .db3 whose only
+// record of the compression is its own `metadata` table — there is no
+// metadata.yaml beside it. Reading it must still yield plain payloads: handing
+// back the stored zstd frames would look like success (right topics, right
+// counts) while every consumer decodes garbage.
+TEST_F(MessageCompressionE2ETest, Sqlite3SingleFileMessageModeZstdDecompresses)
+{
+  const auto dir = tmp_dir_ / "sqlite_message_dir";
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Sqlite3;
+  options.layout = bagwiz::io::Layout::Directory;
+  options.sqlite3_compression_mode = "message";
+  options.sqlite3_compression_format = "zstd";
+
+  bagwiz::io::TopicInfo topic;
+  topic.name = "/foo";
+  topic.type = "std_msgs/msg/String";
+  topic.serialization_format = "cdr";
+
+  const auto plain = as_byte_vector(kPayloadFoo);
+  {
+    auto writer = bagwiz::io::open_write(dir, options);
+    writer->declare_topic(topic);
+    writer->write("/foo", 1'000'000'000LL, std::span<const std::byte>(plain.data(), plain.size()));
+    writer->close();
+  }
+
+  const auto lifted = tmp_dir_ / "lifted.db3";
+  std::filesystem::copy_file(dir / "sqlite_message_dir_0.db3", lifted);
+
+  // Guard against the assertion below passing for the wrong reason: the blob
+  // on disk really is a zstd frame, so a reader that skipped decompression
+  // would hand back these bytes instead.
+  {
+    sqlite3 * db = nullptr;
+    ASSERT_EQ(sqlite3_open(lifted.string().c_str(), &db), SQLITE_OK);
+    sqlite3_stmt * stmt = nullptr;
+    ASSERT_EQ(
+      sqlite3_prepare_v2(db, "SELECT data FROM messages LIMIT 1", -1, &stmt, nullptr), SQLITE_OK);
+    ASSERT_EQ(sqlite3_step(stmt), SQLITE_ROW);
+    const auto * blob = static_cast<const unsigned char *>(sqlite3_column_blob(stmt, 0));
+    ASSERT_GE(sqlite3_column_bytes(stmt, 0), 4);
+    EXPECT_EQ(blob[0], 0x28);  // zstd frame magic 28 B5 2F FD
+    EXPECT_EQ(blob[1], 0xB5);
+    EXPECT_EQ(blob[2], 0x2F);
+    EXPECT_EQ(blob[3], 0xFD);
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+  }
+
+  verify_payloads_match(lifted, {{"/foo", plain}});
+}
 
 TEST_F(MessageCompressionE2ETest, AcceptsFileModeOnMcap)
 {
