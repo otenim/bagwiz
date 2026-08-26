@@ -22,15 +22,20 @@ bagwiz du -i capture.mcap -b
 
 # Restrict the report to selected topics (globs quoted against the shell).
 bagwiz du -i capture.mcap -t '/sensing/*' /tf_static
+
+# Aggregate by topic-name depth, like `du --max-depth`: group under the
+# first name component (/sensing, /perception, ...).
+bagwiz du -i capture.mcap -d 1
 ```
 
 ## Options
 
-| Flag                        | Description                                                                                                                                                                                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>`     | **Required.** ROS 2 rosbag path: a rosbag2 directory or a single-file `*.mcap` / `*.db3`. zstd-compressed `*.db3.zstd` inputs are also accepted.                                                                                                  |
-| `-t`, `--topics <topic>...` | Topic selector(s) to report: a literal topic name or a `*` glob. Repeat for several. Omit to report every topic in the bag. A selector that matches no topic is an error. Selecting fewer topics also narrows the message scan (see Performance). |
-| `-b`, `--bytes`             | Print sizes as raw byte counts instead of the default human-readable units (1024-based, one decimal and a `K`/`M`/`G`/`T` suffix, e.g. `4.0K`, `1.2M`; values below 1 KiB stay raw bytes).                                                        |
+| Flag                        | Description                                                                                                                                                                                                                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>`     | **Required.** ROS 2 rosbag path: a rosbag2 directory or a single-file `*.mcap` / `*.db3`. zstd-compressed `*.db3.zstd` inputs are also accepted.                                                                                                                                                      |
+| `-t`, `--topics <topic>...` | Topic selector(s) to report: a literal topic name or a `*` glob. Repeat for several. Omit to report every topic in the bag. A selector that matches no topic is an error. Selecting fewer topics also narrows the message scan (see Performance).                                                     |
+| `-b`, `--bytes`             | Print sizes as raw byte counts instead of the default human-readable units (1024-based, one decimal and a `K`/`M`/`G`/`T` suffix, e.g. `4.0K`, `1.2M`; values below 1 KiB stay raw bytes).                                                                                                            |
+| `-d`, `--depth <n>`         | Aggregate topics by their first `<n>` name components, du(1) `--max-depth` style: `-d 1` groups `/sensing/lidar/points` under `/sensing`. A topic already at or above the depth keeps its full name. `-d 0` prints only the `total` row. Combines with `-t`: grouping applies to the selected topics. |
 
 ## Output
 

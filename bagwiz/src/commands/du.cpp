@@ -68,6 +68,23 @@ struct Row
   std::uint64_t bytes = 0;
 };
 
+// The group a topic belongs to at `depth`: its first `depth` name components
+// ("/sensing/lidar/points" at depth 2 groups as "/sensing/lidar"). A topic
+// with `depth` or fewer components — a leaf at or above the grouping depth,
+// like du(1) --max-depth — keeps its full name.
+std::string group_key(const std::string & topic, int depth)
+{
+  std::size_t end = 0;  // slash position closing the last counted component
+  for (int c = 0; c < depth; ++c) {
+    const auto next = topic.find('/', end + 1);
+    if (next == std::string::npos) {
+      return topic;
+    }
+    end = next;
+  }
+  return topic.substr(0, end);
+}
+
 }  // namespace
 
 int run_du(const DuArgs & args)
@@ -127,6 +144,24 @@ int run_du(const DuArgs & args)
     total += bytes;
   }
 
+  // Fold per-topic rows into depth groups when -d was given. Depth 0 keeps
+  // no rows at all: like du --max-depth=0, only the total prints.
+  if (args.depth.has_value()) {
+    if (*args.depth == 0) {
+      rows.clear();
+    } else {
+      std::unordered_map<std::string, std::uint64_t> grouped;
+      for (const auto & row : rows) {
+        grouped[group_key(row.topic, *args.depth)] += row.bytes;
+      }
+      rows.clear();
+      rows.reserve(grouped.size());
+      for (const auto & [key, bytes] : grouped) {
+        rows.push_back({key, bytes});
+      }
+    }
+  }
+
   // Size descending — du's whole point is finding what is big — with topic
   // name ascending as the tie-breaker so the output stays stable.
   std::sort(rows.begin(), rows.end(), [](const Row & a, const Row & b) {
@@ -155,11 +190,13 @@ int run_du(const DuArgs & args)
 // in the spirit of du(1): a size column first, the topic name after it, rows
 // sorted by size descending, and a closing `total` row. Sizes print in
 // 1024-based human-readable units by default (`-b/--bytes` switches to raw
-// byte counts, du(1)'s own `-b`). The size is the sum of the uncompressed
-// serialized payload bytes (the logical message size), not the on-disk
-// footprint — per-topic chunk compression makes the latter unrecoverable —
-// so a compressed bag's reported total can exceed its file size. Computing
-// it requires a full scan of the bag's messages, on every storage format.
+// byte counts, du(1)'s own `-b`), and `-d/--depth` aggregates topics by
+// their first N name components (du(1)'s `--max-depth`). The size is the sum
+// of the uncompressed serialized payload bytes (the logical message size),
+// not the on-disk footprint — per-topic chunk compression makes the latter
+// unrecoverable — so a compressed bag's reported total can exceed its file
+// size. Computing it requires a full scan of the bag's messages, on every
+// storage format.
 class DuCommand : public Command
 {
 public:
@@ -184,6 +221,13 @@ public:
       "-b,--bytes", args_.bytes,
       "Print sizes as raw byte counts instead of human-readable units (the default, e.g. "
       "4.0K, 1.2M).");
+    app
+      .add_option(
+        "-d,--depth", args_.depth,
+        "Aggregate topics by their first <n> name components, du --max-depth style: -d 1 groups "
+        "/sensing/lidar under /sensing. A topic already at or above the depth keeps its full name. "
+        "-d 0 prints only the total row.")
+      ->check(CLI::NonNegativeNumber);
   }
 
   int run() override { return run_du(args_); }

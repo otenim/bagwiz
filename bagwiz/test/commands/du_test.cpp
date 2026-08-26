@@ -48,28 +48,28 @@ bagwiz::io::CreateOptions mcap_dir_opts()
   return opts;
 }
 
-// Build an MCAP directory bag with four topics:
-//   /lidar    (2 messages x 1024 bytes = 2048)
-//   /camera   (1 message  x 1536 bytes = 1536)
-//   /objects  (1 message  x    4 bytes =    4)
-//   /silent   (declared, no messages   =    0)
+// Build an MCAP directory bag with four topics at mixed name depths:
+//   /sensing/lidar/points  (2 messages x 1024 bytes = 2048)
+//   /sensing/camera/image  (1 message  x 1536 bytes = 1536)
+//   /perception/objects    (1 message  x    4 bytes =    4)
+//   /silent                (declared, no messages   =    0)
 std::filesystem::path build_input(const std::filesystem::path & dir)
 {
   const auto path = dir / "input";
   auto writer = bagwiz::io::open_write(path, mcap_dir_opts());
-  writer->declare_topic(make_topic("/lidar", "sensor_msgs/msg/PointCloud2"));
-  writer->declare_topic(make_topic("/camera", "sensor_msgs/msg/Image"));
-  writer->declare_topic(make_topic("/objects", "std_msgs/msg/String"));
+  writer->declare_topic(make_topic("/sensing/lidar/points", "sensor_msgs/msg/PointCloud2"));
+  writer->declare_topic(make_topic("/sensing/camera/image", "sensor_msgs/msg/Image"));
+  writer->declare_topic(make_topic("/perception/objects", "std_msgs/msg/String"));
   writer->declare_topic(make_topic("/silent", "std_msgs/msg/String"));
 
   const std::vector<std::byte> lidar_payload(1024, std::byte{0x01});
   const std::vector<std::byte> camera_payload(1536, std::byte{0x02});
   const std::vector<std::byte> objects_payload(4, std::byte{0x03});
 
-  writer->write("/lidar", 1'000'000'000LL, payload_view(lidar_payload));
-  writer->write("/camera", 2'000'000'000LL, payload_view(camera_payload));
-  writer->write("/objects", 3'000'000'000LL, payload_view(objects_payload));
-  writer->write("/lidar", 4'000'000'000LL, payload_view(lidar_payload));
+  writer->write("/sensing/lidar/points", 1'000'000'000LL, payload_view(lidar_payload));
+  writer->write("/sensing/camera/image", 2'000'000'000LL, payload_view(camera_payload));
+  writer->write("/perception/objects", 3'000'000'000LL, payload_view(objects_payload));
+  writer->write("/sensing/lidar/points", 4'000'000'000LL, payload_view(lidar_payload));
   writer->close();
   return path;
 }
@@ -136,9 +136,9 @@ TEST_F(DuTest, ReportsEveryTopicSortedBySizeWithTotal)
   EXPECT_EQ(
     out,
     "SIZE TOPIC\n"
-    "2.0K /lidar\n"
-    "1.5K /camera\n"
-    "   4 /objects\n"
+    "2.0K /sensing/lidar/points\n"
+    "1.5K /sensing/camera/image\n"
+    "   4 /perception/objects\n"
     "   0 /silent\n"
     "3.5K total\n");
 }
@@ -158,20 +158,68 @@ TEST_F(DuTest, RawByteSizes)
   EXPECT_EQ(
     out,
     "SIZE TOPIC\n"
-    "2048 /lidar\n"
-    "1536 /camera\n"
-    "   4 /objects\n"
+    "2048 /sensing/lidar/points\n"
+    "1536 /sensing/camera/image\n"
+    "   4 /perception/objects\n"
     "   0 /silent\n"
     "3588 total\n");
 }
 
-TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
+TEST_F(DuTest, DepthOneGroupsByFirstNameComponent)
 {
   const auto in_path = build_input(tmp_dir_);
 
   bagwiz::commands::DuArgs args;
   args.input_path = in_path;
-  args.topics = {"/camera"};
+  args.depth = 1;
+
+  int exit_code = -1;
+  const auto out = run_captured(args, exit_code);
+
+  // /sensing aggregates lidar + camera (3584 bytes); /perception and /silent
+  // are leaves at the grouping depth and keep their names.
+  EXPECT_EQ(exit_code, 0);
+  EXPECT_EQ(
+    out,
+    "SIZE TOPIC\n"
+    "3.5K /sensing\n"
+    "   4 /perception\n"
+    "   0 /silent\n"
+    "3.5K total\n");
+}
+
+TEST_F(DuTest, DepthTwoGroupsBySecondNameComponent)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  bagwiz::commands::DuArgs args;
+  args.input_path = in_path;
+  args.bytes = true;
+  args.depth = 2;
+
+  int exit_code = -1;
+  const auto out = run_captured(args, exit_code);
+
+  // /perception/objects sits exactly at depth 2 and /silent above it, so
+  // both keep their full names.
+  EXPECT_EQ(exit_code, 0);
+  EXPECT_EQ(
+    out,
+    "SIZE TOPIC\n"
+    "2048 /sensing/lidar\n"
+    "1536 /sensing/camera\n"
+    "   4 /perception/objects\n"
+    "   0 /silent\n"
+    "3588 total\n");
+}
+
+TEST_F(DuTest, DepthZeroPrintsOnlyTotal)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  bagwiz::commands::DuArgs args;
+  args.input_path = in_path;
+  args.depth = 0;
 
   int exit_code = -1;
   const auto out = run_captured(args, exit_code);
@@ -180,7 +228,46 @@ TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
   EXPECT_EQ(
     out,
     "SIZE TOPIC\n"
-    "1.5K /camera\n"
+    "3.5K total\n");
+}
+
+TEST_F(DuTest, DepthAggregatesFilteredTopics)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  bagwiz::commands::DuArgs args;
+  args.input_path = in_path;
+  args.topics = {"/sensing/lidar/points", "/sensing/camera/image"};
+  args.depth = 1;
+
+  int exit_code = -1;
+  const auto out = run_captured(args, exit_code);
+
+  // The total covers only the selected topics.
+  EXPECT_EQ(exit_code, 0);
+  EXPECT_EQ(
+    out,
+    "SIZE TOPIC\n"
+    "3.5K /sensing\n"
+    "3.5K total\n");
+}
+
+TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  bagwiz::commands::DuArgs args;
+  args.input_path = in_path;
+  args.topics = {"/sensing/camera/image"};
+
+  int exit_code = -1;
+  const auto out = run_captured(args, exit_code);
+
+  EXPECT_EQ(exit_code, 0);
+  EXPECT_EQ(
+    out,
+    "SIZE TOPIC\n"
+    "1.5K /sensing/camera/image\n"
     "1.5K total\n");
 }
 
