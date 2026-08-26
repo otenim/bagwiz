@@ -166,6 +166,7 @@ set(bagwiz_command_sources
   src/commands/cam_info_replace.cpp
   src/commands/completion.cpp
   src/commands/convert.cpp
+  src/commands/du.cpp
   src/commands/movify.cpp
   src/commands/movify_video.cpp
   src/commands/movify_video_common.cpp
@@ -626,6 +627,19 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_trim_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_trim_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
+
+  # Same shape as bagwiz_trim_test above, mirrored for `du`: du.cpp is a
+  # single TU carrying both run_du and the DuCommand registrar + CLI11
+  # wiring, so the test also compiles registry.cpp (completion_test idiom),
+  # and topic_option.cpp because DuCommand::configure() declares -t/--topics
+  # through add_topic_option() (topic_option.hpp).
+  ament_add_gtest(bagwiz_du_test
+    test/commands/du_test.cpp
+    src/commands/du.cpp
+    src/commands/registry.cpp
+    src/commands/topic_option.cpp)
+  target_include_directories(bagwiz_du_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(bagwiz_du_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
 
   # trim_stamp.hpp (the shared header.stamp helpers `stamp sync` patches
   # through) is CLI-internal, so the test adds src/commands to its include

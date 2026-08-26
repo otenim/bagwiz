@@ -1431,6 +1431,26 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
   return {};
 }
 
+// `du -i|--input <bag>` reports per-topic payload sizes. `-t|--topics` is a
+// declared topic slot (glob, every topic in the bag), so try_topic_completion
+// handles its values before this function is reached; <input> is a path and
+// `-d`/`--depth`'s value a plain number, both falling through to the shell's
+// default completion. We surface `-b`/`--bytes` (raw byte counts; sizes are
+// human-readable by default), `-d`/`--depth`, `-i`/`--input`, `-t`/`--topics`,
+// and the implicit help flags for any `-` word.
+//
+//   du: `du`(0) -i|--input <bag> [-t|--topics <topic>...] [-b|--bytes]
+//       [-d|--depth <n>]
+std::vector<std::string> complete_du(const CompletionRequest & request)
+{
+  const auto current = current_word(request);
+  if (current.starts_with("-")) {
+    return matching(
+      with_help({"--bytes", "--depth", "--input", "--topics", "-b", "-d", "-i", "-t"}), current);
+  }
+  return {};
+}
+
 // `ls -i|--input <bag>` lists topics. Its only flag is `-l/--long` (per-topic
 // COUNT and HZ); <input> is a path that falls through to the shell's file
 // completion. We surface `-i`/`--input` and `-l`/`--long` plus the implicit help
@@ -1729,6 +1749,9 @@ std::vector<std::string> complete_request(const CLI::App & app, const Completion
   }
   if (command == "convert") {
     return complete_convert(request);
+  }
+  if (command == "du") {
+    return complete_du(request);
   }
   if (command == "traj") {
     return complete_traj(request);
