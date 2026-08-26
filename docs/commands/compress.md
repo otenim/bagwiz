@@ -37,7 +37,7 @@ bagwiz compress -i drive_zstd/ -o drive_plain/ --mode none
 | Flag                      | Description                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag2 (directory or single-file). Must exist. Compressed inputs of every supported shape (MCAP chunk compression, MESSAGE-mode, FILE-mode `.db3.zstd` envelope) are read transparently, including a bare `.db3` lifted out of a MESSAGE-mode directory bag — its own `metadata` table carries the declaration.                       |
-| `-o`, `--output <output>` | **Required.** Output rosbag2 directory or single-file (`*.mcap` / `*.db3`). SQLite3 compression (`--mode file` / `message`) requires a directory output — the compression mode is declared in `metadata.yaml`, which a single `.db3` file does not carry.                                                                                                        |
+| `-o`, `--output <output>` | **Required.** Output rosbag2 directory or single-file (`*.mcap` / `*.db3`). SQLite3 compression (`--mode file` / `message`) requires a directory output: rosbag2 only decompresses when a `metadata.yaml` declares the mode, so a single `.db3` would read back as raw zstd frames without an error.                                                             |
 | `--mode <M>`              | Compression mode. One of `auto`, `file`, `message`, `none`. `file`: MCAP chunk compression, or the whole-shard `.db3.zstd` envelope for SQLite3. `message`: per-message zstd frames (SQLite3 only; rejected for MCAP, where rosbag2 defines no per-message mode). `none`: decompress to plain storage. Default: `auto` — `file` for MCAP, `message` for SQLite3. |
 | `--codec <C>`             | Compression codec. One of `zstd`, `lz4`. `lz4` is valid only for MCAP chunk compression; rosbag2 defines zstd alone for SQLite3 storage. Nothing is encoded under `--mode none`, so naming a codec there is rejected. Default: `zstd`. Long-form only.                                                                                                           |
 | `--level <L>`             | Encoder effort. One of `fastest`, `fast`, `default`, `slow`, `slowest`. Maps onto the codec's effort scale (for SQLite3 zstd: 1, 2, the library default, 9, 19 respectively). Default: the codec's own default. Long-form only.                                                                                                                                  |
@@ -51,8 +51,10 @@ bagwiz compress -i drive_zstd/ -o drive_plain/ --mode none
 | MCAP    | Chunk compression (zstd or lz4), recorded inside the `.mcap` itself                | Not supported (rejected)                                                     | Uncompressed chunks |
 | SQLite3 | Whole-shard `.db3.zstd` envelope (`compression_mode: FILE`), directory layout only | Per-message zstd frames (`compression_mode: MESSAGE`), directory layout only | Plain `.db3`        |
 
-Both SQLite3 modes produce byte shapes identical to
-`ros2 bag compress` (rosbag2_compression_zstd): MESSAGE-mode payloads are
+Both SQLite3 modes produce the byte shapes rosbag2 writes for the same
+settings (rosbag2_compression_zstd, reached with `ros2 bag record
+--compression-mode message|file --compression-format zstd`, or the matching
+keys in a `ros2 bag convert` output config): MESSAGE-mode payloads are
 bare zstd frames, and FILE-mode wraps each finished shard in a single zstd
 frame and points `metadata.yaml` at the `.db3.zstd` name.
 

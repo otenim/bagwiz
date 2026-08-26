@@ -258,8 +258,8 @@ struct CreateOptions
   // a bare zstd frame (rosbag2 `compression_mode: MESSAGE`); "file" wraps
   // each finished shard in a whole-database `.db3.zstd` envelope (rosbag2
   // `compression_mode: FILE`) and is honoured by the directory writer only —
-  // the single-file writer rejects any non-none mode, matching what the
-  // single-file reader can open.
+  // the single-file writer rejects any non-none mode, because rosbag2 reads a
+  // bare .db3 without applying whatever its own `metadata` table declares.
   std::string sqlite3_compression_mode;    // "", "none", "message", "file"
   std::string sqlite3_compression_format;  // "", "none", "zstd"
   // Encoder effort for the zstd frames, using the same level names as

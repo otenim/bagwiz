@@ -126,15 +126,16 @@ public:
   {
     if (compression_.file_mode) {
       // FILE mode wraps the finished shard in a whole-database envelope,
-      // which is the directory writer's job — a bare .db3 carries no
-      // metadata.yaml to declare the envelope. The directory writer never
+      // which is the directory writer's job: the envelope renames the shard to
+      // .db3.zstd, and metadata.yaml is what records that name. The
+      // directory writer never
       // passes "file" down here (it clears the mode on the inner options and
       // compresses the finished shard itself), so reaching this branch means
       // a standalone single-file output was requested.
       throw std::runtime_error(
-        "sqlite3 compression_mode \"file\" requires a directory-layout output "
-        "(the .db3.zstd envelope is declared in metadata.yaml); name an "
-        "extension-less output directory instead of a .db3 file");
+        "sqlite3 compression_mode \"file\" requires a directory-layout output: the "
+        "envelope renames the shard to .db3.zstd and metadata.yaml is what records "
+        "that name; name an extension-less output directory instead of a .db3 file");
     }
     if (compression_.message_mode) {
       // Reached only from the directory writer's inner shard (declared as
@@ -513,16 +514,19 @@ std::unique_ptr<BagWriter> create_sqlite3_file(
   const std::filesystem::path & path, const CreateOptions & options)
 {
   // A bare .db3 has no metadata.yaml beside it, so a single-file output can
-  // only ever be plain storage: MESSAGE-mode payloads would be
-  // indistinguishable from raw ones on open (the single-file reader has no
-  // decompressor hook), and FILE mode's envelope belongs to the directory
-  // layout. Reject both here so the failure surfaces at open_write().
+  // only ever be plain storage. bagwiz itself would read a MESSAGE-mode one
+  // back correctly — the declaration is in the file's own `metadata` table —
+  // but rosbag2 picks its reader from metadata.yaml alone, so it would hand
+  // the stored zstd frames straight to the caller and report success. FILE
+  // mode's envelope additionally needs the .db3.zstd name recorded for it.
+  // Reject both here so the failure surfaces at open_write().
   const auto compression = resolve_sqlite3_compression(options);
   if (compression.message_mode || compression.file_mode) {
     throw std::runtime_error(
-      "sqlite3 compression requires a directory-layout output (the compression "
-      "mode is declared in metadata.yaml, which a single .db3 file does not "
-      "have); name an extension-less output directory instead of a .db3 file");
+      "sqlite3 compression requires a directory-layout output: rosbag2 only "
+      "decompresses when a metadata.yaml declares the mode, so a bare .db3 would "
+      "read back as raw zstd frames with no error; name an extension-less output "
+      "directory instead of a .db3 file");
   }
   return std::make_unique<SqliteFileWriter>(path, options);
 }

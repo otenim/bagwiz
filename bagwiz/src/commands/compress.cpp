@@ -86,8 +86,9 @@ int run_compress(const CompressArgs & args)
   if (mode == "auto") {
     // MCAP's only compression shape is its storage-native chunk compression,
     // which `--mode file` names here even though it stays out of the
-    // metadata; for SQLite3 the per-message mode is the default, matching
-    // `ros2 bag compress`.
+    // metadata. For SQLite3 the per-message mode is the default because it
+    // leaves the shard readable in place; a FILE-mode envelope has to be
+    // expanded to a temporary .db3 before anything can be read from it.
     mode = (target_format == io::Format::Mcap) ? "file" : "message";
   }
   if (mode == "none" && args.codec != "zstd") {
@@ -136,9 +137,10 @@ int run_compress(const CompressArgs & args)
     io::resolve_write_layout(args.output_path, copts).layout == io::Layout::SingleFile) {
     BAGWIZ_LOG_ERROR(
       kLogger,
-      "--mode %s needs a directory output: the compression mode is declared in "
-      "metadata.yaml, which the single sqlite3 file '%s' does not carry. Drop the .db3 "
-      "extension to write a directory-layout bag, or pass --mode none",
+      "--mode %s needs a directory output: rosbag2 only decompresses when a "
+      "metadata.yaml declares the mode, so the single sqlite3 file '%s' would read "
+      "back as raw zstd frames with no error reported. Drop the .db3 extension to "
+      "write a directory-layout bag, or pass --mode none",
       mode.c_str(), args.output_path.c_str());
     return 1;
   }
