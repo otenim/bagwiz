@@ -93,9 +93,9 @@ check() { # <label> <path>
 # unopenable by `ros2 bag play`. Round-tripping through `ros2 bag convert`
 # exercises the reader rosbag2 would really use, and comparing the payload back
 # out proves the decompression itself agreed with what bagwiz wrote.
-readback() { # <label> <path>
+read_back() { # <label> <path>
     local label="$1" path="$2" dest cfg out got
-    dest="$WORK/readback_${label//[^[:alnum:]]/_}"
+    dest="$WORK/read_back_${label//[^[:alnum:]]/_}"
     cfg="$dest.yaml"
     rm -rf "$dest"
     cat >"$cfg" <<YML
@@ -172,18 +172,18 @@ fi
 # rosbag2 must open the bag, so each is read all the way back.
 "$BAGWIZ_BIN" compress -i "$SEED" -o "$WORK/sqlite3_message" --storage sqlite3 >/dev/null
 check "sqlite3 MESSAGE-mode" "$WORK/sqlite3_message"
-readback "sqlite3 MESSAGE-mode" "$WORK/sqlite3_message"
+read_back "sqlite3 MESSAGE-mode" "$WORK/sqlite3_message"
 
 "$BAGWIZ_BIN" compress -i "$SEED" -o "$WORK/sqlite3_file" --storage sqlite3 --mode file >/dev/null
 check "sqlite3 FILE-mode envelope" "$WORK/sqlite3_file"
-readback "sqlite3 FILE-mode envelope" "$WORK/sqlite3_file"
+read_back "sqlite3 FILE-mode envelope" "$WORK/sqlite3_file"
 
 for codec in zstd lz4; do
     "$BAGWIZ_BIN" compress -i "$SEED" -o "$WORK/mcap_$codec" --storage mcap --codec "$codec" \
         >/dev/null
     if ((have_mcap_plugin)); then
         check "mcap $codec chunks" "$WORK/mcap_$codec"
-        readback "mcap $codec chunks" "$WORK/mcap_$codec"
+        read_back "mcap $codec chunks" "$WORK/mcap_$codec"
     else
         echo "skip  mcap $codec chunks (no mcap storage plugin on this distro)"
     fi
