@@ -243,8 +243,7 @@ private:
 class McapDirectoryWriter final : public BagWriter
 {
 public:
-  McapDirectoryWriter(const std::filesystem::path & dir, const CreateOptions & options)
-  : dir_(dir), options_(options)
+  McapDirectoryWriter(const std::filesystem::path & dir, const CreateOptions & options) : dir_(dir)
   {
     std::filesystem::create_directories(dir);
 
@@ -300,9 +299,17 @@ public:
       return;
     }
     inner_->close();
-    // mcap chunk compression is declared to rosbag2 as FILE-mode compression
-    // (the closest slot rosbag2's metadata schema offers for storage-native
-    // compression); write_metadata_yaml derives the mode from the format.
+    // The metadata `compression_format` / `compression_mode` pair describes
+    // rosbag2's own compression layer (rosbag2_compression), not the storage
+    // plugin's internal compression, so both stay empty here however the
+    // chunks were written. Declaring the chunk codec there instead makes
+    // rosbag2 open the bag through SequentialCompressionReader, which expands
+    // the named file as a whole-file zstd envelope and fails on an ordinary
+    // .mcap ("ZSTD decompression error: Unknown frame descriptor"); for lz4 it
+    // fails earlier still, since rosbag2 registers no lz4 plugin. rosbag2's
+    // own mcap writer leaves the pair empty for the same reason. Nothing is
+    // lost: MCAP records each chunk's codec inside the file, which is where
+    // both libmcap and bagwiz's chunk pass-through read it from.
     MetadataYamlInfo info;
     info.storage_identifier = "mcap";
     info.topics = topics_;
@@ -310,7 +317,6 @@ public:
     info.total_messages = total_messages_;
     info.start_ns = start_ns_;
     info.end_ns = end_ns_;
-    info.compression_format = options_.mcap_compression;
     info.shard_relative_path = shard_rel_;
     write_metadata_yaml(dir_, info);
     closed_ = true;
@@ -318,7 +324,6 @@ public:
 
 private:
   std::filesystem::path dir_;
-  CreateOptions options_;
   std::string shard_rel_;
   std::unique_ptr<McapFileWriter> inner_;
 

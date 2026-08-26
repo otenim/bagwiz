@@ -77,7 +77,9 @@ bagwiz stamp sync -i drive_dir/ -o synced_dir/ -w
 - In-place rewriting requires an uncompressed input. A directory bag whose
   `metadata.yaml` declares `compression_mode: file` is rejected with `could
 not detect storage format of input bag`; pass an explicit `-o` output for
-  those.
+  those. A chunk-compressed MCAP bag is not one of those: MCAP keeps its
+  compression inside the shard rather than in `metadata.yaml`, so it rewrites
+  in place like any other MCAP bag.
 - The bag is re-encoded message by message (nearly every message changes, so
   there is no chunk pass-through), and an MCAP output is written with
   `compression=none`; re-compress afterwards with `ros2 bag convert` if

@@ -92,8 +92,8 @@ std::optional<PassthroughCounts> try_bag_passthrough_rewrite(
     }
     // MESSAGE-mode bags carry per-message zstd envelopes that the decoded
     // pipeline strips on read; a verbatim copy would keep them. FILE-mode
-    // on mcap storage is bagwiz's own marker for chunk compression (the
-    // shard is a plain readable mcap), which the engine handles natively.
+    // needs no check of its own: a real whole-file envelope is not an mcap
+    // file, so the detect_format() guard above has already declined it.
     if (to_lower_copy(metadata.compression_mode) == "message") {
       BAGWIZ_LOG_DEBUG(logger, "chunk pass-through declined: MESSAGE-mode compression");
       return std::nullopt;
@@ -137,7 +137,11 @@ std::optional<PassthroughCounts> try_bag_passthrough_rewrite(
     info.total_messages = static_cast<int64_t>(result->messages_written);
     info.start_ns = result->start_ns;
     info.end_ns = result->end_ns;
-    info.compression_format = result->chunk_compression;
+    // The chunks the pass-through preserved keep their codec recorded inside
+    // the mcap file. It is deliberately not mirrored into the metadata's
+    // compression fields, which describe rosbag2's own compression layer and
+    // would make rosbag2 read the shard as a whole-file envelope — see the
+    // mcap directory writer's close() for the full rationale.
     info.shard_relative_path = output_file.filename().string();
     io::write_metadata_yaml(target.path, info);
   }

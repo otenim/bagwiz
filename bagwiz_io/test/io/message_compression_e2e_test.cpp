@@ -303,9 +303,14 @@ TEST_F(MessageCompressionE2ETest, RejectsMessageModeWithNonZstdFormat)
 
 TEST_F(MessageCompressionE2ETest, AcceptsFileModeOnMcap)
 {
-  // MCAP `compression_mode: file` is rosbag2's label for storage-internal
-  // chunk compression, which libmcap decompresses transparently. The factory
-  // must accept it without constructing a MessageDecompressor.
+  // bagwiz never writes `compression_mode: file` beside an mcap shard — those
+  // metadata fields name rosbag2's own compression layer, and filling them
+  // stops rosbag2 opening the bag. Other producers have labelled
+  // storage-internal chunk compression that way, though, so the read path must
+  // still tolerate the declaration: libmcap decompresses the chunks itself, so
+  // the factory has to accept the bag without constructing a
+  // MessageDecompressor. Write a real chunk-compressed shard, then relabel its
+  // metadata the way such a producer would.
   const auto bag = tmp_dir_ / "mcap_chunk_compressed";
   bagwiz::io::CreateOptions options;
   options.format = bagwiz::io::Format::Mcap;
@@ -322,6 +327,10 @@ TEST_F(MessageCompressionE2ETest, AcceptsFileModeOnMcap)
   const auto plain = as_byte_vector(kPayloadFoo);
   writer->write("/foo", 1'000'000'000LL, std::span<const std::byte>(plain.data(), plain.size()));
   writer->close();
+
+  write_metadata_yaml(
+    bag, "mcap", bag.filename().string() + "_0.mcap", "file", "zstd",
+    {{"/foo", "std_msgs/msg/String"}});
 
   // Round-trip succeeds; libmcap returns the plain bytes already.
   verify_payloads_match(bag, {{"/foo", plain}});

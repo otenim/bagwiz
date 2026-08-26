@@ -80,8 +80,11 @@ std::shared_ptr<MessageDecompressor> select_decompressor(
   }
 
   if (mode == "file") {
-    // MCAP FILE-mode = storage-internal chunk compression. libmcap
-    // decompresses chunks transparently, so bagwiz needs no extra work.
+    // MCAP FILE-mode is a declaration bagwiz never writes (its own chunk
+    // compression stays out of the metadata fields) but still tolerates on
+    // input: whatever the producer meant, the shard here is a readable mcap
+    // and libmcap decompresses its chunks transparently, so bagwiz needs no
+    // extra work.
     // SQLite FILE-mode = whole-database `.db3.zstd` envelope; that is handled
     // upstream in open_read() by routing to the envelope-decompressing
     // sqlite3 reader, so select_decompressor is never asked for it. No

@@ -241,7 +241,7 @@ TEST_F(BagPassthroughTest, MessageModeCompressionDeclines)
   // Stamp MESSAGE-mode compression into the metadata, as rosbag2's
   // per-message compression would. The payloads are not actually
   // compressed, but the gate must decline on the metadata alone.
-  patch_metadata_value(input / "metadata.yaml", "compression_format", "none", "zstd");
+  patch_metadata_value(input / "metadata.yaml", "compression_format", "\"\"", "zstd");
   patch_metadata_value(input / "metadata.yaml", "compression_mode", "\"\"", "message");
 
   const auto output = tmp_dir_ / "output";

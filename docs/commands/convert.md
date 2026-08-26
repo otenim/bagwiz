@@ -83,9 +83,12 @@ rosbag2-layer compression handling on directory inputs (driven by
   always written uncompressed.
 - `MESSAGE` + non-zstd: rejected with a clear error (only `zstd`
   is implemented today).
-- `FILE` on MCAP: this is rosbag2's label for storage-internal
-  chunk compression, which libmcap decompresses transparently.
-  Accepted; no extra work needed.
+- `FILE` on MCAP: a declaration bagwiz never writes — MCAP keeps its
+  chunk compression inside the shard, and naming it in
+  `metadata.yaml` instead would make rosbag2 expand the shard as a
+  whole-file envelope and fail to open the bag — but does accept on
+  input, since the shard is an ordinary MCAP whose chunks libmcap
+  decompresses transparently. No extra work needed.
 - `FILE` + `zstd` on SQLite3: a whole-database `.db3.zstd` envelope.
   Each shard is stream-decompressed to a temporary `.db3` on read (an
   `[INFO]` line announces the path) and removed when the reader

@@ -159,7 +159,6 @@ void emit_bagfile_information(YAML::Emitter & out, const MetadataYamlInfo & info
   const int64_t duration_ns =
     (info.total_messages > 0 && info.end_ns >= info.start_ns) ? (info.end_ns - info.start_ns) : 0;
   const int64_t starting_ns = info.total_messages > 0 ? info.start_ns : 0;
-  const bool compressed = !(info.compression_format.empty() || info.compression_format == "none");
 
   out << YAML::BeginMap;
 
@@ -192,7 +191,7 @@ void emit_bagfile_information(YAML::Emitter & out, const MetadataYamlInfo & info
   out << YAML::EndSeq;
 
   out << YAML::Key << "compression_format" << YAML::Value << info.compression_format;
-  out << YAML::Key << "compression_mode" << YAML::Value << (compressed ? "file" : "");
+  out << YAML::Key << "compression_mode" << YAML::Value << info.compression_mode;
   out << YAML::Key << "relative_file_paths" << YAML::Value << YAML::BeginSeq;
   out << info.shard_relative_path;
   out << YAML::EndSeq;
