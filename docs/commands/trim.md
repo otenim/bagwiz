@@ -196,7 +196,7 @@ chunk compression; only chunks straddling a window boundary are re-encoded
 (with the same codec). When this fast path cannot apply — `--stamp header`,
 any `--keep` selection, non-MCAP storage, multi-shard inputs, and a few other
 layouts — the bag is re-encoded and the output MCAP is written with
-`compression=none`; re-compress afterwards with `ros2 bag convert` if needed.
+`compression=none`; re-compress afterwards with [`bagwiz compress`](compress.md) if needed.
 `--keep` is excluded because a chunk lying wholly outside the window can still
 carry messages of an exempt topic, so it cannot be skipped wholesale.
 

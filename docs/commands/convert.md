@@ -103,7 +103,7 @@ rosbag2-layer compression handling on directory inputs (driven by
 
 The MCAP writer is configured with `compression=none`: `mcap` outputs
 are written without chunk compression. Re-compress afterwards with
-`ros2 bag convert` if needed.
+[`bagwiz compress`](compress.md) if needed.
 
 ### Self-description preservation
 

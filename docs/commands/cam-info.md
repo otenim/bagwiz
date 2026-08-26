@@ -153,7 +153,7 @@ One or more entries are given via `-t`/`--topics`, each as `<topic>` or
 - In-place mode replaces the input atomically via a sibling temporary bag, in the
   same storage backend and layout as the input.
 - The output bag is always written uncompressed (re-compress later with
-  `ros2 bag convert` if needed).
+  [`bagwiz compress`](compress.md) if needed).
 
 ---
 
@@ -367,7 +367,7 @@ correct, so the result is exactly `[k | 0]`.
 - In-place mode replaces the input atomically: a bag via a sibling temporary bag,
   a YAML via a sibling temporary file.
 - The output bag is always written uncompressed (re-compress later with
-  `ros2 bag convert` if needed).
+  [`bagwiz compress`](compress.md) if needed).
 
 ---
 

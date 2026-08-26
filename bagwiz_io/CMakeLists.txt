@@ -74,6 +74,7 @@ endif()
 add_library(bagwiz_io
   src/io/bag_factory.cpp
   src/io/bag_open.cpp
+  src/io/file_compressor.cpp
   src/io/file_decompressor.cpp
   src/io/frozen_message.cpp
   src/io/mcap_chunk_codec.cpp
@@ -83,6 +84,7 @@ add_library(bagwiz_io
   src/io/mcap_passthrough.cpp
   src/io/mcap_reader.cpp
   src/io/mcap_writer.cpp
+  src/io/message_compressor.cpp
   src/io/message_decompressor.cpp
   src/io/metadata_computer.cpp
   src/io/metadata_yaml.cpp
@@ -200,6 +202,17 @@ if(BUILD_TESTING)
     bagwiz_file_compression_e2e_test test/io/file_compression_e2e_test.cpp)
   target_link_libraries(
     bagwiz_file_compression_e2e_test bagwiz_io yaml-cpp zstd::zstd)
+
+  # Write-side mirrors of the two e2e suites above: per-message zstd frames
+  # (MESSAGE mode) and whole-shard .db3.zstd envelopes (FILE mode).
+  ament_add_gtest(
+    bagwiz_message_compressor_test test/io/message_compressor_test.cpp)
+  target_link_libraries(bagwiz_message_compressor_test bagwiz_io zstd::zstd)
+
+  ament_add_gtest(
+    bagwiz_sqlite3_compression_write_test test/io/sqlite3_compression_write_test.cpp)
+  target_link_libraries(
+    bagwiz_sqlite3_compression_write_test bagwiz_io yaml-cpp zstd::zstd)
 
   ament_add_gtest(bagwiz_writer_roundtrip_test test/io/writer_roundtrip_test.cpp)
   target_link_libraries(bagwiz_writer_roundtrip_test bagwiz_io yaml-cpp)

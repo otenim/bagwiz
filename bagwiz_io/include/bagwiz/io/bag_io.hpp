@@ -251,6 +251,21 @@ struct CreateOptions
   // uncompressed rewrite). Upstream mcap defaults to 768 KiB for the same
   // regime; 512 KiB measured no faster than 1 MiB.
   uint32_t mcap_chunk_size = 1024 * 1024;
+
+  // SQLite3-specific (the rosbag2 compression plugin's mode/format pair).
+  // Empty or "none" means uncompressed, which is the default and preserves
+  // the historical writer behavior. "message" compresses each payload into
+  // a bare zstd frame (rosbag2 `compression_mode: MESSAGE`); "file" wraps
+  // each finished shard in a whole-database `.db3.zstd` envelope (rosbag2
+  // `compression_mode: FILE`) and is honoured by the directory writer only —
+  // the single-file writer rejects any non-none mode, matching what the
+  // single-file reader can open.
+  std::string sqlite3_compression_mode;    // "", "none", "message", "file"
+  std::string sqlite3_compression_format;  // "", "none", "zstd"
+  // Encoder effort for the zstd frames, using the same level names as
+  // mcap_compression_level ("fastest", "fast", "default", "slow", "slowest");
+  // empty selects ZSTD_defaultCLevel(). Meaningless when the mode is off.
+  std::string sqlite3_compression_level;
 };
 
 // Factory functions. Format/layout are auto-detected from magic bytes and

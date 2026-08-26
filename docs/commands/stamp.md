@@ -82,7 +82,7 @@ not detect storage format of input bag`; pass an explicit `-o` output for
   in place like any other MCAP bag.
 - The bag is re-encoded message by message (nearly every message changes, so
   there is no chunk pass-through), and an MCAP output is written with
-  `compression=none`; re-compress afterwards with `ros2 bag convert` if
+  `compression=none`; re-compress afterwards with [`bagwiz compress`](compress.md) if
   needed.
 
 ## Exit status

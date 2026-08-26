@@ -883,6 +883,44 @@ TEST(FlagCompletionTest, ConvertSubcommandListsFormat)
   EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "convert", ""}), "format\n");
 }
 
+// `compress` is a flat command; `-` surfaces all its flags plus the implicit
+// help flags, sorted.
+TEST(FlagCompletionTest, CompressDashListsCompressFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "2", "bagwiz", "compress", "-"}),
+    "--codec\n--help\n--input\n--level\n--mode\n--output\n--overwrite\n--storage\n-h\n-i\n-o\n-"
+    "w\n");
+}
+
+TEST(FlagCompletionTest, CompressModeListsModes)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "compress", "--mode", ""}),
+    "auto\nfile\nmessage\nnone\n");
+}
+
+TEST(FlagCompletionTest, CompressCodecListsCodecs)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "compress", "--codec", ""}),
+    "lz4\nzstd\n");
+}
+
+TEST(FlagCompletionTest, CompressLevelListsLevels)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "compress", "--level", ""}),
+    "default\nfast\nfastest\nslow\nslowest\n");
+}
+
+TEST(FlagCompletionTest, CompressStorageListsStorages)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "compress", "--storage", ""}),
+    "mcap\nsqlite3\n");
+}
+
 // Parent-level flag completion at the subcommand slot.
 TEST(FlagCompletionTest, TrajParentDashListsHelpFlags)
 {

@@ -140,7 +140,7 @@ not detect storage format of input bag`; pass an explicit `-o` output for
   to the edit (a missing or untrustworthy chunk message index). When this fast
   path cannot apply — non-MCAP storage, multi-shard inputs, and a few other
   layouts — the bag is re-encoded and the output MCAP is written with
-  `compression=none`; re-compress afterwards with `ros2 bag convert` if
+  `compression=none`; re-compress afterwards with [`bagwiz compress`](compress.md) if
   needed.
 - Embedded message schemas are preserved for the surviving topics so MCAP
   outputs stay self-describing.
