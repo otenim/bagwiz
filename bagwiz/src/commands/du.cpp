@@ -38,8 +38,9 @@ constexpr const char * kLogger = "bagwiz.cmd.du";
 // Minimum widths so the header never looks cramped for a bag of tiny topics.
 // Actual widths are computed from the data so long sizes / topic names do not
 // push later columns out of alignment.
-constexpr int kMinSizeWidth = 4;   // "SIZE"
-constexpr int kMinTopicWidth = 5;  // "TOPIC"
+constexpr int kMinSizeWidth = 4;     // "SIZE"
+constexpr int kMinPercentWidth = 1;  // "%"
+constexpr int kMinTopicWidth = 5;    // "TOPIC"
 
 // Raw byte count, or a 1024-based human-readable rendering in the style of
 // `du -h`: values below 1 KiB stay raw bytes, everything above prints one
@@ -60,6 +61,19 @@ std::string format_size(std::uint64_t bytes, bool human)
     return fmt::format("{}", bytes);
   }
   return fmt::format("{:.1f}{}", value, kSuffixes[idx - 1]);
+}
+
+// The row's share of the reported total, one decimal with a trailing '%' in
+// every row (df(1)'s shape, not a bare number under a "%" header). A
+// selection that reported nothing has no total to divide by, so every share
+// there — the `total` row included — reads 0.0%: no row holds a share of
+// zero bytes, and claiming 100.0% of an empty bag would read as a finding.
+std::string format_percent(std::uint64_t bytes, std::uint64_t total)
+{
+  if (total == 0) {
+    return "0.0%";
+  }
+  return fmt::format("{:.1f}%", 100.0 * static_cast<double>(bytes) / static_cast<double>(total));
 }
 
 struct Row
@@ -169,29 +183,36 @@ int run_du(const DuArgs & args)
   });
 
   int size_w = kMinSizeWidth;
+  int pct_w = kMinPercentWidth;
   int topic_w = kMinTopicWidth;
   for (const auto & row : rows) {
     size_w = std::max(size_w, static_cast<int>(format_size(row.bytes, !args.bytes).size()));
+    pct_w = std::max(pct_w, static_cast<int>(format_percent(row.bytes, total).size()));
     topic_w = std::max(topic_w, static_cast<int>(row.topic.size()));
   }
   size_w = std::max(size_w, static_cast<int>(format_size(total, !args.bytes).size()));
+  pct_w = std::max(pct_w, static_cast<int>(format_percent(total, total).size()));
   topic_w = std::max(topic_w, 5);  // "total"
 
-  fmt::print(stdout, "{:>{}} {:<{}}\n", "SIZE", size_w, "TOPIC", topic_w);
+  fmt::print(stdout, "{:>{}} {:>{}} {:<{}}\n", "SIZE", size_w, "%", pct_w, "TOPIC", topic_w);
   for (const auto & row : rows) {
     fmt::print(
-      stdout, "{:>{}} {:<{}}\n", format_size(row.bytes, !args.bytes), size_w, row.topic, topic_w);
+      stdout, "{:>{}} {:>{}} {:<{}}\n", format_size(row.bytes, !args.bytes), size_w,
+      format_percent(row.bytes, total), pct_w, row.topic, topic_w);
   }
-  fmt::print(stdout, "{:>{}} {:<{}}\n", format_size(total, !args.bytes), size_w, "total", topic_w);
+  fmt::print(
+    stdout, "{:>{}} {:>{}} {:<{}}\n", format_size(total, !args.bytes), size_w,
+    format_percent(total, total), pct_w, "total", topic_w);
   return 0;
 }
 
 // `bagwiz du -i <input>` reports each topic's total serialized payload size,
-// in the spirit of du(1): a size column first, the topic name after it, rows
-// sorted by size descending, and a closing `total` row. Sizes print in
-// 1024-based human-readable units by default (`-b/--bytes` switches to raw
-// byte counts, du(1)'s own `-b`), and `-d/--depth` aggregates topics by
-// their first N name components (du(1)'s `--max-depth`). The size is the sum
+// in the spirit of du(1): a size column first, that size's share of the
+// reported total next to it, the topic name after that, rows sorted by size
+// descending, and a closing `total` row. Sizes print in 1024-based
+// human-readable units by default (`-b/--bytes` switches to raw byte counts,
+// du(1)'s own `-b`), and `-d/--depth` aggregates topics by their first N
+// name components (du(1)'s `--max-depth`). The size is the sum
 // of the uncompressed serialized payload bytes (the logical message size),
 // not the on-disk footprint — per-topic chunk compression makes the latter
 // unrecoverable — so a compressed bag's reported total can exceed its file

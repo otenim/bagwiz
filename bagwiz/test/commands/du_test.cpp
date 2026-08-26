@@ -135,12 +135,12 @@ TEST_F(DuTest, ReportsEveryTopicSortedBySizeWithTotal)
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE TOPIC\n"
-    "2.0K /sensing/lidar/points\n"
-    "1.5K /sensing/camera/image\n"
-    "   4 /perception/objects\n"
-    "   0 /silent\n"
-    "3.5K total\n");
+    "SIZE      % TOPIC\n"
+    "2.0K  57.1% /sensing/lidar/points\n"
+    "1.5K  42.8% /sensing/camera/image\n"
+    "   4   0.1% /perception/objects\n"
+    "   0   0.0% /silent\n"
+    "3.5K 100.0% total\n");
 }
 
 TEST_F(DuTest, RawByteSizes)
@@ -157,12 +157,12 @@ TEST_F(DuTest, RawByteSizes)
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE TOPIC\n"
-    "2048 /sensing/lidar/points\n"
-    "1536 /sensing/camera/image\n"
-    "   4 /perception/objects\n"
-    "   0 /silent\n"
-    "3588 total\n");
+    "SIZE      % TOPIC\n"
+    "2048  57.1% /sensing/lidar/points\n"
+    "1536  42.8% /sensing/camera/image\n"
+    "   4   0.1% /perception/objects\n"
+    "   0   0.0% /silent\n"
+    "3588 100.0% total\n");
 }
 
 TEST_F(DuTest, DepthOneGroupsByFirstNameComponent)
@@ -181,11 +181,11 @@ TEST_F(DuTest, DepthOneGroupsByFirstNameComponent)
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE TOPIC\n"
-    "3.5K /sensing\n"
-    "   4 /perception\n"
-    "   0 /silent\n"
-    "3.5K total\n");
+    "SIZE      % TOPIC\n"
+    "3.5K  99.9% /sensing\n"
+    "   4   0.1% /perception\n"
+    "   0   0.0% /silent\n"
+    "3.5K 100.0% total\n");
 }
 
 TEST_F(DuTest, DepthTwoGroupsBySecondNameComponent)
@@ -205,12 +205,12 @@ TEST_F(DuTest, DepthTwoGroupsBySecondNameComponent)
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE TOPIC\n"
-    "2048 /sensing/lidar\n"
-    "1536 /sensing/camera\n"
-    "   4 /perception/objects\n"
-    "   0 /silent\n"
-    "3588 total\n");
+    "SIZE      % TOPIC\n"
+    "2048  57.1% /sensing/lidar\n"
+    "1536  42.8% /sensing/camera\n"
+    "   4   0.1% /perception/objects\n"
+    "   0   0.0% /silent\n"
+    "3588 100.0% total\n");
 }
 
 TEST_F(DuTest, DepthZeroPrintsOnlyTotal)
@@ -227,8 +227,8 @@ TEST_F(DuTest, DepthZeroPrintsOnlyTotal)
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE TOPIC\n"
-    "3.5K total\n");
+    "SIZE      % TOPIC\n"
+    "3.5K 100.0% total\n");
 }
 
 TEST_F(DuTest, DepthAggregatesFilteredTopics)
@@ -247,9 +247,9 @@ TEST_F(DuTest, DepthAggregatesFilteredTopics)
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE TOPIC\n"
-    "3.5K /sensing\n"
-    "3.5K total\n");
+    "SIZE      % TOPIC\n"
+    "3.5K 100.0% /sensing\n"
+    "3.5K 100.0% total\n");
 }
 
 TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
@@ -266,9 +266,9 @@ TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE TOPIC\n"
-    "1.5K /sensing/camera/image\n"
-    "1.5K total\n");
+    "SIZE      % TOPIC\n"
+    "1.5K 100.0% /sensing/camera/image\n"
+    "1.5K 100.0% total\n");
 }
 
 TEST_F(DuTest, TopicFilterKeepsZeroMessageTopic)
@@ -282,12 +282,14 @@ TEST_F(DuTest, TopicFilterKeepsZeroMessageTopic)
   int exit_code = -1;
   const auto out = run_captured(args, exit_code);
 
+  // Nothing was reported, so there is no total to take a share of: every
+  // percentage reads 0.0%, the `total` row included.
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE TOPIC\n"
-    "   0 /silent\n"
-    "   0 total\n");
+    "SIZE    % TOPIC\n"
+    "   0 0.0% /silent\n"
+    "   0 0.0% total\n");
 }
 
 TEST_F(DuTest, UnknownTopicSelectorFails)

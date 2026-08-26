@@ -1,9 +1,10 @@
 # `bagwiz du`
 
 Report each topic's total serialized payload size in a single ROS 2 rosbag,
-in the spirit of du(1): one row per topic sorted by size descending, plus a
-closing `total` row. Sizes print in 1024-based human-readable units by
-default (`-b` for raw byte counts). ROS 1 `*.bag` inputs are not supported.
+in the spirit of du(1): one row per topic sorted by size descending, each
+row carrying that size's share of the reported total, plus a closing `total`
+row. Sizes print in 1024-based human-readable units by default (`-b` for raw
+byte counts). ROS 1 `*.bag` inputs are not supported.
 
 ## Usage
 
@@ -43,17 +44,23 @@ A table written to `stdout`, sorted by size descending (ties broken by topic
 name), with a `total` row last:
 
 ```text
-  SIZE TOPIC
-768.0M /sensing/lidar
-100.0M /sensing/camera
-   512 /tf_static
-868.0M total
+  SIZE      % TOPIC
+768.0M  88.5% /sensing/lidar
+100.0M  11.5% /sensing/camera
+   512   0.0% /tf_static
+868.0M 100.0% total
 ```
 
 - `SIZE` is the sum of the topic's uncompressed serialized payload bytes —
   the logical message size, not the on-disk footprint. Per-topic chunk
   compression makes the latter unrecoverable, so a compressed bag's reported
   total can exceed its file size.
+- `%` is the row's share of the reported `total`, to one decimal. The
+  denominator is the total actually reported, so `-t/--topics` narrows it
+  too and the selected topics still add up to `100.0%`. Rounding is per row,
+  so the column need not sum to exactly `100.0%`. A selection that reports
+  nothing has no total to divide by: every share then reads `0.0%`, the
+  `total` row included.
 - Topics declared in the bag but carrying no messages are listed with `0`.
 - Column widths are computed from the actual data, so long sizes / topic
   names do not push later columns out of alignment.
