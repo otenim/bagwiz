@@ -290,6 +290,31 @@ TEST_F(CompressTest, Sqlite3SingleFileOutputRejectsCompression)
   EXPECT_EQ(bagwiz::commands::run_compress(args), 1);
 }
 
+// The rejection above has to land before the output path is claimed. Under
+// -w/--overwrite the claim clears whatever sits there, so a rejection that
+// fired afterwards would delete the user's bag and put nothing in its place.
+TEST_F(CompressTest, RejectedSingleFileCompressionLeavesTheExistingOutputIntact)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  for (const char * mode : {"message", "file"}) {
+    const auto out_path = tmp_dir_ / (std::string("existing_") + mode + ".db3");
+    auto seed = make_args(in_path, out_path);
+    seed.mode = "none";
+    ASSERT_EQ(bagwiz::commands::run_compress(seed), 0) << mode;
+    const auto before = std::filesystem::file_size(out_path);
+
+    auto args = make_args(in_path, out_path);
+    args.mode = mode;
+    args.overwrite = true;
+    EXPECT_EQ(bagwiz::commands::run_compress(args), 1) << mode;
+
+    ASSERT_TRUE(std::filesystem::exists(out_path)) << mode << ": the rejected run deleted it";
+    EXPECT_EQ(std::filesystem::file_size(out_path), before) << mode;
+    expect_fixture_intact(out_path);
+  }
+}
+
 TEST_F(CompressTest, CodecWithoutCompressionRejected)
 {
   const auto in_path = build_input(tmp_dir_);

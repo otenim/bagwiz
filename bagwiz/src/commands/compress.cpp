@@ -84,9 +84,10 @@ int run_compress(const CompressArgs & args)
   // costs a partial output.
   std::string mode = args.mode;
   if (mode == "auto") {
-    // MCAP's only compression shape is its storage-native chunk compression
-    // (declared to rosbag2 as FILE-mode); for SQLite3 the per-message mode
-    // is the default, matching `ros2 bag compress`.
+    // MCAP's only compression shape is its storage-native chunk compression,
+    // which `--mode file` names here even though it stays out of the
+    // metadata; for SQLite3 the per-message mode is the default, matching
+    // `ros2 bag compress`.
     mode = (target_format == io::Format::Mcap) ? "file" : "message";
   }
   if (mode == "none" && args.codec != "zstd") {
@@ -111,6 +112,37 @@ int run_compress(const CompressArgs & args)
     }
   }
 
+  io::CreateOptions copts;
+  copts.format = target_format;
+  copts.layout = io::Layout::Auto;  // factory picks SingleFile if extension matches
+  if (target_format == io::Format::Mcap) {
+    copts.mcap_compression = (mode == "none") ? "none" : args.codec;
+    copts.mcap_compression_level = args.level;
+  } else {
+    copts.sqlite3_compression_mode = mode;
+    copts.sqlite3_compression_format = (mode == "none") ? "none" : "zstd";
+    copts.sqlite3_compression_level = args.level;
+  }
+
+  // The sqlite3 writer factory refuses compression on a single-file output,
+  // but it only gets to say so from inside open_write() — after
+  // prepare_output_path() has already cleared whatever -w/--overwrite was
+  // pointed at, which would destroy an existing bag and put nothing in its
+  // place. Ask resolve_write_layout() for the same decision here instead, so
+  // the run stops while the output is still untouched. The factory keeps its
+  // own throw as the backstop for callers that do not pre-check.
+  if (
+    target_format == io::Format::Sqlite3 && mode != "none" &&
+    io::resolve_write_layout(args.output_path, copts).layout == io::Layout::SingleFile) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "--mode %s needs a directory output: the compression mode is declared in "
+      "metadata.yaml, which the single sqlite3 file '%s' does not carry. Drop the .db3 "
+      "extension to write a directory-layout bag, or pass --mode none",
+      mode.c_str(), args.output_path.c_str());
+    return 1;
+  }
+
   // Refuse an occupied output path before opening the input. The check
   // removes nothing; prepare_output_path() does the removal once the run is
   // committed to writing.
@@ -129,18 +161,6 @@ int run_compress(const CompressArgs & args)
   if (const auto r = core::prepare_output_path(args.output_path, args.overwrite); !r.ok) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
     return 1;
-  }
-
-  io::CreateOptions copts;
-  copts.format = target_format;
-  copts.layout = io::Layout::Auto;  // factory picks SingleFile if extension matches
-  if (target_format == io::Format::Mcap) {
-    copts.mcap_compression = (mode == "none") ? "none" : args.codec;
-    copts.mcap_compression_level = args.level;
-  } else {
-    copts.sqlite3_compression_mode = mode;
-    copts.sqlite3_compression_format = (mode == "none") ? "none" : "zstd";
-    copts.sqlite3_compression_level = args.level;
   }
 
   std::unique_ptr<io::BagWriter> writer;
