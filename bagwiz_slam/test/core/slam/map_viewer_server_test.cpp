@@ -93,9 +93,10 @@ TEST_F(MapViewerServer, ServesViewerModule)
   const auto res = client.Get("/map_viewer.js");
   ASSERT_TRUE(res);
   EXPECT_EQ(res->status, 200);
-  EXPECT_NE(res->body.find("PCDLoader"), std::string::npos);
-  // The viewer module pulls the overlay widgets from a sibling module, so the
-  // compiled JS must reference it (and the server must serve it; see below).
+  // The viewer module pulls the PCD reader and the overlay widgets from sibling
+  // modules, so the compiled JS must reference both (and the server must serve
+  // them; see below).
+  EXPECT_NE(res->body.find("map_pcd.js"), std::string::npos);
   EXPECT_NE(res->body.find("map_viewer_overlay.js"), std::string::npos);
 }
 
@@ -106,6 +107,19 @@ TEST_F(MapViewerServer, ServesColormapsModule)
   ASSERT_TRUE(res);
   EXPECT_EQ(res->status, 200);
   EXPECT_NE(res->body.find("sampleColormap"), std::string::npos);
+}
+
+// The PCD reader is a module of its own because three.js's PCDLoader decodes a
+// whole .pcd to one JavaScript string, which silently yields "" past V8's ~512 M
+// character cap -- i.e. every cloud over ~512 MB, the size `map slam` reaches on
+// a long run. An unserved module would break the viewer on every map.
+TEST_F(MapViewerServer, ServesPcdModule)
+{
+  httplib::Client client("127.0.0.1", port_);
+  const auto res = client.Get("/map_pcd.js");
+  ASSERT_TRUE(res);
+  EXPECT_EQ(res->status, 200);
+  EXPECT_NE(res->body.find("parsePcd"), std::string::npos);
 }
 
 TEST_F(MapViewerServer, ServesOverlayModule)

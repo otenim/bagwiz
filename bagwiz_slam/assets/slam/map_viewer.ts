@@ -15,12 +15,13 @@
 // runtime via the import map in map_viewer.html.
 
 import * as THREE from "three";
-import { PCDLoader } from "three/addons/loaders/PCDLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { COLORMAP_NAMES, DEFAULT_COLORMAP, sampleColormap } from "./map_colormaps.js";
+import type { PcdCloud } from "./map_pcd.js";
+import { parsePcd } from "./map_pcd.js";
 import { createOrientationGizmo, createScaleBar } from "./map_viewer_overlay.js";
 
 // Look up a required element by id; a missing id is a programmer error because
@@ -1061,22 +1062,21 @@ function loadTrajectory(): void {
 // ---------------------------------------------------------------------------
 // Load
 // ---------------------------------------------------------------------------
-function onLoad(points: THREE.Points): void {
-  // PCDLoader resolves to a THREE.Points (geometry plus a default material we
-  // discard); take its geometry and build our own material/Points below.
-  const geometry = points.geometry;
+function onLoad(cloud: PcdCloud): void {
+  // Only the positions become a geometry attribute; the scalars stay on the CPU
+  // (they drive the colormap, never a shader) so they cost no GPU memory, which
+  // matters on the tens-of-millions-of-points maps `map slam` writes.
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(cloud.position, 3));
   state.geometry = geometry;
-  const position = geometry.getAttribute("position");
-  state.positions = position.array;
-  state.count = position.count;
-  const intensityAttr = geometry.getAttribute("intensity");
-  state.intensity = intensityAttr ? intensityAttr.array : null;
+  state.positions = cloud.position;
+  state.count = cloud.count;
+  state.intensity = cloud.intensity;
 
-  // PCDLoader exposes an rgb field (map slam --color) as a normalized 'color'
-  // attribute; keep a copy before installing our own colormap buffer under the
-  // same attribute name, and default to showing the true colors.
-  const rgbAttr = geometry.getAttribute("color");
-  state.rgb = rgbAttr ? Float32Array.from(rgbAttr.array) : null;
+  // The cloud's own rgb field (map slam --color) is kept as-is and shown by
+  // default; `state.colors` below is the separate buffer the colormap writes
+  // into, so the true colors survive switching scalars and back.
+  state.rgb = cloud.color;
   if (state.rgb) {
     state.scalar = "rgb";
   }
@@ -1110,14 +1110,26 @@ function onLoad(points: THREE.Points): void {
 
 loadTrajectory();
 
-const loader = new PCDLoader();
-// PCDLoader natively exposes the optional per-point `intensity` field (present
-// for LiDAR maps) as its own geometry attribute, so it can be selected as a
-// coloring scalar with no extra configuration.
+// FileLoader only fetches (with progress); map_pcd.ts turns the bytes into
+// positions plus the optional per-point `intensity` and `rgb` fields, both of
+// which become coloring scalars in the UI when present.
+const loader = new THREE.FileLoader();
+loader.setResponseType("arraybuffer");
 setStatus("Loading map.pcd…");
 loader.load(
   "map.pcd",
-  onLoad,
+  (data: string | ArrayBuffer) => {
+    // Parsing is where a malformed or unsupported cloud is rejected, so its
+    // error has to reach the status line the same way a failed fetch does.
+    try {
+      setStatus("Parsing map.pcd…");
+      onLoad(parsePcd(data as ArrayBuffer));
+    } catch (error: unknown) {
+      setStatus(
+        `Failed to read map.pcd: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  },
   (event: ProgressEvent) => {
     if (event.lengthComputable) {
       setStatus(`Loading map.pcd… ${Math.round((event.loaded / event.total) * 100)}%`);

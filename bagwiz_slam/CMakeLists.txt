@@ -338,6 +338,7 @@ if(BAGWIZ_WITH_MAP_VIEWER)
   file(READ "${_viewer_js_dir}/map_viewer.js" VIEWER_JS)
   file(READ "${_viewer_js_dir}/map_colormaps.js" VIEWER_COLORMAPS)
   file(READ "${_viewer_js_dir}/map_viewer_overlay.js" VIEWER_OVERLAY)
+  file(READ "${_viewer_js_dir}/map_pcd.js" VIEWER_PCD)
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/map_viewer_assets.hpp.in"
     "${_viewer_gen_dir}/bagwiz/core/slam/map_viewer_assets.hpp"
@@ -346,6 +347,7 @@ if(BAGWIZ_WITH_MAP_VIEWER)
     "${_viewer_assets_dir}/map_viewer.html"
     "${_viewer_assets_dir}/map_viewer.ts"
     "${_viewer_assets_dir}/map_colormaps.ts"
+    "${_viewer_assets_dir}/map_pcd.ts"
     "${_viewer_assets_dir}/map_viewer_overlay.ts"
     "${_viewer_assets_dir}/tsconfig.json")
 
