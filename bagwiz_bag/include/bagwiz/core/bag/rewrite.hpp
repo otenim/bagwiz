@@ -18,18 +18,20 @@
 
 // The shared "-o vs in-place" dispatch every rewrite-style command
 // (topic drop/keep/rename, cam-info replace/recompute-p,
-// pcd concat/undistort, tf static cp, tf static join, traj join) runs after
-// validating its arguments:
+// pcd concat/undistort, tf static cp, tf static join, traj join, compress)
+// runs after validating its arguments:
 //
 //   * with -o: guard the output path (prepare_output_path), then run the
 //     command's pass with a writer factory targeting the output path.
 //   * without -o: rewrite <input> atomically via write_bag_inplace, running
-//     the same pass against the sibling tmp path with the input's storage
-//     format and layout pinned (the tmp suffix defeats Auto detection), and
-//     abort the swap when the pass reports failure.
+//     the same pass against the staged tmp path with the input's storage
+//     format and layout pinned (a directory bag's path carries no extension
+//     for Auto to resolve from, and Auto would fall through to the
+//     Directory + Mcap default), and abort the swap when the pass reports
+//     failure.
 //
 // Centralising the dispatch keeps the clobber policy, the Format::Auto guard,
-// the mcap_compression override, and the pass-status-to-exception translation
+// the compression overrides, and the pass-status-to-exception translation
 // identical across commands. The pass itself stays with the command.
 namespace bagwiz::core
 {
@@ -58,8 +60,19 @@ struct BagRewriteOptions
   // output inherits the input's storage format while a .mcap/.db3 extension
   // still picks a single-file backend. When false, Format::Auto /
   // Layout::Auto is used and the factory resolves purely from the output
-  // path's extension.
+  // path's extension. Ignored when output_format pins the format outright.
   bool inherit_output_format = false;
+
+  // -o mode only: pin the output's storage format outright, leaving only the
+  // layout to the output path's extension. For commands that resolve the
+  // target backend themselves and must not have that decision re-derived
+  // here — `compress --storage` outranks both the output extension and the
+  // input's format, an order create_options_inheriting_format cannot express.
+  // Format::Auto (the default) hands the choice back to
+  // inherit_output_format. Ignored in in-place mode, where the input's own
+  // storage is preserved and the command is expected to have rejected a
+  // conflicting request already.
+  io::Format output_format = io::Format::Auto;
 
   // Overrides for the writer's mcap chunk codec ("zstd", "lz4", "none") and
   // encoder level ("fastest", "fast", "default", "slow", "slowest"), applied
@@ -72,6 +85,17 @@ struct BagRewriteOptions
   // preserves the input's chunk compression instead.
   std::string mcap_compression = "none";
   std::string mcap_compression_level;
+
+  // Overrides for the sqlite3 writer's rosbag2 compression triple: the mode
+  // ("none", "message", "file"), the format ("none", "zstd"), and the encoder
+  // level (the same effort names as mcap_compression_level). Applied in both
+  // modes; an empty string keeps the storage default for that knob. Unlike
+  // mcap_compression these default to empty rather than "none", because the
+  // CreateOptions default is already "no sqlite3 compression" — only a
+  // command that deliberately asks for it (`compress`) sets them.
+  std::string sqlite3_compression_mode;
+  std::string sqlite3_compression_format;
+  std::string sqlite3_compression_level;
 };
 
 // The command's rewrite pass. Receives the writer factory chosen by the

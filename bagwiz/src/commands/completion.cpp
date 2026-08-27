@@ -741,13 +741,13 @@ std::vector<std::string> complete_complete_command(const CompletionRequest & req
   return {};
 }
 
-// `compress -i|--input <bag> -o|--output <bag>` re-encodes a bag with a
-// different compression setup. All its flags are surfaced for any `-` word;
-// <input>/<output> are paths that fall through to the shell's file
-// completion. `--mode`, `--codec`, `--level`, and `--storage` complete their
-// enumerated values.
+// `compress -i|--input <bag> [-o|--output <bag>]` re-encodes a bag with a
+// different compression setup, in place when -o is omitted. All its flags are
+// surfaced for any `-` word; <input>/<output> are paths that fall through to
+// the shell's file completion. `--mode`, `--codec`, `--level`, and
+// `--storage` complete their enumerated values.
 //
-//   compress: `compress`(0) -i|--input <bag> -o|--output <bag>
+//   compress: `compress`(0) -i|--input <bag> [-o|--output <bag>]
 //             [--mode auto|file|message|none] [--codec zstd|lz4]
 //             [--level fastest|fast|default|slow|slowest]
 //             [--storage mcap|sqlite3] [-w|--overwrite]

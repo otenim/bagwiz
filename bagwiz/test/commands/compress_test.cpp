@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <span>
 #include <string>
@@ -52,6 +53,32 @@ const std::vector<std::byte> & payload_bytes()
 std::uintmax_t mcap_shard_bytes(const std::filesystem::path & dir)
 {
   return std::filesystem::file_size(dir / (dir.filename().string() + "_0.mcap"));
+}
+
+// Total bytes of the shards metadata.yaml points at. Unlike mcap_shard_bytes()
+// this makes no assumption about the shard's name: an in-place run stages the
+// new bag under a sibling tmp directory, and the directory writers name their
+// shard after the directory they are handed, so the swapped-in bag carries
+// that tmp's name on its shard.
+std::uintmax_t declared_shard_bytes(const std::filesystem::path & dir)
+{
+  const auto md = bagwiz::io::load_metadata_yaml(dir / "metadata.yaml");
+  std::uintmax_t total = 0;
+  for (const auto & rel : md.relative_file_paths) {
+    total += std::filesystem::file_size(dir / rel);
+  }
+  return total;
+}
+
+// True when an in-place run left its staging directory behind next to `dir`.
+bool inplace_tmp_leftover_beside(const std::filesystem::path & dir)
+{
+  for (const auto & entry : std::filesystem::directory_iterator(dir.parent_path())) {
+    if (entry.path().filename().string().find(".bagwiz-inplace-tmp-") != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bagwiz::io::TopicInfo make_topic(std::string name, std::string type)
@@ -117,6 +144,26 @@ bagwiz::commands::CompressArgs make_args(
   args.input_path = input;
   args.output_path = output;
   return args;
+}
+
+// The -o-less form: the input bag is rewritten in place.
+bagwiz::commands::CompressArgs make_inplace_args(const std::filesystem::path & input)
+{
+  bagwiz::commands::CompressArgs args;
+  args.input_path = input;
+  return args;
+}
+
+// A directory-layout, uncompressed sqlite3 copy of the MCAP fixture, for the
+// cases that need a sqlite3 bag to start from.
+std::filesystem::path build_sqlite3_input(
+  const std::filesystem::path & mcap_input, const std::filesystem::path & path)
+{
+  auto args = make_args(mcap_input, path);
+  args.storage = "sqlite3";
+  args.mode = "none";
+  EXPECT_EQ(bagwiz::commands::run_compress(args), 0);
+  return path;
 }
 
 class CompressTest : public ::testing::Test
@@ -336,6 +383,157 @@ TEST_F(CompressTest, ExistingOutputRequiresOverwrite)
   args.overwrite = true;
   EXPECT_EQ(bagwiz::commands::run_compress(args), 0);
   expect_fixture_intact(out_path);
+}
+
+// ---------------------------------------------------------------------------
+// In-place mode: -o omitted, so <input> is rewritten atomically and keeps its
+// storage backend and layout — only its compression changes.
+// ---------------------------------------------------------------------------
+
+TEST_F(CompressTest, InPlaceCompressesTheInputBagItself)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto before = declared_shard_bytes(in_path);
+
+  auto args = make_inplace_args(in_path);
+  ASSERT_EQ(bagwiz::commands::run_compress(args), 0);
+
+  // Same contract as the -o run, applied to the input path: MCAP chunk
+  // compression, invisible to metadata.yaml's rosbag2 compression pair.
+  const auto md = bagwiz::io::load_metadata_yaml(in_path / "metadata.yaml");
+  EXPECT_EQ(md.storage_identifier, "mcap");
+  EXPECT_TRUE(md.compression_format.empty()) << md.compression_format;
+  EXPECT_TRUE(md.compression_mode.empty()) << md.compression_mode;
+
+  EXPECT_LT(declared_shard_bytes(in_path), before);
+  expect_fixture_intact(in_path);
+  EXPECT_FALSE(inplace_tmp_leftover_beside(in_path));
+}
+
+TEST_F(CompressTest, InPlaceDecompressesWithModeNone)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  auto compress_args = make_inplace_args(in_path);
+  ASSERT_EQ(bagwiz::commands::run_compress(compress_args), 0);
+  const auto compressed = declared_shard_bytes(in_path);
+
+  auto decompress_args = make_inplace_args(in_path);
+  decompress_args.mode = "none";
+  ASSERT_EQ(bagwiz::commands::run_compress(decompress_args), 0);
+
+  EXPECT_GT(declared_shard_bytes(in_path), compressed);
+  expect_fixture_intact(in_path);
+  EXPECT_FALSE(inplace_tmp_leftover_beside(in_path));
+}
+
+TEST_F(CompressTest, InPlacePreservesSqlite3Storage)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto sqlite_path = build_sqlite3_input(in_path, tmp_dir_ / "sqlite_in");
+
+  // No --storage and no output extension to read one off: in place, the
+  // backend comes from the bag itself, so `auto` resolves to sqlite3's
+  // MESSAGE mode rather than MCAP's chunk compression.
+  auto args = make_inplace_args(sqlite_path);
+  ASSERT_EQ(bagwiz::commands::run_compress(args), 0);
+
+  const auto md = bagwiz::io::load_metadata_yaml(sqlite_path / "metadata.yaml");
+  EXPECT_EQ(md.storage_identifier, "sqlite3");
+  EXPECT_EQ(md.compression_format, "zstd");
+  EXPECT_EQ(md.compression_mode, "message");
+  expect_fixture_intact(sqlite_path);
+}
+
+TEST_F(CompressTest, InPlaceRejectsAStorageChange)
+{
+  const auto in_path = build_input(tmp_dir_);
+
+  // Re-encoding an MCAP bag as sqlite3 over its own path would leave the path
+  // naming a backend the bytes no longer are, so --storage may only restate
+  // what the input already is.
+  auto args = make_inplace_args(in_path);
+  args.storage = "sqlite3";
+  EXPECT_EQ(bagwiz::commands::run_compress(args), 1);
+  expect_fixture_intact(in_path);
+
+  // Naming the input's own backend is accepted and behaves like plain -o-less.
+  auto same = make_inplace_args(in_path);
+  same.storage = "mcap";
+  EXPECT_EQ(bagwiz::commands::run_compress(same), 0);
+  expect_fixture_intact(in_path);
+}
+
+// The single-file sqlite3 rejection has to fire in place too: the in-place
+// swap deletes <input> the moment the pass succeeds, so a rejection that
+// only came from the writer factory would already have staged a replacement.
+TEST_F(CompressTest, InPlaceSqlite3SingleFileRejectsCompression)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto single = tmp_dir_ / "single.db3";
+  auto seed = make_args(in_path, single);
+  seed.mode = "none";
+  ASSERT_EQ(bagwiz::commands::run_compress(seed), 0);
+  const auto before = std::filesystem::file_size(single);
+
+  for (const char * mode : {"message", "file"}) {
+    auto args = make_inplace_args(single);
+    args.mode = mode;
+    EXPECT_EQ(bagwiz::commands::run_compress(args), 1) << mode;
+    ASSERT_TRUE(std::filesystem::exists(single)) << mode << ": the rejected run deleted it";
+    EXPECT_EQ(std::filesystem::file_size(single), before) << mode;
+  }
+  expect_fixture_intact(single);
+}
+
+TEST_F(CompressTest, InPlaceRejectsAnInputWithNoDetectableStorage)
+{
+  const auto not_a_bag = tmp_dir_ / "notes.txt";
+  {
+    std::ofstream out(not_a_bag);
+    out << "not a rosbag";
+  }
+
+  // Nothing says what backend to write it back in, and in place there is no
+  // output extension or input bag to fall back on.
+  auto args = make_inplace_args(not_a_bag);
+  EXPECT_EQ(bagwiz::commands::run_compress(args), 1);
+  EXPECT_TRUE(std::filesystem::exists(not_a_bag));
+}
+
+// A user-typed path very often carries a trailing slash ("drive_dir/"), and
+// std::filesystem::path reads that as filename() == "" with parent_path() ==
+// "drive_dir" — i.e. the bag itself is the "parent". The in-place staging has
+// to normalise that away, or it stages inside the very directory it is about
+// to remove.
+TEST_F(CompressTest, InPlaceAcceptsATrailingSlashInputPath)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto with_slash = std::filesystem::path(in_path.string() + "/");
+  const auto before = declared_shard_bytes(in_path);
+
+  auto args = make_inplace_args(with_slash);
+  ASSERT_EQ(bagwiz::commands::run_compress(args), 0);
+
+  ASSERT_TRUE(std::filesystem::is_directory(in_path));
+  EXPECT_LT(declared_shard_bytes(in_path), before);
+  expect_fixture_intact(in_path);
+  EXPECT_FALSE(inplace_tmp_leftover_beside(in_path));
+}
+
+TEST_F(CompressTest, InPlaceLeavesTheInputIntactWhenTheModeIsRejected)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto before = declared_shard_bytes(in_path);
+
+  // MCAP has no per-message mode; the rejection must land before the swap.
+  auto args = make_inplace_args(in_path);
+  args.mode = "message";
+  EXPECT_EQ(bagwiz::commands::run_compress(args), 1);
+
+  EXPECT_EQ(declared_shard_bytes(in_path), before);
+  expect_fixture_intact(in_path);
+  EXPECT_FALSE(inplace_tmp_leftover_beside(in_path));
 }
 
 TEST_F(CompressTest, ExplicitStorageOverridesExtensionInference)
