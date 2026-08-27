@@ -21,6 +21,34 @@
 namespace bagwiz::core
 {
 
+namespace
+{
+
+// Stamp the command's compression choices onto the CreateOptions the branch
+// composed. Shared by both branches so an override behaves identically
+// whether it lands on an -o output or on the in-place tmp; an empty string
+// leaves that knob at the storage default.
+void apply_compression_overrides(io::CreateOptions & copts, const BagRewriteOptions & options)
+{
+  if (!options.mcap_compression.empty()) {
+    copts.mcap_compression = options.mcap_compression;
+  }
+  if (!options.mcap_compression_level.empty()) {
+    copts.mcap_compression_level = options.mcap_compression_level;
+  }
+  if (!options.sqlite3_compression_mode.empty()) {
+    copts.sqlite3_compression_mode = options.sqlite3_compression_mode;
+  }
+  if (!options.sqlite3_compression_format.empty()) {
+    copts.sqlite3_compression_format = options.sqlite3_compression_format;
+  }
+  if (!options.sqlite3_compression_level.empty()) {
+    copts.sqlite3_compression_level = options.sqlite3_compression_level;
+  }
+}
+
+}  // namespace
+
 int run_bag_rewrite(
   const std::filesystem::path & input_path,
   const std::optional<std::filesystem::path> & output_path, bool overwrite,
@@ -36,18 +64,18 @@ int run_bag_rewrite(
     }
     const auto output = *output_path;
     io::CreateOptions copts;
-    if (options.inherit_output_format) {
+    if (options.output_format != io::Format::Auto) {
+      // The command already resolved the backend; only the layout is left to
+      // the output path's extension.
+      copts.format = options.output_format;
+      copts.layout = io::Layout::Auto;
+    } else if (options.inherit_output_format) {
       copts = io::create_options_inheriting_format(input_path, output);
     } else {
       copts.format = io::Format::Auto;
       copts.layout = io::Layout::Auto;
     }
-    if (!options.mcap_compression.empty()) {
-      copts.mcap_compression = options.mcap_compression;
-    }
-    if (!options.mcap_compression_level.empty()) {
-      copts.mcap_compression_level = options.mcap_compression_level;
-    }
+    apply_compression_overrides(copts, options);
     const io::WriterFactory make_writer = [output, copts]() {
       return io::open_write(output, copts);
     };
@@ -64,12 +92,7 @@ int run_bag_rewrite(
     BAGWIZ_LOG_ERROR(options.logger, options.format_unknown_error, input_path.string().c_str());
     return 1;
   }
-  if (!options.mcap_compression.empty()) {
-    inplace_copts.mcap_compression = options.mcap_compression;
-  }
-  if (!options.mcap_compression_level.empty()) {
-    inplace_copts.mcap_compression_level = options.mcap_compression_level;
-  }
+  apply_compression_overrides(inplace_copts, options);
 
   // The pass reports command-level failures via its return value rather than
   // throwing, so capture the status and translate a non-zero exit into a

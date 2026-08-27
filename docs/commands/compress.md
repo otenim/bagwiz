@@ -7,10 +7,14 @@ envelope). `--mode none` reverses any of these back to plain storage.
 Messages are re-encoded wholesale; no topic selection or time windowing is
 applied.
 
+With `-o` the result lands in a new bag and `<input>` is left untouched.
+Without it the bag is rewritten **in place**, keeping its storage backend and
+layout — only its compression changes.
+
 ## Usage
 
 ```text
-bagwiz compress -i <input> -o <output> [OPTIONS]
+bagwiz compress -i <input> [-o <output>] [OPTIONS]
 ```
 
 ## Examples
@@ -18,6 +22,12 @@ bagwiz compress -i <input> -o <output> [OPTIONS]
 ```bash
 # Compress an MCAP bag with zstd chunk compression (the default for MCAP).
 bagwiz compress -i drive_dir/ -o drive_zstd/
+
+# Same thing in place: no -o, so drive_dir/ is replaced by its compressed self.
+bagwiz compress -i drive_dir/
+
+# Decompress in place.
+bagwiz compress -i drive_dir/ --mode none
 
 # Compress with lz4 chunks instead (MCAP only), at the fastest effort.
 bagwiz compress -i drive_dir/ -o drive_lz4/ --codec lz4 --level fastest
@@ -37,12 +47,12 @@ bagwiz compress -i drive_zstd/ -o drive_plain/ --mode none
 | Flag                      | Description                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag2 (directory or single-file). Must exist. Compressed inputs of every supported shape (MCAP chunk compression, MESSAGE-mode, FILE-mode `.db3.zstd` envelope) are read transparently, including a bare `.db3` lifted out of a MESSAGE-mode directory bag — its own `metadata` table carries the declaration.                       |
-| `-o`, `--output <output>` | **Required.** Output rosbag2 directory or single-file (`*.mcap` / `*.db3`). SQLite3 compression (`--mode file` / `message`) requires a directory output: rosbag2 only decompresses when a `metadata.yaml` declares the mode, so a single `.db3` would read back as raw zstd frames without an error.                                                             |
+| `-o`, `--output <output>` | Write the result to this new rosbag2 directory or single-file (`*.mcap` / `*.db3`) instead of rewriting `<input>` in place. SQLite3 compression (`--mode file` / `message`) requires a directory target: rosbag2 only decompresses when a `metadata.yaml` declares the mode, so a single `.db3` would read back as raw zstd frames without an error.             |
 | `--mode <M>`              | Compression mode. One of `auto`, `file`, `message`, `none`. `file`: MCAP chunk compression, or the whole-shard `.db3.zstd` envelope for SQLite3. `message`: per-message zstd frames (SQLite3 only; rejected for MCAP, where rosbag2 defines no per-message mode). `none`: decompress to plain storage. Default: `auto` — `file` for MCAP, `message` for SQLite3. |
 | `--codec <C>`             | Compression codec. One of `zstd`, `lz4`. `lz4` is valid only for MCAP chunk compression; rosbag2 defines zstd alone for SQLite3 storage. Nothing is encoded under `--mode none`, so naming a codec there is rejected. Default: `zstd`. Long-form only.                                                                                                           |
 | `--level <L>`             | Encoder effort. One of `fastest`, `fast`, `default`, `slow`, `slowest`. Maps onto the codec's effort scale (for SQLite3 zstd: 1, 2, the library default, 9, 19 respectively). Default: the codec's own default. Long-form only.                                                                                                                                  |
-| `--storage <S>`           | Target storage backend. One of `mcap`, `sqlite3`. Default: inferred from the output extension; otherwise inherited from the input bag's storage — the same resolution order as [`convert format`](convert.md#storage-backend-resolution). Long-form only.                                                                                                        |
-| `-w`, `--overwrite`       | Replace `<output>` if it already exists. Without this flag, any pre-existing entry at `<output>` (file or directory) stops the run with a clear log line.                                                                                                                                                                                                        |
+| `--storage <S>`           | Target storage backend. One of `mcap`, `sqlite3`. Default: inferred from the `-o` extension; otherwise inherited from the input bag's storage — the same resolution order as [`convert format`](convert.md#storage-backend-resolution). In place the input's backend is preserved, so only a value naming that same backend is accepted. Long-form only.         |
+| `-w`, `--overwrite`       | Replace the `-o` path if it already exists. Without this flag, any pre-existing entry there (file or directory) stops the run with a clear log line. No effect in-place, where `<input>` is replaced by design.                                                                                                                                                  |
 
 ## Compression modes
 
@@ -69,6 +79,29 @@ leaves the pair empty for the same reason, and every output shape this
 command writes is checked against a live rosbag2 by
 `scripts/check-rosbag2-compat.sh`.
 
+## In-place mode
+
+Omitting `-o` rewrites `<input>` itself. The new bag is staged in a sibling
+temporary path and swapped over `<input>` only after the re-encode has
+finished and closed cleanly, so any failure along the way — an unreadable
+message, a rejected flag combination, a full disk — leaves the original bag
+untouched. The swap itself is a single `remove` + `rename`: a crash inside
+that window leaves no bag at `<input>`, which is why `-o` exists for runs that
+cannot tolerate it.
+
+Because the bag is written back over its own path, in-place mode preserves the
+input's storage backend and layout:
+
+- `--storage` may only name the backend `<input>` already uses. Changing
+  backends in place would leave the path — and, for a single-file bag, its
+  extension — naming storage the bytes no longer are, so it is rejected with a
+  pointer to `-o`.
+- A single-file `.db3` input still cannot take `--mode message` / `file`, for
+  the same reason a single-file `-o` target cannot: only a directory bag's
+  `metadata.yaml` can declare the mode. Use `-o <directory>` instead.
+- An input whose backend cannot be auto-detected is rejected: there is no
+  output extension to read the target storage off.
+
 ## Performance
 
 The re-encode streams every message through the decoded pipeline; nothing is
@@ -84,3 +117,8 @@ machines with free temp space roughly the size of the decompressed database
 | ---- | ------------------------------------ |
 | `0`  | Success.                             |
 | `1`  | Failed — check stderr for the cause. |
+
+In in-place mode a non-zero exit means the swap never happened and `<input>`
+is exactly as it was, with one documented exception: a failure of the final
+`rename` itself, which reports that the original bag has already been
+removed.

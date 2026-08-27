@@ -9,6 +9,7 @@
 #include "bagwiz/core/bag/rewrite.hpp"
 
 #include "bagwiz/io/bag_io.hpp"
+#include "bagwiz/io/metadata_yaml.hpp"
 
 #include <mcap/reader.hpp>
 
@@ -368,6 +369,76 @@ TEST(BagRewriteOptionsDefaults, McapCompressionDefaultsToNone)
   // new command that never touches the field still writes uncompressed.
   EXPECT_EQ(bagwiz::core::BagRewriteOptions{}.mcap_compression, "none");
   EXPECT_TRUE(bagwiz::core::BagRewriteOptions{}.mcap_compression_level.empty());
+}
+
+TEST(BagRewriteOptionsDefaults, Sqlite3CompressionAndOutputFormatDefaultToUnset)
+{
+  // Mirror image of the mcap default above: the sqlite3 triple stays empty so
+  // a command that never asks for sqlite3 compression writes plain shards,
+  // and Format::Auto leaves the output backend to inherit/extension
+  // resolution.
+  const bagwiz::core::BagRewriteOptions defaults;
+  EXPECT_TRUE(defaults.sqlite3_compression_mode.empty());
+  EXPECT_TRUE(defaults.sqlite3_compression_format.empty());
+  EXPECT_TRUE(defaults.sqlite3_compression_level.empty());
+  EXPECT_EQ(defaults.output_format, bagwiz::io::Format::Auto);
+}
+
+TEST_F(RewriteTest, OutputModeExplicitFormatOutranksTheOutputExtension)
+{
+  const auto input = tmp_dir_ / "input.mcap";
+  const auto output = tmp_dir_ / "output.db3";
+  seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
+  // `compress --storage mcap` shape: the command already picked the backend,
+  // so the .db3 extension may only decide the layout.
+  options_.output_format = bagwiz::io::Format::Mcap;
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_replacement_pass),
+    0);
+
+  EXPECT_FALSE(std::filesystem::is_directory(output));
+  EXPECT_EQ(bagwiz::io::detect_format(output), bagwiz::io::Format::Mcap);
+}
+
+TEST_F(RewriteTest, OutputModeSqlite3CompressionOverridesReachTheWriter)
+{
+  const auto input = tmp_dir_ / "input_db3";
+  const auto output = tmp_dir_ / "output_dir";
+  seed_bag(input, bagwiz::io::Format::Sqlite3, bagwiz::io::Layout::Directory);
+  options_.output_format = bagwiz::io::Format::Sqlite3;
+  options_.sqlite3_compression_mode = "message";
+  options_.sqlite3_compression_format = "zstd";
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_replacement_pass),
+    0);
+
+  const auto md = bagwiz::io::load_metadata_yaml(output / "metadata.yaml");
+  EXPECT_EQ(md.compression_mode, "message");
+  EXPECT_EQ(md.compression_format, "zstd");
+}
+
+TEST_F(RewriteTest, InPlaceSqlite3CompressionOverridesReachTheWriter)
+{
+  const auto input = tmp_dir_ / "input_db3";
+  seed_bag(input, bagwiz::io::Format::Sqlite3, bagwiz::io::Layout::Directory);
+  options_.sqlite3_compression_mode = "message";
+  options_.sqlite3_compression_format = "zstd";
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, std::nullopt, /*overwrite=*/false, options_, write_replacement_pass),
+    0);
+
+  // create_options_preserving_storage pins format/layout and leaves the
+  // compression knobs to the override, exactly as the -o path does.
+  const auto md = bagwiz::io::load_metadata_yaml(input / "metadata.yaml");
+  EXPECT_EQ(md.compression_mode, "message");
+  EXPECT_EQ(md.compression_format, "zstd");
+  EXPECT_FALSE(tmp_leftover_in(tmp_dir_));
 }
 
 TEST_F(RewriteTest, OutputModeDisablingCompressionWritesUncompressedChunks)
