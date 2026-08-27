@@ -13,6 +13,7 @@
 #include "bagwiz/core/pointcloud/overlay.hpp"
 #include "bagwiz/core/pointcloud/scan_pattern.hpp"
 #include "bagwiz/core/video/video_encoder.hpp"
+#include "movify_output_size.hpp"      // NOLINT(build/include_subdir) src-local shared header
 #include "movify_pcd_scan_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "movify_video_common.hpp"     // NOLINT(build/include_subdir) src-local shared header
 
@@ -129,6 +130,14 @@ int run_movify_pcd_scan(const MovifyPcdScanArgs & args)
   }
   if (const auto err = validate_video_output_path(args.output_path, args.overwrite); !err.empty()) {
     return 1;
+  }
+  // The canvas is exactly what --width/--height ask for, so the size is known
+  // before any work starts — unlike `movify cam`, which cannot know it until
+  // the first frame fixes the grid's cell size.
+  if (const auto warning =
+        oversized_output_warning(args.width, args.height, /*detail=*/"", "Lower --width/--height.");
+      warning.has_value()) {
+    BAGWIZ_LOG_WARN(kLogger, "%s", warning->c_str());
   }
 
   // Pass 1: derive the cloud rate from the topic's message timestamps.

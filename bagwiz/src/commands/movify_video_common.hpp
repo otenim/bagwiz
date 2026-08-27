@@ -370,6 +370,7 @@ public:
   [[nodiscard]] std::uint32_t cell_height() const { return cell_h_; }
   [[nodiscard]] std::uint32_t width() const { return grid_.cols * cell_w_; }
   [[nodiscard]] std::uint32_t height() const { return grid_.rows * cell_h_; }
+  [[nodiscard]] GridSpec grid() const { return grid_; }
 
   // Black out the whole canvas for a new output frame.
   void clear();

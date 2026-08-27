@@ -142,6 +142,10 @@ With several `-t` topics, each topic occupies one grid cell in argument order
   run, as in the single-view case); secondary views re-fit automatically.
 - A topic that carries no messages at all stops the run with an error, rather
   than silently rendering a black cell.
+- The composed size is the cell size multiplied by the grid, so it grows faster
+  than the topic count suggests: nine 1080p cameras on a 3x3 grid compose a
+  5760x3240 video. A run reports a composed size above 4K — see
+  [Oversized outputs](#oversized-outputs).
 
 ### Frame rate
 
@@ -230,7 +234,7 @@ bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --rang
 | `-t`, `--topic <topic>`   | **Required.** `sensor_msgs/msg/PointCloud2` topic to render. A literal topic name, not a glob. The topic must carry a per-point time field (see below).                                                   |
 | `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                   |
 | `--view <view>`           | Projection space: `3d` (perspective view from a fixed camera looking at the sensor) or `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y). Default: `3d`. Long-form only.      |
-| `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. Long-form only.                                                                                                                      |
+| `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. A canvas above 4K is reported, not rejected — see [Oversized outputs](#oversized-outputs). Long-form only.                           |
 | `--height <px>`           | Output height in pixels (range: 2-4320). Must be even. Default: 720. Long-form only.                                                                                                                      |
 | `--fps <f>`               | Output frame rate in fps (range: 1-240). Each sweep spans round(`--fps` / (cloud rate x `--speed`)) video frames (at least 1), so a higher value gives a smoother animation. Default: 60. Long-form only. |
 | `--speed <x>`             | Playback speed as a fraction of real time: 1.0 plays each sweep in its recorded duration, 0.1 slows the animation to one tenth (range: 0.001-100). Default: 0.1. Long-form only.                          |
@@ -271,6 +275,26 @@ frames, so the video timeline is not disturbed. Dimensions must be even (the
 Clouds are parsed and encoded one at a time; the video is written to a
 temporary file and atomically moved into place on success. A failed run leaves
 no partial output or leftover temporary file.
+
+## Oversized outputs
+
+Neither leaf caps the output size, but both report one large enough to be
+worth a second look: when the output exceeds 3840x2160 (4K UHD, 8,294,400
+pixels), the run logs a warning naming the actual size and continues.
+
+```text
+[WARN] output is 5760x3240 (3x3 grid of 1920x1080 cells, 18.7 Mpx), larger than
+3840x2160; encoding will be slow and the output file large. Pass --width to cap
+the output width, or --resize to scale the cells down.
+```
+
+The test is on the pixel product, not on either dimension, so a tall, narrow
+output is judged by what it actually costs to encode. A 2x2 grid of 1080p views
+lands exactly on 4K and stays quiet.
+
+`cam` cannot know its size until the first frame fixes the cell size, so its
+warning appears once decoding has begun; `scan` takes its size straight from
+`--width`/`--height` and reports before any work starts.
 
 ## Exit status
 

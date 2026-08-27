@@ -325,6 +325,44 @@ TEST_F(MovifyPcdScanTest, RunOverwriteReplacesExistingOutput)
   EXPECT_EQ(probe.frame_count, 180);
 }
 
+// `scan` reaches an oversized canvas through explicit --width/--height, so the
+// same guard reports it — before pass 1, since the size is known from the flags
+// alone. One frame at 3842x2160 keeps the encode cheap.
+TEST_F(MovifyPcdScanTest, RunWarnsWhenTheOutputIsOversized)
+{
+  const auto bag = build_bag(dir_, 2);
+  MovifyPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
+  args.fps = 1;
+  args.speed = 1.0;
+  args.width = 3842;  // 3842x2160 = 8.30 Mpx, just past 4K's 8.29 Mpx.
+  args.height = 2160;
+
+  ::testing::internal::CaptureStderr();
+  ASSERT_EQ(run_movify_pcd_scan(args), 0);
+  const std::string err = ::testing::internal::GetCapturedStderr();
+
+  EXPECT_NE(err.find("3842x2160"), std::string::npos) << err;
+  EXPECT_NE(err.find("larger than 3840x2160"), std::string::npos) << err;
+  // scan has no grid to explain, so the parenthetical carries only the count.
+  EXPECT_NE(err.find("(8.3 Mpx)"), std::string::npos) << err;
+}
+
+TEST_F(MovifyPcdScanTest, RunStaysQuietForAnOrdinaryOutputSize)
+{
+  const auto bag = build_bag(dir_, 2);
+  MovifyPcdScanArgs args{bag, kPcdTopic, dir_ / "out.mp4", false};
+  args.fps = 1;
+  args.speed = 1.0;
+  args.width = 320;
+  args.height = 240;
+
+  ::testing::internal::CaptureStderr();
+  ASSERT_EQ(run_movify_pcd_scan(args), 0);
+  const std::string err = ::testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(err.find("larger than"), std::string::npos) << err;
+}
+
 TEST(ScanFramesPerSweep, FramesPerSweepFromFpsAndSpeed)
 {
   // 10 Hz clouds, 60 fps, speed 0.1 -> 60 frames per sweep.

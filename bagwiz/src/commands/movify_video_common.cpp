@@ -17,9 +17,12 @@
 #include "bagwiz/core/pointcloud/projector_helpers.hpp"
 #include "bagwiz/core/tf/tf_buffer_loader.hpp"
 #include "bagwiz/io/topics.hpp"
+#include "movify_output_size.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+
+#include <fmt/core.h>
 
 #include <algorithm>
 #include <charconv>
@@ -240,6 +243,28 @@ std::optional<std::vector<ViewState>> build_view_states(
 // message nearest the primary's bag record time. Selected frames are resized
 // to their render size here, so render_tick() never rescales. Returns false
 // on a logged failure.
+// Report a composed output large enough that the user probably did not intend
+// it. Called once per run, at the point the first primary frame fixes the cell
+// size and with it the output resolution for the rest of the encode — the
+// earliest moment it is knowable, since the pre-flight checks never decode a
+// frame. A single view names no grid: "1x1 grid of WxH cells" would only
+// restate the size that precedes it.
+void warn_if_output_oversized(const GridCanvas & canvas)
+{
+  const GridSpec grid = canvas.grid();
+  const std::string detail = (grid.cols * grid.rows > 1U)
+                               ? fmt::format(
+                                   "{}x{} grid of {}x{} cells", grid.cols, grid.rows,
+                                   canvas.cell_width(), canvas.cell_height())
+                               : std::string{};
+  const auto warning = oversized_output_warning(
+    canvas.width(), canvas.height(), detail,
+    "Pass --width to cap the output width, or --resize to scale the cells down.");
+  if (warning.has_value()) {
+    BAGWIZ_LOG_WARN(kLogger, "%s", warning->c_str());
+  }
+}
+
 bool prepare_tick(
   const io::RawMessage & raw, std::vector<ViewState> & states, GridCanvas & canvas,
   std::uint64_t frame_index, TickData & out)
@@ -277,6 +302,7 @@ bool prepare_tick(
     // output size for the whole run.
     if (!canvas.ready()) {
       canvas.set_cell_size(geom->width, geom->height);
+      warn_if_output_oversized(canvas);
     }
     if (!resize_frame(*primary, geom->width, geom->height)) {
       return false;
@@ -516,6 +542,7 @@ int run_encode_loop_parallel(
           // and with it the composed output size for the whole run — before
           // any other view's job starts (the caller waits for this job first).
           canvas.set_cell_size(prepared->width, prepared->height);
+          warn_if_output_oversized(canvas);
           canvas.clear();
         }
         if (!resize_frame(*decoded, prepared->width, prepared->height)) {
