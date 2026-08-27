@@ -106,9 +106,9 @@ private:
       });
     add_topic_option(
       *sub, "--cam-info", video_args_.camera_info_entries,
-      "CameraInfo topic for --rectify and --pcd: a bare <info_topic> applies to every view, "
-      "an <image_topic>=<info_topic> entry overrides one view. Both halves are literal topic "
-      "names. Views without an entry derive it from the image topic name following the "
+      "CameraInfo topic for rectification and --pcd: a bare <info_topic> applies to every "
+      "view, an <image_topic>=<info_topic> entry overrides one view. Both halves are literal "
+      "topic names. Views without an entry derive it from the image topic name following the "
       "standard /camera_info suffix rules. Repeatable.",
       TopicSlotSpec{
         .allowed_types = kImageTopicTypes,
@@ -122,15 +122,14 @@ private:
         return std::string{};
       })
       ->expected(-1);
-    sub
-      ->add_flag(
-        "--rectify,!--no-rectify", video_args_.rectify,
-        "Apply distortion correction to each frame using each view's resolved CameraInfo "
-        "(on by default; --no-rectify opts out, including for --pcd views). A view whose "
-        "camera-info topic cannot be derived renders unrectified with a warning — pass "
-        "--cam-info to name it explicitly. Point-cloud projection always requires a "
-        "camera-info topic.")
-      ->default_val(true);
+    sub->add_flag(
+      "!--no-rectify", video_args_.rectify,
+      "Disable distortion correction (default on): each frame is otherwise rectified using "
+      "the view's resolved CameraInfo. Applies to --pcd views too, whose points then "
+      "project onto the raw image with the lens distortion applied. A view whose "
+      "camera-info topic cannot be derived renders unrectified with a warning — pass "
+      "--cam-info to name it explicitly. Point-cloud projection always requires a "
+      "camera-info topic.");
     sub
       ->add_option(
         "--resize", video_args_.resize_scale,

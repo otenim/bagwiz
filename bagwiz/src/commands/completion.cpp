@@ -1315,9 +1315,8 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
       return matching(
         with_help({"--alpha", "--cam-info",   "--field",      "--grid",   "--input",
                    "--max",   "--min",        "--no-rectify", "--output", "--overwrite",
-                   "--pcd",   "--point-size", "--rectify",    "--resize", "--scheme",
-                   "--topic", "--width",      "-i",           "-o",       "-t",
-                   "-w"}),
+                   "--pcd",   "--point-size", "--resize",     "--scheme", "--topic",
+                   "--width", "-i",           "-o",           "-t",       "-w"}),
         current);
     }
     if (verb == "scan") {

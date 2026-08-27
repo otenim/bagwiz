@@ -56,9 +56,10 @@ struct MovifyVideoArgs
   // entry derive the topic from the image topic name.
   std::vector<std::string> camera_info_entries;
   // Rectify each frame (OpenCV lens-distortion remap) using the resolved
-  // camera info. On by default; --no-rectify opts out. A view whose camera
-  // info cannot be resolved renders unrectified with a warning, unless it
-  // projects point clouds (those always require a camera info).
+  // camera info. Requested unless --no-rectify opts out; the CLI has no
+  // opt-in flag, since this initializer already carries the default. A view
+  // whose camera info cannot be resolved renders unrectified with a warning,
+  // unless it projects point clouds (those always require a camera info).
   // "rectify" is the image-side term throughout bagwiz; the point-cloud
   // motion correction keeps the name `pcd undistort`.
   bool rectify = true;

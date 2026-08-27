@@ -1401,4 +1401,30 @@ TEST(MovifyVideoCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
   EXPECT_TRUE(pcd_slot->spec.pair_selector_rhs);
 }
 
+// Rectification is requested by default, so the CLI carries the opt-out alone:
+// there is no --rectify to ask for what the command already does. That leaves
+// MovifyVideoArgs::rectify's initializer as the sole carrier of the default —
+// CLI11 leaves a negated-only flag's target untouched when the flag is absent
+// — so both halves are pinned here.
+TEST(MovifyVideoCliWiring, RectificationIsOptOutOnly)
+{
+  bagwiz::commands::Command * movify_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "movify") {
+      movify_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(movify_cmd, nullptr);
+
+  CLI::App app{"movify"};
+  movify_cmd->configure(app);
+
+  auto * cam_sub = app.get_subcommand_no_throw("cam");
+  ASSERT_NE(cam_sub, nullptr);
+  EXPECT_NE(cam_sub->get_option_no_throw("--no-rectify"), nullptr);
+  EXPECT_EQ(cam_sub->get_option_no_throw("--rectify"), nullptr);
+  EXPECT_TRUE(MovifyVideoArgs{}.rectify);
+}
+
 }  // namespace
