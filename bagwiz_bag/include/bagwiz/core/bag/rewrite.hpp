@@ -24,9 +24,11 @@
 //   * with -o: guard the output path (prepare_output_path), then run the
 //     command's pass with a writer factory targeting the output path.
 //   * without -o: rewrite <input> atomically via write_bag_inplace, running
-//     the same pass against the sibling tmp path with the input's storage
-//     format and layout pinned (the tmp suffix defeats Auto detection), and
-//     abort the swap when the pass reports failure.
+//     the same pass against the staged tmp path with the input's storage
+//     format and layout pinned (a directory bag's path carries no extension
+//     for Auto to resolve from, and Auto would fall through to the
+//     Directory + Mcap default), and abort the swap when the pass reports
+//     failure.
 //
 // Centralising the dispatch keeps the clobber policy, the Format::Auto guard,
 // the mcap_compression override, and the pass-status-to-exception translation

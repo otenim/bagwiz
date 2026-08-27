@@ -54,9 +54,11 @@ int run_bag_rewrite(
     return pass(make_writer, RewriteTarget{output, copts});
   }
 
-  // In-place mode: rewrite <input> atomically via a sibling tmp, preserving
-  // its storage format and layout. The tmp path carries a synthetic suffix
-  // that Format::Auto cannot interpret, so pin both explicitly.
+  // In-place mode: rewrite <input> atomically via a staged sibling copy,
+  // preserving its storage format and layout. The staged path keeps the
+  // bag's own name, but a directory bag's name carries no extension for
+  // Format::Auto to resolve from (it would fall through to the
+  // Directory + Mcap default), so pin both explicitly.
   auto inplace_copts = io::create_options_preserving_storage(input_path);
   if (inplace_copts.format == io::Format::Auto) {
     BAGWIZ_LOG_ERROR(options.logger, options.format_unknown_error, input_path.string().c_str());

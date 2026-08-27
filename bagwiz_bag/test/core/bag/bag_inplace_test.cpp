@@ -144,6 +144,88 @@ TEST_F(BagInplaceTest, ErrorsWhenFinalPathMissing)
     std::runtime_error);
 }
 
+// The staged path must carry the bag's OWN name, uniquified only by the
+// directory holding it. The directory writers name their shard after the
+// directory they are handed and record it in metadata.yaml, so a uniquified
+// bag name would be carried straight into the swapped-in bag; a single-file
+// bag would likewise lose the extension its format is read from.
+TEST_F(BagInplaceTest, StagesTheBagUnderItsOwnNameInsideAUniqueDirectory)
+{
+  const auto target = tmp_dir_ / "rosbag2_dir";
+  std::filesystem::create_directory(target);
+  write_text_file(target / "metadata.yaml", "OLD");
+
+  std::filesystem::path staged;
+  bagwiz::core::write_bag_inplace(target, [&](const std::filesystem::path & tmp) {
+    staged = tmp;
+    std::filesystem::create_directory(tmp);
+    write_text_file(tmp / "metadata.yaml", "NEW");
+  });
+
+  EXPECT_EQ(staged.filename(), target.filename());
+  EXPECT_NE(staged.parent_path(), target.parent_path()) << "staging must not be the bag's parent";
+  EXPECT_NE(
+    staged.parent_path().filename().string().find(".bagwiz-inplace-tmp-"), std::string::npos)
+    << "the unique suffix belongs on the staging directory: " << staged;
+
+  // And the staging directory is gone once the swap has happened.
+  EXPECT_FALSE(std::filesystem::exists(staged.parent_path()));
+  EXPECT_EQ(read_text_file(target / "metadata.yaml"), "NEW");
+}
+
+TEST_F(BagInplaceTest, StagedSingleFileKeepsItsExtension)
+{
+  const auto target = tmp_dir_ / "probe.db3";
+  write_text_file(target, "ORIGINAL");
+
+  std::filesystem::path staged;
+  bagwiz::core::write_bag_inplace(target, [&](const std::filesystem::path & tmp) {
+    staged = tmp;
+    write_text_file(tmp, "NEW");
+  });
+
+  EXPECT_EQ(staged.extension(), ".db3");
+  EXPECT_EQ(read_text_file(target), "NEW");
+}
+
+// Regression: a user-typed "drive_dir/" parses as an empty filename() whose
+// parent_path() is the bag itself, so the staging landed INSIDE the bag. The
+// swap then removed the bag — staged replacement and all — and the rename
+// failed with the original already gone. Data loss on a plain trailing slash.
+TEST_F(BagInplaceTest, TrailingSeparatorIsNormalisedRatherThanStagingInsideTheBag)
+{
+  const auto target = tmp_dir_ / "rosbag2_dir";
+  std::filesystem::create_directory(target);
+  write_text_file(target / "metadata.yaml", "OLD");
+  const auto with_slash = std::filesystem::path(target.string() + "/");
+
+  std::filesystem::path staged;
+  bagwiz::core::write_bag_inplace(with_slash, [&](const std::filesystem::path & tmp) {
+    staged = tmp;
+    std::filesystem::create_directory(tmp);
+    write_text_file(tmp / "metadata.yaml", "NEW");
+  });
+
+  // Staged beside the bag, never within it.
+  EXPECT_EQ(staged.parent_path().parent_path(), tmp_dir_);
+  ASSERT_TRUE(std::filesystem::is_directory(target));
+  EXPECT_EQ(read_text_file(target / "metadata.yaml"), "NEW");
+}
+
+TEST_F(BagInplaceTest, RefusesAPathThatNamesNoBagOfItsOwn)
+{
+  // "/", "." and ".." name a directory the swap would remove wholesale
+  // instead of a bag inside it. Nothing may be created or deleted for them.
+  for (const char * path : {"/", ".", ".."}) {
+    EXPECT_THROW(
+      bagwiz::core::write_bag_inplace(
+        std::filesystem::path(path),
+        [](const std::filesystem::path & tmp) { write_text_file(tmp, "should-not-be-reached"); }),
+      std::runtime_error)
+      << path;
+  }
+}
+
 namespace
 {
 
@@ -185,12 +267,11 @@ void write_probe_bag(
 }  // namespace
 
 // Regression: `bagwiz traj join` (and any future in-place rewrite) used
-// to pass Format::Auto / Layout::Auto into the writer factory. The tmp
-// path produced by write_bag_inplace carries a ".bagwiz-inplace-tmp-..."
-// suffix, which is neither .mcap nor .db3, so the auto-resolver fell
-// through to the Directory + Mcap default — silently converting db3
-// inputs to mcap on swap. These tests pin the realistic combinations
-// callers must use to preserve the input's storage identity.
+// to pass Format::Auto / Layout::Auto into the writer factory. A directory
+// bag's staged path carries no .mcap / .db3 extension for the auto-resolver
+// to read, so it fell through to the Directory + Mcap default — silently
+// converting db3 inputs to mcap on swap. These tests pin the realistic
+// combinations callers must use to preserve the input's storage identity.
 
 TEST_F(BagInplaceTest, PinnedSqlite3DirectoryPreservedThroughSwap)
 {
