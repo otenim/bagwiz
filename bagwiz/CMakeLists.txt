@@ -169,6 +169,7 @@ set(bagwiz_command_sources
   src/commands/convert.cpp
   src/commands/du.cpp
   src/commands/movify.cpp
+  src/commands/movify_output_size.cpp
   src/commands/movify_video.cpp
   src/commands/movify_video_common.cpp
   src/commands/movify_pcd_scan.cpp
@@ -715,6 +716,7 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_movify_video_test
     test/commands/movify_video_test.cpp
     src/commands/movify.cpp
+    src/commands/movify_output_size.cpp
     src/commands/movify_video.cpp
     src/commands/movify_video_common.cpp
     src/commands/movify_pcd_scan.cpp
@@ -734,6 +736,7 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_movify_pcd_scan_test
     test/commands/movify_pcd_scan_test.cpp
     src/commands/movify.cpp
+    src/commands/movify_output_size.cpp
     src/commands/movify_video.cpp
     src/commands/movify_video_common.cpp
     src/commands/movify_pcd_scan.cpp
@@ -746,11 +749,23 @@ if(BUILD_TESTING)
     bagwiz_movify_pcd_scan_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     PkgConfig::LIBAV ${OpenCV_LIBS})
 
+  # movify_output_size.hpp lives in src/commands (CLI-internal, not
+  # installed), so this test adds src/commands to its include path
+  # (pcd_concat_common idiom). The unit is pure string/arithmetic work, so it
+  # needs no bag, codec, or OpenCV support.
+  ament_add_gtest(bagwiz_movify_output_size_test
+    test/commands/movify_output_size_test.cpp
+    src/commands/movify_output_size.cpp)
+  target_include_directories(bagwiz_movify_output_size_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_movify_output_size_test ${bagwiz_test_libs} fmt::fmt)
+
   # movify_video_common.hpp lives in src/commands (CLI-internal, not
   # installed), so this test adds src/commands to its include path
   # (pcd_concat_common idiom).
   ament_add_gtest(bagwiz_movify_video_common_test
     test/commands/movify_video_common_test.cpp
+    src/commands/movify_output_size.cpp
     src/commands/movify_video_common.cpp)
   target_include_directories(bagwiz_movify_video_common_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)

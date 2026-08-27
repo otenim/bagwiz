@@ -2150,7 +2150,7 @@ TEST(FlagCompletionTest, MovifyCamDashListsCamFlags)
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "cam", "-"}),
     "--alpha\n--cam-info\n--field\n--grid\n--help\n--input\n--max\n--min\n--no-rectify\n"
-    "--output\n--overwrite\n--pcd\n--point-size\n--rectify\n--resize\n--scheme\n--topic\n--width\n"
+    "--output\n--overwrite\n--pcd\n--point-size\n--resize\n--scheme\n--topic\n--width\n"
     "-h\n-i\n-o\n-t\n-w\n");
 }
 

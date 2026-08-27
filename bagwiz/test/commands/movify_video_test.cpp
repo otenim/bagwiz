@@ -705,6 +705,49 @@ TEST_F(MovifyVideoTest, AutoResolvesCameraInfoForImageRawCompressed)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
+// The composed output size is a product the user never types — grid columns
+// times the primary frame's cell size — so a run reports one that has grown
+// past 4K. --width drives the cell size here, which keeps the source frames
+// (and the fixture bag) tiny while still composing an oversized canvas.
+TEST_F(MovifyVideoTest, RunWarnsWhenTheComposedOutputIsOversized)
+{
+  constexpr int kFrames = 2;
+  // 4096 wide at the source's 16:9 aspect composes 4096x2304 = 9.4 Mpx.
+  const auto in = build_bag(tmp_dir_, kFrames, 32, 18, "bgr8");
+  const auto out = tmp_dir_ / "out.avi";
+
+  MovifyVideoArgs args{in, kImageTopic, out, false};
+  args.width = 4096;
+  args.enable_parallel_pipeline = false;
+
+  ::testing::internal::CaptureStderr();
+  ASSERT_EQ(run_movify_video(args), 0);
+  const std::string err = ::testing::internal::GetCapturedStderr();
+
+  EXPECT_NE(err.find("4096x2304"), std::string::npos) << err;
+  EXPECT_NE(err.find("larger than 3840x2160"), std::string::npos) << err;
+  // A single view has no grid worth naming.
+  EXPECT_EQ(err.find("grid of"), std::string::npos) << err;
+}
+
+// An ordinary single-view render is silent: the guard must not nag about sizes
+// nobody would call surprising.
+TEST_F(MovifyVideoTest, RunStaysQuietForAnOrdinaryOutputSize)
+{
+  constexpr int kFrames = 2;
+  const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");
+  const auto out = tmp_dir_ / "out.avi";
+
+  MovifyVideoArgs args{in, kImageTopic, out, false};
+  args.enable_parallel_pipeline = false;
+
+  ::testing::internal::CaptureStderr();
+  ASSERT_EQ(run_movify_video(args), 0);
+  const std::string err = ::testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(err.find("larger than"), std::string::npos) << err;
+}
+
 TEST_F(MovifyVideoTest, AutoResolvesCameraInfoForImageRectColor)
 {
   constexpr int kFrames = 2;
@@ -1399,6 +1442,32 @@ TEST(MovifyVideoCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
   EXPECT_EQ(pcd_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
   EXPECT_TRUE(pcd_slot->spec.pair_value);
   EXPECT_TRUE(pcd_slot->spec.pair_selector_rhs);
+}
+
+// Rectification is requested by default, so the CLI carries the opt-out alone:
+// there is no --rectify to ask for what the command already does. That leaves
+// MovifyVideoArgs::rectify's initializer as the sole carrier of the default —
+// CLI11 leaves a negated-only flag's target untouched when the flag is absent
+// — so both halves are pinned here.
+TEST(MovifyVideoCliWiring, RectificationIsOptOutOnly)
+{
+  bagwiz::commands::Command * movify_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "movify") {
+      movify_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(movify_cmd, nullptr);
+
+  CLI::App app{"movify"};
+  movify_cmd->configure(app);
+
+  auto * cam_sub = app.get_subcommand_no_throw("cam");
+  ASSERT_NE(cam_sub, nullptr);
+  EXPECT_NE(cam_sub->get_option_no_throw("--no-rectify"), nullptr);
+  EXPECT_EQ(cam_sub->get_option_no_throw("--rectify"), nullptr);
+  EXPECT_TRUE(MovifyVideoArgs{}.rectify);
 }
 
 }  // namespace

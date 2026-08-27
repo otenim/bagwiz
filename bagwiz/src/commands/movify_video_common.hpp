@@ -131,15 +131,15 @@ struct VideoInputValidation
 // rejection, every image topic's presence + renderable type, --pcd and
 // --cam-info entry parsing, per-view cam-info resolution (explicit entry or
 // derivation from the image topic name) and the cam-info requirement of
-// --rectify / --pcd, and every point-cloud topic's presence + type. Logs the
-// command's errors and returns on the first failure.
+// rectification / --pcd, and every point-cloud topic's presence + type. Logs
+// the command's errors and returns on the first failure.
 [[nodiscard]] VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args);
 
-// Whether a validated view renders rectified: rectification must be requested
-// (--rectify, the default) and the view's camera info must have resolved.
-// --no-rectify wins even with --pcd — the projection then targets the raw
-// image, applying the camera's lens distortion model instead of assuming a
-// rectified one.
+// Whether a validated view renders rectified: rectification must be in effect
+// (the default, unless --no-rectify) and the view's camera info must have
+// resolved. --no-rectify wins even with --pcd — the projection then targets
+// the raw image, applying the camera's lens distortion model instead of
+// assuming a rectified one.
 [[nodiscard]] bool view_rectifies(bool rectify_requested, const ViewInput & view) noexcept;
 
 // Fail-fast output checks run before the expensive encode: an existing
@@ -200,7 +200,7 @@ struct VideoInputScan
 // ---- pass-2 geometry ---------------------------------------------------------
 
 // The camera infos (one per view, UNSCALED — each view's renderer applies its
-// own scale) and TF buffer the encode loop needs for --rectify / --pcd,
+// own scale) and TF buffer the encode loop needs for rectification / --pcd,
 // loaded up front so a failure aborts before the encode. camera_infos[i] is
 // set iff view i resolved a camera-info topic; the TF buffer iff any view
 // projects point clouds. Filled via an out parameter because tf2::BufferCore
@@ -370,6 +370,7 @@ public:
   [[nodiscard]] std::uint32_t cell_height() const { return cell_h_; }
   [[nodiscard]] std::uint32_t width() const { return grid_.cols * cell_w_; }
   [[nodiscard]] std::uint32_t height() const { return grid_.rows * cell_h_; }
+  [[nodiscard]] GridSpec grid() const { return grid_; }
 
   // Black out the whole canvas for a new output frame.
   void clear();

@@ -31,12 +31,13 @@ bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4
 # Render to MJPEG AVI, replacing an existing file.
 bagwiz movify cam -i drive_dir/ -t /sensing/camera/image_raw -o clip.avi -w
 
-# Render with distortion correction.
-bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 --rectify
-
-# Render with distortion correction using an explicit CameraInfo topic.
+# Render with distortion correction (on by default) using an explicit
+# CameraInfo topic.
 bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4 \
-  --rectify --cam-info /sensing/camera/camera_info
+  --cam-info /sensing/camera/camera_info
+
+# Render the raw frames, skipping distortion correction.
+bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw -o out.mp4 --no-rectify
 
 # Render with a point-cloud overlay colored by distance.
 bagwiz movify cam -i drive.mcap -t /sensing/camera/image_raw/compressed -o out.mp4 \
@@ -110,9 +111,8 @@ bagwiz movify cam -i drive.mcap -o overlay_each.mp4 \
 | `-t`, `--topic <topic>...` | **Required.** Image topic(s) to render, in grid order (left to right, top to bottom). Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)); a glob's matches expand in lexicographic (topic-name) order, so grid placement stays deterministic. The first topic is primary: it drives the frame rate and output timing, and its frame size (after `--resize`) fixes the grid's cell size. Repeatable.                                                             |
 | `-o`, `--output <output>`  | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `--grid <cols>x<rows>`     | Grid layout for multiple topics (e.g. `2x2`). Must provide at least as many cells as topics; extra cells stay black. When omitted, a near-square grid is derived from the topic count (2 topics -> 2x1, 3-4 -> 2x2, 5-6 -> 3x2, ...). Long-form only.                                                                                                                                                                                                                                                                                                                                                         |
-| `--cam-info <topic>`       | `sensor_msgs/msg/CameraInfo` topic for `--rectify` and `--pcd`: a bare `<info_topic>` applies to every view, an `<image_topic>=<info_topic>` entry overrides one view. Views without an entry derive it from the image topic name (`/image_raw`, `/image_raw/compressed`, `/image_rect_color`, and `/image_rect_color/compressed` map their prefix to `/camera_info`). Literal topic names, not globs. Long-form only. Repeatable.                                                                                                                                                                            |
-| `--rectify`                | Rectify each frame (apply lens-distortion correction) using each view's resolved CameraInfo. **On by default.** A view whose camera-info topic cannot be derived renders unrectified with a warning (name it with `--cam-info`); point-cloud projection still requires one. Long-form only.                                                                                                                                                                                                                                                                                                                   |
-| `--no-rectify`             | Disable rectification even when a CameraInfo is available — including for `--pcd` views, whose points then project onto the raw image with the camera's lens distortion applied. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `--cam-info <topic>`       | `sensor_msgs/msg/CameraInfo` topic for rectification and `--pcd`: a bare `<info_topic>` applies to every view, an `<image_topic>=<info_topic>` entry overrides one view. Views without an entry derive it from the image topic name (`/image_raw`, `/image_raw/compressed`, `/image_rect_color`, and `/image_rect_color/compressed` map their prefix to `/camera_info`). Literal topic names, not globs. Long-form only. Repeatable.                                                                                                                                                                          |
+| `--no-rectify`             | Disable rectification. Each frame is otherwise rectified (lens-distortion correction applied) using the view's resolved CameraInfo — there is no opt-in flag, since that is the default. `--no-rectify` also covers `--pcd` views, whose points then project onto the raw image with the camera's lens distortion applied. A view whose camera-info topic cannot be derived renders unrectified with a warning (name it with `--cam-info`); point-cloud projection still requires one. Long-form only.                                                                                                        |
 | `--pcd <topic>...`         | `sensor_msgs/msg/PointCloud2` topic selector(s) to project onto the frames — a bare value (a literal name or a `*` glob, see [Topic selectors](topic.md#topic-selectors)) projects onto every view, an `<image_topic>=<pcd_selector>` entry projects onto that view only. Repeatable. Every resolved topic is drawn with the same field, color scheme, point size, and alpha. Points project onto the rectified image, or onto the raw image with lens distortion applied when `--no-rectify` is given. Requires a CameraInfo topic and a TF chain from each cloud frame to the camera frame. Long-form only. |
 | `--field <field>`          | Point-cloud field used for coloring: `x`, `y`, `z`, `distance`, `intensity`. Default: `distance`. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `--min <value>`            | Manual minimum value for field normalization. Default: auto-computed from the point-cloud span. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -120,7 +120,7 @@ bagwiz movify cam -i drive.mcap -o overlay_each.mp4 \
 | `--scheme <scheme>`        | Color scheme for point coloring: `viridis`, `turbo`, `jet`, `plasma`, `inferno`, `magma`, `rainbow`. Default: `viridis`. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `--point-size <px>`        | Side length of drawn square points in pixels (range: 1-64). Default: 2. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `--alpha <alpha>`          | Point overlay opacity, 0.0-1.0. Default: 1.0. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--resize <factor>`        | Scale the cell width and height by this factor while preserving aspect ratio. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so `--rectify` and `--pcd` stay aligned (range: 0.01-10.0). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                                                                                                                                                                                |
+| `--resize <factor>`        | Scale the cell width and height by this factor while preserving aspect ratio. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so rectification and `--pcd` stay aligned (range: 0.01-10.0). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                                                                                                                                                                              |
 | `--width <px>`             | Fix the composed output width in pixels: the cell width is the width split across the grid columns, and the cell height follows the primary frame's aspect ratio (both rounded down to even, so the output can be a few pixels narrower). Mutually exclusive with `--resize`. Long-form only.                                                                                                                                                                                                                                                                                                                 |
 | `-w`, `--overwrite`        | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
@@ -142,6 +142,10 @@ With several `-t` topics, each topic occupies one grid cell in argument order
   run, as in the single-view case); secondary views re-fit automatically.
 - A topic that carries no messages at all stops the run with an error, rather
   than silently rendering a black cell.
+- The composed size is the cell size multiplied by the grid, so it grows faster
+  than the topic count suggests: nine 1080p cameras on a 3x3 grid compose a
+  5760x3240 video. A run reports a composed size above 4K — see
+  [Oversized outputs](#oversized-outputs).
 
 ### Frame rate
 
@@ -230,7 +234,7 @@ bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --rang
 | `-t`, `--topic <topic>`   | **Required.** `sensor_msgs/msg/PointCloud2` topic to render. A literal topic name, not a glob. The topic must carry a per-point time field (see below).                                                   |
 | `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                   |
 | `--view <view>`           | Projection space: `3d` (perspective view from a fixed camera looking at the sensor) or `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y). Default: `3d`. Long-form only.      |
-| `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. Long-form only.                                                                                                                      |
+| `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. A canvas above 4K is reported, not rejected — see [Oversized outputs](#oversized-outputs). Long-form only.                           |
 | `--height <px>`           | Output height in pixels (range: 2-4320). Must be even. Default: 720. Long-form only.                                                                                                                      |
 | `--fps <f>`               | Output frame rate in fps (range: 1-240). Each sweep spans round(`--fps` / (cloud rate x `--speed`)) video frames (at least 1), so a higher value gives a smoother animation. Default: 60. Long-form only. |
 | `--speed <x>`             | Playback speed as a fraction of real time: 1.0 plays each sweep in its recorded duration, 0.1 slows the animation to one tenth (range: 0.001-100). Default: 0.1. Long-form only.                          |
@@ -271,6 +275,26 @@ frames, so the video timeline is not disturbed. Dimensions must be even (the
 Clouds are parsed and encoded one at a time; the video is written to a
 temporary file and atomically moved into place on success. A failed run leaves
 no partial output or leftover temporary file.
+
+## Oversized outputs
+
+Neither leaf caps the output size, but both report one large enough to be
+worth a second look: when the output exceeds 3840x2160 (4K UHD, 8,294,400
+pixels), the run logs a warning naming the actual size and continues.
+
+```text
+[WARN] output is 5760x3240 (3x3 grid of 1920x1080 cells, 18.7 Mpx), larger than
+3840x2160; encoding will be slow and the output file large. Pass --width to cap
+the output width, or --resize to scale the cells down.
+```
+
+The test is on the pixel product, not on either dimension, so a tall, narrow
+output is judged by what it actually costs to encode. A 2x2 grid of 1080p views
+lands exactly on 4K and stays quiet.
+
+`cam` cannot know its size until the first frame fixes the cell size, so its
+warning appears once decoding has begun; `scan` takes its size straight from
+`--width`/`--height` and reports before any work starts.
 
 ## Exit status
 
