@@ -39,8 +39,9 @@ namespace bagwiz::core
 // The unique name is on the STAGING DIRECTORY, not on the bag, so the bag
 // is staged under its real name: the directory writers derive their shard
 // name from the directory they are handed and record it in metadata.yaml,
-// so a uniquified bag name would be carried into the swapped-in bag, and a
-// single-file bag would lose its .mcap / .db3 extension.
+// so a bag staged under a suffixed name would carry that suffix into the
+// swapped-in bag, and a single-file bag would lose its .mcap / .db3
+// extension.
 //
 // If `writer_fn` throws, the staging directory is removed and the exception
 // is rethrown; `final_path` is left untouched. An RAII guard ensures the

@@ -144,11 +144,12 @@ TEST_F(BagInplaceTest, ErrorsWhenFinalPathMissing)
     std::runtime_error);
 }
 
-// The staged path must carry the bag's OWN name, uniquified only by the
+// The staged path must carry the bag's OWN name, made unique only by the
 // directory holding it. The directory writers name their shard after the
-// directory they are handed and record it in metadata.yaml, so a uniquified
-// bag name would be carried straight into the swapped-in bag; a single-file
-// bag would likewise lose the extension its format is read from.
+// directory they are handed and record it in metadata.yaml, so a bag staged
+// under a suffixed name would carry that suffix straight into the swapped-in
+// bag; a single-file bag would likewise lose the extension its format is
+// read from.
 TEST_F(BagInplaceTest, StagesTheBagUnderItsOwnNameInsideAUniqueDirectory)
 {
   const auto target = tmp_dir_ / "rosbag2_dir";
