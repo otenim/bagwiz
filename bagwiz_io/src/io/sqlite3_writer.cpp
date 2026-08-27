@@ -10,6 +10,8 @@
 
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "bagwiz/io/file_compressor.hpp"
+#include "bagwiz/io/message_compressor.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "bagwiz/io/sqlite3_helpers.hpp"
 #include "env_tuning.hpp"  // NOLINT(build/include_subdir) src-local shared header
@@ -21,6 +23,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -47,6 +50,55 @@ constexpr int kBatchSize = 1024;
 // written under jazzy unopenable under humble.
 constexpr int kMetadataVersion = 5;
 
+// The compression setup resolved from CreateOptions, validated once at writer
+// construction so a bad flag fails at open_write() rather than mid-bag.
+struct Sqlite3Compression
+{
+  bool message_mode = false;  // rosbag2 compression_mode: MESSAGE (per-message zstd)
+  bool file_mode = false;     // rosbag2 compression_mode: FILE (.db3.zstd envelope)
+  int zstd_level = 0;         // 0 = ZSTD_defaultCLevel()
+};
+
+Sqlite3Compression resolve_sqlite3_compression(const CreateOptions & options)
+{
+  Sqlite3Compression out;
+
+  std::string mode = options.sqlite3_compression_mode;
+  std::string format = options.sqlite3_compression_format;
+  if (mode.empty()) {
+    mode = "none";
+  }
+  if (format.empty()) {
+    format = "none";
+  }
+
+  if (format != "none" && format != "zstd") {
+    throw std::runtime_error(
+      "sqlite3 compression_format '" + options.sqlite3_compression_format +
+      "' is not supported (rosbag2 defines only 'zstd' for sqlite3 storage)");
+  }
+  if (mode != "none" && mode != "message" && mode != "file") {
+    throw std::runtime_error(
+      "sqlite3 compression_mode '" + options.sqlite3_compression_mode +
+      "' is not supported (expected \"none\", \"message\", or \"file\")");
+  }
+  if (mode == "none" && format != "none") {
+    throw std::runtime_error(
+      "sqlite3 compression_format '" + options.sqlite3_compression_format +
+      "' requires compression_mode \"message\" or \"file\"");
+  }
+  if (mode != "none" && format == "none") {
+    throw std::runtime_error(
+      "sqlite3 compression_mode \"" + mode + "\" requires compression_format 'zstd'");
+  }
+
+  out.message_mode = mode == "message";
+  out.file_mode = mode == "file";
+  // Throws on an unknown level name — that is the validation we want here.
+  out.zstd_level = zstd_level_from_name(options.sqlite3_compression_level);
+  return out;
+}
+
 void exec_or_throw(sqlite3 * db, const char * sql)
 {
   char * err = nullptr;
@@ -65,12 +117,34 @@ void exec_or_throw(sqlite3 * db, const char * sql)
 class SqliteFileWriter final : public BagWriter
 {
 public:
-  explicit SqliteFileWriter(const std::filesystem::path & path)
+  explicit SqliteFileWriter(const std::filesystem::path & path, const CreateOptions & options)
   : db_(sqlite_open_or_throw(
       path.string(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX,
       "sqlite3 open")),
-    shard_rel_(path.filename().string())
+    shard_rel_(path.filename().string()),
+    compression_(resolve_sqlite3_compression(options))
   {
+    if (compression_.file_mode) {
+      // FILE mode wraps the finished shard in a whole-database envelope,
+      // which is the directory writer's job: the envelope renames the shard to
+      // .db3.zstd, and metadata.yaml is what records that name. The
+      // directory writer never
+      // passes "file" down here (it clears the mode on the inner options and
+      // compresses the finished shard itself), so reaching this branch means
+      // a standalone single-file output was requested.
+      throw std::runtime_error(
+        "sqlite3 compression_mode \"file\" requires a directory-layout output: the "
+        "envelope renames the shard to .db3.zstd and metadata.yaml is what records "
+        "that name; name an extension-less output directory instead of a .db3 file");
+    }
+    if (compression_.message_mode) {
+      // Reached only from the directory writer's inner shard (declared as
+      // MESSAGE-mode in the directory's metadata.yaml); create_sqlite3_file()
+      // rejects MESSAGE mode for standalone single-file outputs, whose
+      // reader has no metadata.yaml to learn the compression from.
+      compressor_.emplace("zstd", compression_.zstd_level);
+    }
+
     // page_size must come first: SQLite only honours it while the database is
     // still empty, so any pragma or statement that writes a page locks in the
     // 4 KiB default. Rosbag payloads are large BLOBs, and at 4 KiB a 2 MB point
@@ -172,8 +246,14 @@ public:
 
     sqlite3_bind_int64(insert_stmt_.get(), 1, it->second);
     sqlite3_bind_int64(insert_stmt_.get(), 2, timestamp_ns);
+    // MESSAGE mode stores each payload as a bare zstd frame (rosbag2
+    // compression plugin contract). SQLITE_STATIC stays correct in both
+    // branches: the bound bytes must only outlive the sqlite3_step() below,
+    // and the compressor's internal buffer is valid until the next write().
+    const std::span<const std::byte> stored =
+      compressor_.has_value() ? compressor_->compress(payload) : payload;
     sqlite3_bind_blob(
-      insert_stmt_.get(), 3, payload.data(), static_cast<int>(payload.size()), SQLITE_STATIC);
+      insert_stmt_.get(), 3, stored.data(), static_cast<int>(stored.size()), SQLITE_STATIC);
     if (sqlite3_step(insert_stmt_.get()) != SQLITE_DONE) {
       throw std::runtime_error("message insert failed: " + sqlite_errmsg(db_.get()));
     }
@@ -222,6 +302,12 @@ public:
     info.start_ns = start_ns_;
     info.end_ns = end_ns_;
     info.shard_relative_path = shard_rel_;
+    if (compression_.message_mode) {
+      // Declared in both the embedded `metadata` row and the directory's
+      // metadata.yaml, so the two descriptions of this bag cannot drift.
+      info.compression_format = "zstd";
+      info.compression_mode = "message";
+    }
     return info;
   }
 
@@ -308,6 +394,9 @@ private:
   SqlitePtr db_;
   SqliteStmtPtr insert_stmt_;
   std::string shard_rel_;
+  Sqlite3Compression compression_;
+  // Present only in MESSAGE mode; compresses each payload before the insert.
+  std::optional<MessageCompressor> compressor_;
   std::unordered_map<std::string, int64_t> topic_to_id_;
   // Message accounting for the embedded metadata row (see summary()).
   std::vector<TopicInfo> topics_;
@@ -330,12 +419,22 @@ class SqliteDirectoryWriter final : public BagWriter
 {
 public:
   SqliteDirectoryWriter(const std::filesystem::path & dir, const CreateOptions & options)
-  : dir_(dir), options_(options)
+  : dir_(dir), options_(options), compression_(resolve_sqlite3_compression(options))
   {
     std::filesystem::create_directories(dir);
     const auto stem = dir.filename().string();
     shard_rel_ = stem + "_0.db3";
-    inner_ = std::make_unique<SqliteFileWriter>(dir_ / shard_rel_);
+
+    // FILE mode is the directory writer's own concern: the inner shard is
+    // written plain and wrapped in the .db3.zstd envelope at close(), so the
+    // file writer below always sees "none" for that mode. MESSAGE mode is
+    // passed down — it changes what the shard stores per message.
+    CreateOptions inner_options = options;
+    if (compression_.file_mode) {
+      inner_options.sqlite3_compression_mode = "none";
+      inner_options.sqlite3_compression_format = "none";
+    }
+    inner_ = std::make_unique<SqliteFileWriter>(dir_ / shard_rel_, inner_options);
   }
 
   ~SqliteDirectoryWriter() override
@@ -371,11 +470,31 @@ public:
     }
     // Take the summary before close() so metadata.yaml and the shard's own
     // embedded `metadata` row are emitted from one accumulator — they describe
-    // the same bag and must not be able to drift. sqlite3 storage has no
-    // built-in compression, so the compression fields stay empty (an empty
-    // format derives an empty mode).
-    const MetadataYamlInfo info = inner_->summary();
+    // the same bag and must not be able to drift.
+    MetadataYamlInfo info = inner_->summary();
     inner_->close();
+
+    if (compression_.file_mode) {
+      // rosbag2 compression_mode: FILE — wrap the finished shard in a
+      // whole-database zstd envelope and point metadata.yaml at it. The
+      // shard's embedded `metadata` row stays a plain-storage declaration:
+      // it describes the .db3 bytes as written, which is what a reader sees
+      // after expanding the envelope.
+      const auto plain_shard = dir_ / shard_rel_;
+      shard_rel_ += ".zstd";
+      compress_file_to_zstd(plain_shard, dir_ / shard_rel_, compression_.zstd_level);
+      std::error_code ec;
+      std::filesystem::remove(plain_shard, ec);
+      if (ec) {
+        throw std::runtime_error(
+          "failed to remove plain shard after zstd envelope compression: " + plain_shard.string() +
+          ": " + ec.message());
+      }
+      info.compression_format = "zstd";
+      info.compression_mode = "file";
+      info.shard_relative_path = shard_rel_;
+    }
+
     write_metadata_yaml(dir_, info);
     closed_ = true;
   }
@@ -384,6 +503,7 @@ private:
   std::filesystem::path dir_;
   CreateOptions options_;
   std::string shard_rel_;
+  Sqlite3Compression compression_;
   std::unique_ptr<SqliteFileWriter> inner_;
   bool closed_ = false;
 };
@@ -393,8 +513,22 @@ private:
 std::unique_ptr<BagWriter> create_sqlite3_file(
   const std::filesystem::path & path, const CreateOptions & options)
 {
-  (void)options;  // unused for sqlite3 (no format-specific options yet)
-  return std::make_unique<SqliteFileWriter>(path);
+  // A bare .db3 has no metadata.yaml beside it, so a single-file output can
+  // only ever be plain storage. bagwiz itself would read a MESSAGE-mode one
+  // back correctly — the declaration is in the file's own `metadata` table —
+  // but rosbag2 picks its reader from metadata.yaml alone, so it would hand
+  // the stored zstd frames straight to the caller and report success. FILE
+  // mode's envelope additionally needs the .db3.zstd name recorded for it.
+  // Reject both here so the failure surfaces at open_write().
+  const auto compression = resolve_sqlite3_compression(options);
+  if (compression.message_mode || compression.file_mode) {
+    throw std::runtime_error(
+      "sqlite3 compression requires a directory-layout output: rosbag2 only "
+      "decompresses when a metadata.yaml declares the mode, so a bare .db3 would "
+      "read back as raw zstd frames with no error; name an extension-less output "
+      "directory instead of a .db3 file");
+  }
+  return std::make_unique<SqliteFileWriter>(path, options);
 }
 
 std::unique_ptr<BagWriter> create_sqlite3_directory(

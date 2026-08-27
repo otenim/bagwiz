@@ -165,6 +165,7 @@ set(bagwiz_command_sources
   src/commands/cam_info_recompute_p.cpp
   src/commands/cam_info_replace.cpp
   src/commands/completion.cpp
+  src/commands/compress.cpp
   src/commands/convert.cpp
   src/commands/du.cpp
   src/commands/movify.cpp
@@ -203,6 +204,7 @@ set(bagwiz_command_sources
   src/commands/tf_static_join.cpp
   src/commands/tf_static_update.cpp
   src/commands/topic.cpp
+  src/commands/topic_declare.cpp
   src/commands/topic_drop.cpp
   src/commands/topic_expand.cpp
   src/commands/topic_keep.cpp
@@ -627,6 +629,20 @@ if(BUILD_TESTING)
   target_include_directories(bagwiz_trim_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_trim_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
+
+  # compress.cpp is a single TU carrying both run_compress and the
+  # CompressCommand registrar + CLI11 wiring, so the test also compiles
+  # registry.cpp and links CLI11 (trim_test idiom). The schema-backfill
+  # declare helper lives in the src-local topic_declare.cpp, so the test
+  # adds src/commands to its include path (traj_common idiom).
+  ament_add_gtest(bagwiz_compress_test
+    test/commands/compress_test.cpp
+    src/commands/compress.cpp
+    src/commands/topic_declare.cpp
+    src/commands/registry.cpp)
+  target_include_directories(bagwiz_compress_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_compress_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
 
   # Same shape as bagwiz_trim_test above, mirrored for `du`: du.cpp is a
   # single TU carrying both run_du and the DuCommand registrar + CLI11

@@ -124,10 +124,11 @@ entire `/sensing` subtree.
   extension (`.mcap` / `.db3` pick a single-file backend) or, for a directory
   output, inherits the input bag's storage backend.
 - In-place rewriting requires an uncompressed input. A directory bag whose
-  `metadata.yaml` declares `compression_mode: file` — including a
-  chunk-compressed directory bag produced by an earlier `-o` run of
-  `topic`/`trim` — is rejected with `could not detect storage format of input
-bag`; pass an explicit `-o` output for those.
+  `metadata.yaml` declares `compression_mode: file` is rejected with `could
+not detect storage format of input bag`; pass an explicit `-o` output for
+  those. A chunk-compressed MCAP bag is not one of those: MCAP keeps its
+  compression inside the shard rather than in `metadata.yaml`, so it rewrites
+  in place like any other MCAP bag.
 
 ### Chunk pass-through
 
@@ -139,7 +140,7 @@ bag`; pass an explicit `-o` output for those.
   to the edit (a missing or untrustworthy chunk message index). When this fast
   path cannot apply — non-MCAP storage, multi-shard inputs, and a few other
   layouts — the bag is re-encoded and the output MCAP is written with
-  `compression=none`; re-compress afterwards with `ros2 bag convert` if
+  `compression=none`; re-compress afterwards with [`bagwiz compress`](compress.md) if
   needed.
 - Embedded message schemas are preserved for the surviving topics so MCAP
   outputs stay self-describing.

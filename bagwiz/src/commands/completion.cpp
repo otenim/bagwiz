@@ -741,6 +741,45 @@ std::vector<std::string> complete_complete_command(const CompletionRequest & req
   return {};
 }
 
+// `compress -i|--input <bag> -o|--output <bag>` re-encodes a bag with a
+// different compression setup. All its flags are surfaced for any `-` word;
+// <input>/<output> are paths that fall through to the shell's file
+// completion. `--mode`, `--codec`, `--level`, and `--storage` complete their
+// enumerated values.
+//
+//   compress: `compress`(0) -i|--input <bag> -o|--output <bag>
+//             [--mode auto|file|message|none] [--codec zstd|lz4]
+//             [--level fastest|fast|default|slow|slowest]
+//             [--storage mcap|sqlite3] [-w|--overwrite]
+std::vector<std::string> complete_compress(const CompletionRequest & request)
+{
+  const auto current = current_word(request);
+  if (current.starts_with("-")) {
+    return matching(
+      with_help(
+        {"--codec", "--input", "--level", "--mode", "--output", "--overwrite", "--storage", "-i",
+         "-o", "-w"}),
+      current);
+  }
+
+  if (request.cursor_word > 0) {
+    const auto & previous = request.words[request.cursor_word - 1];
+    if (previous == "--mode") {
+      return matching({"auto", "file", "message", "none"}, current);
+    }
+    if (previous == "--codec") {
+      return matching({"zstd", "lz4"}, current);
+    }
+    if (previous == "--level") {
+      return matching({"fastest", "fast", "default", "slow", "slowest"}, current);
+    }
+    if (previous == "--storage") {
+      return matching({"mcap", "sqlite3"}, current);
+    }
+  }
+  return {};
+}
+
 std::vector<std::string> complete_convert(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1749,6 +1788,9 @@ std::vector<std::string> complete_request(const CLI::App & app, const Completion
   }
   if (command == "convert") {
     return complete_convert(request);
+  }
+  if (command == "compress") {
+    return complete_compress(request);
   }
   if (command == "du") {
     return complete_du(request);

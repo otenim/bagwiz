@@ -553,6 +553,35 @@ TEST_F(WriterRoundTripTest, Sqlite3DirectoryMetadataDeclaresFilesSection)
     /*end=*/2'000'000'001LL, /*messages=*/5);
 }
 
+// rosbag2 picks its reader from `compression_mode`: a non-empty value routes
+// the bag through rosbag2_compression's SequentialCompressionReader, which
+// expands the named file as a whole-file envelope before handing it to the
+// storage plugin. MCAP chunk compression is storage-internal — the shard is a
+// perfectly ordinary .mcap — so declaring it there makes `ros2 bag play` and
+// `ros2 bag convert` fail with "ZSTD decompression error: Unknown frame
+// descriptor" (and, for lz4, with no registered plugin at all) on a bag
+// `ros2 bag info` still summarises happily. rosbag2's own mcap writer leaves
+// the pair empty; pin that here.
+TEST_F(WriterRoundTripTest, McapDirectoryMetadataLeavesCompressionFieldsEmpty)
+{
+  for (const char * codec : {"none", "zstd", "lz4"}) {
+    const auto dir = tmp_dir_ / (std::string("mcap_metadata_") + codec);
+    bagwiz::io::CreateOptions options;
+    options.format = bagwiz::io::Format::Mcap;
+    options.layout = bagwiz::io::Layout::Directory;
+    options.mcap_compression = codec;
+    write_fixture(dir, options, topics_, messages_);
+
+    const auto info = load_metadata_info(dir);
+    ASSERT_TRUE(info["compression_format"]) << codec;
+    ASSERT_TRUE(info["compression_mode"]) << codec;
+    EXPECT_EQ(info["compression_format"].as<std::string>(), "") << codec;
+    EXPECT_EQ(info["compression_mode"].as<std::string>(), "") << codec;
+
+    verify_round_trip(dir);
+  }
+}
+
 TEST_F(WriterRoundTripTest, Sqlite3SingleFileEmbedsMetadataSummary)
 {
   // A single-file .db3 has no metadata.yaml beside it, so rosbag2 reserves the

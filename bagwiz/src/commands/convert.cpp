@@ -11,9 +11,9 @@
 #include "bagwiz/core/bag/bag_copy.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/base/output_path.hpp"
-#include "bagwiz/core/msg_yaml/msg_definition_resolver.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
+#include "topic_declare.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <cinttypes>
 #include <cstddef>
@@ -207,7 +207,7 @@ private:
     copts.format = target_format;
     copts.layout = io::Layout::Auto;  // factory picks SingleFile if extension matches
     // Leave compression off so the output is predictable; callers can
-    // recompress with `ros2 bag convert` if they want.
+    // recompress with `bagwiz compress` if they want.
     copts.mcap_compression = "none";
 
     std::unique_ptr<io::BagWriter> writer;
@@ -218,57 +218,9 @@ private:
       return 1;
     }
 
-    // Force schema bytes onto the topic list before declaring so MCAP
-    // outputs preserve self-description across a repack (one-shot shard
-    // open for multi-shard MCAP inputs; no-op for single-file MCAP and
-    // SQLite3 where schemas are either already loaded or not embedded).
-    reader->populate_schemas();
-
-    // SQLite3 storage in Humble (and earlier) does not embed message
-    // definitions, so reader->topics() comes back with empty
-    // schema_text. Resolve each missing definition from
-    // $AMENT_PREFIX_PATH/share/<pkg>/msg/<Type>.msg before declaring
-    // the topic — otherwise the resulting MCAP loses self-description
-    // and breaks strict downstream readers like rosbags-convert.
-    std::size_t declared = 0;
-    std::size_t resolved_defs = 0;
-    std::size_t unresolved_defs = 0;
-    for (const auto & t : reader->topics()) {
-      io::TopicInfo augmented = t;
-      if (augmented.schema_text.empty()) {
-        auto resolved = core::resolve_message_definition(augmented.type);
-        if (!resolved.text.empty()) {
-          augmented.schema_text = std::move(resolved.text);
-          augmented.schema_encoding = std::move(resolved.encoding);
-          ++resolved_defs;
-        } else {
-          ++unresolved_defs;
-          if (unresolved_defs <= 5) {
-            BAGWIZ_LOG_WARN(
-              kLogger,
-              "no .msg on disk for type '%s' (topic '%s'); writing MCAP without "
-              "self-description for this topic",
-              augmented.type.c_str(), augmented.name.c_str());
-          }
-        }
-      }
-      try {
-        writer->declare_topic(augmented);
-        ++declared;
-      } catch (const std::exception & e) {
-        BAGWIZ_LOG_WARN(
-          kLogger, "declare_topic failed for '%s': %s; skipping topic", t.name.c_str(), e.what());
-      }
-    }
-    if (resolved_defs > 0) {
-      BAGWIZ_LOG_INFO(
-        kLogger, "resolved %zu missing message definition(s) from $AMENT_PREFIX_PATH",
-        resolved_defs);
-    }
-    if (unresolved_defs > 5) {
-      BAGWIZ_LOG_WARN(
-        kLogger, "(plus %zu more topic(s) without resolvable .msg)", unresolved_defs - 5);
-    }
+    // Declare every input topic with schema backfill so the output keeps
+    // self-description across the repack.
+    const std::size_t declared = declare_reader_topics(*reader, *writer, kLogger);
 
     // convert re-encodes nothing (only the storage container changes), so it runs
     // through the shared rewrite seam with an empty suppress set on the threaded

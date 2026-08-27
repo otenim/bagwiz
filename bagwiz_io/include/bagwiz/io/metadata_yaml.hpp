@@ -68,11 +68,16 @@ struct MetadataYamlInfo
   int64_t total_messages = 0;
   int64_t start_ns = 0;  // earliest message time; ignored when total_messages == 0
   int64_t end_ns = 0;    // latest message time; ignored when total_messages == 0
-  // Storage-native compression, written verbatim to `compression_format`.
-  // `compression_mode` derives from it: "" when empty or "none", else "file"
-  // (mcap chunk compression is declared as FILE-mode; see the mcap directory
-  // writer for the compatibility rationale).
+  // rosbag2's compression layer (rosbag2_compression), written verbatim to
+  // `compression_format` / `compression_mode`. Both empty means "rosbag2
+  // reads this bag with the plain reader"; otherwise they must be set as a
+  // pair ("zstd" + "message" or "zstd" + "file"), which only the sqlite3
+  // writers do. A storage backend's own internal compression does NOT belong
+  // here — MCAP chunk compression stays out of these fields, or rosbag2 would
+  // try to expand the shard as a whole-file envelope (see the mcap directory
+  // writer's close() for the failure it causes).
   std::string compression_format;
+  std::string compression_mode;
   std::string shard_relative_path;  // the single shard, relative to the dir
 };
 

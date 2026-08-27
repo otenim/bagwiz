@@ -344,12 +344,20 @@ TEST_F(TopicKeepTest, PassthroughMatchesPipelineAndPreservesCompression)
 
   EXPECT_EQ(collect(tmp_dir_ / "ref"), collect(tmp_dir_ / "out"));
 
-  // The decoded pipeline still forces compression off; the pass-through
-  // keeps the input's zstd chunks (visible in the directory metadata).
-  EXPECT_EQ(
-    bagwiz::io::load_metadata_yaml(tmp_dir_ / "ref" / "metadata.yaml").compression_format, "none");
-  EXPECT_EQ(
-    bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml").compression_format, "zstd");
+  // Neither output declares compression in metadata.yaml — those fields name
+  // rosbag2's own compression layer, and an mcap shard that fills them stops
+  // being readable. The pass-through nonetheless kept the input's zstd chunks,
+  // which shows as a smaller shard than the decoded pipeline's uncompressed
+  // rewrite of the same messages.
+  for (const char * name : {"ref", "out"}) {
+    const auto md = bagwiz::io::load_metadata_yaml(tmp_dir_ / name / "metadata.yaml");
+    EXPECT_TRUE(md.compression_format.empty()) << name << ": " << md.compression_format;
+    EXPECT_TRUE(md.compression_mode.empty()) << name << ": " << md.compression_mode;
+  }
+  const auto shard_bytes = [this](const std::string & name) {
+    return std::filesystem::file_size(tmp_dir_ / name / (name + "_0.mcap"));
+  };
+  EXPECT_LT(shard_bytes("out"), shard_bytes("ref"));
 }
 
 // Exercises the real TopicCommand::configure_keep() — reached through the

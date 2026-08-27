@@ -83,6 +83,7 @@
     "fatbin",
     "forwardpropagate",
     "fpath",
+    "fromhex",
     "fronto",
     "fsanitize",
     "fsync",
