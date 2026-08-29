@@ -29,6 +29,11 @@
 namespace bagwiz::commands
 {
 
+// An aggregate of references: every member is bound by the brace
+// initializer at the single construction site, which is the only way to build
+// it. Recent cppcheck releases still report the reference members as
+// uninitialized (uninitMemberVarNoCtor); a reference cannot be left unbound,
+// so the report is suppressed per member.
 struct CamOffsetEstimateInput
 {
   const CalibCamLidarArgs & args;
@@ -39,9 +44,12 @@ struct CamOffsetEstimateInput
   // The image topic's CameraInfo (full resolution) and the pose of the
   // camera's optical frame in --of at the bag's edge value, whose rotation
   // block carries the visual rotations into the --of frame.
+  // cppcheck-suppress uninitMemberVarNoCtor
   const core::image::CameraInfo & cam_info;
+  // cppcheck-suppress uninitMemberVarNoCtor
   const core::calib::Mat4 & t_trajframe_cam0;
   // Static-only TF buffer, for the --imu frame's chain from --of.
+  // cppcheck-suppress uninitMemberVarNoCtor
   tf2::BufferCore & static_buffer;
 };
 
