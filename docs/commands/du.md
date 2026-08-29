@@ -90,8 +90,8 @@ zstd from 11.6s to 5.2s.
 
 Two bag shapes cannot be answered this way and fall back to a full message
 scan, with identical output: bags recorded with `compression_mode: MESSAGE`
-(where the stored length is the compressed one) and MCAPs written without a
-chunk index (unchunked, or never finalized).
+(where the stored length is the compressed one) and MCAPs carrying no chunk
+index — written with chunking off, or never finalized.
 
 Passing `-t/--topics` narrows the work further. The selection is pushed down
 into the storage layer, and on MCAP a chunk that holds none of the selected
