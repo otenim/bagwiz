@@ -1276,13 +1276,12 @@ std::vector<std::string> complete_video_cam_pair_value(
   return candidates;
 }
 
-// `movify` renders a rosbag to video. Its subcommands are `cam` and `scan`.
-// `cam`'s `-t/--topic` (image topics) and `scan`'s `-t/--topic` (PointCloud2
-// topics) are declared topic slots, so try_topic_completion handles their
-// values before this function is reached; `cam`'s `--pcd` and `--cam-info` are
-// pair-valued slots whose completion defers here (see
-// completion_defers_to_command). Here we surface each leaf's own flags for any
-// `-` word, and the enum choices for `--field`, `--scheme`, and `--view`.
+// `movify` renders a rosbag to video. Its only subcommand is `cam`. `cam`'s
+// `-t/--topic` (image topics) is a declared topic slot, so try_topic_completion
+// handles its values before this function is reached; `cam`'s `--pcd` and
+// `--cam-info` are pair-valued slots whose completion defers here (see
+// completion_defers_to_command). Here we surface the leaf's own flags for any
+// `-` word, and the enum choices for `--field` and `--scheme`.
 //
 //   cam:  `movify`(0) `cam`(1) -i|--input <bag>
 //         -t|--topic <image_topic>... -o|--output <path> [--grid <cols>x<rows>]
@@ -1291,11 +1290,6 @@ std::vector<std::string> complete_video_cam_pair_value(
 //         [--pcd <topic>|<image>=<topic>...] [--field <f>]
 //         [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
 //         [--alpha <a>] [-w|--overwrite]
-//   scan: `movify`(0) `scan`(1) -i|--input <bag>
-//         -t|--topic <pcd_topic> -o|--output <path> [--view <bev|3d>]
-//         [--width <px>] [--height <px>] [--fps <f>] [--speed <x>]
-//         [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>]
-//         [--scheme <s>] [--point-size <n>] [-w|--overwrite]
 std::vector<std::string> complete_movify(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1303,7 +1297,7 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
     if (current.starts_with("-")) {
       return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
     }
-    return matching({"cam", "scan"}, current);
+    return matching({"cam"}, current);
   }
 
   // Reaching here implies cursor_word > kFirstCommandArgWord, so words[1]
@@ -1317,14 +1311,6 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
                    "--max",   "--min",        "--no-rectify", "--output", "--overwrite",
                    "--pcd",   "--point-size", "--resize",     "--scheme", "--topic",
                    "--width", "-i",           "-o",           "-t",       "-w"}),
-        current);
-    }
-    if (verb == "scan") {
-      return matching(
-        with_help(
-          {"--azim", "--dist", "--elev", "--fps", "--height", "--input", "--output", "--overwrite",
-           "--point-size", "--range", "--scheme", "--speed", "--topic", "--view", "--width", "-i",
-           "-o", "-t", "-w"}),
         current);
     }
   }
@@ -1345,9 +1331,6 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
   }
   if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--scheme") {
     return matching({"inferno", "jet", "magma", "plasma", "rainbow", "turbo", "viridis"}, current);
-  }
-  if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--view") {
-    return matching({"3d", "bev"}, current);
   }
   return {};
 }

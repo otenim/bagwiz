@@ -80,8 +80,8 @@ TEST(OversizedOutputWarning, FoldsInDetailAndRemedy)
   EXPECT_NE(warning->find("Pass --width to cap the output width."), std::string::npos) << *warning;
 }
 
-// An empty `detail` leaves no dangling separator behind — `movify scan` passes
-// none, since its size comes straight from --width/--height.
+// An empty `detail` leaves no dangling separator behind — a caller whose size
+// needs no grid explanation passes none.
 TEST(OversizedOutputWarning, OmitsTheDetailWhenEmpty)
 {
   const auto warning = oversized_output_warning(5760, 3240, "", "Lower --width/--height.");

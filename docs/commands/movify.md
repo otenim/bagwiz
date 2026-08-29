@@ -2,10 +2,9 @@
 
 Render a rosbag to video. Subcommands:
 
-| Subcommand                    | What it does                                            |
-| ----------------------------- | ------------------------------------------------------- |
-| [`cam`](#bagwiz-movify-cam)   | Render image topic(s) to a video file (single or grid). |
-| [`scan`](#bagwiz-movify-scan) | Render a point-cloud topic's scan pattern to video.     |
+| Subcommand                  | What it does                                            |
+| --------------------------- | ------------------------------------------------------- |
+| [`cam`](#bagwiz-movify-cam) | Render image topic(s) to a video file (single or grid). |
 
 ---
 
@@ -187,98 +186,9 @@ Frames are decoded and encoded one at a time; the video is written to a
 temporary file and atomically moved into place on success. A failed run leaves
 no partial output or leftover temporary file.
 
----
-
-## `bagwiz movify scan`
-
-Render the scan pattern of a point-cloud topic to a video file: within each
-sweep the points appear one by one in firing order, colored by their
-sweep-relative time. This makes the sensor's firing sequence visible — the
-rotating sweep of a spinning lidar, or a non-repetitive pattern — and helps
-spot timestamp irregularities and motion-distortion behavior.
-
-### Usage
-
-```text
-bagwiz movify scan -i <input> -t <topic> -o <output> [OPTIONS]
-```
-
-### Examples
-
-```bash
-# Render a lidar's scan pattern as a 3D animation (the default view).
-bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4
-
-# Tune the 3D viewpoint: elevation, azimuth, and camera distance.
-bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 \
-  --elev 35 --azim 180 --dist 120
-
-# Top-down (BEV) animation instead.
-bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --view bev
-
-# Coarser animation (and a smaller file): 30 fps output instead of 60.
-bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --fps 30
-
-# Play in real time instead of the default one-tenth speed.
-bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --speed 1.0
-
-# Fix the view extent to +-80 m instead of auto-fitting the first cloud.
-bagwiz movify scan -i drive.mcap -t /sensing/lidar/top/points -o scan.mp4 --range 80
-```
-
-### Options
-
-| Flag                      | Description                                                                                                                                                                                               |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                  |
-| `-t`, `--topic <topic>`   | **Required.** `sensor_msgs/msg/PointCloud2` topic to render. A literal topic name, not a glob. The topic must carry a per-point time field (see below).                                                   |
-| `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                   |
-| `--view <view>`           | Projection space: `3d` (perspective view from a fixed camera looking at the sensor) or `bev` (top-down XY view centered on the sensor; up is +x/forward, left is +y). Default: `3d`. Long-form only.      |
-| `--width <px>`            | Output width in pixels (range: 2-7680). Must be even. Default: 1280. A canvas above 4K is reported, not rejected — see [Oversized outputs](#oversized-outputs). Long-form only.                           |
-| `--height <px>`           | Output height in pixels (range: 2-4320). Must be even. Default: 720. Long-form only.                                                                                                                      |
-| `--fps <f>`               | Output frame rate in fps (range: 1-240). Each sweep spans round(`--fps` / (cloud rate x `--speed`)) video frames (at least 1), so a higher value gives a smoother animation. Default: 60. Long-form only. |
-| `--speed <x>`             | Playback speed as a fraction of real time: 1.0 plays each sweep in its recorded duration, 0.1 slows the animation to one tenth (range: 0.001-100). Default: 0.1. Long-form only.                          |
-| `--range <m>`             | BEV half-extent in meters: the BEV view spans +-range on both ground axes. Not used by the 3D view. Default: auto — the largest finite XY distance in the first cloud. Long-form only.                    |
-| `--elev <deg>`            | 3D view: camera elevation above the XY plane in degrees (range: -89 to 89). Default: 20. Long-form only.                                                                                                  |
-| `--azim <deg>`            | 3D view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks at the scene from behind the sensor. Default: 180. Long-form only.                                                     |
-| `--dist <m>`              | 3D view: camera distance from the sensor in meters. Default: 30. Long-form only.                                                                                                                          |
-| `--scheme <scheme>`       | Color scheme for the sweep-relative time coloring: `viridis`, `turbo`, `jet`, `plasma`, `inferno`, `magma`, `rainbow`. Default: `viridis`. Long-form only.                                                |
-| `--point-size <px>`       | Side length of drawn square points in pixels (range: 1-64). Default: 2. Long-form only.                                                                                                                   |
-| `-w`, `--overwrite`       | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                        |
-
-### Per-point time field
-
-The firing order is read from the cloud's per-point time field: the first
-field named `t`, `time`, `time_stamp`, or `timestamp` with element count 1 and
-datatype UINT32 (nanoseconds) or FLOAT32 / FLOAT64 (seconds). A topic without
-one stops the run — there is no array-order fallback, because array order does
-not reliably match firing order across drivers. Whether the values are
-sweep-relative or epoch-absolute does not matter: each sweep is normalized by
-its own earliest and latest point time. Points with a non-finite time never
-appear.
-
-### Animation model
-
-Each sweep clears the canvas and re-accumulates its points in firing order
-over round(`--fps` / (cloud rate x `--speed`)) video frames; the last frame of
-a sweep shows the complete cloud. The output frame rate is `--fps` itself (a
-10 Hz lidar with the default 60 fps and the default speed 0.1 gives each sweep
-60 frames), so the animation plays at `--speed` times real time. If `--fps` is
-below the cloud rate times `--speed`, each sweep gets exactly one frame with a
-warning (the animation then plays slower than the requested speed). A sweep in
-which no point carries a finite time contributes the same number of blank
-frames, so the video timeline is not disturbed. Dimensions must be even (the
-4:2:0 pixel formats these codecs use require it).
-
-### Output
-
-Clouds are parsed and encoded one at a time; the video is written to a
-temporary file and atomically moved into place on success. A failed run leaves
-no partial output or leftover temporary file.
-
 ## Oversized outputs
 
-Neither leaf caps the output size, but both report one large enough to be
+`cam` does not cap the output size, but it reports one large enough to be
 worth a second look: when the output exceeds 3840x2160 (4K UHD, 8,294,400
 pixels), the run logs a warning naming the actual size and continues.
 
@@ -292,9 +202,8 @@ The test is on the pixel product, not on either dimension, so a tall, narrow
 output is judged by what it actually costs to encode. A 2x2 grid of 1080p views
 lands exactly on 4K and stays quiet.
 
-`cam` cannot know its size until the first frame fixes the cell size, so its
-warning appears once decoding has begun; `scan` takes its size straight from
-`--width`/`--height` and reports before any work starts.
+`cam` cannot know its size until the first frame fixes the cell size, so the
+warning appears once decoding has begun.
 
 ## Exit status
 
