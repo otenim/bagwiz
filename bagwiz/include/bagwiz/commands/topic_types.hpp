@@ -73,7 +73,7 @@ inline constexpr std::array<std::string_view, 3> kUndistortTwistTopicTypes{{
 // Image types the shared to_packed_raster() decoder handles — `movify cam`
 // rendering, `walk`'s image preview, `map slam --color`, and `calib cam-lidar
 // --cam` all gate on it. Must mirror is_supported_type() in
-// bagwiz/src/commands/movify_video_common.cpp AND is_supported_image_type()
+// bagwiz/src/commands/movify_inputs.cpp AND is_supported_image_type()
 // in bagwiz_image/src/core/image/packed_raster.cpp AND the
 // kImageMsgType/kCompressedImageMsgType pair in
 // bagwiz/src/commands/calib_cam_lidar.cpp — three independent private copies,
@@ -98,7 +98,7 @@ inline constexpr std::array<std::string_view, 1> kCameraInfoType{{
 // bagwiz/src/commands/pcd_concat.cpp (`pcd concat --pcd`), and
 // bagwiz/src/commands/map_slam.cpp (`map slam --pcd`) — plus the
 // differently-named kPointCloudType in
-// bagwiz/src/commands/movify_video_common.cpp (`movify cam --pcd`) and
+// bagwiz/src/commands/movify_inputs.cpp (`movify cam --pcd`) and
 // kPointCloud2MsgType in bagwiz/src/commands/calib_cam_lidar.cpp
 // (`calib cam-lidar --pcd`).
 inline constexpr std::array<std::string_view, 1> kPointCloud2Type{{

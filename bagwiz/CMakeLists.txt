@@ -171,7 +171,12 @@ set(bagwiz_command_sources
   src/commands/movify.cpp
   src/commands/movify_output_size.cpp
   src/commands/movify_video.cpp
-  src/commands/movify_video_common.cpp
+  src/commands/movify_camera_panel.cpp
+  src/commands/movify_cloud_source.cpp
+  src/commands/movify_inputs.cpp
+  src/commands/movify_layout.cpp
+  src/commands/movify_output.cpp
+  src/commands/movify_pipeline.cpp
   src/commands/joke.cpp
   src/commands/ls.cpp
   src/commands/pcd.cpp
@@ -714,7 +719,12 @@ if(BUILD_TESTING)
     src/commands/movify.cpp
     src/commands/movify_output_size.cpp
     src/commands/movify_video.cpp
-    src/commands/movify_video_common.cpp
+    src/commands/movify_camera_panel.cpp
+    src/commands/movify_cloud_source.cpp
+    src/commands/movify_inputs.cpp
+    src/commands/movify_layout.cpp
+    src/commands/movify_output.cpp
+    src/commands/movify_pipeline.cpp
     src/commands/topic_option.cpp
     src/commands/registry.cpp)
   target_include_directories(bagwiz_movify_video_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -733,17 +743,30 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_movify_output_size_test ${bagwiz_test_libs} fmt::fmt)
 
-  # movify_video_common.hpp lives in src/commands (CLI-internal, not
-  # installed), so this test adds src/commands to its include path
-  # (pcd_concat_common idiom).
-  ament_add_gtest(bagwiz_movify_video_common_test
-    test/commands/movify_video_common_test.cpp
+  # The movify_*.hpp units (layout, output, inputs, cloud sources, camera
+  # panel, pipeline) live in src/commands (CLI-internal, not installed), so
+  # their unit tests add src/commands to the include path (pcd_concat_common
+  # idiom). The units depend on each other (the pipeline drives panels over
+  # the layout, the panel reads the inputs and cloud sources), so every test
+  # compiles the whole set from one list rather than a hand-picked subset.
+  set(bagwiz_movify_unit_sources
     src/commands/movify_output_size.cpp
-    src/commands/movify_video_common.cpp)
-  target_include_directories(bagwiz_movify_video_common_test
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
-  target_link_libraries(
-    bagwiz_movify_video_common_test ${bagwiz_test_libs} fmt::fmt ${OpenCV_LIBS})
+    src/commands/movify_camera_panel.cpp
+    src/commands/movify_cloud_source.cpp
+    src/commands/movify_inputs.cpp
+    src/commands/movify_layout.cpp
+    src/commands/movify_output.cpp
+    src/commands/movify_pipeline.cpp)
+  foreach(movify_unit layout output inputs camera_panel pipeline)
+    ament_add_gtest(bagwiz_movify_${movify_unit}_test
+      test/commands/movify_${movify_unit}_test.cpp
+      ${bagwiz_movify_unit_sources})
+    target_include_directories(bagwiz_movify_${movify_unit}_test
+      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+    target_link_libraries(
+      bagwiz_movify_${movify_unit}_test ${bagwiz_test_libs} fmt::fmt PkgConfig::LIBAV
+      ${OpenCV_LIBS})
+  endforeach()
 
   # The walk_*.hpp headers live in src/commands (CLI-internal, not installed),
   # so the walk unit tests add src/commands to their include path
