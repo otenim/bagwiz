@@ -24,6 +24,7 @@
 namespace
 {
 
+using bagwiz::commands::clock_topic_of;
 using bagwiz::commands::load_video_geometry;
 using bagwiz::commands::MovifyArgs;
 using bagwiz::commands::open_encode_reader;
@@ -40,6 +41,8 @@ using bagwiz::test::kMovifyImageType;
 using bagwiz::test::kMovifyPointCloudType;
 using bagwiz::test::movify_declare_topic;
 using bagwiz::test::movify_mcap_options;
+using bagwiz::test::movify_pointcloud2_payload;
+using bagwiz::test::movify_write_cloud_bag;
 using bagwiz::test::movify_write_image_bag;
 using bagwiz::test::MovifyTmpDirTest;
 
@@ -426,7 +429,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsWithoutCamTopicsFails)
   args.output_path = tmp_dir_ / "out.avi";
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
-  EXPECT_EQ(v.error, "nothing to render: pass at least one --cam topic.");
+  EXPECT_EQ(v.error, "nothing to render: pass at least one --cam or --pcd topic.");
 }
 
 TEST_F(MovifyTmpDirTest, ValidateInputsClockMustBeACamTopic)
@@ -436,7 +439,101 @@ TEST_F(MovifyTmpDirTest, ValidateInputsClockMustBeACamTopic)
   args.clock = "/cam/other";
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
-  EXPECT_EQ(v.error, "--clock '/cam/other' is not one of the --cam topics.");
+  EXPECT_EQ(v.error, "--clock '/cam/other' is not one of the --cam or --pcd topics.");
+}
+
+// A point-cloud topic alone: one panel per view, the frame and (for a BEV
+// view) the extent taken from the first cloud, and the topic as the clock.
+TEST_F(MovifyTmpDirTest, ValidateInputsPointCloudPanelsAlone)
+{
+  const auto bag = movify_write_cloud_bag(tmp_dir_, "in.mcap", "/points", "lidar", 2);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.output_path = tmp_dir_ / "out.avi";
+  args.pcd_topics = {"/points"};
+  args.views = {
+    bagwiz::core::pointcloud::CloudProjection::kPerspective,
+    bagwiz::core::pointcloud::CloudProjection::kBev};
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  EXPECT_TRUE(v.views.empty());
+  EXPECT_EQ(v.pcd_topics, std::vector<std::string>({"/points"}));
+  EXPECT_EQ(v.pcd_views.size(), 2u);
+  EXPECT_EQ(v.frame, "lidar");
+  EXPECT_DOUBLE_EQ(v.range_m, 1.0);  // the first cloud's farthest point
+  ASSERT_TRUE(v.clock_pcd.has_value());
+  EXPECT_EQ(*v.clock_pcd, 0u);
+  EXPECT_EQ(v.clock, 0u);
+  EXPECT_EQ(clock_topic_of(v), "/points");
+  EXPECT_EQ(v.grid.cols, 2u);  // two panels
+  EXPECT_EQ(v.grid.rows, 1u);
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsHonorsFrameAndRange)
+{
+  const auto bag = movify_write_cloud_bag(tmp_dir_, "in.mcap", "/points", "lidar", 1);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.output_path = tmp_dir_ / "out.avi";
+  args.pcd_topics = {"/points"};
+  args.views = {bagwiz::core::pointcloud::CloudProjection::kBev};
+  args.frame = "base_link";
+  args.range_m = 80.0;
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  EXPECT_EQ(v.frame, "base_link");
+  EXPECT_DOUBLE_EQ(v.range_m, 80.0);
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsRejectsARepeatedView)
+{
+  const auto bag = movify_write_cloud_bag(tmp_dir_, "in.mcap", "/points", "lidar", 1);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.output_path = tmp_dir_ / "out.avi";
+  args.pcd_topics = {"/points"};
+  args.views = {
+    bagwiz::core::pointcloud::CloudProjection::kBev,
+    bagwiz::core::pointcloud::CloudProjection::kBev};
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(v.error, "--view names the same projection more than once.");
+}
+
+// A point-cloud topic may be the clock behind camera panels: it drives the
+// ticks, and the first point-cloud panel (after the cameras) is the clock
+// panel.
+TEST_F(MovifyTmpDirTest, ValidateInputsClockMayBeAPointCloudTopic)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, movify_mcap_options());
+    movify_declare_topic(*w, "/cam/image", kMovifyImageType);
+    movify_declare_topic(*w, "/points", kMovifyPointCloudType);
+    const auto cloud = movify_pointcloud2_payload(1'000'000'000LL, "lidar", {{{1.0F, 0.0F, 0.0F}}});
+    w->write("/points", 1'000'000'000LL, cloud);
+    w->close();
+  }
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  args.pcd_topics = {"/points"};
+  args.clock = "/points";
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  ASSERT_TRUE(v.clock_pcd.has_value());
+  EXPECT_EQ(v.clock, 1u);  // after the one camera panel
+  EXPECT_EQ(clock_topic_of(v), "/points");
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsPointCloudTopicWithoutMessagesFails)
+{
+  const auto bag = movify_write_cloud_bag(tmp_dir_, "in.mcap", "/points", "lidar", 0);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.output_path = tmp_dir_ / "out.avi";
+  args.pcd_topics = {"/points"};
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(v.error, "topic '/points' has no messages to render.");
 }
 
 // ---- scan_video_inputs ------------------------------------------------------

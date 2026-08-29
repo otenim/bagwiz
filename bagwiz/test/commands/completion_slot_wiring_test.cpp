@@ -170,7 +170,9 @@ TEST(CompletionSlotWiring, Movify)
   const auto slots = topic_slots_of(app);
   expect_slot(slot_for(slots, "cam"), TopicSelectorMode::kGlob, bagwiz::commands::kImageTopicTypes);
   expect_slot(
-    slot_for(slots, "clock"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
+    slot_for(slots, "clock"), TopicSelectorMode::kLiteral,
+    bagwiz::commands::kMovifyClockTopicTypes);
+  expect_slot(slot_for(slots, "pcd"), TopicSelectorMode::kGlob, bagwiz::commands::kPointCloud2Type);
   // --cam-info takes a bare CameraInfo topic or an <image>=<info> pair; its
   // allowed_types name the pair's left half (like map slam --cam-info), and
   // its value completion defers to complete_movify() (pair_optional).

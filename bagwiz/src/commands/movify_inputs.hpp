@@ -87,27 +87,49 @@ struct ViewInput
   std::vector<std::string> pcd_topics;
 };
 
-// Outcome of validate_video_inputs(). `views` is parallel to args.cam_topics,
-// `grid` is the resolved layout, and `clock` is the index into `views` of the
-// clock panel (--clock, else the first). `error` is empty on success; on failure it
+// Outcome of validate_video_inputs(). `views` is parallel to args.cam_topics
+// (the camera panels, in grid order) and `grid` is the resolved layout. The
+// point-cloud panels follow the camera panels in the grid: `pcd_topics` are
+// the --pcd topics they all draw, `pcd_views` the projections (one panel
+// each, in --view order), `frame` the frame every cloud is transformed
+// into, and `range_m` the BEV half-extent. `clock` indexes the clock panel
+// among all panels (camera panels first); when the clock is a point-cloud
+// topic, `clock_pcd` is its index into `pcd_topics` and the clock panel is
+// the first point-cloud panel. `error` is empty on success; on failure it
 // holds the message that was already logged.
 struct VideoInputValidation
 {
   std::vector<ViewInput> views;
   GridSpec grid;
   std::size_t clock = 0;
+  std::vector<std::string> pcd_topics;
+  std::vector<core::pointcloud::CloudProjection> pcd_views;
+  std::string frame;
+  double range_m = 0.0;
+  std::optional<std::size_t> clock_pcd;
   std::string error;
 
   [[nodiscard]] bool ok() const { return error.empty(); }
 };
 
-// The command's pre-flight checks: grid parse, duplicate/empty topic
-// rejection, every image topic's presence + renderable type, the --clock
-// resolution, --cam-pcd and --cam-info entry parsing, per-view cam-info resolution (explicit entry
-// or derivation from the image topic name) and the cam-info requirement of rectification /
-// --cam-pcd, and every point-cloud topic's presence + type. Logs the command's errors and returns
-// on the first failure.
+// The command's pre-flight checks: the --view list, grid parse,
+// duplicate/empty topic rejection, every image topic's presence + renderable
+// type, the --clock resolution, --cam-pcd and --cam-info entry parsing,
+// per-view cam-info resolution (explicit entry or derivation from the image
+// topic name) and the cam-info requirement of rectification / --cam-pcd,
+// every point-cloud topic's presence + type, and the point-cloud panels'
+// frame and BEV extent (from the first cloud of the first --pcd topic unless
+// --frame / --range name them). Logs the command's errors and returns on the
+// first failure.
 [[nodiscard]] VideoInputValidation validate_video_inputs(const MovifyArgs & args);
+
+// The topic whose messages define the ticks: the clock camera panel's, or
+// the point-cloud topic `clock_pcd` names.
+[[nodiscard]] inline const std::string & clock_topic_of(const VideoInputValidation & validation)
+{
+  return validation.clock_pcd.has_value() ? validation.pcd_topics[*validation.clock_pcd]
+                                          : validation.views[validation.clock].topic;
+}
 
 // Whether a validated view renders rectified: rectification must be in effect
 // (the default, unless --no-rectify) and the view's camera info must have
@@ -126,8 +148,9 @@ struct TopicSpan
   std::uint64_t count = 0;
 };
 
-// Outcome of scan_video_inputs(). pcd_topics is the deduplicated union of
-// every view's point-cloud topics in first-use order; pcd_spans and
+// Outcome of scan_video_inputs(). pcd_topics is the deduplicated union of the
+// point-cloud panels' topics and every camera panel's overlay topics, in
+// first-use order; pcd_spans and
 // pcd_topic_has_stamps are parallel to it, and the pcd_spans entries are
 // owned here (the cloud sources move them out). `error` is empty on success;
 // on failure it holds the message that was already logged.

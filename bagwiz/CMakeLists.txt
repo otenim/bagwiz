@@ -172,6 +172,7 @@ set(bagwiz_command_sources
   src/commands/movify_output_size.cpp
   src/commands/movify_run.cpp
   src/commands/movify_camera_panel.cpp
+  src/commands/movify_cloud_panel.cpp
   src/commands/movify_cloud_source.cpp
   src/commands/movify_inputs.cpp
   src/commands/movify_layout.cpp
@@ -720,6 +721,7 @@ if(BUILD_TESTING)
     src/commands/movify_output_size.cpp
     src/commands/movify_run.cpp
     src/commands/movify_camera_panel.cpp
+    src/commands/movify_cloud_panel.cpp
     src/commands/movify_cloud_source.cpp
     src/commands/movify_inputs.cpp
     src/commands/movify_layout.cpp
@@ -752,6 +754,7 @@ if(BUILD_TESTING)
   set(bagwiz_movify_unit_sources
     src/commands/movify_output_size.cpp
     src/commands/movify_camera_panel.cpp
+    src/commands/movify_cloud_panel.cpp
     src/commands/movify_cloud_source.cpp
     src/commands/movify_inputs.cpp
     src/commands/movify_layout.cpp

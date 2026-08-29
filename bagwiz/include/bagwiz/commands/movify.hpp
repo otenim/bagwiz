@@ -9,6 +9,7 @@
 #ifndef BAGWIZ__COMMANDS__MOVIFY_HPP_
 #define BAGWIZ__COMMANDS__MOVIFY_HPP_
 
+#include "bagwiz/core/pointcloud/cloud_view.hpp"
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
 
@@ -41,16 +42,16 @@ struct MovifyArgs
 
   std::filesystem::path input_path;
   // Image topics to render as camera panels, in grid order (left to right,
-  // top to bottom). At least one panel is required.
+  // top to bottom). Together with pcd_topics at least one panel is required.
   std::vector<std::string> cam_topics;
   std::filesystem::path output_path;
   // Replace a pre-existing <output>. Without it, an existing output path stops
   // the run before any work is done.
   bool overwrite = false;
   // The topic whose messages define the output frames — one frame per
-  // message, its message rate as the frame rate, and its frame size (after
-  // --resize / --width) as the grid's cell size. Must be one of cam_topics;
-  // unset picks the first one.
+  // message, its message rate as the frame rate, and its panel's render size
+  // as the grid's cell size. Must be one of cam_topics or pcd_topics; unset
+  // picks the first camera panel, else the first point-cloud panel.
   std::optional<std::string> clock;
   // Grid layout as "<cols>x<rows>" (e.g. "2x2"). Empty derives a near-square
   // grid from the panel count.
@@ -68,7 +69,7 @@ struct MovifyArgs
   // motion correction keeps the name `pcd undistort`.
   bool rectify = true;
   // Scale the clock panel's frame by this factor while preserving aspect
-  // ratio, which sets the cell size.
+  // ratio, which sets the cell size (camera clocks only).
   float resize_scale = 1.0f;
   // Fix the composed output width in pixels, deriving the cell size from the
   // grid columns and the clock panel's aspect ratio. Mutually exclusive with
@@ -79,12 +80,31 @@ struct MovifyArgs
   // (a literal name or '*' glob) projects onto every panel; an
   // "<image_topic>=<pcd_selector>" entry projects onto that panel only.
   std::vector<std::string> cam_pcd_entries;
+  // Coloring shared by the camera overlays and the point-cloud panels.
   core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
   std::optional<double> property_min;
   std::optional<double> property_max;
   core::pointcloud::ColorScheme colorscheme = core::pointcloud::ColorScheme::kViridis;
   std::uint32_t point_size = 2;
+  // Opacity of the camera overlays (the point-cloud panels draw on black).
   float alpha = 1.0f;
+
+  // Point-cloud panels (--pcd): every listed topic is drawn into one panel per
+  // view, each cloud transformed at its own stamp into `frame` (unset: the
+  // first topic's own frame).
+  std::vector<std::string> pcd_topics;
+  std::vector<core::pointcloud::CloudProjection> views{
+    core::pointcloud::CloudProjection::kPerspective};
+  std::optional<std::string> frame;
+  // BEV half-extent in meters. Unset: the largest finite point distance in the
+  // first cloud of the first topic.
+  std::optional<double> range_m;
+  // Perspective camera on a sphere of radius dist_m around the view frame's
+  // origin, looking at it.
+  double elev_deg = 20.0;
+  double azim_deg = 180.0;
+  double dist_m = 30.0;
+
   // Internal toggle for the parallel per-panel pipeline. When false the
   // synchronous loop is used, which composes the same frames without worker
   // threads. Not exposed on the CLI; tests set this directly.
@@ -118,14 +138,13 @@ struct VideoSourceCheck
 [[nodiscard]] VideoSourceCheck check_video_source(
   const std::filesystem::path & input, const std::string & topic);
 
-// Render `args.cam_topics` from `args.input_path` to a video at
+// Render the panels named by `args` (camera panels from cam_topics,
+// point-cloud panels from pcd_topics) from `args.input_path` to a video at
 // `args.output_path`, inferring the container/codec from the output extension
 // and the frame rate from the clock topic's message timestamps. The panels are
 // arranged in a grid (see `grid`); every panel other than the clock shows the
-// frame whose bag record time is nearest the clock frame's. Returns a process
-// exit code: 0 on success, 1 on any error. Renders raw sensor_msgs/msg/Image
-// (bgr8 / rgb8) and sensor_msgs/msg/CompressedImage (JPEG / PNG, decoded to
-// BGR before encoding).
+// message of its topic whose bag record time is nearest the clock message's.
+// Returns a process exit code: 0 on success, 1 on any error.
 int run_movify(const MovifyArgs & args);
 
 }  // namespace bagwiz::commands

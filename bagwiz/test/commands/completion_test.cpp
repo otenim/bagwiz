@@ -2136,9 +2136,16 @@ TEST(FlagCompletionTest, MovifyDashListsFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "movify", "-"}),
-    "--alpha\n--cam\n--cam-info\n--cam-pcd\n--clock\n--field\n--grid\n--help\n--input\n"
-    "--max\n--min\n--no-rectify\n--output\n--overwrite\n--point-size\n--resize\n--scheme\n"
-    "--width\n-h\n-i\n-o\n-w\n");
+    "--alpha\n--azim\n--cam\n--cam-info\n--cam-pcd\n--clock\n--dist\n--elev\n--field\n"
+    "--frame\n--grid\n--help\n--input\n--max\n--min\n--no-rectify\n--output\n--overwrite\n"
+    "--pcd\n--point-size\n--range\n--resize\n--scheme\n--view\n--width\n-h\n-i\n-o\n-w\n");
+}
+
+// `--view <TAB>` offers the point-cloud panel projections, sorted.
+TEST(FlagCompletionTest, MovifyViewFlagListsChoices)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "--view"}), "3d\nbev\n");
 }
 
 // `--field <TAB>` offers the valid point-cloud field choices, sorted.

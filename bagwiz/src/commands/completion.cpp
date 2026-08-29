@@ -1273,28 +1273,32 @@ std::vector<std::string> complete_video_cam_pair_value(
   return candidates;
 }
 
-// `movify` renders a rosbag to video. `--cam` (image topics) and `--clock` are
-// declared topic slots, so try_topic_completion handles their values before
-// this function is reached; `--cam-pcd` and `--cam-info` are pair-valued
-// slots whose completion defers here (see completion_defers_to_command). Here
-// we surface the command's flags for any `-` word, and the enum choices for
-// `--field` and `--scheme`.
+// `movify` renders a rosbag to video. `--cam` (image topics), `--pcd`
+// (point-cloud topics) and `--clock` are declared topic slots, so
+// try_topic_completion handles their values before this function is reached; `--cam-pcd` and
+// `--cam-info` are pair-valued slots whose completion defers here (see
+// completion_defers_to_command). Here we surface the command's flags for any `-` word, and the enum
+// choices for
+// `--field`, `--scheme`, and `--view`.
 //
 //   `movify`(0) -i|--input <bag> --cam <image_topic>... -o|--output <path>
 //   [--clock <image_topic>] [--grid <cols>x<rows>]
 //   [--cam-info <topic>|<image>=<info>] [--no-rectify] [--resize <s>]
 //   [--width <px>] [--cam-pcd <topic>|<image>=<topic>...] [--field <f>]
 //   [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
-//   [--alpha <a>] [-w|--overwrite]
+//   [--alpha <a>] [--pcd <pcd_topic>...] [--view <3d|bev>...] [--frame <f>]
+//   [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>] [-w|--overwrite]
 std::vector<std::string> complete_movify(const CompletionRequest & request)
 {
   const auto current = current_word(request);
   if (current.starts_with("-")) {
     return matching(
-      with_help({"--alpha",      "--cam",    "--cam-info",  "--cam-pcd",    "--clock",
-                 "--field",      "--grid",   "--input",     "--max",        "--min",
-                 "--no-rectify", "--output", "--overwrite", "--point-size", "--resize",
-                 "--scheme",     "--width",  "-i",          "-o",           "-w"}),
+      with_help({"--alpha",  "--azim",      "--cam",  "--cam-info",   "--cam-pcd",
+                 "--clock",  "--dist",      "--elev", "--field",      "--frame",
+                 "--grid",   "--input",     "--max",  "--min",        "--no-rectify",
+                 "--output", "--overwrite", "--pcd",  "--point-size", "--range",
+                 "--resize", "--scheme",    "--view", "--width",      "-i",
+                 "-o",       "-w"}),
       current);
   }
 
@@ -1312,6 +1316,9 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
   }
   if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--scheme") {
     return matching({"inferno", "jet", "magma", "plasma", "rainbow", "turbo", "viridis"}, current);
+  }
+  if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--view") {
+    return matching({"3d", "bev"}, current);
   }
   return {};
 }

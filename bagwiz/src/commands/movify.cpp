@@ -12,6 +12,7 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/commands/topic_types.hpp"
+#include "bagwiz/core/pointcloud/cloud_view.hpp"
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
 
@@ -23,10 +24,10 @@ namespace bagwiz::commands
 {
 
 // `bagwiz movify` renders a rosbag to video: the image topics named with
-// --cam become the panels of one grid, one output frame per message of the
-// clock topic, with point clouds optionally projected onto the panels
-// (--cam-pcd). Every input is a role selector — there is no general topic
-// operand, because no single topic is "the" topic of a composed video.
+// --cam and the point clouds named with --pcd become the panels of one grid,
+// one output frame per message of the clock topic, with point clouds
+// optionally projected onto the camera panels (--cam-pcd). Every input is a role selector — there
+// is no general topic operand, because no single topic is "the" topic of a composed video.
 class MovifyCommand : public Command
 {
 public:
@@ -44,9 +45,16 @@ public:
       "Image topic(s) to render as camera panels, in grid order (left to right, top to "
       "bottom — see --grid). Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
       "sensor_msgs/msg/CompressedImage (JPEG/PNG). A literal name or a '*' glob; a glob's "
-      "matches expand in lexicographic (topic-name) order. At least one is required. "
-      "Repeatable.",
+      "matches expand in lexicographic (topic-name) order. At least one --cam or --pcd "
+      "topic is required. Repeatable.",
       TopicSlotSpec{.allowed_types = kImageTopicTypes})
+      ->expected(-1);
+    add_topic_option(
+      app, "--pcd", args_.pcd_topics,
+      "PointCloud2 topic(s) to render as point-cloud panels: every listed topic is drawn "
+      "into one panel per --view, each cloud transformed into the --frame frame at its own "
+      "stamp. A literal name or a '*' glob. Repeatable.",
+      TopicSlotSpec{.allowed_types = kPointCloud2Type})
       ->expected(-1);
     app
       .add_option(
@@ -61,8 +69,9 @@ public:
       app, "--clock", args_.clock,
       "Topic whose messages define the output frames: each message becomes one frame, its "
       "message rate sets the frame rate, and its frame size fixes the grid's cell size. Must "
-      "be one of the --cam topics. Default: the first --cam topic.",
-      TopicSlotSpec{.allowed_types = kImageTopicTypes, .mode = TopicSelectorMode::kLiteral});
+      "be one of the --cam or --pcd topics. Default: the first --cam topic, else the first "
+      "--pcd topic.",
+      TopicSlotSpec{.allowed_types = kMovifyClockTopicTypes, .mode = TopicSelectorMode::kLiteral});
     app
       .add_option(
         "--grid", args_.grid,
@@ -170,6 +179,43 @@ public:
     app.add_option("--alpha", args_.alpha, "Point overlay opacity.")
       ->default_val(1.0f)
       ->check(CLI::Range(0.0f, 1.0f));
+    const std::map<std::string, core::pointcloud::CloudProjection> view_map = {
+      {"3d", core::pointcloud::CloudProjection::kPerspective},
+      {"bev", core::pointcloud::CloudProjection::kBev}};
+    app
+      .add_option(
+        "--view", args_.views,
+        "Projection(s) of the point-cloud panels, one panel each: '3d' is a perspective view "
+        "from a virtual camera (--elev/--azim/--dist) looking at the --frame origin, 'bev' a "
+        "top-down view of its XY plane (up is +x, left is +y). Default: 3d.")
+      ->transform(CLI::CheckedTransformer{view_map})
+      ->expected(-1);
+    app.add_option(
+      "--frame", args_.frame,
+      "TF frame the point-cloud panels draw in; every cloud is transformed into it at its own "
+      "stamp. Default: the first --pcd topic's frame.");
+    app
+      .add_option(
+        "--range", args_.range_m,
+        "BEV half-extent in meters: the bev view spans +-range on both ground axes. Default: "
+        "the farthest finite point of the first cloud.")
+      ->check(CLI::PositiveNumber);
+    app
+      .add_option(
+        "--elev", args_.elev_deg, "3d view: camera elevation above the XY plane in degrees.")
+      ->default_val(20.0)
+      ->check(CLI::Range(-89.0, 89.0));
+    app
+      .add_option(
+        "--azim", args_.azim_deg,
+        "3d view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks "
+        "at the scene from behind the sensor.")
+      ->default_val(180.0);
+    app
+      .add_option(
+        "--dist", args_.dist_m, "3d view: camera distance from the --frame origin in meters.")
+      ->default_val(30.0)
+      ->check(CLI::PositiveNumber);
     app.footer(
       "Frames stream straight to the encoder (no large temp files); the output is written\n"
       "atomically and a failed run leaves no partial file behind.");

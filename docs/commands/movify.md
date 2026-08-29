@@ -1,16 +1,17 @@
 # `bagwiz movify`
 
-Render a rosbag to video: the image topics named with `--cam` become the
-panels of one grid — a single view, or a multi-view grid — with point clouds
-optionally projected onto them. One topic is the clock: each of its messages
-becomes one output frame, its message rate sets the frame rate, and its frame
-size fixes the grid's cell size. The container/codec is chosen from the
-`<output>` extension.
+Render a rosbag to video: the image topics named with `--cam` and the point
+clouds named with `--pcd` (drawn in 3D and/or from above) become the panels
+of one grid — a single view, or a multi-view grid — with point clouds
+optionally projected onto the camera panels. One topic is the clock: each of
+its messages becomes one output frame, its message rate sets the frame rate,
+and its panel's size fixes the grid's cell size. The container/codec is
+chosen from the `<output>` extension.
 
 ## Usage
 
 ```text
-bagwiz movify -i <input> --cam <topic>... -o <output> [OPTIONS]
+bagwiz movify -i <input> [--cam <topic>...] [--pcd <topic>...] -o <output> [OPTIONS]
 ```
 
 ## Examples
@@ -50,6 +51,32 @@ bagwiz movify -i drive.mcap --cam /sensing/camera/image_raw/compressed -o out.mp
 # distorted image.
 bagwiz movify -i drive.mcap --cam /sensing/camera/image_raw/compressed -o out.mp4 \
   --cam-pcd /sensing/lidar/front/points --no-rectify
+
+# Render a lidar alone: a 3D view from a virtual camera behind the sensor,
+# one frame per sweep at the sweep rate.
+bagwiz movify -i drive.mcap --pcd /sensing/lidar/top/points -o lidar.mp4
+
+# The same lidar from above (bird's-eye view), the extent fixed to +-80 m.
+bagwiz movify -i drive.mcap --pcd /sensing/lidar/top/points -o bev.mp4 --view bev --range 80
+
+# Both views side by side, with the virtual camera tuned.
+bagwiz movify -i drive.mcap --pcd /sensing/lidar/top/points -o lidar.mp4 \
+  --view 3d bev --elev 35 --azim 150 --dist 60
+
+# Four lidars merged into one panel in the vehicle frame (through the bag's
+# TF), colored by intensity.
+bagwiz movify -i drive.mcap -o surround.mp4 --frame base_link --field intensity \
+  --pcd '/sensing/lidar/*/points'
+
+# A camera next to the lidar: the camera drives the frames, the lidar panel
+# fills a cell of the camera's size.
+bagwiz movify -i drive.mcap -o cam_lidar.mp4 \
+  --cam /sensing/camera/front/image_raw/compressed --pcd /sensing/lidar/top/points
+
+# The lidar as the clock instead: one frame per sweep, the camera following.
+bagwiz movify -i drive.mcap -o cam_lidar.mp4 \
+  --cam /sensing/camera/front/image_raw/compressed --pcd /sensing/lidar/top/points \
+  --clock /sensing/lidar/top/points
 
 # Render at half resolution to reduce output file size.
 bagwiz movify -i drive.mcap --cam /sensing/camera/image_raw/compressed -o out.mp4 --resize 0.5
@@ -105,9 +132,10 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 | Flag                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--cam <topic>...`        | **Required** (at least one). Image topic(s) to render as camera panels, in grid order (left to right, top to bottom). Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)); a glob's matches expand in lexicographic (topic-name) order, so grid placement stays deterministic. Long-form only. Repeatable.                                                                                                                                                                |
+| `--cam <topic>...`        | Image topic(s) to render as camera panels, in grid order (left to right, top to bottom). Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)); a glob's matches expand in lexicographic (topic-name) order, so grid placement stays deterministic. At least one `--cam` or `--pcd` topic is required. Long-form only. Repeatable.                                                                                                                                          |
+| `--pcd <topic>...`        | `sensor_msgs/msg/PointCloud2` topic(s) to render as point-cloud panels, after the camera panels in the grid: every listed topic is drawn into one panel per `--view`, each cloud transformed into the `--frame` frame at its own stamp — see [Point-cloud panels](#point-cloud-panels). A literal topic name or a `*` glob. Long-form only. Repeatable.                                                                                                                                                                                                                                                                |
 | `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--clock <topic>`         | The panel whose messages define the output frames: each message becomes one frame, its message rate sets the frame rate, and its frame size (after `--resize` / `--width`) fixes the grid's cell size — see [The clock panel](#the-clock-panel). Must be one of the `--cam` topics. A literal topic name, not a glob. Default: the first `--cam` topic. Long-form only.                                                                                                                                                                                                                                                |
+| `--clock <topic>`         | The panel whose messages define the output frames: each message becomes one frame, its message rate sets the frame rate, and its panel's size (a camera frame after `--resize` / `--width`, or a point-cloud panel's 1280x720) fixes the grid's cell size — see [The clock panel](#the-clock-panel). Must be one of the `--cam` or `--pcd` topics. A literal topic name, not a glob. Default: the first `--cam` topic, else the first `--pcd` topic. Long-form only.                                                                                                                                                   |
 | `--grid <cols>x<rows>`    | Grid layout for the panels (e.g. `2x2`). Must provide at least as many cells as panels; extra cells stay black. When omitted, a near-square grid is derived from the panel count (2 panels -> 2x1, 3-4 -> 2x2, 5-6 -> 3x2, ...). Long-form only.                                                                                                                                                                                                                                                                                                                                                                       |
 | `--cam-info <topic>`      | `sensor_msgs/msg/CameraInfo` topic for rectification and `--cam-pcd`: a bare `<info_topic>` applies to every camera panel, an `<image_topic>=<info_topic>` entry overrides one panel. Panels without an entry derive it from the image topic name (`/image_raw`, `/image_raw/compressed`, `/image_rect_color`, and `/image_rect_color/compressed` map their prefix to `/camera_info`). Literal topic names, not globs. Long-form only. Repeatable.                                                                                                                                                                     |
 | `--no-rectify`            | Disable rectification. Each frame is otherwise rectified (lens-distortion correction applied) using the panel's resolved CameraInfo — there is no opt-in flag, since that is the default. `--no-rectify` also covers `--cam-pcd` panels, whose points then project onto the raw image with the camera's lens distortion applied. A panel whose camera-info topic cannot be derived renders unrectified with a warning (name it with `--cam-info`); point-cloud projection still requires one. Long-form only.                                                                                                          |
@@ -117,15 +145,21 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 | `--max <value>`           | Manual maximum value for field normalization. Default: auto-computed from the point-cloud span. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `--scheme <scheme>`       | Color scheme for point coloring: `viridis`, `turbo`, `jet`, `plasma`, `inferno`, `magma`, `rainbow`. Default: `viridis`. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `--point-size <px>`       | Side length of drawn square points in pixels (range: 1-64). Default: 2. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--alpha <alpha>`         | Point overlay opacity, 0.0-1.0. Default: 1.0. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `--alpha <alpha>`         | Opacity of the point clouds projected onto camera panels, 0.0-1.0. Default: 1.0. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `--view <view>...`        | Projection(s) of the point-cloud panels, one panel each, in this order: `3d` is a perspective view from a virtual camera on a sphere around the `--frame` origin (`--elev`, `--azim`, `--dist`), `bev` a top-down view of its XY plane spanning `--range` (up is +x/forward, left is +y). Each may appear once. Default: `3d`. Long-form only.                                                                                                                                                                                                                                                                         |
+| `--frame <frame_id>`      | TF frame the point-cloud panels draw in; every cloud is transformed into it at its own `header.stamp` through the bag's TF, a cloud already in that frame as is. Default: the first `--pcd` topic's own frame. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `--range <m>`             | `bev` half-extent in meters: the view spans +-range on both ground axes. Not used by the `3d` view. Default: the distance of the farthest finite point in the first cloud of the first `--pcd` topic. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `--elev <deg>`            | `3d` view: camera elevation above the XY plane in degrees (range: -89 to 89). Default: 20. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `--azim <deg>`            | `3d` view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks at the scene from behind the sensor. Default: 180. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `--dist <m>`              | `3d` view: camera distance from the `--frame` origin in meters. Default: 30. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `--resize <factor>`       | Scale the clock panel's frame by this factor while preserving aspect ratio, which sets the cell size. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so rectification and `--cam-pcd` stay aligned (range: 0.01-10.0). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                                                                                                                                                           |
 | `--width <px>`            | Fix the composed output width in pixels: the cell width is the width split across the grid columns, and the cell height follows the clock panel's aspect ratio (both rounded down to even, so the output can be a few pixels narrower). Mutually exclusive with `--resize`. Long-form only.                                                                                                                                                                                                                                                                                                                            |
 | `-w`, `--overwrite`       | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ## The clock panel
 
-One panel drives the output: the first `--cam` topic, or the one named with
-`--clock`.
+One panel drives the output: the first `--cam` topic — the first `--pcd`
+topic when there is no camera — or the one named with `--clock`.
 
 - The output's frame rate and frame count come from the clock topic's message
   timestamps. Each output frame shows, for every other panel, that topic's
@@ -134,17 +168,36 @@ One panel drives the output: the first `--cam` topic, or the one named with
   a message yet renders as a black cell).
 - The cell size is the clock frame's size after `--resize` — or, when
   `--width` is given, the size derived from the output width and the grid
-  columns. Every other panel is scaled uniformly to fit the cell, preserving
-  aspect ratio, and centered with black bars when the aspect ratios differ.
+  columns; a point-cloud clock panel renders at 1280x720, or at the `--width`
+  split across the columns at 16:9. Every other camera panel is scaled
+  uniformly to fit the cell, preserving aspect ratio, and centered with black
+  bars when the aspect ratios differ; a point-cloud panel fills the cell.
 - The clock topic's frame size must not change mid-bag (a change aborts the
   run); other panels re-fit automatically.
 - A topic that carries no messages at all stops the run with an error, rather
   than silently rendering a black cell.
 
+## Point-cloud panels
+
+Every `--pcd` topic is drawn into one panel per `--view`: a `3d` panel is a
+perspective view from a virtual camera on a sphere around the view frame's
+origin (`--elev`, `--azim`, `--dist`), a `bev` panel a top-down view of its XY
+plane spanning `--range` on both axes (up is +x, left is +y). Each frame,
+every topic's cloud whose bag record time is nearest the clock message's is
+transformed into the view frame — `--frame`, or the first topic's own frame
+— at the cloud's own `header.stamp`, through the bag's TF; a cloud already
+in that frame needs no TF, and a cloud whose chain to the frame does not
+resolve stops the run. Points are colored by `--field` with `--scheme` over
+the range of every point-cloud topic in the run (or `--min`/`--max`) and
+drawn as `--point-size` squares with a depth test: where points overlap,
+the `3d` panel keeps the one nearest the camera and the `bev` panel the
+highest one.
+
 ## Multi-view grids
 
-With several `--cam` topics, each topic occupies one grid cell in argument
-order (left to right, top to bottom), the clock panel included. The composed
+With several panels, each occupies one grid cell in order — the `--cam`
+topics as given, then one point-cloud panel per `--view` (left to right, top
+to bottom), the clock panel included. The composed
 size is the cell size multiplied by the grid, so it grows faster than the
 topic count suggests: nine 1080p cameras on a 3x3 grid compose a 5760x3240
 video. A run reports a composed size above 4K — see

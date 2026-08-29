@@ -10,6 +10,7 @@
 #define BAGWIZ__CORE__POINTCLOUD__PROJECTOR_HELPERS_HPP_
 
 #include "bagwiz/core/image/camera_info.hpp"
+#include "bagwiz/core/pointcloud/cloud_transform.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/pointcloud/projector.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
@@ -23,6 +24,15 @@
 
 namespace bagwiz::core::pointcloud
 {
+
+// The pose of `source_frame` expressed in `target_frame` at `stamp_ns` —
+// TF's lookupTransform(target, source) — as the RigidTransform that maps a
+// point of the source frame into the target frame. Lookups are serialized
+// the same way project_cloud_for_frame's are. Returns nullopt with `error`
+// set when the chain does not resolve at that time.
+[[nodiscard]] std::optional<RigidTransform> lookup_rigid_transform(
+  tf2::BufferCore & tf_buffer, const std::string & target_frame, const std::string & source_frame,
+  std::int64_t stamp_ns, std::string & error);
 
 // Transform a point cloud into the camera frame and project it onto the image.
 // `use_rectified` should be true when the target image has been rectified, so

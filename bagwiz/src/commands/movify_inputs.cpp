@@ -10,16 +10,19 @@
 
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/image/camera_info_resolver.hpp"
+#include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/tf_buffer_loader.hpp"
 #include "bagwiz/io/topics.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <limits>
 #include <memory>
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace bagwiz::commands
 {
@@ -87,6 +90,46 @@ int scan_pointcloud_span(
   }
   out = std::move(*idx);
   return 0;
+}
+
+// The first message of a point-cloud topic, parsed: the point-cloud panels
+// take their view frame and BEV extent from it.
+struct FirstCloud
+{
+  std::optional<core::pointcloud::PointCloud2> cloud;
+  std::string error;
+};
+
+FirstCloud read_first_cloud(const std::filesystem::path & input, const std::string & topic)
+{
+  FirstCloud out;
+  std::unique_ptr<io::BagReader> reader;
+  try {
+    reader = io::open_read(input);
+  } catch (const std::exception & e) {
+    out.error = "failed to open '" + input.string() + "': " + e.what();
+    return out;
+  }
+  io::ReadFilter filter;
+  filter.topics.push_back(topic);
+  reader->set_filter(filter);
+  io::RawMessage raw;
+  try {
+    if (!reader->next(raw)) {
+      out.error = "topic '" + topic + "' has no messages to render.";
+      return out;
+    }
+  } catch (const std::exception & e) {
+    out.error = "error reading topic '" + topic + "': " + e.what();
+    return out;
+  }
+  auto parsed = core::pointcloud::parse_pointcloud2(raw.payload);
+  if (!parsed.ok()) {
+    out.error = "failed to parse the first cloud of topic '" + topic + "': " + parsed.error;
+    return out;
+  }
+  out.cloud = std::move(*parsed.cloud);
+  return out;
 }
 
 }  // namespace
@@ -203,13 +246,35 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
 {
   VideoInputValidation out;
 
-  if (args.cam_topics.empty()) {
-    BAGWIZ_LOG_ERROR(kLogger, "nothing to render: pass at least one --cam topic.");
-    out.error = "nothing to render: pass at least one --cam topic.";
+  if (args.cam_topics.empty() && args.pcd_topics.empty()) {
+    BAGWIZ_LOG_ERROR(kLogger, "nothing to render: pass at least one --cam or --pcd topic.");
+    out.error = "nothing to render: pass at least one --cam or --pcd topic.";
     return out;
   }
 
-  const auto grid = parse_grid_spec(args.grid, args.cam_topics.size());
+  // The point-cloud panels: one per requested view, every --pcd topic in
+  // each.
+  if (!args.pcd_topics.empty()) {
+    if (args.views.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "--view must name at least one projection (3d, bev).");
+      out.error = "--view must name at least one projection (3d, bev).";
+      return out;
+    }
+    for (std::size_t i = 0; i < args.views.size(); ++i) {
+      for (std::size_t j = 0; j < i; ++j) {
+        if (args.views[i] == args.views[j]) {
+          BAGWIZ_LOG_ERROR(kLogger, "--view names the same projection more than once.");
+          out.error = "--view names the same projection more than once.";
+          return out;
+        }
+      }
+    }
+    out.pcd_views = args.views;
+  }
+  const std::size_t panel_count =
+    args.cam_topics.size() + (args.pcd_topics.empty() ? 0 : args.views.size());
+
+  const auto grid = parse_grid_spec(args.grid, panel_count);
   if (!grid.ok()) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", grid.error.c_str());
     out.error = grid.error;
@@ -260,17 +325,39 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
     out.views.push_back(std::move(view));
   }
 
+  // Every --pcd topic is drawn once.
+  {
+    std::unordered_set<std::string> seen_pcd;
+    for (const auto & topic : args.pcd_topics) {
+      if (!seen_pcd.insert(topic).second) {
+        BAGWIZ_LOG_ERROR(kLogger, "topic '%s' given more than once", topic.c_str());
+        out.error = "topic '" + topic + "' given more than once";
+        return out;
+      }
+    }
+    out.pcd_topics = args.pcd_topics;
+  }
+
   // --clock names the panel whose messages define the frames; it must be one
-  // of the --cam topics. Unset picks the first.
+  // of the --cam or --pcd topics. Unset picks the first camera panel, else the
+  // first point-cloud panel (the panels follow the camera panels in the grid).
   if (args.clock.has_value()) {
-    const auto it = std::find(args.cam_topics.begin(), args.cam_topics.end(), *args.clock);
-    if (it == args.cam_topics.end()) {
+    const auto cam_it = std::find(args.cam_topics.begin(), args.cam_topics.end(), *args.clock);
+    const auto pcd_it = std::find(args.pcd_topics.begin(), args.pcd_topics.end(), *args.clock);
+    if (cam_it != args.cam_topics.end()) {
+      out.clock = static_cast<std::size_t>(cam_it - args.cam_topics.begin());
+    } else if (pcd_it != args.pcd_topics.end()) {
+      out.clock_pcd = static_cast<std::size_t>(pcd_it - args.pcd_topics.begin());
+      out.clock = args.cam_topics.size();
+    } else {
       BAGWIZ_LOG_ERROR(
-        kLogger, "--clock '%s' is not one of the --cam topics.", args.clock->c_str());
-      out.error = "--clock '" + *args.clock + "' is not one of the --cam topics.";
+        kLogger, "--clock '%s' is not one of the --cam or --pcd topics.", args.clock->c_str());
+      out.error = "--clock '" + *args.clock + "' is not one of the --cam or --pcd topics.";
       return out;
     }
-    out.clock = static_cast<std::size_t>(it - args.cam_topics.begin());
+  } else if (args.cam_topics.empty()) {
+    out.clock_pcd = 0;
+    out.clock = 0;
   }
 
   // Split the --cam-pcd / --cam-info entries into global values and per-view
@@ -372,10 +459,15 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
     }
   }
 
-  // Validate every unique point-cloud topic's presence and type.
-  std::unordered_set<std::string> validated_pcd;
+  // Validate every unique point-cloud topic's presence and type: the panels'
+  // topics and every camera panel's overlay topics.
+  std::vector<std::string> pcd_to_validate = out.pcd_topics;
   for (const auto & view : out.views) {
-    for (const auto & topic : view.pcd_topics) {
+    pcd_to_validate.insert(pcd_to_validate.end(), view.pcd_topics.begin(), view.pcd_topics.end());
+  }
+  {
+    std::unordered_set<std::string> validated_pcd;
+    for (const auto & topic : pcd_to_validate) {
       if (!validated_pcd.insert(topic).second) {
         continue;
       }
@@ -407,6 +499,52 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
     }
   }
 
+  // The point-cloud panels' view frame and BEV extent come from the first
+  // cloud of the first --pcd topic: its frame_id unless --frame names one,
+  // and, for a BEV view without --range, its farthest finite point.
+  if (!out.pcd_topics.empty()) {
+    const auto first = read_first_cloud(args.input_path, out.pcd_topics.front());
+    if (!first.cloud.has_value()) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", first.error.c_str());
+      out.error = first.error;
+      return out;
+    }
+    out.frame = args.frame.value_or(first.cloud->frame_id);
+    if (out.frame.empty()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "topic '%s' carries no frame_id; pass --frame.", out.pcd_topics.front().c_str());
+      out.error = "topic '" + out.pcd_topics.front() + "' carries no frame_id; pass --frame.";
+      return out;
+    }
+    const bool any_bev = std::any_of(
+      out.pcd_views.begin(), out.pcd_views.end(), [](core::pointcloud::CloudProjection p) {
+        return p == core::pointcloud::CloudProjection::kBev;
+      });
+    if (any_bev) {
+      if (args.range_m.has_value()) {
+        out.range_m = *args.range_m;
+      } else {
+        core::pointcloud::PropertyRanges ranges;
+        std::string error;
+        const auto distance =
+          static_cast<std::size_t>(core::pointcloud::PointCloudProperty::kDistance);
+        if (
+          !core::pointcloud::accumulate_property_ranges(*first.cloud, ranges, error) ||
+          ranges.mins[distance] > ranges.maxs[distance] || !(ranges.maxs[distance] > 0.0)) {
+          BAGWIZ_LOG_ERROR(
+            kLogger,
+            "could not determine --range from the first cloud of topic '%s' (no finite "
+            "points); pass --range explicitly.",
+            out.pcd_topics.front().c_str());
+          out.error = "could not determine --range from the first cloud of topic '" +
+                      out.pcd_topics.front() + "' (no finite points); pass --range explicitly.";
+          return out;
+        }
+        out.range_m = ranges.maxs[distance];
+      }
+    }
+  }
+
   return out;
 }
 
@@ -415,7 +553,7 @@ VideoInputScan scan_video_inputs(const MovifyArgs & args, const VideoInputValida
   VideoInputScan out;
 
   // Derive the frame rate from the clock topic's message timestamps.
-  const std::string & primary = validation.views[validation.clock].topic;
+  const std::string & primary = clock_topic_of(validation);
   if (scan_topic_span(args.input_path, primary, out.span) != 0) {
     out.error = "failed to scan topic '" + primary + "'";
     return out;
@@ -446,9 +584,15 @@ VideoInputScan scan_video_inputs(const MovifyArgs & args, const VideoInputValida
     }
   }
 
-  // Point-cloud overlay: scan timestamps and the selected property's global
-  // min/max across the deduplicated union of every view's topics.
+  // Point clouds: scan timestamps and the selected property's global min/max
+  // across the deduplicated union of the panels' topics and every camera
+  // panel's overlay topics.
   std::unordered_set<std::string> seen;
+  for (const auto & topic : validation.pcd_topics) {
+    if (seen.insert(topic).second) {
+      out.pcd_topics.push_back(topic);
+    }
+  }
   for (const auto & view : validation.views) {
     for (const auto & topic : view.pcd_topics) {
       if (seen.insert(topic).second) {
@@ -470,6 +614,12 @@ VideoInputScan scan_video_inputs(const MovifyArgs & args, const VideoInputValida
         return out;
       }
       out.pcd_topic_has_stamps[i] = out.pcd_spans[i].header_stamps_present;
+      if (out.pcd_spans[i].entries.empty()) {
+        BAGWIZ_LOG_ERROR(
+          kLogger, "topic '%s' has no messages to render.", out.pcd_topics[i].c_str());
+        out.error = "topic '" + out.pcd_topics[i] + "' has no messages to render.";
+        return out;
+      }
       if (!args.property_min.has_value()) {
         running_min = std::min(running_min, out.pcd_spans[i].property_min);
       }
@@ -503,11 +653,24 @@ std::string load_video_geometry(
     // --resize or another panel's fit-to-cell) when it prepares a frame.
     out.camera_infos[i] = std::move(*ci.info);
   }
-  if (any_pcd) {
+  // Overlays always look their clouds up in TF; the point-cloud panels only
+  // when a cloud may sit in another frame than the view frame (an explicit
+  // --frame, or more than one topic). A bag without TF is fatal for the
+  // former and a warning for the latter: the panel reports the missing
+  // transform if it turns out to need one.
+  const bool panels_may_need_tf =
+    !validation.pcd_topics.empty() && (args.frame.has_value() || validation.pcd_topics.size() > 1);
+  if (any_pcd || panels_may_need_tf) {
     out.tf_buffer.emplace();
     if (const auto err = core::load_tf_buffer(args.input_path, *out.tf_buffer); err.has_value()) {
-      BAGWIZ_LOG_ERROR(kLogger, "%s", err->c_str());
-      return *err;
+      if (any_pcd) {
+        BAGWIZ_LOG_ERROR(kLogger, "%s", err->c_str());
+        return *err;
+      }
+      BAGWIZ_LOG_WARN(
+        kLogger, "%s; a point-cloud panel cloud outside the '%s' frame cannot be drawn.",
+        err->c_str(), validation.frame.c_str());
+      out.tf_buffer.reset();
     }
   }
   return "";

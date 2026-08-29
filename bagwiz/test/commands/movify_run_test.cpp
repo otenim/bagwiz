@@ -1395,12 +1395,79 @@ TEST_F(MovifyRunTest, PointCloudOverlayOnRealBag)
   EXPECT_NEAR(probe.duration_s, 30.0, 1.0);
 }
 
+// A point-cloud topic alone renders one 3D panel per cloud at the default
+// 1280x720 cell, one frame per cloud (the topic is the clock).
+TEST_F(MovifyRunTest, RunRendersAPointCloudPanelAlone)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto payload =
+        make_pointcloud2_payload(ts, "lidar", {{static_cast<float>(i + 1), 0.0f, 0.0f}});
+      writer->write("/points", ts, {payload.data(), payload.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.pcd_topics = {"/points"};
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 1280u);
+  EXPECT_EQ(probe.height, 720u);
+}
+
+// A camera and a point-cloud topic compose a 2x1 grid whose cell is the
+// camera frame; both a 3D and a BEV view add a panel each (3 panels -> 2x2).
+TEST_F(MovifyRunTest, RunComposesCameraAndPointCloudPanels)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic(kImageTopic, kImageType));
+    writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto image = make_image_payload(8, 4, "bgr8", static_cast<std::uint8_t>(i * 20));
+      writer->write(kImageTopic, ts, {image.data(), image.size()});
+      const auto cloud =
+        make_pointcloud2_payload(ts, "lidar", {{static_cast<float>(i + 1), 0.0f, 0.0f}});
+      writer->write("/points", ts, {cloud.data(), cloud.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args(bag, kImageTopic, tmp_dir_ / "out.avi", false);
+  args.pcd_topics = {"/points"};
+  EXPECT_EQ(run_movify(args), 0);
+  auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 16u);  // 2x1 grid of 8x4 cells
+  EXPECT_EQ(probe.height, 4u);
+
+  args.overwrite = true;
+  args.views = {
+    bagwiz::core::pointcloud::CloudProjection::kPerspective,
+    bagwiz::core::pointcloud::CloudProjection::kBev};
+  EXPECT_EQ(run_movify(args), 0);
+  probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.width, 16u);  // 3 panels on an auto 2x2 grid
+  EXPECT_EQ(probe.height, 8u);
+}
+
 // Exercises the real MovifyCommand::configure() — reached through the
 // process-wide command registry that movify.cpp's BAGWIZ_REGISTER_COMMAND
 // registrar populates — rather than a hand-mirrored copy of its wiring. The
 // assertions pin down the slot semantics the multi-view surface relies on:
-// --cam is a multi-value glob slot (a glob expands to its matches in
-// lexicographic order, so grid placement stays deterministic) that is not
+// --cam and --pcd are multi-value glob slots (a glob expands to its matches
+// in lexicographic order, so grid placement stays deterministic), neither
 // required at the parser level (the run reports "nothing to render" itself),
 // --clock is a literal single-topic slot, --cam-info is a literal
 // pair-optional slot (bare value or <image>=<info>), and --cam-pcd is a glob
@@ -1421,7 +1488,7 @@ TEST(MovifyCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
   EXPECT_TRUE(app.get_subcommands({}).empty());  // a single-action command
 
   const auto slots = bagwiz::commands::topic_slots_of(app);
-  ASSERT_EQ(slots.size(), 4U);  // --cam, --clock, --cam-info, --cam-pcd
+  ASSERT_EQ(slots.size(), 5U);  // --cam, --pcd, --clock, --cam-info, --cam-pcd
 
   const auto * cam_slot = bagwiz::test::slot_for(slots, "cam");
   ASSERT_NE(cam_slot, nullptr);
@@ -1433,8 +1500,14 @@ TEST(MovifyCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
   const auto * clock_slot = bagwiz::test::slot_for(slots, "clock");
   ASSERT_NE(clock_slot, nullptr);
   EXPECT_EQ(clock_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  EXPECT_EQ(clock_slot->spec.allowed_types.size(), 2U);
+  EXPECT_EQ(clock_slot->spec.allowed_types.size(), 3U);  // + PointCloud2
   EXPECT_FALSE(clock_slot->option->get_required());
+
+  const auto * pcd_panel_slot = bagwiz::test::slot_for(slots, "pcd");
+  ASSERT_NE(pcd_panel_slot, nullptr);
+  EXPECT_EQ(pcd_panel_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
+  EXPECT_FALSE(pcd_panel_slot->spec.pair_value);
+  EXPECT_FALSE(pcd_panel_slot->option->get_required());
 
   const auto * cam_info_slot = bagwiz::test::slot_for(slots, "cam-info");
   ASSERT_NE(cam_info_slot, nullptr);
