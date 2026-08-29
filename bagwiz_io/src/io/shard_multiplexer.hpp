@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -187,6 +188,27 @@ public:
       auto shard_counts = ensure_shard(i).compute_topic_counts(names);
       // cppcheck-suppress unassignedVariable
       for (const auto & [k, v] : shard_counts) {
+        result[k] += v;
+      }
+    }
+    return result;
+  }
+
+  // Folded over the shards: metadata.yaml carries per-topic message counts but
+  // no per-topic byte totals, so there is no summary shortcut here. One shard
+  // that cannot answer sinks the whole bag — a partial sum would silently
+  // under-report — and the caller falls back to scanning all of them.
+  std::optional<std::unordered_map<std::string, uint64_t>> compute_topic_sizes(
+    std::span<const std::string> names) override
+  {
+    std::unordered_map<std::string, uint64_t> result;
+    for (std::size_t i = 0; i < shard_rel_paths_.size(); ++i) {
+      auto shard_sizes = ensure_shard(i).compute_topic_sizes(names);
+      if (!shard_sizes.has_value()) {
+        return std::nullopt;
+      }
+      // cppcheck-suppress unassignedVariable
+      for (const auto & [k, v] : *shard_sizes) {
         result[k] += v;
       }
     }

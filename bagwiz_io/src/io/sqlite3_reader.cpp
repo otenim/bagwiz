@@ -16,6 +16,7 @@
 #include "bagwiz/io/sqlite3_helpers.hpp"
 #include "env_tuning.hpp"              // NOLINT(build/include_subdir) src-local shared header
 #include "shard_multiplexer.hpp"       // NOLINT(build/include_subdir) src-local shared header
+#include "sqlite3_payload_sizes.hpp"   // NOLINT(build/include_subdir) src-local shared header
 #include "sqlite3_slice_prefetch.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "sqlite3_slice_schedule.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
@@ -208,25 +209,13 @@ public:
       return result;
     }
 
-    std::vector<int64_t> ids;
-    ids.reserve(names.size());
-    for (const auto & name : names) {
-      for (const auto & [tid, idx] : topic_id_to_idx_) {
-        if (topics_[idx].name == name) {
-          ids.push_back(tid);
-          break;
-        }
-      }
-    }
+    const auto ids = topic_ids_for(names);
     if (ids.empty()) {
       return result;
     }
 
-    std::string sql = "SELECT topic_id, COUNT(*) FROM messages WHERE topic_id IN (";
-    for (std::size_t i = 0; i < ids.size(); ++i) {
-      sql += (i == 0 ? "" : ",") + std::to_string(ids[i]);
-    }
-    sql += ") GROUP BY topic_id";
+    const std::string sql = "SELECT topic_id, COUNT(*) FROM messages WHERE " +
+                            topic_id_in_clause(ids) + " GROUP BY topic_id";
 
     auto stmt = sqlite_prepare_or_throw(db_.get(), sql.c_str());
     for (;;) {
@@ -248,6 +237,44 @@ public:
     return result;
   }
 
+  std::optional<std::unordered_map<std::string, std::uint64_t>> compute_topic_sizes(
+    std::span<const std::string> names) override
+  {
+    // MESSAGE-mode bags store each payload compressed, so the BLOB length is
+    // the compressed size; only a real decompression recovers the logical one.
+    if (decompressor_) {
+      return std::nullopt;
+    }
+
+    std::string topic_clause;
+    if (!names.empty()) {
+      const auto ids = topic_ids_for(names);
+      if (ids.empty()) {
+        return std::unordered_map<std::string, std::uint64_t>{};
+      }
+      topic_clause = topic_id_in_clause(ids);
+    }
+
+    auto sizes = sum_payload_lengths(path_, topic_clause, resolve_read_threads(kLogger));
+    if (!sizes.error.empty()) {
+      BAGWIZ_LOG_DEBUG(
+        kLogger, "row-header sizes unavailable for %s (%s); falling back to a scan", path_.c_str(),
+        sizes.error.c_str());
+      return std::nullopt;
+    }
+
+    std::unordered_map<std::string, std::uint64_t> result;
+    // cppcheck-suppress unassignedVariable
+    for (const auto & [topic_id, bytes] : sizes.per_topic_id) {
+      // Rows referencing a topic_id the topics table does not carry are
+      // dropped, exactly as next() skips them.
+      if (auto idx_it = topic_id_to_idx_.find(topic_id); idx_it != topic_id_to_idx_.end()) {
+        result[topics_[idx_it->second].name] += bytes;
+      }
+    }
+    return result;
+  }
+
   TimeExtent compute_time_extent() override
   {
     TimeExtent extent;
@@ -263,6 +290,37 @@ public:
   }
 
 private:
+  // `topics` table ids of the named topics, in the caller's order. Names the
+  // bag does not carry are skipped, so an all-unknown selection yields an
+  // empty vector.
+  std::vector<int64_t> topic_ids_for(std::span<const std::string> names) const
+  {
+    std::vector<int64_t> ids;
+    ids.reserve(names.size());
+    for (const auto & name : names) {
+      for (const auto & [tid, idx] : topic_id_to_idx_) {
+        if (topics_[idx].name == name) {
+          ids.push_back(tid);
+          break;
+        }
+      }
+    }
+    return ids;
+  }
+
+  // A `topic_id IN (...)` restriction over `ids`. The values are the bag's own
+  // topic table ids, never caller text, so there is nothing to bind — matching
+  // how the rest of this reader composes SQL.
+  static std::string topic_id_in_clause(const std::vector<int64_t> & ids)
+  {
+    std::string clause = "topic_id IN (";
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+      clause += (i == 0 ? "" : ",") + std::to_string(ids[i]);
+    }
+    clause += ")";
+    return clause;
+  }
+
   // Answer compute_stats() from the bag's own `metadata` row instead of
   // scanning. rosbag2 iron+ writes that row when recording a single-file .db3,
   // and bagwiz writes it for every .db3 it produces, so this covers both

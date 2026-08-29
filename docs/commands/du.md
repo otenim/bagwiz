@@ -34,7 +34,7 @@ bagwiz du -i capture.mcap -d 1
 | Flag                        | Description                                                                                                                                                                                                                                                                                           |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <input>`     | **Required.** ROS 2 rosbag path: a rosbag2 directory or a single-file `*.mcap` / `*.db3`. zstd-compressed `*.db3.zstd` inputs are also accepted.                                                                                                                                                      |
-| `-t`, `--topics <topic>...` | Topic selector(s) to report: a literal topic name or a `*` glob. Repeat for several. Omit to report every topic in the bag. A selector that matches no topic is an error. Selecting fewer topics also narrows the message scan (see Performance).                                                     |
+| `-t`, `--topics <topic>...` | Topic selector(s) to report: a literal topic name or a `*` glob. Repeat for several. Omit to report every topic in the bag. A selector that matches no topic is an error. Selecting fewer topics also narrows the work (see Performance).                                                             |
 | `-b`, `--bytes`             | Print sizes as raw byte counts instead of the default human-readable units (1024-based, one decimal and a `K`/`M`/`G`/`T` suffix, e.g. `4.0K`, `1.2M`; values below 1 KiB stay raw bytes).                                                                                                            |
 | `-d`, `--depth <n>`         | Aggregate topics by their first `<n>` name components, du(1) `--max-depth` style: `-d 1` groups `/sensing/lidar/points` under `/sensing`. A topic already at or above the depth keeps its full name. `-d 0` prints only the `total` row. Combines with `-t`: grouping applies to the selected topics. |
 
@@ -67,12 +67,35 @@ name), with a `total` row last:
 
 ## Performance
 
-Computing the sizes requires a full scan of the bag's messages, on every
-storage format: neither the MCAP summary nor `metadata.yaml` records
-per-topic byte totals, so there is no summary shortcut like `ls -l`'s counts.
-On a large bag, expect a runtime comparable to `bagwiz convert`. Passing
-`-t/--topics` pushes the selection down into the storage layer, so a narrow
-selection scans only the matching messages.
+`du` does not read message payloads. Neither the MCAP summary nor
+`metadata.yaml` records per-topic byte totals — there is no summary shortcut
+like `ls -l`'s counts — but both storage formats record every message's own
+length, and reading only those lengths is far cheaper than reading the bytes
+they describe:
+
+- SQLite3: `LENGTH(data)` is answered from the row header, so the payload's
+  overflow pages stay unread. Disjoint rowid ranges are scanned in parallel
+  (`BAGWIZ_READ_THREADS` workers, 8 by default).
+- MCAP: the chunk and message indexes already say where every message record
+  starts, so only each record's own length prefix is read. A chunk stored
+  uncompressed is addressed in place, so those few bytes per message are all
+  that is read of it; a compressed chunk still has to be read and
+  decompressed to reach its record headers, so a fully compressed bag stays
+  closer to the cost of a full read.
+
+So the shape of the bag decides the size of the win. Measured cold-cache on
+one NVMe host: a 12.3 GB uncompressed-chunk MCAP went from 13.1s to 0.47s, a
+12.9 GB `.db3` from 20.5s to 2.4s, and an 8.0 GB MCAP whose chunks are mostly
+zstd from 11.6s to 5.2s.
+
+Two bag shapes cannot be answered this way and fall back to a full message
+scan, with identical output: bags recorded with `compression_mode: MESSAGE`
+(where the stored length is the compressed one) and MCAPs carrying no chunk
+index — written with chunking off, or never finalized.
+
+Passing `-t/--topics` narrows the work further. The selection is pushed down
+into the storage layer, and on MCAP a chunk that holds none of the selected
+topics is not read at all.
 
 ## Exit status
 
