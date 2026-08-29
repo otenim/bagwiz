@@ -79,6 +79,7 @@ add_library(bagwiz_io
   src/io/frozen_message.cpp
   src/io/mcap_chunk_codec.cpp
   src/io/mcap_chunk_prefetch.cpp
+  src/io/mcap_index_sizes.cpp
   src/io/mcap_indexed_stream.cpp
   src/io/mcap_parallel_chunk_writer.cpp
   src/io/mcap_passthrough.cpp
@@ -88,6 +89,7 @@ add_library(bagwiz_io
   src/io/message_decompressor.cpp
   src/io/metadata_computer.cpp
   src/io/metadata_yaml.cpp
+  src/io/sqlite3_payload_sizes.cpp
   src/io/sqlite3_reader.cpp
   src/io/sqlite3_slice_prefetch.cpp
   src/io/sqlite3_slice_schedule.cpp
@@ -179,6 +181,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_sqlite3_parallel_read_test test/io/sqlite3_parallel_read_test.cpp)
   target_link_libraries(bagwiz_sqlite3_parallel_read_test bagwiz_io)
+
+  ament_add_gtest(bagwiz_topic_sizes_test test/io/topic_sizes_test.cpp)
+  target_link_libraries(bagwiz_topic_sizes_test bagwiz_io ${mcap_vendor_TARGETS})
 
   ament_add_gtest(bagwiz_metadata_computer_test test/io/metadata_computer_test.cpp)
   target_link_libraries(bagwiz_metadata_computer_test bagwiz_io)

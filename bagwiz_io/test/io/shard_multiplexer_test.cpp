@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -54,6 +55,9 @@ public:
   std::vector<std::pair<std::size_t, std::int64_t>> messages;  // (topic idx, stamp ns)
   Stats canned_stats;
   std::unordered_map<std::string, std::int64_t> canned_counts;
+  // nullopt scripts a shard that cannot answer compute_topic_sizes().
+  std::optional<std::unordered_map<std::string, std::uint64_t>> canned_sizes =
+    std::unordered_map<std::string, std::uint64_t>{};
   TimeExtent canned_extent;
 
   int filter_calls = 0;
@@ -92,7 +96,16 @@ public:
     return result;
   }
 
+  std::optional<std::unordered_map<std::string, std::uint64_t>> compute_topic_sizes(
+    std::span<const std::string> /*topics*/) override
+  {
+    ++size_calls;
+    return canned_sizes;
+  }
+
   TimeExtent compute_time_extent() override { return canned_extent; }
+
+  int size_calls = 0;
 
 private:
   std::size_t pos_ = 0;
@@ -369,6 +382,41 @@ TEST(ShardMultiplexer, TopicCountsFromShardScans)
   const std::vector<std::string> request{"/a", "/b", "/absent"};
   const auto counts = mux.compute_topic_counts(request);
   EXPECT_EQ(counts, (std::unordered_map<std::string, std::int64_t>{{"/a", 7}, {"/b", 9}}));
+}
+
+// metadata.yaml has no per-topic byte totals, so the sizes always come from
+// the shards and are summed across them.
+TEST(ShardMultiplexer, TopicSizesSumAcrossShards)
+{
+  auto md = make_metadata(true, {make_topic("/a")});
+  FakeMultiplexer mux("/bag", {"s0", "s1"}, md.topics, md);
+  auto s0 = std::make_unique<FakeFileReader>();
+  s0->canned_sizes = {{{"/a", 2}, {"/b", 9}}};
+  auto s1 = std::make_unique<FakeFileReader>();
+  s1->canned_sizes = {{{"/a", 5}}};
+  mux.scripted.push_back(std::move(s0));
+  mux.scripted.push_back(std::move(s1));
+
+  const std::vector<std::string> request{"/a", "/b"};
+  const auto sizes = mux.compute_topic_sizes(request);
+  ASSERT_TRUE(sizes.has_value());
+  EXPECT_EQ(*sizes, (std::unordered_map<std::string, std::uint64_t>{{"/a", 7}, {"/b", 9}}));
+}
+
+// A shard that cannot answer sinks the whole bag: reporting the other shards'
+// sum would silently under-report, so the caller must scan instead.
+TEST(ShardMultiplexer, TopicSizesDeclineFromOneShardSinksTheBag)
+{
+  FakeMultiplexer mux("/bag", {"s0", "s1"}, {make_topic("/a")}, make_metadata(false));
+  auto s0 = std::make_unique<FakeFileReader>();
+  s0->canned_sizes = {{{"/a", 2}}};
+  auto s1 = std::make_unique<FakeFileReader>();
+  s1->canned_sizes = std::nullopt;
+  mux.scripted.push_back(std::move(s0));
+  mux.scripted.push_back(std::move(s1));
+
+  const std::vector<std::string> request{"/a"};
+  EXPECT_FALSE(mux.compute_topic_sizes(request).has_value());
 }
 
 TEST(ShardMultiplexer, TimeExtentFromMetadataSummary)

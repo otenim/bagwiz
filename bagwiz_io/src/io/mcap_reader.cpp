@@ -13,6 +13,7 @@
 #include "bagwiz/io/message_decompressor.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "env_tuning.hpp"           // NOLINT(build/include_subdir) src-local shared header
+#include "mcap_index_sizes.hpp"     // NOLINT(build/include_subdir) src-local shared header
 #include "mcap_indexed_stream.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "shard_multiplexer.hpp"    // NOLINT(build/include_subdir) src-local shared header
 
@@ -220,6 +221,61 @@ public:
       const std::string & name = topics_[idx_it->second].name;
       if (requested.count(name) != 0U) {
         result[name] = static_cast<int64_t>(count);
+      }
+    }
+    return result;
+  }
+
+  std::optional<std::unordered_map<std::string, std::uint64_t>> compute_topic_sizes(
+    std::span<const std::string> names) override
+  {
+    // MESSAGE-mode bags store each payload compressed inside the message
+    // record, so the record length is the compressed size; only a real
+    // decompression recovers the logical one.
+    if (decompressor_) {
+      return std::nullopt;
+    }
+
+    // A bag the summary reports as empty has no chunks to index-scan, and
+    // every topic's size is zero. Answering that here keeps the caller off a
+    // pointless scan and off the "no chunk index" path, which is meant for
+    // bags that do have messages.
+    if (const auto & statistics = reader_.statistics();
+        statistics && statistics->messageCount == 0) {
+      return std::unordered_map<std::string, std::uint64_t>{};
+    }
+
+    std::unordered_set<std::uint16_t> channels;
+    if (!names.empty()) {
+      const std::unordered_set<std::string> requested(names.begin(), names.end());
+      for (const auto & [channel_id, idx] : channel_to_topic_idx_) {
+        if (requested.count(topics_[idx].name) != 0U) {
+          channels.insert(channel_id);
+        }
+      }
+      if (channels.empty()) {
+        return std::unordered_map<std::string, std::uint64_t>{};
+      }
+    }
+
+    auto sizes =
+      compute_channel_sizes_from_index(path_, reader_, channels, resolve_read_threads(kLogger));
+    if (!sizes.error.empty()) {
+      // Expected for an unchunked or unindexed bag; the caller scans instead.
+      BAGWIZ_LOG_DEBUG(
+        kLogger, "index-based sizes unavailable for %s (%s); falling back to a scan", path_.c_str(),
+        sizes.error.c_str());
+      return std::nullopt;
+    }
+
+    std::unordered_map<std::string, std::uint64_t> result;
+    // cppcheck-suppress unassignedVariable
+    for (const auto & [channel_id, bytes] : sizes.per_channel) {
+      // Channels with no known schema entry are dropped, exactly as next()
+      // skips their messages.
+      if (auto idx_it = channel_to_topic_idx_.find(channel_id);
+          idx_it != channel_to_topic_idx_.end()) {
+        result[topics_[idx_it->second].name] += bytes;
       }
     }
     return result;

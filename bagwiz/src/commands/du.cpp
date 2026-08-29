@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -126,23 +127,35 @@ int run_du(const DuArgs & args)
       }
     }
     selected = args.topics;
-    io::ReadFilter filter;
-    filter.topics = args.topics;
-    reader->set_filter(filter);
   } else {
     for (const auto & t : reader->topics()) {
       selected.push_back(t.name);
     }
   }
 
-  // Full-message scan: every topic's size is the sum of its serialized
-  // payload bytes. There is no summary shortcut — neither the MCAP summary
-  // nor metadata.yaml records per-topic byte totals.
+  // Every topic's size is the sum of its serialized payload bytes. Neither
+  // the MCAP summary nor metadata.yaml records those totals, but both storage
+  // formats do record each message's own length — in a SQLite3 row header, in
+  // an MCAP message record's length prefix — and reading only those is far
+  // cheaper than reading the payloads. compute_topic_sizes() takes that route
+  // when the bag allows it; when it cannot (individually compressed messages,
+  // an MCAP without a chunk index), the honest full scan below stands in.
   std::unordered_map<std::string, std::uint64_t> sizes;
-  io::RawMessage msg;
   try {
-    while (reader->next(msg)) {
-      sizes[msg.topic->name] += msg.payload.size();
+    const auto selection =
+      args.topics.empty() ? std::span<const std::string>() : std::span<const std::string>(selected);
+    if (auto from_index = reader->compute_topic_sizes(selection)) {
+      sizes = std::move(*from_index);
+    } else {
+      if (!args.topics.empty()) {
+        io::ReadFilter filter;
+        filter.topics = args.topics;
+        reader->set_filter(filter);
+      }
+      io::RawMessage msg;
+      while (reader->next(msg)) {
+        sizes[msg.topic->name] += msg.payload.size();
+      }
     }
   } catch (const std::exception & e) {
     BAGWIZ_LOG_ERROR(kLogger, "Failed while scanning %s: %s", args.input_path.c_str(), e.what());
@@ -216,8 +229,9 @@ int run_du(const DuArgs & args)
 // of the uncompressed serialized payload bytes (the logical message size),
 // not the on-disk footprint — per-topic chunk compression makes the latter
 // unrecoverable — so a compressed bag's reported total can exceed its file
-// size. Computing it requires a full scan of the bag's messages, on every
-// storage format.
+// size. Computing it reads each message's declared length rather than its
+// payload (BagReader::compute_topic_sizes), and falls back to a full message
+// scan only for the bag shapes where that length is not the payload's.
 class DuCommand : public Command
 {
 public:

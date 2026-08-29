@@ -170,6 +170,30 @@ public:
   virtual std::unordered_map<std::string, int64_t> compute_topic_counts(
     std::span<const std::string> topics) = 0;
 
+  // Per-topic sum of serialized payload bytes, answered from the storage's
+  // own record framing instead of from the payloads themselves: SQLite3 reads
+  // each row's BLOB length, which leaves the payload's overflow pages unread,
+  // and MCAP reads each message record's length prefix at the offsets its
+  // message index already lists. Both are exact, and both read a small
+  // fraction of the bytes a full scan would.
+  //
+  // Returns nullopt when the storage cannot answer that way, leaving the
+  // caller to fall back to its own scan. That covers a bag whose messages are
+  // individually compressed (`compression_mode: MESSAGE`), where the stored
+  // length is the compressed one and only a real decompression recovers the
+  // logical size, and an MCAP with no chunk index to read offsets from.
+  //
+  // `topics` empty = every topic in the bag. Topics that are absent or carry
+  // no messages may be omitted from the result.
+  //
+  // Default: nullopt — a reader that has no cheaper path than the caller's
+  // scan says so rather than reimplementing it.
+  virtual std::optional<std::unordered_map<std::string, uint64_t>> compute_topic_sizes(
+    std::span<const std::string> /*topics*/)
+  {
+    return std::nullopt;
+  }
+
   // Lightweight bag-level time extent. Implementations prefer
   // summary/index data (MCAP summary, metadata.yaml, SQLite timestamp index).
   // When no summary is available, the returned extent is zero and has_data is
