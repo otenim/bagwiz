@@ -67,7 +67,7 @@ interface PcdHeader {
 // PCDLoader feeds the rgb bytes through Color.setRGB(..., SRGBColorSpace) --
 // sRGB into three's linear working space. Match it exactly through the same
 // call rather than re-deriving the transfer function; a byte has only 256
-// values, so the whole mapping precomputes.
+// values, so the whole mapping fits a precomputed table.
 function buildSrgbByteToLinear(): Float32Array {
   const lut = new Float32Array(256);
   const color = new Color();
