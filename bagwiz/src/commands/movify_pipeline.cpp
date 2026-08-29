@@ -76,7 +76,7 @@ void warn_if_output_oversized(const GridCanvas & canvas)
 
 int run_encode_loop_sync(
   io::BagReader & reader, std::vector<std::unique_ptr<Panel>> & panels, GridSpec grid,
-  VideoFrameEncoder & encoder)
+  std::size_t clock, VideoFrameEncoder & encoder)
 {
   GridCanvas canvas(grid);
   io::RawMessage raw;
@@ -85,17 +85,20 @@ int run_encode_loop_sync(
     const TickInfo info{tick, raw.timestamp_ns, raw.payload};
     // The clock panel selects first: on the first tick its render size is
     // what fixes the cell every other panel fits into.
-    if (const auto err = panels[0]->select(info, cell_size_of(canvas)); !err.empty()) {
+    if (const auto err = panels[clock]->select(info, cell_size_of(canvas)); !err.empty()) {
       BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", tick, err.c_str());
       return 1;
     }
     if (!canvas.ready()) {
-      if (const auto err = pin_cell_size(*panels[0], canvas); !err.empty()) {
+      if (const auto err = pin_cell_size(*panels[clock], canvas); !err.empty()) {
         BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", tick, err.c_str());
         return 1;
       }
     }
-    for (std::size_t i = 1; i < panels.size(); ++i) {
+    for (std::size_t i = 0; i < panels.size(); ++i) {
+      if (i == clock) {
+        continue;
+      }
       if (const auto err = panels[i]->select(info, cell_size_of(canvas)); !err.empty()) {
         BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", tick, err.c_str());
         return 1;
@@ -118,7 +121,7 @@ int run_encode_loop_sync(
 
 int run_encode_loop_parallel(
   io::BagReader & reader, std::vector<std::unique_ptr<Panel>> & panels, GridSpec grid,
-  const std::string & clock_topic, VideoFrameEncoder & encoder)
+  std::size_t clock, const std::string & clock_topic, VideoFrameEncoder & encoder)
 {
   // Two canvases in alternation: one being composed by the current tick's
   // jobs, one being drained by the encoder for the previous tick. A tick's
@@ -161,11 +164,11 @@ int run_encode_loop_parallel(
     auto payload =
       std::make_shared<const std::vector<std::byte>>(raw.payload.begin(), raw.payload.end());
     const TickInfo info{0, raw.timestamp_ns, *payload};
-    if (const auto err = panels[0]->select(info, PanelSize{}); !err.empty()) {
+    if (const auto err = panels[clock]->select(info, PanelSize{}); !err.empty()) {
       BAGWIZ_LOG_ERROR(kLogger, "frame 0: %s", err.c_str());
       return 1;
     }
-    if (const auto err = pin_cell_size(*panels[0], canvases[0]); !err.empty()) {
+    if (const auto err = pin_cell_size(*panels[clock], canvases[0]); !err.empty()) {
       BAGWIZ_LOG_ERROR(kLogger, "frame 0: %s", err.c_str());
       return 1;
     }
@@ -173,10 +176,13 @@ int run_encode_loop_parallel(
     // first tick before it would otherwise learn the size.
     canvases[1].set_cell_size(canvases[0].cell_width(), canvases[0].cell_height());
     canvases[0].clear();
-    pending[0] = std::async(std::launch::async, [&, payload, info] {
-      return run_panel_job(0, canvases[0], info, false);
+    pending[clock] = std::async(std::launch::async, [&, payload, info] {
+      return run_panel_job(clock, canvases[0], info, false);
     });
-    for (std::size_t i = 1; i < panels.size(); ++i) {
+    for (std::size_t i = 0; i < panels.size(); ++i) {
+      if (i == clock) {
+        continue;
+      }
       pending[i] = std::async(std::launch::async, [&, i, payload, info] {
         return run_panel_job(i, canvases[0], info, true);
       });
@@ -261,13 +267,13 @@ bool should_use_parallel_pipeline(
 
 int run_encode_pass(
   io::BagReader & reader, std::vector<std::unique_ptr<Panel>> & panels, GridSpec grid,
-  bool parallel, const std::string & clock_topic, VideoFrameEncoder & encoder)
+  bool parallel, std::size_t clock, const std::string & clock_topic, VideoFrameEncoder & encoder)
 {
   try {
     if (parallel) {
-      return run_encode_loop_parallel(reader, panels, grid, clock_topic, encoder);
+      return run_encode_loop_parallel(reader, panels, grid, clock, clock_topic, encoder);
     }
-    return run_encode_loop_sync(reader, panels, grid, encoder);
+    return run_encode_loop_sync(reader, panels, grid, clock, encoder);
   } catch (const std::exception & e) {
     BAGWIZ_LOG_ERROR(kLogger, "error reading topic '%s': %s", clock_topic.c_str(), e.what());
     return 1;

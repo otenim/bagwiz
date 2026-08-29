@@ -296,17 +296,18 @@ code that is not part of the CLI itself.
   the bag already carries is `-t`/`--topic`, or `-t`/`--topics` when
   it takes several, whenever it is that subcommand's general topic
   operand (`traj dump`, `tf tree`, `topic drop` / `keep`, `cam-info`,
-  `walk`, `movify cam`); a selector that fills a named role
-  instead keeps that role's name (`--pcd`, `--pose`, `--cam`,
-  `--twist`, `--cam-info`, `--color`), which already reads as
-  selecting rather than creating. A subcommand can have no general
-  operand at all: `calib cam-lidar` reads three topics that each fill
-  a role (`--pcd`, `--pose`, `--cam`), so none of them is "the"
-  topic and a bare `-t` would only be ambiguous. One shared `-t`
-  cannot say which
-  direction a slot points, which left write targets reading like
-  filters: `traj join --traj t.tum --as /slam/tf` says the topic is
-  being brought into existence, where `-t /slam/tf` did not.
+  `walk`); a selector that fills a named role instead keeps that
+  role's name (`--pcd`, `--pose`, `--cam`, `--twist`, `--cam-info`,
+  `--color`), which already reads as selecting rather than creating.
+  A subcommand can have no general operand at all: `calib cam-lidar`
+  reads three topics that each fill a role (`--pcd`, `--pose`,
+  `--cam`), so none of them is "the" topic and a bare `-t` would only
+  be ambiguous; `movify` likewise takes the camera panels it composes
+  as `--cam` and the clouds it projects onto them as `--cam-pcd`. One
+  shared `-t` cannot say which direction a slot points, which left
+  write targets reading like filters: `traj join --traj t.tum --as
+/slam/tf` says the topic is being brought into existence, where
+  `-t /slam/tf` did not.
   Two shapes stay outside the split. A subcommand that renames or
   copies one topic to another takes the matched pair `--src` /
   `--dst` (`topic rename`), the flag-form expression of the

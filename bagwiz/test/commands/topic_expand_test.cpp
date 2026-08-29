@@ -335,7 +335,7 @@ TEST_F(ExpandTopicSelectorsTest, DedupeSkipsGlobDuplicateOfAGlob)
 }
 
 // Proves a type-filtered glob on an image-typed slot (the shape `tf tree`,
-// `cam-info replace`/`recompute-p`, `movify cam --pcd`, `pcd undistort
+// `cam-info replace`/`recompute-p`, `movify --cam-pcd`, `pcd undistort
 // --pcd`, and `map slam --color` all now share) matches only topics of the
 // declared type, ignoring the bag's other PointCloud2 topics.
 TEST_F(ExpandTopicSelectorsTest, ImageSlotGlobPicksOnlyImageTopics)

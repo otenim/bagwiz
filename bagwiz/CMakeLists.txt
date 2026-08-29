@@ -129,7 +129,7 @@ if(NOT zstd_vendor_FOUND)
 endif()
 find_package(zstd REQUIRED)
 
-# FFmpeg/libav is exercised directly by the `movify cam` command test,
+# FFmpeg/libav is exercised directly by the `movify` command test,
 # which synthesizes image fixtures and inspects the encoded output. No
 # ament/CMake package exists for it, so locate the libraries via pkg-config.
 # pkg_check_modules creates the imported target PkgConfig::LIBAV spanning all
@@ -170,7 +170,7 @@ set(bagwiz_command_sources
   src/commands/du.cpp
   src/commands/movify.cpp
   src/commands/movify_output_size.cpp
-  src/commands/movify_video.cpp
+  src/commands/movify_run.cpp
   src/commands/movify_camera_panel.cpp
   src/commands/movify_cloud_source.cpp
   src/commands/movify_inputs.cpp
@@ -711,14 +711,14 @@ if(BUILD_TESTING)
 
   # Also compiles movify.cpp (MovifyCommand's CLI11 wiring) plus
   # topic_option.cpp + registry.cpp so a test can drive the real
-  # configure_video() through Registry::instance() (walk_test.cpp idiom) —
+  # configure() through Registry::instance() (walk_test.cpp idiom) —
   # movify.cpp is the production call site for
-  # add_topic_option(std::optional<std::string>&) (--cam-info).
-  ament_add_gtest(bagwiz_movify_video_test
-    test/commands/movify_video_test.cpp
+  # add_topic_option(std::optional<std::string>&) (--clock).
+  ament_add_gtest(bagwiz_movify_run_test
+    test/commands/movify_run_test.cpp
     src/commands/movify.cpp
     src/commands/movify_output_size.cpp
-    src/commands/movify_video.cpp
+    src/commands/movify_run.cpp
     src/commands/movify_camera_panel.cpp
     src/commands/movify_cloud_source.cpp
     src/commands/movify_inputs.cpp
@@ -727,9 +727,9 @@ if(BUILD_TESTING)
     src/commands/movify_pipeline.cpp
     src/commands/topic_option.cpp
     src/commands/registry.cpp)
-  target_include_directories(bagwiz_movify_video_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_include_directories(bagwiz_movify_run_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(
-    bagwiz_movify_video_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
+    bagwiz_movify_run_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV ${OpenCV_LIBS})
 
   # movify_output_size.hpp lives in src/commands (CLI-internal, not

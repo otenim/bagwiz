@@ -25,7 +25,7 @@ namespace
 {
 
 using bagwiz::commands::load_video_geometry;
-using bagwiz::commands::MovifyVideoArgs;
+using bagwiz::commands::MovifyArgs;
 using bagwiz::commands::open_encode_reader;
 using bagwiz::commands::parse_cam_info_entries;
 using bagwiz::commands::parse_pcd_bindings;
@@ -72,7 +72,7 @@ TEST(ParsePcdBindings, RejectsUnknownImageTopic)
   const std::vector<std::string> images{"/cam/a"};
   const auto r = parse_pcd_bindings(entries, images);
   EXPECT_FALSE(r.ok());
-  EXPECT_NE(r.error.find("not one of the -t/--topic topics"), std::string::npos);
+  EXPECT_NE(r.error.find("not one of the --cam topics"), std::string::npos);
 }
 
 TEST(ParsePcdBindings, RejectsEmptyHalves)
@@ -157,7 +157,7 @@ TEST(ViewRectifies, RectifiesWhenRequestedAndCamInfoResolved)
 
 TEST(ViewRectifies, NoRectifyWinsOverPcd)
 {
-  // --pcd does not force rectification: with --no-rectify the points are
+  // --cam-pcd does not force rectification: with --no-rectify the points are
   // projected onto the raw image using the camera's lens distortion instead.
   ViewInput view;
   view.camera_info_topic = "/cam/camera_info";
@@ -170,7 +170,7 @@ TEST(ViewRectifies, NoRectifyWinsOverPcd)
 
 TEST_F(MovifyTmpDirTest, ValidateInputsUnopenableInput)
 {
-  MovifyVideoArgs args(tmp_dir_ / "does_not_exist.mcap", "/cam/image", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(tmp_dir_ / "does_not_exist.mcap", "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_NE(v.error.find("failed to open"), std::string::npos);
@@ -179,7 +179,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsUnopenableInput)
 TEST_F(MovifyTmpDirTest, ValidateInputsTopicNotFound)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
-  MovifyVideoArgs args(bag, "/nope", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/nope", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(v.error, "topic '/nope' not found in " + bag.string());
@@ -188,7 +188,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsTopicNotFound)
 TEST_F(MovifyTmpDirTest, ValidateInputsPlainImageTopicOk)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   ASSERT_EQ(v.views.size(), 1u);
@@ -201,8 +201,8 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPlainImageTopicOk)
 TEST_F(MovifyTmpDirTest, ValidateInputsDuplicateTopicFails)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
-  args.topics.push_back("/cam/image");
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  args.cam_topics.push_back("/cam/image");
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(v.error, "topic '/cam/image' given more than once");
@@ -217,8 +217,8 @@ TEST_F(MovifyTmpDirTest, ValidateInputsGridTooSmallFails)
     movify_declare_topic(*w, "/cam/b", kMovifyImageType);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
-  args.topics.push_back("/cam/b");
+  MovifyArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
+  args.cam_topics.push_back("/cam/b");
   args.grid = "1x1";
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
@@ -228,7 +228,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsGridTooSmallFails)
 TEST_F(MovifyTmpDirTest, ValidateInputsWidthConflictsWithResize)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   args.width = 640;
   args.resize_scale = 0.5f;
   const auto v = validate_video_inputs(args);
@@ -245,8 +245,8 @@ TEST_F(MovifyTmpDirTest, ValidateInputsWidthTooSmallForTheGridFails)
     movify_declare_topic(*w, "/cam/b", kMovifyImageType);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
-  args.topics.push_back("/cam/b");
+  MovifyArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
+  args.cam_topics.push_back("/cam/b");
   args.width = 2;  // 2 px across 2 auto-grid columns leaves a sub-2-px cell
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
@@ -259,7 +259,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsWidthTooSmallForTheGridFails)
 TEST_F(MovifyTmpDirTest, ValidateInputsRectifyWithoutCamInfoWarnsAndContinues)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   ASSERT_EQ(v.views.size(), 1u);
@@ -276,13 +276,13 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPcdWithoutCamInfoFails)
     movify_declare_topic(*w, "/points", kMovifyPointCloudType);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
-  args.pointcloud_topics = {"/points"};
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  args.cam_pcd_entries = {"/points"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(
     v.error,
-    "A camera-info topic is required for --pcd, but none could be derived from "
+    "A camera-info topic is required for --cam-pcd, but none could be derived from "
     "'/cam/image'. Pass it explicitly with --cam-info /cam/image=<info_topic>.");
 }
 
@@ -296,8 +296,8 @@ TEST_F(MovifyTmpDirTest, ValidateInputsDerivesCamInfoAndAcceptsPcd)
     movify_declare_topic(*w, "/points", kMovifyPointCloudType);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
-  args.pointcloud_topics = {"/points"};
+  MovifyArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  args.cam_pcd_entries = {"/points"};
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   ASSERT_EQ(v.views.size(), 1u);
@@ -318,9 +318,9 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPerViewPcdBinding)
     movify_declare_topic(*w, "/points/a_only", kMovifyPointCloudType);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/a/image_raw", tmp_dir_ / "out.avi", false);
-  args.topics.push_back("/cam/b/image_raw");
-  args.pointcloud_topics = {"/points/shared", "/cam/a/image_raw=/points/a_only"};
+  MovifyArgs args(bag, "/cam/a/image_raw", tmp_dir_ / "out.avi", false);
+  args.cam_topics.push_back("/cam/b/image_raw");
+  args.cam_pcd_entries = {"/points/shared", "/cam/a/image_raw=/points/a_only"};
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   ASSERT_EQ(v.views.size(), 2u);
@@ -341,8 +341,8 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPerViewCamInfoOverride)
     movify_declare_topic(*w, "/custom/b_info", kMovifyCameraInfoType);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/a/image_raw", tmp_dir_ / "out.avi", false);
-  args.topics.push_back("/cam/b/image_raw");
+  MovifyArgs args(bag, "/cam/a/image_raw", tmp_dir_ / "out.avi", false);
+  args.cam_topics.push_back("/cam/b/image_raw");
   args.camera_info_entries = {"/cam/b/image_raw=/custom/b_info"};
   args.rectify = true;
   const auto v = validate_video_inputs(args);
@@ -360,8 +360,8 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPcdTopicNotFoundFails)
     movify_declare_topic(*w, "/cam/camera_info", kMovifyCameraInfoType);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
-  args.pointcloud_topics = {"/points"};
+  MovifyArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  args.cam_pcd_entries = {"/points"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(v.error, "pcd topic '/points' not found in " + bag.string());
@@ -377,8 +377,8 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPcdTopicWrongTypeFails)
     movify_declare_topic(*w, "/points", kMovifyImageType);  // wrong type
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
-  args.pointcloud_topics = {"/points"};
+  MovifyArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  args.cam_pcd_entries = {"/points"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(
@@ -389,11 +389,54 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPcdTopicWrongTypeFails)
 TEST_F(MovifyTmpDirTest, ValidateInputsExplicitCamInfoMissingFails)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   args.camera_info_entries = {"/cam/camera_info"};
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
   EXPECT_EQ(v.error, "camera_info topic '/cam/camera_info' not found in " + bag.string());
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsClockDefaultsToTheFirstPanel)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, movify_mcap_options());
+    movify_declare_topic(*w, "/cam/a", kMovifyImageType);
+    movify_declare_topic(*w, "/cam/b", kMovifyImageType);
+    w->close();
+  }
+  MovifyArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
+  args.cam_topics.push_back("/cam/b");
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  EXPECT_EQ(v.clock, 0u);
+  args.clock = "/cam/b";
+  const auto named = validate_video_inputs(args);
+  ASSERT_TRUE(named.ok()) << named.error;
+  EXPECT_EQ(named.clock, 1u);
+  EXPECT_EQ(named.views[1].topic, "/cam/b");
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsWithoutCamTopicsFails)
+{
+  // The parser leaves --cam optional (the coming panel kinds are alternatives),
+  // so an invocation with no panel at all is refused here.
+  MovifyArgs args;
+  args.input_path = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
+  args.output_path = tmp_dir_ / "out.avi";
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(v.error, "nothing to render: pass at least one --cam topic.");
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsClockMustBeACamTopic)
+{
+  const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  args.clock = "/cam/other";
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(v.error, "--clock '/cam/other' is not one of the --cam topics.");
 }
 
 // ---- scan_video_inputs ------------------------------------------------------
@@ -401,7 +444,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsExplicitCamInfoMissingFails)
 TEST_F(MovifyTmpDirTest, ScanEmptyTopicFails)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 0);
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   const auto s = scan_video_inputs(args, v);
@@ -419,8 +462,8 @@ TEST_F(MovifyTmpDirTest, ScanEmptySecondaryTopicFails)
     w->write("/cam/a", 1'000'000'000LL, kMovifyGarbagePayload);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
-  args.topics.push_back("/cam/b");
+  MovifyArgs args(bag, "/cam/a", tmp_dir_ / "out.avi", false);
+  args.cam_topics.push_back("/cam/b");
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   const auto s = scan_video_inputs(args, v);
@@ -431,7 +474,7 @@ TEST_F(MovifyTmpDirTest, ScanEmptySecondaryTopicFails)
 TEST_F(MovifyTmpDirTest, ScanDerivesSpanAndFps)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 3);
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   const auto s = scan_video_inputs(args, v);
@@ -453,7 +496,7 @@ TEST_F(MovifyTmpDirTest, ScanDerivesSpanAndFps)
 TEST_F(MovifyTmpDirTest, LoadVideoGeometryDefaultsToEmpty)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
   VideoGeometry g;
@@ -473,7 +516,7 @@ TEST_F(MovifyTmpDirTest, LoadVideoGeometryFailsWhenCamInfoUnreadable)
     movify_declare_topic(*w, "/cam/camera_info", kMovifyCameraInfoType);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  MovifyArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
   args.rectify = true;
   const auto v = validate_video_inputs(args);
   ASSERT_TRUE(v.ok()) << v.error;
@@ -485,11 +528,10 @@ TEST_F(MovifyTmpDirTest, LoadVideoGeometryFailsWhenCamInfoUnreadable)
 
 TEST_F(MovifyTmpDirTest, OpenEncodeReaderMissingBagReturnsNull)
 {
-  MovifyVideoArgs args(tmp_dir_ / "does_not_exist.mcap", "/cam/image", tmp_dir_ / "out.avi", false);
-  EXPECT_EQ(open_encode_reader(args), nullptr);
+  EXPECT_EQ(open_encode_reader(tmp_dir_ / "does_not_exist.mcap", "/cam/image"), nullptr);
 }
 
-TEST_F(MovifyTmpDirTest, OpenEncodeReaderFiltersToThePrimaryTopic)
+TEST_F(MovifyTmpDirTest, OpenEncodeReaderFiltersToTheClockTopic)
 {
   const auto bag = tmp_dir_ / "in.mcap";
   {
@@ -500,14 +542,12 @@ TEST_F(MovifyTmpDirTest, OpenEncodeReaderFiltersToThePrimaryTopic)
     w->write("/other", 1'000'000'000LL, kMovifyGarbagePayload);
     w->close();
   }
-  MovifyVideoArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
-  args.topics.push_back("/other");
-  auto reader = open_encode_reader(args);
+  auto reader = open_encode_reader(bag, "/cam/image");
   ASSERT_NE(reader, nullptr);
   bagwiz::io::RawMessage raw;
   ASSERT_TRUE(reader->next(raw));
   EXPECT_EQ(raw.topic->name, "/cam/image");
-  EXPECT_FALSE(reader->next(raw));  // the secondary is filtered out of the encode reader
+  EXPECT_FALSE(reader->next(raw));  // the other topic is filtered out of the encode reader
 }
 
 }  // namespace

@@ -28,8 +28,8 @@ namespace
 {
 constexpr const char * kLogger = "bagwiz.cmd.movify";
 // kImageType / kCompressedImageType mirror topic_types.hpp's kImageTopicTypes
-// (movify cam -t's allowed_types) via is_supported_type() below.
-// kPointCloudType mirrors topic_types.hpp's kPointCloud2Type (--pcd's
+// (movify --cam's allowed_types) via is_supported_type() below.
+// kPointCloudType mirrors topic_types.hpp's kPointCloud2Type (--cam-pcd's
 // allowed_types). Keep both in sync by hand.
 constexpr const char * kImageType = "sensor_msgs/msg/Image";
 constexpr const char * kCompressedImageType = "sensor_msgs/msg/CompressedImage";
@@ -121,8 +121,8 @@ VideoSourceCheck check_video_source(const std::filesystem::path & input, const s
   if (!is_supported_type(found->type)) {
     check.status = VideoSourceStatus::kUnsupportedType;
     check.message = "topic '" + topic + "' has type '" + found->type +
-                    "', which movify cam cannot render; supported types are " + kImageType +
-                    " and " + kCompressedImageType;
+                    "', which movify cannot render; supported types are " + kImageType + " and " +
+                    kCompressedImageType;
     return check;
   }
 
@@ -143,12 +143,12 @@ PcdBindings parse_pcd_bindings(
     const std::string lhs = entry.substr(0, eq);
     const std::string rhs = entry.substr(eq + 1);
     if (lhs.empty() || rhs.empty()) {
-      out.error = "malformed --pcd entry '" + entry + "': expected <image_topic>=<pcd_topic>";
+      out.error = "malformed --cam-pcd entry '" + entry + "': expected <image_topic>=<pcd_topic>";
       return out;
     }
     if (std::find(image_topics.begin(), image_topics.end(), lhs) == image_topics.end()) {
-      out.error = "--pcd entry '" + entry + "' names image topic '" + lhs +
-                  "', which is not one of the -t/--topic topics";
+      out.error = "--cam-pcd entry '" + entry + "' names image topic '" + lhs +
+                  "', which is not one of the --cam topics";
       return out;
     }
     out.per_view[lhs].push_back(rhs);
@@ -179,7 +179,7 @@ CamInfoEntries parse_cam_info_entries(
     }
     if (std::find(image_topics.begin(), image_topics.end(), lhs) == image_topics.end()) {
       out.error = "--cam-info entry '" + entry + "' names image topic '" + lhs +
-                  "', which is not one of the -t/--topic topics";
+                  "', which is not one of the --cam topics";
       return out;
     }
     if (!out.per_view.emplace(lhs, rhs).second) {
@@ -192,24 +192,24 @@ CamInfoEntries parse_cam_info_entries(
 
 bool view_rectifies(bool rectify_requested, const ViewInput & view) noexcept
 {
-  // --pcd hard-requires a resolved camera-info topic (validate_video_inputs
+  // --cam-pcd hard-requires a resolved camera-info topic (validate_video_inputs
   // fails the run otherwise), so a projecting view always has one; honoring
   // --no-rectify here is what lets the projection fall back to the raw,
   // distortion-aware path in core::pointcloud::project_pointcloud.
   return rectify_requested && view.camera_info_topic.has_value();
 }
 
-VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args)
+VideoInputValidation validate_video_inputs(const MovifyArgs & args)
 {
   VideoInputValidation out;
 
-  if (args.topics.empty()) {
-    BAGWIZ_LOG_ERROR(kLogger, "at least one image topic is required (-t/--topic).");
-    out.error = "at least one image topic is required (-t/--topic).";
+  if (args.cam_topics.empty()) {
+    BAGWIZ_LOG_ERROR(kLogger, "nothing to render: pass at least one --cam topic.");
+    out.error = "nothing to render: pass at least one --cam topic.";
     return out;
   }
 
-  const auto grid = parse_grid_spec(args.grid, args.topics.size());
+  const auto grid = parse_grid_spec(args.grid, args.cam_topics.size());
   if (!grid.ok()) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", grid.error.c_str());
     out.error = grid.error;
@@ -238,7 +238,7 @@ VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args)
   // A topic listed more than once is an error: grid placement is positional,
   // so a duplicate would be two cells showing the same stream.
   std::unordered_set<std::string> seen_topics;
-  for (const auto & topic : args.topics) {
+  for (const auto & topic : args.cam_topics) {
     if (!seen_topics.insert(topic).second) {
       BAGWIZ_LOG_ERROR(kLogger, "topic '%s' given more than once", topic.c_str());
       out.error = "topic '" + topic + "' given more than once";
@@ -247,7 +247,7 @@ VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args)
   }
 
   // Validate every source topic and type before touching anything else.
-  for (const auto & topic : args.topics) {
+  for (const auto & topic : args.cam_topics) {
     const auto check = check_video_source(args.input_path, topic);
     if (!check.ok()) {
       BAGWIZ_LOG_ERROR(kLogger, "%s", check.message.c_str());
@@ -260,16 +260,29 @@ VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args)
     out.views.push_back(std::move(view));
   }
 
-  // Split the --pcd / --cam-info entries into global values and per-view
+  // --clock names the panel whose messages define the frames; it must be one
+  // of the --cam topics. Unset picks the first.
+  if (args.clock.has_value()) {
+    const auto it = std::find(args.cam_topics.begin(), args.cam_topics.end(), *args.clock);
+    if (it == args.cam_topics.end()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "--clock '%s' is not one of the --cam topics.", args.clock->c_str());
+      out.error = "--clock '" + *args.clock + "' is not one of the --cam topics.";
+      return out;
+    }
+    out.clock = static_cast<std::size_t>(it - args.cam_topics.begin());
+  }
+
+  // Split the --cam-pcd / --cam-info entries into global values and per-view
   // bindings, then hand each view its point-cloud topics (global topics
   // first, then the view's own bindings, duplicates removed).
-  const auto bindings = parse_pcd_bindings(args.pointcloud_topics, args.topics);
+  const auto bindings = parse_pcd_bindings(args.cam_pcd_entries, args.cam_topics);
   if (!bindings.ok()) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", bindings.error.c_str());
     out.error = bindings.error;
     return out;
   }
-  const auto cam_info_entries = parse_cam_info_entries(args.camera_info_entries, args.topics);
+  const auto cam_info_entries = parse_cam_info_entries(args.camera_info_entries, args.cam_topics);
   if (!cam_info_entries.ok()) {
     BAGWIZ_LOG_ERROR(kLogger, "%s", cam_info_entries.error.c_str());
     out.error = cam_info_entries.error;
@@ -341,12 +354,12 @@ VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args)
       if (!view.pcd_topics.empty()) {
         BAGWIZ_LOG_ERROR(
           kLogger,
-          "A camera-info topic is required for --pcd, but none could be derived from "
+          "A camera-info topic is required for --cam-pcd, but none could be derived from "
           "'%s'. Pass it explicitly with --cam-info %s=<info_topic>.",
           view.topic.c_str(), view.topic.c_str());
-        out.error = "A camera-info topic is required for --pcd, but none could be derived from '" +
-                    view.topic + "'. Pass it explicitly with --cam-info " + view.topic +
-                    "=<info_topic>.";
+        out.error =
+          "A camera-info topic is required for --cam-pcd, but none could be derived from '" +
+          view.topic + "'. Pass it explicitly with --cam-info " + view.topic + "=<info_topic>.";
         return out;
       }
       if (args.rectify) {
@@ -397,13 +410,12 @@ VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args)
   return out;
 }
 
-VideoInputScan scan_video_inputs(
-  const MovifyVideoArgs & args, const VideoInputValidation & validation)
+VideoInputScan scan_video_inputs(const MovifyArgs & args, const VideoInputValidation & validation)
 {
   VideoInputScan out;
 
-  // Derive the frame rate from the primary topic's message timestamps.
-  const std::string & primary = validation.views.front().topic;
+  // Derive the frame rate from the clock topic's message timestamps.
+  const std::string & primary = validation.views[validation.clock].topic;
   if (scan_topic_span(args.input_path, primary, out.span) != 0) {
     out.error = "failed to scan topic '" + primary + "'";
     return out;
@@ -415,9 +427,12 @@ VideoInputScan scan_video_inputs(
   }
   out.fps = core::video::derive_frame_rate(out.span.first_ns, out.span.last_ns, out.span.count);
 
-  // Every secondary topic must carry at least one message; a view that can
-  // never render would silently produce a black cell otherwise.
-  for (std::size_t i = 1; i < validation.views.size(); ++i) {
+  // Every other topic must carry at least one message; a view that can never
+  // render would silently produce a black cell otherwise.
+  for (std::size_t i = 0; i < validation.views.size(); ++i) {
+    if (i == validation.clock) {
+      continue;
+    }
     TopicSpan span;
     const auto & topic = validation.views[i].topic;
     if (scan_topic_span(args.input_path, topic, span) != 0) {
@@ -469,7 +484,7 @@ VideoInputScan scan_video_inputs(
 }
 
 std::string load_video_geometry(
-  const MovifyVideoArgs & args, const VideoInputValidation & validation, VideoGeometry & out)
+  const MovifyArgs & args, const VideoInputValidation & validation, VideoGeometry & out)
 {
   out.camera_infos.resize(validation.views.size());
   bool any_pcd = false;
@@ -484,8 +499,8 @@ std::string load_video_geometry(
       BAGWIZ_LOG_ERROR(kLogger, "%s", ci.error.c_str());
       return ci.error;
     }
-    // Kept UNSCALED: each view's renderer applies its own scale (the primary's
-    // --resize or a secondary's fit-to-cell) when it prepares a frame.
+    // Kept UNSCALED: each view's renderer applies its own scale (the clock's
+    // --resize or another panel's fit-to-cell) when it prepares a frame.
     out.camera_infos[i] = std::move(*ci.info);
   }
   if (any_pcd) {
@@ -498,18 +513,18 @@ std::string load_video_geometry(
   return "";
 }
 
-std::unique_ptr<io::BagReader> open_encode_reader(const MovifyVideoArgs & args)
+std::unique_ptr<io::BagReader> open_encode_reader(
+  const std::filesystem::path & input, const std::string & clock_topic)
 {
   std::unique_ptr<io::BagReader> reader;
   try {
-    reader = io::open_read(args.input_path);
+    reader = io::open_read(input);
   } catch (const std::exception & e) {
-    BAGWIZ_LOG_ERROR(
-      kLogger, "failed to open '%s': %s", args.input_path.string().c_str(), e.what());
+    BAGWIZ_LOG_ERROR(kLogger, "failed to open '%s': %s", input.string().c_str(), e.what());
     return nullptr;
   }
   io::ReadFilter filter;
-  filter.topics.push_back(args.topics.front());
+  filter.topics.push_back(clock_topic);
   reader->set_filter(filter);
   return reader;
 }

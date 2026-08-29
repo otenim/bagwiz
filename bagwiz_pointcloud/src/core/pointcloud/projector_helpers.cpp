@@ -37,7 +37,7 @@ ProjectionResult project_cloud_for_frame(
   geometry_msgs::msg::TransformStamped tf;
   try {
     // tf2::BufferCore is not guaranteed to be thread-safe for concurrent
-    // lookups. All callers (including movify_video's async projection workers)
+    // lookups. All callers (including movify's async projection workers)
     // share the same buffer, so serialize the lookup.
     static std::mutex lookup_mutex;
     std::lock_guard<std::mutex> lock(lookup_mutex);

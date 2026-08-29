@@ -9,7 +9,7 @@
 #ifndef COMMANDS__MOVIFY_INPUTS_HPP_
 #define COMMANDS__MOVIFY_INPUTS_HPP_
 
-#include "bagwiz/commands/movify_video.hpp"
+#include "bagwiz/commands/movify.hpp"
 #include "bagwiz/core/image/camera_info.hpp"
 #include "bagwiz/core/pointcloud/fetcher.hpp"
 #include "bagwiz/core/video/frame_rate.hpp"
@@ -18,7 +18,9 @@
 
 #include <tf2/buffer_core.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
@@ -26,19 +28,19 @@
 #include <unordered_map>
 #include <vector>
 
-// The input side of `movify cam`: the --pcd / --cam-info entry parsing, the
-// pre-flight validation of every topic, the pass-1 scan (frame rate and
-// point-cloud index), the pass-2 geometry (camera infos + TF), and the encode
-// reader. CLI-internal: this header lives with the command sources and is not
+// The input side of `movify`: the --cam-pcd / --cam-info entry parsing, the
+// pre-flight validation of every topic, the --clock resolution, the pass-1
+// scan (frame rate and point-cloud index), the pass-2 geometry (camera infos
+// + TF), and the encode reader. CLI-internal: this header lives with the command sources and is not
 // installed.
 namespace bagwiz::commands
 {
 
 // ---- per-view bindings ----------------------------------------------------------
 
-// --pcd entries after topic expansion: a bare value (already glob-expanded by
-// the CLI layer) projects onto every view; an "<image_topic>=<pcd_topic>"
-// entry projects onto that view only.
+// --cam-pcd entries after topic expansion: a bare value (already glob-expanded
+// by the CLI layer) projects onto every camera panel; an
+// "<image_topic>=<pcd_topic>" entry projects onto that panel only.
 struct PcdBindings
 {
   std::vector<std::string> global_topics;
@@ -48,7 +50,7 @@ struct PcdBindings
   [[nodiscard]] bool ok() const { return error.empty(); }
 };
 
-// Split --pcd entries into global topics and per-view bindings. Errors: an
+// Split --cam-pcd entries into global topics and per-view bindings. Errors: an
 // empty half, or an <image_topic> that is not one of `image_topics`.
 [[nodiscard]] PcdBindings parse_pcd_bindings(
   std::span<const std::string> entries, std::span<const std::string> image_topics);
@@ -85,29 +87,31 @@ struct ViewInput
   std::vector<std::string> pcd_topics;
 };
 
-// Outcome of validate_video_inputs(). `views` is parallel to args.topics and
-// `grid` is the resolved layout. `error` is empty on success; on failure it
+// Outcome of validate_video_inputs(). `views` is parallel to args.cam_topics,
+// `grid` is the resolved layout, and `clock` is the index into `views` of the
+// clock panel (--clock, else the first). `error` is empty on success; on failure it
 // holds the message that was already logged.
 struct VideoInputValidation
 {
   std::vector<ViewInput> views;
   GridSpec grid;
+  std::size_t clock = 0;
   std::string error;
 
   [[nodiscard]] bool ok() const { return error.empty(); }
 };
 
 // The command's pre-flight checks: grid parse, duplicate/empty topic
-// rejection, every image topic's presence + renderable type, --pcd and
-// --cam-info entry parsing, per-view cam-info resolution (explicit entry or
-// derivation from the image topic name) and the cam-info requirement of
-// rectification / --pcd, and every point-cloud topic's presence + type. Logs
-// the command's errors and returns on the first failure.
-[[nodiscard]] VideoInputValidation validate_video_inputs(const MovifyVideoArgs & args);
+// rejection, every image topic's presence + renderable type, the --clock
+// resolution, --cam-pcd and --cam-info entry parsing, per-view cam-info resolution (explicit entry
+// or derivation from the image topic name) and the cam-info requirement of rectification /
+// --cam-pcd, and every point-cloud topic's presence + type. Logs the command's errors and returns
+// on the first failure.
+[[nodiscard]] VideoInputValidation validate_video_inputs(const MovifyArgs & args);
 
 // Whether a validated view renders rectified: rectification must be in effect
 // (the default, unless --no-rectify) and the view's camera info must have
-// resolved. --no-rectify wins even with --pcd — the projection then targets
+// resolved. --no-rectify wins even with --cam-pcd — the projection then targets
 // the raw image, applying the camera's lens distortion model instead of
 // assuming a rectified one.
 [[nodiscard]] bool view_rectifies(bool rectify_requested, const ViewInput & view) noexcept;
@@ -129,7 +133,7 @@ struct TopicSpan
 // on failure it holds the message that was already logged.
 struct VideoInputScan
 {
-  // The primary (first) view's message span, which drives the frame rate.
+  // The clock view's message span, which drives the frame rate.
   TopicSpan span;
   core::video::FrameRate fps;
   std::vector<std::string> pcd_topics;
@@ -145,13 +149,13 @@ struct VideoInputScan
   [[nodiscard]] bool ok() const { return error.empty(); }
 };
 
-// Pass 1: derive the frame rate from the primary topic's message timestamps,
+// Pass 1: derive the frame rate from the clock topic's message timestamps,
 // require every view's topic to carry at least one message, and, when
 // point-cloud overlay topics are given, scan each for its index and the
 // selected property's global min/max. Logs the command's errors and returns
 // with !ok() on the first failure.
 [[nodiscard]] VideoInputScan scan_video_inputs(
-  const MovifyVideoArgs & args, const VideoInputValidation & validation);
+  const MovifyArgs & args, const VideoInputValidation & validation);
 
 // ---- pass-2 geometry ---------------------------------------------------------
 
@@ -171,14 +175,15 @@ struct VideoGeometry
 // topic, and the bag's TF when point-cloud overlay topics are present.
 // Returns "" on success; on failure logs and returns the message.
 [[nodiscard]] std::string load_video_geometry(
-  const MovifyVideoArgs & args, const VideoInputValidation & validation, VideoGeometry & out);
+  const MovifyArgs & args, const VideoInputValidation & validation, VideoGeometry & out);
 
 // ---- pass 2: the encode reader ------------------------------------------------
 
-// Open the input bag for the encode pass, restricted to the primary image
-// topic (every other view reads through its own NearestMessageSource). Logs
-// "failed to open ..." and returns nullptr on failure.
-[[nodiscard]] std::unique_ptr<io::BagReader> open_encode_reader(const MovifyVideoArgs & args);
+// Open the input bag for the encode pass, restricted to `clock_topic` (every
+// other panel reads through its own NearestMessageSource). Logs "failed to
+// open ..." and returns nullptr on failure.
+[[nodiscard]] std::unique_ptr<io::BagReader> open_encode_reader(
+  const std::filesystem::path & input, const std::string & clock_topic);
 
 }  // namespace bagwiz::commands
 
