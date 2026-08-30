@@ -28,9 +28,9 @@
 namespace bagwiz::commands
 {
 
-// The parallel per-panel pipeline is only worthwhile when there is work to
-// spread across workers (several panels, or point-cloud projection) and enough
-// frames to hide the per-tick job-launch overhead.
+// The parallel per-panel pipeline pays off whenever there are enough frames to
+// hide the per-tick job-launch overhead and more than one core: even a single
+// panel's decode then overlaps the previous frame's encode.
 [[nodiscard]] bool should_use_parallel_pipeline(
   std::size_t panel_count, bool has_pointcloud_topics, bool enable_parallel,
   std::uint64_t frame_count, unsigned int hardware_concurrency);

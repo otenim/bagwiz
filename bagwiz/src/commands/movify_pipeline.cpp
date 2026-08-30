@@ -260,9 +260,11 @@ bool should_use_parallel_pipeline(
   std::size_t panel_count, bool has_pointcloud_topics, bool enable_parallel,
   std::uint64_t frame_count, unsigned int hardware_concurrency)
 {
-  const bool has_parallel_work = panel_count > 1 || has_pointcloud_topics;
-  return has_parallel_work && enable_parallel && frame_count >= kThreadingMinFrames &&
-         hardware_concurrency > 1;
+  // Even a single panel gains from the parallel loop: its decode runs on a
+  // worker while the main thread encodes the previous tick's frame.
+  (void)panel_count;
+  (void)has_pointcloud_topics;
+  return enable_parallel && frame_count >= kThreadingMinFrames && hardware_concurrency > 1;
 }
 
 int run_encode_pass(

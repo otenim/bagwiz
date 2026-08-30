@@ -50,10 +50,10 @@ using bagwiz::test::MovifyTmpDirTest;
 
 // ---- should_use_parallel_pipeline ---------------------------------------------
 
-TEST(ShouldUseParallelPipeline, SinglePanelWithoutPointCloudsStaysSynchronous)
+TEST(ShouldUseParallelPipeline, SinglePanelRunsInParallelToo)
 {
-  // One panel and no projection work: there is nothing to spread across workers.
-  EXPECT_FALSE(should_use_parallel_pipeline(1, false, true, 100, 8));
+  // One panel still pipelines: its decode overlaps the previous frame's encode.
+  EXPECT_TRUE(should_use_parallel_pipeline(1, false, true, 100, 8));
 }
 
 TEST(ShouldUseParallelPipeline, MultiplePanelsRunInParallelWithoutPointClouds)
