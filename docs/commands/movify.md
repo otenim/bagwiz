@@ -146,9 +146,9 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 | `--pcd <topic>...`        | `sensor_msgs/msg/PointCloud2` topic(s) to render as point-cloud panels, after the camera panels in the grid: every listed topic is drawn into one panel per `--view`, each cloud transformed into the `--frame` frame at its own stamp — see [Point-cloud panels](#point-cloud-panels). A literal topic name or a `*` glob. Long-form only. Repeatable.                                                                                                                                                                                                                                                                |
 | `--gnss <topic>`          | `sensor_msgs/msg/NavSatFix` topic to render as a map panel, after the point-cloud panels: the vehicle's track in a local East-North-Up plan view with the current fix marked — see [Map panel](#map-panel). A literal topic name. Long-form only.                                                                                                                                                                                                                                                                                                                                                                      |
 | `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--encoder <encoder>`     | H.264 encoder for `.mp4`/`.mkv`/`.mov` outputs: `auto` uses NVIDIA NVENC for outputs larger than 1080p when this build and a GPU support it, else libx264; `x264` and `nvenc` force one (a forced `nvenc` without a usable GPU stops the run). `.avi` (MJPEG) ignores it. Default: `auto`. Long-form only.                                                                                                                                                                                                                                                                                                             |
+| `--encoder <encoder>`     | H.264 encoder for `.mp4`/`.mkv`/`.mov` outputs: `auto` uses NVIDIA NVENC for outputs larger than 1080p (by pixel count, 1920x1080) when this build and a GPU support it, else libx264; `x264` and `nvenc` force one (a forced `nvenc` without a usable GPU stops the run). `.avi` (MJPEG) ignores it. Default: `auto`. Long-form only.                                                                                                                                                                                                                                                                                 |
 | `--preset <preset>`       | H.264 speed/quality preset, by libx264's names: `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`, `medium`, `slow`, `slower`, `veryslow`; NVENC maps them onto its `p1`-`p7`. Default: `medium`. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--clock <topic>`         | The panel whose messages define the output frames: each message becomes one frame, its message rate sets the frame rate, and its panel's size (a camera frame after `--resize` / `--width`, or a point-cloud or map panel's 1280x720) fixes the grid's cell size — see [The clock panel](#the-clock-panel). Must be one of the `--cam`, `--pcd` or `--gnss` topics. A literal topic name, not a glob. Default: the first `--cam` topic, else the first `--pcd` topic, else the `--gnss` topic. Long-form only.                                                                                                         |
+| `--clock <topic>`         | The panel whose messages define the output frames: each message becomes one frame, its message rate sets the frame rate, and its panel's size (a camera frame after `--resize` / `--width`, or a point-cloud or map panel's 1280x720, or the `--width` split across the columns at 16:9) fixes the grid's cell size — see [The clock panel](#the-clock-panel). Must be one of the `--cam`, `--pcd` or `--gnss` topics. A literal topic name, not a glob. Default: the first `--cam` topic, else the first `--pcd` topic, else the `--gnss` topic. Long-form only.                                                      |
 | `--grid <cols>x<rows>`    | Grid layout for the panels (e.g. `2x2`). Must provide at least as many cells as panels; extra cells stay black. When omitted, a near-square grid is derived from the panel count (2 panels -> 2x1, 3-4 -> 2x2, 5-6 -> 3x2, ...). Long-form only.                                                                                                                                                                                                                                                                                                                                                                       |
 | `--cam-info <topic>`      | `sensor_msgs/msg/CameraInfo` topic for rectification and `--cam-pcd`: a bare `<info_topic>` applies to every camera panel, an `<image_topic>=<info_topic>` entry overrides one panel. Panels without an entry derive it from the image topic name (`/image_raw`, `/image_raw/compressed`, `/image_rect_color`, and `/image_rect_color/compressed` map their prefix to `/camera_info`). Literal topic names, not globs. Long-form only. Repeatable.                                                                                                                                                                     |
 | `--no-rectify`            | Disable rectification. Each frame is otherwise rectified (lens-distortion correction applied) using the panel's resolved CameraInfo — there is no opt-in flag, since that is the default. `--no-rectify` also covers `--cam-pcd` panels, whose points then project onto the raw image with the camera's lens distortion applied. A panel whose camera-info topic cannot be derived renders unrectified with a warning (name it with `--cam-info`); point-cloud projection still requires one. Long-form only.                                                                                                          |
@@ -165,8 +165,8 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 | `--elev <deg>`            | `3d` view: camera elevation above the XY plane in degrees (range: -89 to 89). Default: 20. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `--azim <deg>`            | `3d` view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks at the scene from behind the sensor. Default: 180. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `--dist <m>`              | `3d` view: camera distance from the `--frame` origin in meters. Default: 30. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--map-range <m>`         | Map panel: follow the current fix, the panel spanning +-range meters around it. Default: the whole track fitted into the panel. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--resize <factor>`       | Scale the clock panel's frame by this factor while preserving aspect ratio, which sets the cell size. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so rectification and `--cam-pcd` stay aligned (range: 0.01-10.0). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                                                                                                                                                           |
+| `--map-range <m>`         | Map panel: follow the current fix, the panel's shorter axis spanning +-range meters around it (the longer axis shows proportionally more). Default: the whole track fitted into the panel. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `--resize <factor>`       | Scale the clock panel's frame by this factor while preserving aspect ratio, which sets the cell size. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so rectification and `--cam-pcd` stay aligned (range: 0.01-10.0). Applies only when the clock panel is a camera: a point-cloud or map clock renders at a fixed size and ignores it (use `--width` instead). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                 |
 | `--width <px>`            | Fix the composed output width in pixels: the cell width is the width split across the grid columns, and the cell height follows the clock panel's aspect ratio (both rounded down to even, so the output can be a few pixels narrower). Mutually exclusive with `--resize`. Long-form only.                                                                                                                                                                                                                                                                                                                            |
 | `-w`, `--overwrite`       | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
@@ -179,8 +179,8 @@ the one named with `--clock`.
 - The output's frame rate and frame count come from the clock topic's message
   timestamps. Each output frame shows, for every other panel, that topic's
   message whose bag record time is nearest the clock frame's (a frame is
-  simply repeated while its topic is slower, and a topic that has not produced
-  a message yet renders as a black cell).
+  simply repeated while its topic is slower, and a tick before that topic's
+  first message shows that first message).
 - The cell size is the clock frame's size after `--resize` — or, when
   `--width` is given, the size derived from the output width and the grid
   columns; a point-cloud or map clock panel renders at 1280x720, or at the
@@ -219,10 +219,12 @@ record time is nearest the clock message's as a marker pointing along its
 direction of travel (read off the last half meter of movement, so a vehicle
 at rest keeps its heading). A north arrow, a scale bar, and the current
 latitude, longitude and altitude are drawn over it. By default the whole
-track is fitted into the panel; `--map-range <m>` follows the vehicle
-instead, the panel spanning +-m around it. No map tiles are drawn: the panel
-is an offline plan view. A topic whose messages all lack a position stops
-the run.
+track is fitted into the panel, over at least 20 m on each axis so a
+stationary vehicle's GNSS noise is not blown up to fill it; `--map-range <m>`
+follows the vehicle instead, the panel's shorter axis spanning +-m around it
+(the longer axis shows proportionally more). No map tiles are drawn: the
+panel is an offline plan view. A topic whose messages all lack a position
+stops the run.
 
 ## Multi-view grids
 
@@ -268,20 +270,23 @@ a different resolution stops the run (other panels re-fit into their cell
 instead). Dimensions must be even (the 4:2:0 pixel formats these codecs use
 require it).
 
-H.264 outputs larger than 1080p are encoded by NVIDIA NVENC when the FFmpeg
+H.264 outputs larger than 1080p (by pixel count, 1920x1080) are encoded by
+NVIDIA NVENC when the FFmpeg
 build has it and a GPU accepts the stream, else by libx264 — the run logs
 which. Below that size libx264 is used outright: the GPU's setup and
 per-frame cost outweigh what it saves on small frames, while at 4K libx264
 dominates the whole run. `--encoder` forces one, and `--preset` trades speed
 for quality and size (libx264's names, mapped onto NVENC's `p1`-`p7`).
 NVENC's H.264 encoder tops out at 4096x4096 on most GPUs, so a composed
-output larger than that (a 2x2 grid of 4K cameras) falls back to libx264.
+output larger than that (a 2x2 grid of 4K cameras) falls back to libx264
+under `auto`, and stops the run under a forced `--encoder nvenc`.
 Both keep B-frames off, so the output plays on hardware decoders that choke
 on negative timestamps.
 
 A single JPEG camera shown as decoded — one `--cam` topic of
 `CompressedImage`, `--no-rectify` (or no camera info to rectify with), no
-`--resize` / `--width`, no `--cam-pcd`, and no other panel — streams each
+`--resize` / `--width`, no `--cam-pcd`, no `--grid` larger than `1x1`, and no
+other panel — streams each
 frame's decoded YUV planes straight to the encoder, decoding a few frames
 ahead on worker threads, instead of composing a frame through packed BGR
 and back; the run logs "streaming ... as decoded". Every other layout
@@ -291,9 +296,11 @@ composes and encodes.
 
 ## Output
 
-Frames are decoded and encoded one at a time; the video is written to a
-temporary file and atomically moved into place on success. A failed run leaves
-no partial output or leftover temporary file.
+Frames stream to the encoder as they are composed — the panels' work on
+worker threads, a clock camera's decodes a few frames ahead — and nothing is
+buffered whole; the video is written to a temporary file and atomically
+moved into place on success. A failed run leaves no partial output or
+leftover temporary file.
 
 ## Oversized outputs
 

@@ -144,8 +144,10 @@ public:
       .add_option(
         "--resize", args_.resize_scale,
         "Scale the clock panel's frame by this factor while preserving aspect ratio, which "
-        "sets the cell size. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 "
-        "doubles them.")
+        "sets the cell size (camera clocks only: a point-cloud or map clock renders at a "
+        "fixed size and ignores this). 1.0 keeps the original size, 0.5 halves both "
+        "dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so "
+        "rectification and --cam-pcd stay aligned. Mutually exclusive with --width.")
       ->default_val(1.0f)
       ->check(CLI::Range(0.01f, 10.0f));
     auto * width_opt =
@@ -250,8 +252,9 @@ public:
     app
       .add_option(
         "--map-range", args_.map_range_m,
-        "Map panel: follow the current fix, the panel spanning +-range meters around it. "
-        "Default: the whole track fitted into the panel.")
+        "Map panel: follow the current fix, the panel's shorter axis spanning +-range meters "
+        "around it (the longer axis shows proportionally more). Default: the whole track "
+        "fitted into the panel.")
       ->check(CLI::PositiveNumber);
     app.footer(
       "Frames stream straight to the encoder (no large temp files); the output is written\n"
