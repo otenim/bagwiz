@@ -135,8 +135,9 @@ std::string finalize_video_output(
 }
 
 VideoFrameEncoder::VideoFrameEncoder(
-  const std::filesystem::path & tmp_path, core::video::FrameRate fps)
-: tmp_path_(tmp_path), fps_(fps)
+  const std::filesystem::path & tmp_path, core::video::FrameRate fps,
+  core::video::VideoEncoderOptions options)
+: tmp_path_(tmp_path), fps_(fps), options_(std::move(options))
 {
 }
 
@@ -147,10 +148,18 @@ bool VideoFrameEncoder::encode(
     // The first frame fixes the geometry and pixel encoding for the run.
     enc_w_ = frame_w;
     enc_h_ = frame_h;
-    auto opened = core::video::open_video_encoder(tmp_path_, enc_w_, enc_h_, fps_.num, fps_.den);
+    auto opened =
+      core::video::open_video_encoder(tmp_path_, enc_w_, enc_h_, fps_.num, fps_.den, options_);
     if (!opened.ok()) {
       BAGWIZ_LOG_ERROR(kLogger, "%s", opened.error.c_str());
       return false;
+    }
+    if (!opened.fallback_note.empty()) {
+      BAGWIZ_LOG_WARN(
+        kLogger, "NVENC is not usable here (%s); encoding with %s.", opened.fallback_note.c_str(),
+        opened.backend.c_str());
+    } else {
+      BAGWIZ_LOG_INFO(kLogger, "encoding with %s.", opened.backend.c_str());
     }
     encoder_ = std::move(opened.encoder);
   } else if (frame_w != enc_w_ || frame_h != enc_h_) {

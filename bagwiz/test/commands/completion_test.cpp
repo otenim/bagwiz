@@ -2136,10 +2136,26 @@ TEST(FlagCompletionTest, MovifyDashListsFlags)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "movify", "-"}),
-    "--alpha\n--azim\n--cam\n--cam-info\n--cam-pcd\n--clock\n--dist\n--elev\n--field\n"
-    "--frame\n--gnss\n--grid\n--help\n--input\n--map-range\n--max\n--min\n--no-rectify\n"
-    "--output\n--overwrite\n--pcd\n--point-size\n--range\n--resize\n--scheme\n--view\n"
-    "--width\n-h\n-i\n-o\n-w\n");
+    "--alpha\n--azim\n--cam\n--cam-info\n--cam-pcd\n--clock\n--dist\n--elev\n--encoder\n"
+    "--field\n--frame\n--gnss\n--grid\n--help\n--input\n--map-range\n--max\n--min\n"
+    "--no-rectify\n--output\n--overwrite\n--pcd\n--point-size\n--preset\n--range\n"
+    "--resize\n--scheme\n--view\n--width\n-h\n-i\n-o\n-w\n");
+}
+
+// `--encoder <TAB>` / `--preset <TAB>` offer the H.264 encoder and preset
+// choices, sorted.
+TEST(FlagCompletionTest, MovifyEncoderFlagListsChoices)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "--encoder"}),
+    "auto\nnvenc\nx264\n");
+}
+
+TEST(FlagCompletionTest, MovifyPresetFlagListsChoices)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "--preset"}),
+    "fast\nfaster\nmedium\nslow\nslower\nsuperfast\nultrafast\nveryfast\nveryslow\n");
 }
 
 // `--view <TAB>` offers the point-cloud panel projections, sorted.

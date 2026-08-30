@@ -84,7 +84,8 @@ int run_movify(const MovifyArgs & args)
     panels->size(), !scan.pcd_topics.empty(), args.enable_parallel_pipeline, scan.span.count,
     std::thread::hardware_concurrency());
 
-  VideoFrameEncoder encoder(tmp_path, scan.fps);
+  VideoFrameEncoder encoder(
+    tmp_path, scan.fps, core::video::VideoEncoderOptions{args.encoder, args.preset});
   if (
     run_encode_pass(
       *reader, *panels, validation.grid, parallel, validation.clock, clock_topic, encoder) != 0) {

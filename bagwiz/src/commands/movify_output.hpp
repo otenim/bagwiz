@@ -76,7 +76,9 @@ private:
 class VideoFrameEncoder
 {
 public:
-  VideoFrameEncoder(const std::filesystem::path & tmp_path, core::video::FrameRate fps);
+  VideoFrameEncoder(
+    const std::filesystem::path & tmp_path, core::video::FrameRate fps,
+    core::video::VideoEncoderOptions options = {});
 
   // Encode one composed packed-BGR24 frame (row stride width*3). Returns
   // false after logging on any failure, including a mid-run size change.
@@ -98,6 +100,7 @@ public:
 private:
   std::filesystem::path tmp_path_;
   core::video::FrameRate fps_;
+  core::video::VideoEncoderOptions options_;
 
   std::unique_ptr<core::video::VideoEncoder> encoder_;
   std::uint32_t enc_w_ = 0;

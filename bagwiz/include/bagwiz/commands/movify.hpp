@@ -12,6 +12,7 @@
 #include "bagwiz/core/pointcloud/cloud_view.hpp"
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
+#include "bagwiz/core/video/video_encoder.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -49,6 +50,11 @@ struct MovifyArgs
   // Replace a pre-existing <output>. Without it, an existing output path stops
   // the run before any work is done.
   bool overwrite = false;
+  // The H.264 encoder for .mp4/.mkv/.mov outputs (auto: NVENC above 1080p
+  // when usable, else libx264) and its speed/quality preset; .avi (MJPEG)
+  // ignores both.
+  core::video::H264Backend encoder = core::video::H264Backend::kAuto;
+  std::string preset = "medium";
   // The topic whose messages define the output frames — one frame per
   // message, its message rate as the frame rate, and its panel's render size
   // as the grid's cell size. Must be one of cam_topics, pcd_topics or

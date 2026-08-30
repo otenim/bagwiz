@@ -9,12 +9,14 @@
 #ifndef BAGWIZ__CORE__VIDEO__VIDEO_ENCODER_HPP_
 #define BAGWIZ__CORE__VIDEO__VIDEO_ENCODER_HPP_
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 
 // Thin RAII wrapper around a libav (FFmpeg) encode + mux pipeline. All
 // <libav*> types are confined to the .cpp via a pimpl, so neither this header
@@ -62,25 +64,49 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-// Outcome of open_video_encoder(). On success `encoder` is non-null and `error`
-// is empty; on failure `encoder` is null and `error` explains why.
+// Which encoder an H.264 output (.mp4 / .mkv / .mov) uses. kAuto tries
+// NVIDIA NVENC first for frames larger than 1080p — when this FFmpeg build
+// has it and a GPU accepts the stream — and falls back to libx264, which it
+// uses outright for smaller frames (there the GPU's overhead outweighs the
+// saving); kX264 / kNvenc force one.
+enum class H264Backend { kAuto, kX264, kNvenc };
+
+// The libx264 preset names, fastest first, as VideoEncoderOptions::preset
+// accepts them. NVENC maps them onto its p1 (fastest) .. p7 (slowest).
+inline constexpr std::array<std::string_view, 9> kH264Presets{
+  {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}};
+
+// Encoding choices beyond what the output extension fixes. Ignored by the
+// MJPEG (.avi) path.
+struct VideoEncoderOptions
+{
+  H264Backend backend = H264Backend::kAuto;
+  std::string preset = "medium";  // one of kH264Presets
+};
+
+// Outcome of open_video_encoder(). On success `encoder` is non-null, `error`
+// is empty, `backend` names the encoder that opened ("libx264", "h264_nvenc",
+// "mjpeg"), and `fallback_note` is set when kAuto could not use NVENC (why);
+// on failure `encoder` is null and `error` explains why.
 struct OpenVideoEncoderResult
 {
   std::unique_ptr<VideoEncoder> encoder;
   std::string error;
+  std::string backend;
+  std::string fallback_note;
 
   [[nodiscard]] bool ok() const noexcept { return encoder != nullptr && error.empty(); }
 };
 
 // Open an encoder writing to `output`. Container/codec are inferred from the
-// extension: `.mp4` / `.mkv` / `.mov` -> H.264 (libx264, YUV420P);
-// `.avi` -> MJPEG. `fps_num`/`fps_den` set the constant frame rate. Failures
-// (unsupported extension, missing codec in this FFmpeg build, unwritable path,
-// odd dimensions for a codec that needs even ones) return a null encoder with a
-// descriptive error.
+// extension: `.mp4` / `.mkv` / `.mov` -> H.264 (YUV420P; the encoder per
+// `options.backend`); `.avi` -> MJPEG. `fps_num`/`fps_den` set the constant
+// frame rate. Failures (unsupported extension, an unknown preset, missing
+// codec in this FFmpeg build, unwritable path, odd dimensions for a codec
+// that needs even ones) return a null encoder with a descriptive error.
 OpenVideoEncoderResult open_video_encoder(
   const std::filesystem::path & output, std::uint32_t width, std::uint32_t height, int fps_num,
-  int fps_den);
+  int fps_den, const VideoEncoderOptions & options = {});
 
 // Basic stream facts read back from an encoded file. Lets tests (and a future
 // `--verify`) confirm an output is a real, playable video without shelling out

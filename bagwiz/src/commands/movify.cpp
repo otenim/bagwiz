@@ -19,6 +19,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace bagwiz::commands
 {
@@ -71,6 +72,29 @@ public:
     app.add_flag(
       "-w,--overwrite", args_.overwrite,
       "Replace an existing <output>. Without it, an existing output path stops the run.");
+    const std::map<std::string, core::video::H264Backend> encoder_map{
+      {"auto", core::video::H264Backend::kAuto},
+      {"x264", core::video::H264Backend::kX264},
+      {"nvenc", core::video::H264Backend::kNvenc}};
+    app
+      .add_option(
+        "--encoder", args_.encoder,
+        "H.264 encoder for .mp4/.mkv/.mov outputs: 'auto' uses NVIDIA NVENC for outputs "
+        "larger than 1080p when this build and a GPU support it, else libx264; 'x264' and "
+        "'nvenc' force one. .avi (MJPEG) ignores it. Default: auto.")
+      ->transform(CLI::CheckedTransformer{encoder_map})
+      ->default_val(core::video::H264Backend::kAuto);
+    app
+      .add_option(
+        "--preset", args_.preset,
+        "H.264 speed/quality preset, by libx264's names (ultrafast, superfast, veryfast, "
+        "faster, fast, medium, slow, slower, veryslow); NVENC maps them onto its p1-p7. "
+        "Default: medium.")
+      ->check(
+        CLI::IsMember(
+          std::vector<std::string>(
+            core::video::kH264Presets.begin(), core::video::kH264Presets.end())))
+      ->default_val("medium");
     add_topic_option(
       app, "--clock", args_.clock,
       "Topic whose messages define the output frames: each message becomes one frame, its "
