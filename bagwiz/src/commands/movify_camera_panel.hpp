@@ -258,6 +258,10 @@ private:
   // Draw the --pose trajectory over the frame pasted into `cell` as plates
   // on the ground, projected through the panel's camera at the frame's time.
   [[nodiscard]] std::string draw_pose(const CellView & cell) const;
+  // The panel's projection of a plate corner: through the camera model of
+  // the frame's render geometry (rectified or raw, like the point-cloud
+  // overlay), or nullopt for a corner behind the camera.
+  [[nodiscard]] PoseCornerProjector corner_projector() const;
 
   // A decode started by prefetch(): its own decoder, a copy of the payload,
   // the tick it is for, and the frame its select() takes over.
