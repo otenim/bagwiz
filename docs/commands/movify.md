@@ -285,7 +285,9 @@ A single JPEG camera shown as decoded — one `--cam` topic of
 frame's decoded YUV planes straight to the encoder, decoding a few frames
 ahead on worker threads, instead of composing a frame through packed BGR
 and back; the run logs "streaming ... as decoded". Every other layout
-composes its frames.
+composes its frames — with a camera as the clock, the loop reads a few
+messages ahead and decodes them on worker threads while the current frame
+composes and encodes.
 
 ## Output
 

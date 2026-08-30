@@ -93,8 +93,10 @@ TEST(ShouldUseParallelPipeline, RequiresParallelHardware)
 class StubPanel final : public Panel
 {
 public:
-  StubPanel(bool clock, std::vector<std::uint64_t> * ticks_seen)
-  : clock_(clock), ticks_seen_(ticks_seen)
+  StubPanel(
+    bool clock, std::vector<std::uint64_t> * ticks_seen,
+    std::vector<std::uint64_t> * prefetched = nullptr)
+  : clock_(clock), ticks_seen_(ticks_seen), prefetched_(prefetched)
   {
   }
 
@@ -103,6 +105,13 @@ public:
     ticks_seen_->push_back(tick.index);
     value_ = clock_ ? tick.payload.front() : static_cast<std::byte>(tick.index);
     return "";
+  }
+
+  void prefetch(const TickInfo & tick) override
+  {
+    if (prefetched_ != nullptr) {
+      prefetched_->push_back(tick.index);
+    }
   }
 
   std::optional<PanelSize> clock_cell_size() const override
@@ -124,6 +133,7 @@ public:
 private:
   bool clock_;
   std::vector<std::uint64_t> * ticks_seen_;
+  std::vector<std::uint64_t> * prefetched_;
   std::byte value_{0};
 };
 
@@ -159,6 +169,8 @@ struct PassResult
   bagwiz::core::video::VideoProbe probe;
   std::vector<std::uint64_t> clock_ticks;
   std::vector<std::uint64_t> follower_ticks;
+  std::vector<std::uint64_t> clock_prefetched;
+  std::vector<std::uint64_t> follower_prefetched;
 };
 
 // `clock` is the grid index the clock panel takes; the follower takes the
@@ -174,7 +186,8 @@ PassResult run_pass(
     const bool is_clock = i == clock;
     panels.push_back(
       std::make_unique<StubPanel>(
-        is_clock, is_clock ? &result.clock_ticks : &result.follower_ticks));
+        is_clock, is_clock ? &result.clock_ticks : &result.follower_ticks,
+        is_clock ? &result.clock_prefetched : &result.follower_prefetched));
   }
   const auto output = dir / (parallel ? "parallel.avi" : "sync.avi");
   VideoFrameEncoder encoder(output, bagwiz::core::video::FrameRate{10, 1});
@@ -208,6 +221,17 @@ TEST_F(MovifyTmpDirTest, ParallelLoopDrivesEveryPanelOncePerTick)
   EXPECT_EQ(r.probe.height, 2u);
   EXPECT_EQ(r.clock_ticks, std::vector<std::uint64_t>({0, 1, 2, 3, 4}));
   EXPECT_EQ(r.follower_ticks, std::vector<std::uint64_t>({0, 1, 2, 3, 4}));
+  // Every tick past the first reached the clock panel ahead of its select,
+  // in order; followers are never prefetched.
+  EXPECT_EQ(r.clock_prefetched, std::vector<std::uint64_t>({1, 2, 3, 4}));
+  EXPECT_TRUE(r.follower_prefetched.empty());
+}
+
+TEST_F(MovifyTmpDirTest, SynchronousLoopNeverPrefetches)
+{
+  const auto r = run_pass(tmp_dir_, 5, /*parallel=*/false);
+  ASSERT_EQ(r.exit_code, 0);
+  EXPECT_TRUE(r.clock_prefetched.empty());
 }
 
 // The clock panel may sit in any grid cell: with the clock at index 1 both

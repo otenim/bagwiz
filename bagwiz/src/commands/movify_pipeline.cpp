@@ -14,6 +14,7 @@
 #include <fmt/core.h>
 
 #include <cinttypes>
+#include <deque>
 #include <exception>
 #include <future>
 #include <memory>
@@ -212,22 +213,44 @@ int run_encode_loop_parallel(
     return true;
   };
 
+  // The ticks read past the one being composed, in order: the clock panel
+  // saw each through prefetch() as it was read, so a panel that decodes
+  // ahead is already at work on them.
+  struct QueuedTick
+  {
+    std::shared_ptr<const std::vector<std::byte>> payload;
+    std::int64_t record_ns = 0;
+  };
+  std::deque<QueuedTick> queued;
+  std::uint64_t read_count = 1;  // tick 0 was read above
+  const auto read_ahead = [&] {
+    io::RawMessage ahead;
+    while (queued.size() < kDecodeAheadDepth && reader.next(ahead)) {
+      auto payload =
+        std::make_shared<const std::vector<std::byte>>(ahead.payload.begin(), ahead.payload.end());
+      panels[clock]->prefetch(TickInfo{read_count, ahead.timestamp_ns, *payload});
+      queued.push_back(QueuedTick{std::move(payload), ahead.timestamp_ns});
+      ++read_count;
+    }
+  };
+
   while (true) {
     if (!wait_jobs()) {
       return 1;
     }
-    io::RawMessage next_raw;
-    if (!reader.next(next_raw)) {
+    read_ahead();
+    if (queued.empty()) {
       break;
     }
+    QueuedTick next = std::move(queued.front());
+    queued.pop_front();
     const std::uint64_t next_tick = tick + 1;
     GridCanvas & next_canvas = canvases[next_tick % 2];
     // Clear before launch: this canvas's previous tick finished two iterations
     // ago — its jobs were waited and its frame encoded.
     next_canvas.clear();
-    auto payload = std::make_shared<const std::vector<std::byte>>(
-      next_raw.payload.begin(), next_raw.payload.end());
-    const TickInfo info{next_tick, next_raw.timestamp_ns, *payload};
+    auto payload = std::move(next.payload);
+    const TickInfo info{next_tick, next.record_ns, *payload};
     for (std::size_t i = 0; i < panels.size(); ++i) {
       pending[i] = std::async(std::launch::async, [&, i, payload, info] {
         return run_panel_job(i, next_canvas, info, true);
