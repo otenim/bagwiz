@@ -61,7 +61,7 @@ Registered commands: `cam-info`, `complete`, `convert`, `joke`
 | cam-info | `cam_info.cpp`, `cam_info_replace.cpp`, `bagwiz_image/src/core/image/camera_info_resolver.cpp`                                 | `docs/commands/cam-info.md` |
 | complete | `completion.cpp`                                                                                                               | `docs/commands/complete.md` |
 | convert  | `convert.cpp`                                                                                                                  | `docs/commands/convert.md`  |
-| movify   | `movify.cpp`, `movify_video.cpp`, `movify_pcd_scan.cpp`                                                                        | `docs/commands/movify.md`   |
+| movify   | `movify.cpp`, `movify_video.cpp`                                                                                               | `docs/commands/movify.md`   |
 | ls       | `ls.cpp`                                                                                                                       | `docs/commands/ls.md`       |
 | map      | `map.cpp`, `map_slam.cpp`, `map_viewer.cpp`                                                                                    | `docs/commands/map.md`      |
 | tf       | `tf.cpp`, `tf_static_cp.cpp`, `bagwiz_tf/src/core/tf/*.cpp`                                                                    | `docs/commands/tf.md`       |

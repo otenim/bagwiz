@@ -172,8 +172,6 @@ set(bagwiz_command_sources
   src/commands/movify_output_size.cpp
   src/commands/movify_video.cpp
   src/commands/movify_video_common.cpp
-  src/commands/movify_pcd_scan.cpp
-  src/commands/movify_pcd_scan_common.cpp
   src/commands/joke.cpp
   src/commands/ls.cpp
   src/commands/pcd.cpp
@@ -711,43 +709,18 @@ if(BUILD_TESTING)
   # configure_video() through Registry::instance() (walk_test.cpp idiom) —
   # movify.cpp is the production call site for
   # add_topic_option(std::optional<std::string>&) (--cam-info).
-  # movify.cpp's run() dispatches to both video leaves, so the pcd-scan
-  # sources are compiled in too.
   ament_add_gtest(bagwiz_movify_video_test
     test/commands/movify_video_test.cpp
     src/commands/movify.cpp
     src/commands/movify_output_size.cpp
     src/commands/movify_video.cpp
     src/commands/movify_video_common.cpp
-    src/commands/movify_pcd_scan.cpp
-    src/commands/movify_pcd_scan_common.cpp
     src/commands/topic_option.cpp
     src/commands/registry.cpp)
   target_include_directories(bagwiz_movify_video_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(
     bagwiz_movify_video_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV ${OpenCV_LIBS})
-
-  # movify_pcd_scan_common.hpp lives in src/commands (CLI-internal,
-  # not installed), so this test adds src/commands to its include path
-  # (pcd_concat_common idiom). movify.cpp is compiled in so the CLI wiring
-  # test can drive the real configure() through Registry::instance()
-  # (movify_video_test idiom).
-  ament_add_gtest(bagwiz_movify_pcd_scan_test
-    test/commands/movify_pcd_scan_test.cpp
-    src/commands/movify.cpp
-    src/commands/movify_output_size.cpp
-    src/commands/movify_video.cpp
-    src/commands/movify_video_common.cpp
-    src/commands/movify_pcd_scan.cpp
-    src/commands/movify_pcd_scan_common.cpp
-    src/commands/topic_option.cpp
-    src/commands/registry.cpp)
-  target_include_directories(bagwiz_movify_pcd_scan_test
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
-  target_link_libraries(
-    bagwiz_movify_pcd_scan_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
-    PkgConfig::LIBAV ${OpenCV_LIBS})
 
   # movify_output_size.hpp lives in src/commands (CLI-internal, not
   # installed), so this test adds src/commands to its include path

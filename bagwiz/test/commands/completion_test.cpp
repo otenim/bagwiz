@@ -2130,10 +2130,10 @@ TEST(FlagCompletionTest, TopicKeepDashListsKeepFlags)
     "--help\n--input\n--output\n--overwrite\n--topics\n-h\n-i\n-o\n-t\n-w\n");
 }
 
-// `bagwiz movify <TAB>` lists the command group's leaf subcommands, sorted.
+// `bagwiz movify <TAB>` lists the command group's leaf subcommand.
 TEST(FlagCompletionTest, MovifySubcommandListsLeaves)
 {
-  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "movify", ""}), "cam\nscan\n");
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "movify", ""}), "cam\n");
 }
 
 // `bagwiz movify -` is the command-group slot; only the implicit help flags
@@ -2344,46 +2344,6 @@ TEST_F(CompletionTest, MovifyTopicSlotSuppressedWhenInputSlotIsFlag)
   write_image_topics_fixture(tmp_dir_ / "images.mcap");
 
   EXPECT_EQ(run_completion({"bagwiz", "__complete", "4", "bagwiz", "movify", "cam", "-t"}), "");
-}
-
-// `movify scan -` surfaces the leaf's flags plus the implicit help
-// flags, sorted.
-TEST(FlagCompletionTest, MovifyScanDashListsScanFlags)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "scan", "-"}),
-    "--azim\n--dist\n--elev\n--fps\n--height\n--help\n--input\n--output\n--overwrite\n"
-    "--point-size\n--range\n--scheme\n--speed\n--topic\n--view\n--width\n-h\n-i\n-o\n-t\n-w\n");
-}
-
-// `--view <TAB>` offers the valid projection choices, sorted.
-TEST(FlagCompletionTest, MovifyScanViewFlagListsChoices)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "movify", "scan", "--view"}),
-    "3d\nbev\n");
-}
-
-// `--scheme <TAB>` offers the valid color scheme choices, sorted.
-TEST(FlagCompletionTest, MovifyScanSchemeFlagListsChoices)
-{
-  EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "4", "bagwiz", "movify", "scan", "--scheme"}),
-    "inferno\njet\nmagma\nplasma\nrainbow\nturbo\nviridis\n");
-}
-
-// `movify scan <bag> <TAB>` (the <pcd_topic> slot) lists only the
-// bag's PointCloud2 topics, excluding the non-PointCloud2 /image.
-TEST_F(CompletionTest, MovifyScanTopicSlotListsOnlyPointCloud2Topics)
-{
-  const HomeEnvGuard home_guard(tmp_dir_);
-
-  write_pointcloud2_fixture(tmp_dir_ / "points.mcap");
-
-  EXPECT_EQ(
-    run_completion(
-      {"bagwiz", "__complete", "6", "bagwiz", "movify", "scan", "-i", "~/points.mcap", "-t"}),
-    "/points\n");
 }
 
 // `walk <input> <topic> --cam-info <TAB>` offers only the bag's
