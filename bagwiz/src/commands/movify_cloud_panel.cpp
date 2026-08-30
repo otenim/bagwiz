@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <exception>
 #include <future>
 #include <memory>
@@ -220,41 +221,47 @@ std::string CloudPanel::render(const CellView & cell)
 std::string CloudPanel::draw_pose(const CellView & cell) const
 {
   std::string error;
-  const auto polyline = pose_polyline_in_frame(*options_.pose, options_.frame, stamp_ns_, error);
-  if (!polyline.has_value()) {
+  const auto tiles =
+    pose_tiles_in_frame(*options_.pose, options_.frame, stamp_ns_, options_.pose_width_m, error);
+  if (!tiles.has_value()) {
     return on_topic(
       options_.topics.empty() ? std::string{"point-cloud panel"} : options_.topics.front(), error);
   }
-  const bool perspective = view_.projection == core::pointcloud::CloudProjection::kPerspective;
-  const core::pointcloud::PerspectiveCamera camera =
-    perspective ? core::pointcloud::make_perspective_camera(view_)
-                : core::pointcloud::PerspectiveCamera{};
-  const auto to_runs = [&](const std::vector<std::array<double, 3>> & points) {
-    std::vector<std::optional<cv::Point>> pixels;
-    pixels.reserve(points.size());
-    for (const auto & p : points) {
-      if (perspective) {
-        const auto projected =
-          core::pointcloud::project_perspective(p[0], p[1], p[2], camera, view_);
-        if (projected.has_value()) {
-          pixels.emplace_back(cv::Point(projected->u, projected->v));
-        } else {
-          pixels.emplace_back(std::nullopt);  // behind the virtual camera: the run breaks
-        }
-      } else {
-        // The BEV places every point; one off the canvas just clips.
-        const auto projected = core::pointcloud::project_bev(p[0], p[1], view_);
-        pixels.emplace_back(cv::Point(projected.u, projected.v));
-      }
-    }
-    return pose_runs(pixels);
-  };
+  const PoseTilePlacement placement{cell.width, cell.height, 0, 0};
+  const auto projected = project_pose_tiles(*tiles, corner_projector(), placement);
   cv::Mat canvas(
     static_cast<int>(cell.height), static_cast<int>(cell.width), CV_8UC3,
     static_cast<void *>(cell.data), cell.stride);
-  draw_pose_polylines(
-    canvas, to_runs(polyline->past), to_runs(polyline->future), pose_ui_scale(cell.height));
+  draw_pose_tiles(canvas, projected, pose_ui_scale(cell.height));  // sorts far to near itself
   return "";
+}
+
+PoseCornerProjector CloudPanel::corner_projector() const
+{
+  if (view_.projection == core::pointcloud::CloudProjection::kPerspective) {
+    // The virtual camera's depth orders the plates; a corner at or behind
+    // the camera does not project.
+    const core::pointcloud::PerspectiveCamera camera =
+      core::pointcloud::make_perspective_camera(view_);
+    return [camera,
+            view = view_](const std::array<double, 3> & p) -> std::optional<ProjectedPoseCorner> {
+      const auto projected = core::pointcloud::project_perspective(p[0], p[1], p[2], camera, view);
+      if (!projected.has_value()) {
+        return std::nullopt;
+      }
+      return ProjectedPoseCorner{
+        static_cast<double>(projected->u), static_cast<double>(projected->v), projected->depth};
+    };
+  }
+  // The BEV places every corner (one off the canvas just clips) and has no
+  // depth of its own: the corner's ground distance from the view's origin
+  // stands in, so where the path crosses itself the plate nearer the body
+  // lies on top.
+  return [view = view_](const std::array<double, 3> & p) -> std::optional<ProjectedPoseCorner> {
+    const auto projected = core::pointcloud::project_bev(p[0], p[1], view);
+    return ProjectedPoseCorner{
+      static_cast<double>(projected.u), static_cast<double>(projected.v), std::hypot(p[0], p[1])};
+  };
 }
 
 std::optional<std::vector<std::unique_ptr<Panel>>> build_cloud_panels(
@@ -278,6 +285,7 @@ std::optional<std::vector<std::unique_ptr<Panel>>> build_cloud_panels(
   options.value_max = scan.global_property_max;
   options.point_size = args.point_size;
   options.pose = pose;
+  options.pose_width_m = args.pose_width_m;
   for (const auto & topic : validation.pcd_topics) {
     const auto it = std::find(scan.pcd_topics.begin(), scan.pcd_topics.end(), topic);
     if (it == scan.pcd_topics.end()) {

@@ -85,7 +85,7 @@ public:
     app
       .add_option(
         "--pose-width", args_.pose_width_m,
-        "Width in meters of the plates the camera panels lay along the --pose trajectory "
+        "Width in meters of the plates the panels lay along the --pose trajectory "
         "(the vehicle's width, say).")
       ->default_val(2.0)
       ->check(CLI::PositiveNumber);
