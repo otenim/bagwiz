@@ -148,8 +148,9 @@ source ~/.config/fish/completions/bagwiz.fish
   `-h` / `--help` flags that CLI11 auto-injects. At the bagwiz top level,
   `-<TAB>` also surfaces `--version`. The covered positions are:
   - `bagwiz -<TAB>` → `--help`, `--version`, `-h`
-  - `bagwiz <cmd> -<TAB>` for every command (`cam-info`, `complete`, `convert`,
-    `movify`, `ls`, `map`, `pcd`, `tf`, `topic`, `traj`, `trim`, `walk`).
+  - `bagwiz <cmd> -<TAB>` for every command (`calib`, `cam-info`, `complete`,
+    `compress`, `convert`, `du`, `ls`, `map`, `movify`, `pcd`, `stamp`, `tf`, `topic`,
+    `traj`, `trim`, `walk`).
     `map`'s own flag/subcommand completion responds the same way regardless
     of `BAGWIZ_WITH_SLAM` — see the note above; only `bagwiz <TAB>` (the
     top-level list) and topic-slot values are build-gated;
@@ -213,8 +214,17 @@ name only — it offers plain topic names either way, typed as-is.
 
 - Flag values that name a bag topic of a specific type are completed by opening
   `<input>` and offering only topics of that type:
-  - `bagwiz movify -i <input> ... --cam-info <topic>` — `sensor_msgs/msg/CameraInfo` topics
-  - `bagwiz movify -i <input> ... --cam-pcd <topic>` — `sensor_msgs/msg/PointCloud2` topics
+  - `bagwiz movify -i <input> --cam <image_topic>... --cam-info <info_topic>|<image>=<info>...` —
+    `sensor_msgs/msg/CameraInfo` topics for a bare value (which applies to every panel),
+    offered at every value of the variadic run, alongside each `--cam` topic already on the
+    command line (as `<topic>=`) to override one panel; glob `--cam` values are not offered,
+    since a pair's left half must name one resolved panel. Unlike the `<topic>=<value>` flags
+    below, the right half completes too: past `=`, CameraInfo topics again
+  - `bagwiz movify -i <input> --cam <image_topic>... --cam-pcd <topic>|<image>=<pcd>...` —
+    `sensor_msgs/msg/PointCloud2` topics for a bare value, offered at every value of the
+    variadic run, alongside each `--cam` topic already on the command line (as `<topic>=`) to
+    start a per-panel entry; glob `--cam` values are not offered. Past `=`, PointCloud2 topics
+    again
   - `bagwiz map slam -i <input> ... --imu <topic>` — `sensor_msgs/msg/Imu` topics
   - `bagwiz map slam -i <input> ... --color <topic>...` — `sensor_msgs/msg/Image` or
     `sensor_msgs/msg/CompressedImage` topics, offered at every value of the
@@ -287,16 +297,23 @@ name only — it offers plain topic names either way, typed as-is.
     new topic, so it has nothing to suggest
   - `bagwiz topic rename -i <input> --src <src_topic> --dst <dst_topic>` — every topic in the bag
     at the `<src_topic>` slot only; `<dst_topic>` is a new name with nothing to suggest
-  - `bagwiz movify -i <input> --cam <image_topic> -o <output>` — restricted to the image
+  - `bagwiz movify -i <input> --cam <image_topic>... -o <output>` — restricted to the image
     types `movify` operates on (`sensor_msgs/msg/Image`,
-    `sensor_msgs/msg/CompressedImage`); topics of any other type are omitted
+    `sensor_msgs/msg/CompressedImage`), offered at every value of the variadic run;
+    topics of any other type are omitted
   - `bagwiz movify -i <input> --pcd <pcd_topic>... -o <output>` — restricted to
     `sensor_msgs/msg/PointCloud2` topics
   - `bagwiz movify -i <input> --gnss <gnss_topic> -o <output>` — restricted to
     `sensor_msgs/msg/NavSatFix` topics
+  - `bagwiz movify -i <input> ... --clock <topic>` — restricted to the types a clock
+    topic may have: `sensor_msgs/msg/Image`, `sensor_msgs/msg/CompressedImage`,
+    `sensor_msgs/msg/PointCloud2` or `sensor_msgs/msg/NavSatFix` (it must name one of the
+    camera, point-cloud or GNSS panel topics)
   - `bagwiz map slam -i <input> --pcd <pcd_topic> -o <output_root>` — restricted to
     `sensor_msgs/msg/PointCloud2` topics (the only type `map slam` ingests);
     topics of any other type are omitted
+  - `bagwiz map slam -i <input> ... --gnss <topic>` — `sensor_msgs/msg/NavSatFix`
+    topics
 
   Paths beginning with `~/` are expanded against the current user's home
   directory before opening the bag.

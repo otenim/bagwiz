@@ -18,17 +18,21 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace bagwiz::core::video
 {
@@ -42,11 +46,19 @@ std::string av_err(int errnum)
   return std::string(buf.data());
 }
 
+constexpr const char * kX264Name = "libx264";
+constexpr const char * kNvencName = "h264_nvenc";
+// The largest frame side NVENC's H.264 encoder takes on most GPUs.
+constexpr std::uint32_t kNvencMaxH264Side = 4096;
+// kAuto reaches for NVENC only above this many pixels per frame (1080p): the
+// GPU's setup and per-frame submission cost more than libx264 saves on
+// smaller frames, and libx264's cost grows with the frame.
+constexpr std::uint64_t kNvencAutoMinPixels = 1920ULL * 1080ULL;
+
 // Container + codec selection derived from the output extension.
 struct CodecChoice
 {
   AVCodecID id = AV_CODEC_ID_NONE;
-  const char * encoder_name = nullptr;  // preferred encoder name; null -> find by id
   AVPixelFormat pix_fmt = AV_PIX_FMT_YUV420P;
   bool jpeg_range = false;    // tag the stream full-range (MJPEG)
   bool requires_even = true;  // 4:2:0 chroma needs even dimensions
@@ -61,13 +73,81 @@ std::optional<CodecChoice> codec_for_extension(
   }
 
   if (ext == ".mp4" || ext == ".mkv" || ext == ".mov") {
-    return CodecChoice{AV_CODEC_ID_H264, "libx264", AV_PIX_FMT_YUV420P, false, true};
+    return CodecChoice{AV_CODEC_ID_H264, AV_PIX_FMT_YUV420P, false, true};
   }
   if (ext == ".avi") {
-    return CodecChoice{AV_CODEC_ID_MJPEG, nullptr, AV_PIX_FMT_YUVJ420P, true, true};
+    return CodecChoice{AV_CODEC_ID_MJPEG, AV_PIX_FMT_YUVJ420P, true, true};
   }
   error = "unsupported output extension '" + ext + "'; use .mp4/.mkv/.mov (H.264) or .avi (MJPEG)";
   return std::nullopt;
+}
+
+// The H.264 encoders to try, in order, for a backend choice and frame size.
+std::vector<const char *> h264_candidates(
+  H264Backend backend, std::uint32_t width, std::uint32_t height)
+{
+  switch (backend) {
+    case H264Backend::kX264:
+      return {kX264Name};
+    case H264Backend::kNvenc:
+      return {kNvencName};
+    case H264Backend::kAuto:
+    default:
+      if (static_cast<std::uint64_t>(width) * height > kNvencAutoMinPixels) {
+        return {kNvencName, kX264Name};
+      }
+      return {kX264Name};
+  }
+}
+
+// The NVENC preset (p1 fastest .. p7 slowest) standing in for a libx264 one.
+const char * nvenc_preset_for(std::string_view x264_preset)
+{
+  if (x264_preset == "ultrafast") {
+    return "p1";
+  }
+  if (x264_preset == "superfast") {
+    return "p2";
+  }
+  if (x264_preset == "veryfast") {
+    return "p3";
+  }
+  if (x264_preset == "slow") {
+    return "p5";
+  }
+  if (x264_preset == "slower") {
+    return "p6";
+  }
+  if (x264_preset == "veryslow") {
+    return "p7";
+  }
+  return "p4";  // faster, fast, medium
+}
+
+// The encoder-specific options for one H.264 encoder. Both keep B-frames off:
+// the default inserts them, which leads to negative DTS in the MP4 container
+// and crashes some hardware decoders (notably mpv's Vulkan hwdec path); the
+// codec-context field and the option are both set so the request is
+// respected regardless of which path the wrapper reads.
+void set_h264_options(
+  AVCodecContext * codec, const char * encoder_name, const VideoEncoderOptions & options,
+  AVDictionary ** opts)
+{
+  codec->max_b_frames = 0;
+  av_dict_set(opts, "bf", "0", 0);
+  if (std::string_view{encoder_name} == kNvencName) {
+    // Constant-quality VBR at the quality libx264's crf 23 lands near; the
+    // bitrate is left unset so the quality target drives the rate.
+    av_dict_set(opts, "preset", nvenc_preset_for(options.preset), 0);
+    av_dict_set(opts, "rc", "vbr", 0);
+    av_dict_set(opts, "cq", "23", 0);
+    return;
+  }
+  av_dict_set(opts, "preset", options.preset.c_str(), 0);
+  av_dict_set(opts, "crf", "23", 0);
+  // Also disable scenecut: with B-frames off and a short GOP, libx264 tends
+  // to mark every frame as an I-frame, blowing up the file size for no gain.
+  av_dict_set(opts, "sc_threshold", "0", 0);
 }
 
 }  // namespace
@@ -83,6 +163,7 @@ struct VideoEncoder::Impl
   int width = 0;
   int height = 0;
   AVPixelFormat pix_fmt = AV_PIX_FMT_YUV420P;
+  bool full_range = false;
   SourcePixelFormat sws_src_fmt = SourcePixelFormat::kBgr8;
   bool sws_ready = false;
   bool finished = false;
@@ -184,6 +265,13 @@ std::string VideoEncoder::write_frame(
       im.sws_ready = false;
       return "failed to create swscale conversion context";
     }
+    if (im.full_range && im.pix_fmt == AV_PIX_FMT_YUV420P) {
+      // A full-range stream converts RGB to full-range YUV (the default
+      // targets limited range), so converted frames match planes handed over
+      // straight from a JPEG decoder.
+      const int * coefficients = sws_getCoefficients(SWS_CS_ITU601);
+      sws_setColorspaceDetails(im.sws, coefficients, 1, coefficients, 1, 0, 1 << 16, 1 << 16);
+    }
     im.sws_src_fmt = format;
     im.sws_ready = true;
   }
@@ -200,6 +288,45 @@ std::string VideoEncoder::write_frame(
   const std::array<int, 4> src_stride{static_cast<int>(stride), 0, 0, 0};
   sws_scale(
     im.sws, src_data.data(), src_stride.data(), 0, im.height, im.frame->data, im.frame->linesize);
+
+  im.frame->pts = im.next_pts++;
+  return im.drain(im.frame);
+}
+
+std::string VideoEncoder::write_yuv420(const Yuv420Planes & planes)
+{
+  Impl & im = *impl_;
+  const auto width = static_cast<std::size_t>(im.width);
+  const auto height = static_cast<std::size_t>(im.height);
+  const std::size_t chroma_w = (width + 1) / 2;
+  const std::size_t chroma_h = (height + 1) / 2;
+  if (planes.y == nullptr || planes.u == nullptr || planes.v == nullptr) {
+    return "yuv420 frame is missing a plane";
+  }
+  if (planes.y_stride < width || planes.u_stride < chroma_w || planes.v_stride < chroma_w) {
+    return "yuv420 frame row stride is shorter than the frame width";
+  }
+
+  int ret = av_frame_make_writable(im.frame);
+  if (ret < 0) {
+    return "frame_make_writable failed: " + av_err(ret);
+  }
+  const auto copy_plane = [](
+                            const std::uint8_t * src, std::size_t src_stride, std::uint8_t * dst,
+                            std::size_t dst_stride, std::size_t row_bytes, std::size_t rows) {
+    for (std::size_t r = 0; r < rows; ++r) {
+      std::memcpy(dst + r * dst_stride, src + r * src_stride, row_bytes);
+    }
+  };
+  copy_plane(
+    planes.y, planes.y_stride, im.frame->data[0], static_cast<std::size_t>(im.frame->linesize[0]),
+    width, height);
+  copy_plane(
+    planes.u, planes.u_stride, im.frame->data[1], static_cast<std::size_t>(im.frame->linesize[1]),
+    chroma_w, chroma_h);
+  copy_plane(
+    planes.v, planes.v_stride, im.frame->data[2], static_cast<std::size_t>(im.frame->linesize[2]),
+    chroma_w, chroma_h);
 
   im.frame->pts = im.next_pts++;
   return im.drain(im.frame);
@@ -224,7 +351,7 @@ std::string VideoEncoder::finish()
 
 OpenVideoEncoderResult open_video_encoder(
   const std::filesystem::path & output, std::uint32_t width, std::uint32_t height, int fps_num,
-  int fps_den)
+  int fps_den, const VideoEncoderOptions & options)
 {
   OpenVideoEncoderResult result;
 
@@ -254,25 +381,20 @@ OpenVideoEncoderResult open_video_encoder(
     return result;
   }
 
+  if (
+    choice->id == AV_CODEC_ID_H264 &&
+    std::find(kH264Presets.begin(), kH264Presets.end(), options.preset) == kH264Presets.end()) {
+    result.error = "unknown H.264 preset '" + options.preset + "'";
+    return result;
+  }
+
   auto im = std::make_unique<VideoEncoder::Impl>();
   im->width = static_cast<int>(width);
   im->height = static_cast<int>(height);
   im->pix_fmt = choice->pix_fmt;
+  im->full_range = options.full_range;
 
   const std::string path_str = output.string();
-
-  const AVCodec * encoder = (choice->encoder_name != nullptr)
-                              ? avcodec_find_encoder_by_name(choice->encoder_name)
-                              : avcodec_find_encoder(choice->id);
-  if (encoder == nullptr) {
-    result.error =
-      std::string("encoder not available in this FFmpeg build: ") +
-      (choice->encoder_name != nullptr ? choice->encoder_name : avcodec_get_name(choice->id));
-    if (choice->id == AV_CODEC_ID_H264) {
-      result.error += " (try an .avi output, which uses the built-in MJPEG encoder)";
-    }
-    return result;
-  }
 
   int ret = avformat_alloc_output_context2(&im->fmt, nullptr, nullptr, path_str.c_str());
   if (ret < 0 || im->fmt == nullptr) {
@@ -286,46 +408,92 @@ OpenVideoEncoderResult open_video_encoder(
     return result;
   }
 
-  im->codec = avcodec_alloc_context3(encoder);
-  if (im->codec == nullptr) {
-    result.error = "could not allocate codec context";
-    return result;
-  }
-  im->codec->width = im->width;
-  im->codec->height = im->height;
-  im->codec->pix_fmt = choice->pix_fmt;
-  im->codec->time_base = AVRational{fps_den, fps_num};  // seconds per frame
-  im->codec->framerate = AVRational{fps_num, fps_den};
-  im->codec->gop_size = 12;
-  if (choice->jpeg_range) {
-    im->codec->color_range = AVCOL_RANGE_JPEG;
+  // Open the codec context for one encoder. Returns "" on success; on
+  // failure the context is released so the next candidate can try.
+  auto open_codec = [&](const AVCodec * encoder) -> std::string {
+    im->codec = avcodec_alloc_context3(encoder);
+    if (im->codec == nullptr) {
+      return "could not allocate codec context";
+    }
+    im->codec->width = im->width;
+    im->codec->height = im->height;
+    im->codec->pix_fmt = choice->pix_fmt;
+    im->codec->time_base = AVRational{fps_den, fps_num};  // seconds per frame
+    im->codec->framerate = AVRational{fps_num, fps_den};
+    im->codec->gop_size = 12;
+    if (choice->jpeg_range || options.full_range) {
+      im->codec->color_range = AVCOL_RANGE_JPEG;
+    }
+    if ((im->fmt->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
+      im->codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+    AVDictionary * opts = nullptr;
+    if (choice->id == AV_CODEC_ID_H264) {
+      set_h264_options(im->codec, encoder->name, options, &opts);
+    }
+    const int open_ret = avcodec_open2(im->codec, encoder, &opts);
+    av_dict_free(&opts);
+    if (open_ret < 0) {
+      avcodec_free_context(&im->codec);
+      return "could not open encoder " + std::string(encoder->name) + ": " + av_err(open_ret);
+    }
+    return "";
+  };
+
+  if (choice->id == AV_CODEC_ID_H264) {
+    const auto candidates = h264_candidates(options.backend, width, height);
+    std::string last_error;
+    std::vector<std::string> failures;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+      const AVCodec * encoder = avcodec_find_encoder_by_name(candidates[i]);
+      std::string attempt = encoder == nullptr ? std::string(
+                                                   "encoder not available in this "
+                                                   "FFmpeg build: ") +
+                                                   candidates[i]
+                                               : open_codec(encoder);
+      if (attempt.empty()) {
+        result.backend = candidates[i];
+        break;
+      }
+      // NVENC's H.264 encoder refuses frames past 4096x4096 on most GPUs with
+      // only a generic error; say so, since a 2x2 grid of 4K cameras hits it.
+      if (
+        std::string_view{candidates[i]} == kNvencName &&
+        (width > kNvencMaxH264Side || height > kNvencMaxH264Side)) {
+        attempt += " (NVENC's H.264 encoder tops out at " + std::to_string(kNvencMaxH264Side) +
+                   "x" + std::to_string(kNvencMaxH264Side) + " on most GPUs)";
+      }
+      last_error = std::move(attempt);
+      failures.push_back(last_error);
+      // kAuto records why NVENC was passed over and moves on to libx264.
+      if (i + 1 < candidates.size()) {
+        result.fallback_note = last_error;
+      }
+    }
+    if (result.backend.empty()) {
+      // Every candidate failed: say why each did.
+      std::string all;
+      for (const auto & failure : failures) {
+        all += (all.empty() ? "" : "; ") + failure;
+      }
+      result.error = all + " (try an .avi output, which uses the built-in MJPEG encoder)";
+      result.fallback_note.clear();
+      return result;
+    }
+  } else {
+    const AVCodec * encoder = avcodec_find_encoder(choice->id);
+    if (encoder == nullptr) {
+      result.error =
+        std::string("encoder not available in this FFmpeg build: ") + avcodec_get_name(choice->id);
+      return result;
+    }
+    if (const auto err = open_codec(encoder); !err.empty()) {
+      result.error = err;
+      return result;
+    }
+    result.backend = encoder->name;
   }
   im->stream->time_base = im->codec->time_base;
-  if ((im->fmt->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
-    im->codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-  }
-
-  AVDictionary * opts = nullptr;
-  if (choice->id == AV_CODEC_ID_H264) {
-    av_dict_set(&opts, "preset", "medium", 0);
-    av_dict_set(&opts, "crf", "23", 0);
-    // Disable B-frames. The default libx264 setting inserts B-frames, which
-    // leads to negative DTS in the MP4 container and crashes some hardware
-    // decoders (notably mpv's Vulkan hwdec path). Set both the codec-context
-    // field and the encoder option so the request is respected regardless of
-    // which path the libx264 wrapper reads.
-    im->codec->max_b_frames = 0;
-    av_dict_set(&opts, "bframes", "0", 0);
-    // Also disable scenecut: with B-frames off and a short GOP, libx264 tends
-    // to mark every frame as an I-frame, blowing up the file size for no gain.
-    av_dict_set(&opts, "sc_threshold", "0", 0);
-  }
-  ret = avcodec_open2(im->codec, encoder, &opts);
-  av_dict_free(&opts);
-  if (ret < 0) {
-    result.error = "could not open encoder: " + av_err(ret);
-    return result;
-  }
 
   ret = avcodec_parameters_from_context(im->stream->codecpar, im->codec);
   if (ret < 0) {

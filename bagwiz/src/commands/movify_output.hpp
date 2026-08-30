@@ -9,6 +9,7 @@
 #ifndef COMMANDS__MOVIFY_OUTPUT_HPP_
 #define COMMANDS__MOVIFY_OUTPUT_HPP_
 
+#include "bagwiz/core/image/image_decoder.hpp"
 #include "bagwiz/core/video/frame_rate.hpp"
 #include "bagwiz/core/video/video_encoder.hpp"
 
@@ -76,12 +77,21 @@ private:
 class VideoFrameEncoder
 {
 public:
-  VideoFrameEncoder(const std::filesystem::path & tmp_path, core::video::FrameRate fps);
+  VideoFrameEncoder(
+    const std::filesystem::path & tmp_path, core::video::FrameRate fps,
+    core::video::VideoEncoderOptions options = {});
 
   // Encode one composed packed-BGR24 frame (row stride width*3). Returns
   // false after logging on any failure, including a mid-run size change.
   [[nodiscard]] bool encode(
     std::span<const std::byte> bgr, std::uint32_t frame_w, std::uint32_t frame_h);
+
+  // Encode one frame handed over as the 4:2:0 planes it decoded to (the
+  // direct camera pass), skipping every color conversion. A first frame
+  // through here opens the stream in the planes' range; a later frame in
+  // the other range is an error like a size change. Returns false after
+  // logging on any failure.
+  [[nodiscard]] bool encode_yuv420(const core::image::DecodedYuvView & view);
 
   // Flush and close the stream. Returns "" on success; on failure logs and
   // returns the message. Either way the encoder is closed afterwards (the tmp
@@ -96,8 +106,16 @@ public:
   [[nodiscard]] std::uint32_t height() const { return enc_h_; }
 
 private:
+  // Open the encoder for the run's geometry (the first frame's), tagging the
+  // stream full-range when the frames come as JPEG planes.
+  [[nodiscard]] bool open(std::uint32_t frame_w, std::uint32_t frame_h, bool full_range);
+  // False after logging when a frame's geometry differs from the first's.
+  [[nodiscard]] bool same_geometry(std::uint32_t frame_w, std::uint32_t frame_h) const;
+
   std::filesystem::path tmp_path_;
   core::video::FrameRate fps_;
+  core::video::VideoEncoderOptions options_;
+  bool full_range_ = false;  // the range the stream was opened in
 
   std::unique_ptr<core::video::VideoEncoder> encoder_;
   std::uint32_t enc_w_ = 0;

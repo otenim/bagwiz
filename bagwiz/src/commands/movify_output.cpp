@@ -135,33 +135,94 @@ std::string finalize_video_output(
 }
 
 VideoFrameEncoder::VideoFrameEncoder(
-  const std::filesystem::path & tmp_path, core::video::FrameRate fps)
-: tmp_path_(tmp_path), fps_(fps)
+  const std::filesystem::path & tmp_path, core::video::FrameRate fps,
+  core::video::VideoEncoderOptions options)
+: tmp_path_(tmp_path), fps_(fps), options_(std::move(options))
 {
+}
+
+bool VideoFrameEncoder::open(std::uint32_t frame_w, std::uint32_t frame_h, bool full_range)
+{
+  // The first frame fixes the geometry and pixel encoding for the run.
+  enc_w_ = frame_w;
+  enc_h_ = frame_h;
+  core::video::VideoEncoderOptions options = options_;
+  options.full_range = full_range;
+  full_range_ = full_range;
+  auto opened =
+    core::video::open_video_encoder(tmp_path_, enc_w_, enc_h_, fps_.num, fps_.den, options);
+  if (!opened.ok()) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", opened.error.c_str());
+    return false;
+  }
+  if (!opened.fallback_note.empty()) {
+    BAGWIZ_LOG_WARN(
+      kLogger, "NVENC is not usable here (%s); encoding with %s.", opened.fallback_note.c_str(),
+      opened.backend.c_str());
+  } else {
+    BAGWIZ_LOG_INFO(kLogger, "encoding with %s.", opened.backend.c_str());
+  }
+  encoder_ = std::move(opened.encoder);
+  return true;
+}
+
+bool VideoFrameEncoder::same_geometry(std::uint32_t frame_w, std::uint32_t frame_h) const
+{
+  if (frame_w == enc_w_ && frame_h == enc_h_) {
+    return true;
+  }
+  BAGWIZ_LOG_ERROR(
+    kLogger, "frame %" PRIu64 " changed to %ux%u from the first frame's %ux%u; aborting.", written_,
+    frame_w, frame_h, enc_w_, enc_h_);
+  return false;
 }
 
 bool VideoFrameEncoder::encode(
   std::span<const std::byte> bgr, std::uint32_t frame_w, std::uint32_t frame_h)
 {
   if (encoder_ == nullptr) {
-    // The first frame fixes the geometry and pixel encoding for the run.
-    enc_w_ = frame_w;
-    enc_h_ = frame_h;
-    auto opened = core::video::open_video_encoder(tmp_path_, enc_w_, enc_h_, fps_.num, fps_.den);
-    if (!opened.ok()) {
-      BAGWIZ_LOG_ERROR(kLogger, "%s", opened.error.c_str());
+    if (!open(frame_w, frame_h, false)) {
       return false;
     }
-    encoder_ = std::move(opened.encoder);
-  } else if (frame_w != enc_w_ || frame_h != enc_h_) {
-    BAGWIZ_LOG_ERROR(
-      kLogger, "frame %" PRIu64 " changed to %ux%u from the first frame's %ux%u; aborting.",
-      written_, frame_w, frame_h, enc_w_, enc_h_);
+  } else if (!same_geometry(frame_w, frame_h)) {
     return false;
   }
 
   if (auto e = encoder_->write_frame(bgr, frame_w * 3U, core::video::SourcePixelFormat::kBgr8);
       !e.empty()) {
+    BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", written_, e.c_str());
+    return false;
+  }
+  ++written_;
+  return true;
+}
+
+bool VideoFrameEncoder::encode_yuv420(const core::image::DecodedYuvView & view)
+{
+  if (encoder_ == nullptr) {
+    if (!open(view.width, view.height, view.full_range)) {
+      return false;
+    }
+  } else if (!same_geometry(view.width, view.height)) {
+    return false;
+  }
+  if (view.full_range != full_range_) {
+    // Planes are copied as they are, so a frame in the other range would
+    // play with wrong levels; stop, as a geometry change does.
+    BAGWIZ_LOG_ERROR(
+      kLogger, "frame %" PRIu64 " decoded %s-range where the stream is %s-range; aborting.",
+      written_, view.full_range ? "full" : "limited", full_range_ ? "full" : "limited");
+    return false;
+  }
+
+  core::video::Yuv420Planes planes;
+  planes.y = view.y;
+  planes.y_stride = static_cast<std::size_t>(view.y_stride);
+  planes.u = view.u;
+  planes.u_stride = static_cast<std::size_t>(view.u_stride);
+  planes.v = view.v;
+  planes.v_stride = static_cast<std::size_t>(view.v_stride);
+  if (auto e = encoder_->write_yuv420(planes); !e.empty()) {
     BAGWIZ_LOG_ERROR(kLogger, "frame %" PRIu64 ": %s", written_, e.c_str());
     return false;
   }

@@ -105,7 +105,19 @@ public:
   // with nothing selected leaves the cell black and succeeds. Returns "" on
   // success, or the error the loop logs.
   [[nodiscard]] virtual std::string render(const CellView & cell) = 0;
+
+  // Look-ahead, clock panel only: the parallel loop hands the clock panel the
+  // ticks it has read past the current one, in order, before their select(),
+  // so a panel that decodes ahead can start on them. `tick.payload` is valid
+  // only for the duration of the call: a panel that keeps it copies it. The
+  // default does nothing.
+  virtual void prefetch(const TickInfo & tick) { (void)tick; }
 };
+
+// How many ticks the parallel loop reads past the current one and hands the
+// clock panel through prefetch(); a panel that decodes ahead keeps as many
+// decoders.
+inline constexpr std::size_t kDecodeAheadDepth = 3;
 
 }  // namespace bagwiz::commands
 

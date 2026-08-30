@@ -7,9 +7,12 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 #include "bagwiz/commands/movify.hpp"
+#include "bagwiz/core/base/logging.hpp"
+#include "bagwiz/core/video/frame_rate.hpp"
 #include "movify_camera_panel.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "movify_cloud_panel.hpp"   // NOLINT(build/include_subdir) src-local shared header
 #include "movify_cloud_source.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_direct.hpp"        // NOLINT(build/include_subdir) src-local shared header
 #include "movify_inputs.hpp"        // NOLINT(build/include_subdir) src-local shared header
 #include "movify_map_panel.hpp"     // NOLINT(build/include_subdir) src-local shared header
 #include "movify_output.hpp"        // NOLINT(build/include_subdir) src-local shared header
@@ -22,6 +25,26 @@
 
 namespace bagwiz::commands
 {
+
+namespace
+{
+constexpr const char * kLogger = "bagwiz.cmd.movify";
+
+// Close the stream, move it into place, and log the summary line. Returns
+// the process exit code.
+int finish_and_report(
+  VideoFrameEncoder & encoder, const std::string & clock_topic,
+  const std::filesystem::path & tmp_path, const MovifyArgs & args, core::video::FrameRate fps)
+{
+  if (const auto err =
+        finish_video_encode(encoder, clock_topic, tmp_path, args.output_path, args.overwrite);
+      !err.empty()) {
+    return 1;
+  }
+  log_video_summary(args.output_path, encoder.written(), encoder.width(), encoder.height(), fps);
+  return 0;
+}
+}  // namespace
 
 int run_movify(const MovifyArgs & args)
 {
@@ -60,6 +83,22 @@ int run_movify(const MovifyArgs & args)
     return 1;
   }
 
+  VideoFrameEncoder encoder(
+    tmp_path, scan.fps, core::video::VideoEncoderOptions{args.encoder, args.preset});
+
+  // One JPEG camera shown as decoded skips the composed canvas: its frames'
+  // planes go to the encoder as they decode, several frames ahead.
+  if (can_stream_camera_direct(args, validation)) {
+    const unsigned int slots =
+      direct_decode_slots(args.enable_parallel_pipeline, std::thread::hardware_concurrency());
+    BAGWIZ_LOG_INFO(
+      kLogger, "streaming '%s' as decoded, %u frame(s) ahead.", clock_topic.c_str(), slots);
+    if (run_direct_encode_pass(*reader, clock_topic, encoder, slots) != 0) {
+      return 1;
+    }
+    return finish_and_report(encoder, clock_topic, tmp_path, args, scan.fps);
+  }
+
   // The point-cloud sources every panel projects from (they take the pass-1
   // index entries out of `scan`), then the panels themselves in grid order,
   // the clock among them: the camera panels, one point-cloud panel per view,
@@ -84,20 +123,12 @@ int run_movify(const MovifyArgs & args)
     panels->size(), !scan.pcd_topics.empty(), args.enable_parallel_pipeline, scan.span.count,
     std::thread::hardware_concurrency());
 
-  VideoFrameEncoder encoder(tmp_path, scan.fps);
   if (
     run_encode_pass(
       *reader, *panels, validation.grid, parallel, validation.clock, clock_topic, encoder) != 0) {
     return 1;
   }
-  if (const auto err =
-        finish_video_encode(encoder, clock_topic, tmp_path, args.output_path, args.overwrite);
-      !err.empty()) {
-    return 1;
-  }
-  log_video_summary(
-    args.output_path, encoder.written(), encoder.width(), encoder.height(), scan.fps);
-  return 0;
+  return finish_and_report(encoder, clock_topic, tmp_path, args, scan.fps);
 }
 
 }  // namespace bagwiz::commands

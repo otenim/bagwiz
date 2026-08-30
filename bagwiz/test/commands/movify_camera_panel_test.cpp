@@ -300,6 +300,45 @@ TEST_F(MovifyTmpDirTest, ClockPanelFixesTheCellSizeAndRendersItsPayload)
   }
 }
 
+// A decode started by prefetch() is what the tick's select() takes over:
+// the frame is the prefetched payload's, and a tick that was never
+// prefetched still decodes inline. Prefetches that are never selected are
+// harmless.
+TEST_F(MovifyTmpDirTest, ClockPanelTakesOverAPrefetchedDecode)
+{
+  auto clouds = empty_clouds(tmp_dir_ / "unused.mcap");
+  CameraPanel panel(image_options("/cam/image"), CameraPanel::ClockSizing{}, &clouds);
+  const auto first = movify_bgr8_image_payload(4, 2, 0x11);
+  const auto second = movify_bgr8_image_payload(4, 2, 0x22);
+  const auto third = movify_bgr8_image_payload(4, 2, 0x33);
+  panel.prefetch(TickInfo{1, 2'000, second});
+  panel.prefetch(TickInfo{2, 3'000, third});
+  panel.prefetch(TickInfo{5, 6'000, first});  // never selected
+
+  GridCanvas canvas(GridSpec{1, 1});
+  canvas.set_cell_size(4, 2);
+  const auto render_value = [&](const TickInfo & tick) {
+    EXPECT_EQ(panel.select(tick, PanelSize{}), "");
+    canvas.clear();
+    EXPECT_EQ(panel.render(canvas.cell(0)), "");
+    return canvas.pixels().front();
+  };
+  EXPECT_EQ(render_value(TickInfo{0, 1'000, first}), std::byte{0x11});   // inline
+  EXPECT_EQ(render_value(TickInfo{1, 2'000, second}), std::byte{0x22});  // prefetched
+  EXPECT_EQ(render_value(TickInfo{2, 3'000, third}), std::byte{0x33});   // prefetched
+  EXPECT_EQ(render_value(TickInfo{3, 4'000, first}), std::byte{0x11});   // inline again
+}
+
+// A prefetched payload that does not decode surfaces at its tick's select.
+TEST_F(MovifyTmpDirTest, ClockPanelReportsAPrefetchedPayloadThatDoesNotDecode)
+{
+  auto clouds = empty_clouds(tmp_dir_ / "unused.mcap");
+  CameraPanel panel(image_options("/cam/image"), CameraPanel::ClockSizing{}, &clouds);
+  panel.prefetch(TickInfo{0, 1'000, kMovifyGarbagePayload});
+  const auto error = panel.select(TickInfo{0, 1'000, kMovifyGarbagePayload}, PanelSize{});
+  EXPECT_NE(error.find("topic '/cam/image': "), std::string::npos) << error;
+}
+
 // --width pins the clock's render size from the output width: 8 px across 2
 // columns gives 4-px cells, and the height follows the frame's aspect ratio.
 TEST_F(MovifyTmpDirTest, ClockPanelPinsTheCellFromTheOutputWidth)

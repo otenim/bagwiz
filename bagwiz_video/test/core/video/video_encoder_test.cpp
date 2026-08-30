@@ -20,9 +20,12 @@
 
 namespace
 {
+using bagwiz::core::video::H264Backend;
 using bagwiz::core::video::open_video_encoder;
 using bagwiz::core::video::probe_video;
 using bagwiz::core::video::SourcePixelFormat;
+using bagwiz::core::video::VideoEncoderOptions;
+using bagwiz::core::video::Yuv420Planes;
 
 class VideoEncoderTest : public ::testing::Test
 {
@@ -119,6 +122,156 @@ TEST_F(VideoEncoderTest, EncodesH264Mp4WhenLibx264Available)
   EXPECT_EQ(probe.frame_count, kFrames);
   EXPECT_EQ(probe.codec, "h264");
   EXPECT_FALSE(probe.has_b_frames);
+}
+
+TEST_F(VideoEncoderTest, RejectsAnUnknownH264Preset)
+{
+  VideoEncoderOptions options;
+  options.preset = "warp";
+  const auto opened = open_video_encoder(tmp_dir_ / "clip.mp4", 16, 16, 10, 1, options);
+  EXPECT_FALSE(opened.ok());
+  EXPECT_EQ(opened.error, "unknown H.264 preset 'warp'");
+}
+
+TEST_F(VideoEncoderTest, MjpegIgnoresTheH264Options)
+{
+  VideoEncoderOptions options;
+  options.backend = H264Backend::kNvenc;
+  options.preset = "warp";
+  auto opened = open_video_encoder(tmp_dir_ / "clip.avi", 16, 16, 10, 1, options);
+  ASSERT_TRUE(opened.ok()) << opened.error;
+  EXPECT_EQ(opened.backend, "mjpeg");
+  EXPECT_TRUE(opened.fallback_note.empty());
+}
+
+TEST_F(VideoEncoderTest, ForcedX264NamesItsBackendAndTakesThePreset)
+{
+  constexpr std::uint32_t kW = 32;
+  constexpr std::uint32_t kH = 16;
+  VideoEncoderOptions options;
+  options.backend = H264Backend::kX264;
+  options.preset = "ultrafast";
+  auto opened = open_video_encoder(tmp_dir_ / "clip.mp4", kW, kH, 10, 1, options);
+  if (!opened.ok()) {
+    GTEST_SKIP() << "libx264 unavailable: " << opened.error;
+  }
+  EXPECT_EQ(opened.backend, "libx264");
+  EXPECT_TRUE(opened.fallback_note.empty());
+  // Six frames, like EncodesH264Mp4WhenLibx264Available: the probe's packet
+  // count is only reliable past the container's stream-info probing window.
+  constexpr int kFrames = 6;
+  for (int i = 0; i < kFrames; ++i) {
+    const auto px = solid_bgr(kW, kH, static_cast<std::uint8_t>(i * 40));
+    ASSERT_TRUE(
+      opened.encoder
+        ->write_frame(
+          {px.data(), px.size()}, static_cast<std::size_t>(kW) * 3, SourcePixelFormat::kBgr8)
+        .empty());
+  }
+  ASSERT_TRUE(opened.encoder->finish().empty());
+  opened.encoder.reset();
+  const auto probe = probe_video(tmp_dir_ / "clip.mp4");
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.codec, "h264");
+  EXPECT_EQ(probe.frame_count, kFrames);
+}
+
+// The default (auto) backend uses libx264 outright for a small frame: no
+// NVENC attempt, so no fallback note.
+TEST_F(VideoEncoderTest, AutoUsesX264ForSmallFrames)
+{
+  auto opened = open_video_encoder(tmp_dir_ / "clip.mp4", 32, 16, 10, 1);
+  if (!opened.ok()) {
+    GTEST_SKIP() << "no H.264 encoder: " << opened.error;
+  }
+  EXPECT_EQ(opened.backend, "libx264");
+  EXPECT_TRUE(opened.fallback_note.empty()) << opened.fallback_note;
+}
+
+// Above 1080p, auto opens whichever H.264 encoder works here: NVENC on a
+// machine with a usable GPU, else libx264 with a note saying why.
+TEST_F(VideoEncoderTest, AutoTriesNvencAbove1080p)
+{
+  auto opened = open_video_encoder(tmp_dir_ / "clip.mp4", 2560, 1440, 10, 1);
+  if (!opened.ok()) {
+    GTEST_SKIP() << "no H.264 encoder: " << opened.error;
+  }
+  EXPECT_TRUE(opened.backend == "libx264" || opened.backend == "h264_nvenc") << opened.backend;
+  EXPECT_EQ(opened.backend == "libx264", !opened.fallback_note.empty()) << opened.fallback_note;
+}
+
+// A forced backend never falls back: without a usable NVENC the open fails
+// and says so.
+TEST_F(VideoEncoderTest, ForcedNvencEitherOpensOrFailsLoudly)
+{
+  VideoEncoderOptions options;
+  options.backend = H264Backend::kNvenc;
+  auto opened = open_video_encoder(tmp_dir_ / "clip.mp4", 32, 16, 10, 1, options);
+  if (opened.ok()) {
+    EXPECT_EQ(opened.backend, "h264_nvenc");
+    EXPECT_TRUE(opened.fallback_note.empty());
+    return;
+  }
+  EXPECT_NE(opened.error.find("h264_nvenc"), std::string::npos) << opened.error;
+  EXPECT_TRUE(opened.fallback_note.empty());
+}
+
+// Planes handed over as decoded: a solid 4:2:0 frame with padded strides
+// encodes frame for frame, for both codecs.
+TEST_F(VideoEncoderTest, WritesYuv420PlanesAsTheyAre)
+{
+  constexpr std::uint32_t kW = 32;
+  constexpr std::uint32_t kH = 16;
+  constexpr int kFrames = 6;
+  constexpr std::size_t kYStride = 40;  // padded past the 32-px width
+  constexpr std::size_t kCStride = 24;  // padded past the 16-px chroma width
+  std::vector<std::uint8_t> y(kYStride * kH, 200);
+  std::vector<std::uint8_t> u(kCStride * (kH / 2), 100);
+  std::vector<std::uint8_t> v(kCStride * (kH / 2), 150);
+  Yuv420Planes planes;
+  planes.y = y.data();
+  planes.y_stride = kYStride;
+  planes.u = u.data();
+  planes.u_stride = kCStride;
+  planes.v = v.data();
+  planes.v_stride = kCStride;
+  for (const char * ext : {"clip.avi", "clip.mp4"}) {
+    const auto out = tmp_dir_ / ext;
+    VideoEncoderOptions options;
+    options.full_range = true;
+    auto opened = open_video_encoder(out, kW, kH, 10, 1, options);
+    if (!opened.ok()) {
+      GTEST_SKIP() << "encoder unavailable: " << opened.error;
+    }
+    for (int i = 0; i < kFrames; ++i) {
+      ASSERT_TRUE(opened.encoder->write_yuv420(planes).empty()) << ext << " frame " << i;
+    }
+    ASSERT_TRUE(opened.encoder->finish().empty());
+    opened.encoder.reset();
+    const auto probe = probe_video(out);
+    ASSERT_TRUE(probe.ok()) << probe.error;
+    EXPECT_EQ(probe.width, kW);
+    EXPECT_EQ(probe.height, kH);
+    EXPECT_EQ(probe.frame_count, kFrames) << ext;
+  }
+}
+
+TEST_F(VideoEncoderTest, RejectsYuv420PlanesThatAreMissingOrTooNarrow)
+{
+  auto opened = open_video_encoder(tmp_dir_ / "clip.avi", 32, 16, 10, 1);
+  ASSERT_TRUE(opened.ok()) << opened.error;
+  std::vector<std::uint8_t> plane(32 * 16, 0);
+  Yuv420Planes planes;
+  planes.y = plane.data();
+  planes.y_stride = 32;
+  planes.u = plane.data();
+  planes.u_stride = 16;
+  EXPECT_EQ(opened.encoder->write_yuv420(planes), "yuv420 frame is missing a plane");
+  planes.v = plane.data();
+  planes.v_stride = 8;  // narrower than the 16-px chroma width
+  EXPECT_EQ(
+    opened.encoder->write_yuv420(planes),
+    "yuv420 frame row stride is shorter than the frame width");
 }
 
 TEST_F(VideoEncoderTest, RejectsUnsupportedExtension)

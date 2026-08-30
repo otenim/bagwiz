@@ -15,6 +15,8 @@
 #include "bagwiz/core/pointcloud/projector_helpers.hpp"
 
 #include <algorithm>
+#include <exception>
+#include <future>
 #include <memory>
 #include <string>
 #include <utility>
@@ -49,6 +51,83 @@ CloudPanel::CloudPanel(Options options, CloudSources * clouds)
 {
 }
 
+// One topic's points for a tick, or the error the panel reports.
+struct CloudPanel::TopicProjection
+{
+  std::vector<core::pointcloud::ProjectedPoint> points;
+  std::string error;
+};
+
+CloudPanel::TopicProjection CloudPanel::project_topic(
+  std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const
+{
+  const std::string & topic = options_.topics[k];
+  try {
+    return project_topic_unguarded(k, tick, view);
+  } catch (const std::exception & e) {
+    TopicProjection out;
+    out.error = on_topic(topic, std::string("projection failed: ") + e.what());
+    return out;
+  }
+}
+
+CloudPanel::TopicProjection CloudPanel::project_topic_unguarded(
+  std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const
+{
+  TopicProjection out;
+  const std::string & topic = options_.topics[k];
+  std::shared_ptr<const core::pointcloud::PointCloud2> cloud;
+  std::string error;
+  if (clock_topic_.has_value() && *clock_topic_ == k) {
+    // The clock's own message arrives with the tick.
+    auto parsed = core::pointcloud::parse_pointcloud2(tick.payload);
+    if (!parsed.ok()) {
+      out.error = on_topic(topic, parsed.error);
+      return out;
+    }
+    cloud = std::make_shared<const core::pointcloud::PointCloud2>(std::move(*parsed.cloud));
+  } else {
+    // Every other topic follows the tick by bag record time, like a camera
+    // panel that is not the clock.
+    cloud = clouds_->fetch(
+      options_.cloud_indexes[k], tick.record_ns, core::pointcloud::PointCloudMatchKey::kRecordTime,
+      error);
+    if (!cloud) {
+      out.error = on_topic(topic, error);
+      return out;
+    }
+  }
+
+  // Move the cloud into the view frame at its own capture time, so a cloud
+  // published in a moving frame lands where that frame was when the sweep
+  // was taken.
+  core::pointcloud::RigidTransform transform;
+  if (!options_.frame.empty() && cloud->frame_id != options_.frame) {
+    if (clouds_->tf_buffer() == nullptr) {
+      out.error = on_topic(
+        topic, "cannot transform " + cloud->frame_id + " -> " + options_.frame +
+                 ": the bag carries no TF");
+      return out;
+    }
+    const auto looked_up = core::pointcloud::lookup_rigid_transform(
+      *clouds_->tf_buffer(), options_.frame, cloud->frame_id, cloud->timestamp_ns, error);
+    if (!looked_up.has_value()) {
+      out.error = on_topic(topic, error);
+      return out;
+    }
+    transform = *looked_up;
+  }
+
+  auto projected =
+    core::pointcloud::project_cloud_to_view(*cloud, transform, view, options_.property);
+  if (!projected.ok()) {
+    out.error = on_topic(topic, projected.error);
+    return out;
+  }
+  out.points = std::move(projected.points);
+  return out;
+}
+
 std::string CloudPanel::select(const TickInfo & tick, PanelSize cell)
 {
   selected_ = false;
@@ -61,52 +140,41 @@ std::string CloudPanel::select(const TickInfo & tick, PanelSize cell)
   view.width = size_.width;
   view.height = size_.height;
 
-  for (std::size_t k = 0; k < options_.cloud_indexes.size(); ++k) {
-    const std::string & topic = options_.topics[k];
-    std::shared_ptr<const core::pointcloud::PointCloud2> cloud;
-    std::string error;
-    if (clock_topic_.has_value() && *clock_topic_ == k) {
-      // The clock's own message arrives with the tick.
-      auto parsed = core::pointcloud::parse_pointcloud2(tick.payload);
-      if (!parsed.ok()) {
-        return on_topic(topic, parsed.error);
-      }
-      cloud = std::make_shared<const core::pointcloud::PointCloud2>(std::move(*parsed.cloud));
+  // Each topic's fetch, transform and projection is independent of the
+  // others' (the sources serialize per topic, TF lookups behind their own
+  // mutex), so the topics past the first run on their own threads while this
+  // one does the first; the points merge in topic order, though the depth
+  // test makes the raster the same either way.
+  const std::size_t topics = options_.cloud_indexes.size();
+  std::vector<std::future<TopicProjection>> pending;
+  pending.reserve(topics > 0 ? topics - 1 : 0);
+  for (std::size_t k = 1; k < topics; ++k) {
+    pending.push_back(std::async(std::launch::async, [this, k, &tick, &view] {
+      return project_topic(k, tick, view);
+    }));
+  }
+  std::string first_error;
+  if (topics > 0) {
+    TopicProjection first = project_topic(0, tick, view);
+    if (!first.error.empty()) {
+      first_error = std::move(first.error);
     } else {
-      // Every other topic follows the tick by bag record time, like a camera
-      // panel that is not the clock.
-      cloud = clouds_->fetch(
-        options_.cloud_indexes[k], tick.record_ns,
-        core::pointcloud::PointCloudMatchKey::kRecordTime, error);
-      if (!cloud) {
-        return on_topic(topic, error);
-      }
+      points_ = std::move(first.points);
     }
-
-    // Move the cloud into the view frame at its own capture time, so a cloud
-    // published in a moving frame lands where that frame was when the sweep
-    // was taken.
-    core::pointcloud::RigidTransform transform;
-    if (!options_.frame.empty() && cloud->frame_id != options_.frame) {
-      if (clouds_->tf_buffer() == nullptr) {
-        return on_topic(
-          topic, "cannot transform " + cloud->frame_id + " -> " + options_.frame +
-                   ": the bag carries no TF");
+  }
+  for (auto & job : pending) {
+    TopicProjection projection = job.get();  // every job is collected, error or not
+    if (!projection.error.empty()) {
+      if (first_error.empty()) {
+        first_error = std::move(projection.error);
       }
-      const auto looked_up = core::pointcloud::lookup_rigid_transform(
-        *clouds_->tf_buffer(), options_.frame, cloud->frame_id, cloud->timestamp_ns, error);
-      if (!looked_up.has_value()) {
-        return on_topic(topic, error);
-      }
-      transform = *looked_up;
+      continue;
     }
-
-    auto projected =
-      core::pointcloud::project_cloud_to_view(*cloud, transform, view, options_.property);
-    if (!projected.ok()) {
-      return on_topic(topic, projected.error);
-    }
-    points_.insert(points_.end(), projected.points.begin(), projected.points.end());
+    points_.insert(points_.end(), projection.points.begin(), projection.points.end());
+  }
+  if (!first_error.empty()) {
+    points_.clear();
+    return first_error;
   }
   selected_ = true;
   return "";

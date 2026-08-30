@@ -26,7 +26,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -240,10 +242,34 @@ public:
 
   [[nodiscard]] std::string select(const TickInfo & tick, PanelSize cell) override;
   [[nodiscard]] std::optional<PanelSize> clock_cell_size() const override;
+  // Clock role: start decoding `tick` on one of kDecodeAheadDepth spare
+  // decoders (when one is free; otherwise the tick's select() decodes
+  // inline). A follower ignores it.
+  void prefetch(const TickInfo & tick) override;
   [[nodiscard]] std::string render(const CellView & cell) override;
 
 private:
   [[nodiscard]] std::string select_clock(const TickInfo & tick);
+
+  // A decode started by prefetch(): its own decoder, a copy of the payload,
+  // the tick it is for, and the frame its select() takes over.
+  struct AheadResult
+  {
+    std::optional<FrameBuffer> frame;
+    std::string error;
+  };
+  struct AheadSlot
+  {
+    explicit AheadSlot(std::string topic_type) : normalizer(std::move(topic_type)) {}
+    FrameNormalizer normalizer;
+    std::vector<std::byte> payload;
+    std::uint64_t index = 0;
+    bool busy = false;
+    std::future<AheadResult> job;
+  };
+  // The decode prefetch() started for tick `index`, if any: waits for it and
+  // frees its slot.
+  [[nodiscard]] std::optional<AheadResult> take_ahead(std::uint64_t index);
   [[nodiscard]] std::string select_follower(const TickInfo & tick, PanelSize cell);
   // Project every point-cloud topic of the panel onto the selected frame.
   [[nodiscard]] std::string project(std::vector<core::pointcloud::ProjectedPoint> & out) const;
@@ -251,6 +277,11 @@ private:
   Options options_;
   ClockSizing sizing_;
   FrameNormalizer normalizer_;
+  // Clock role: the decodes in flight ahead of their ticks. The loop calls
+  // prefetch() from its own thread while a select() may run on a worker, so
+  // the slot table is guarded; each job touches only its own slot.
+  std::vector<std::unique_ptr<AheadSlot>> ahead_;
+  std::mutex ahead_mutex_;
   ViewRenderer renderer_;
   std::unique_ptr<NearestMessageSource> source_;  // follower role only
   CloudSources * clouds_;

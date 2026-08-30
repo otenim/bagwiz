@@ -1274,33 +1274,35 @@ std::vector<std::string> complete_video_cam_pair_value(
 }
 
 // `movify` renders a rosbag to video. `--cam` (image topics), `--pcd`
-// (point-cloud topics), `--gnss` (NavSatFix topics) and `--clock` are
-// declared topic slots, so
-// try_topic_completion handles their values before this function is reached; `--cam-pcd` and
-// `--cam-info` are pair-valued slots whose completion defers here (see
-// completion_defers_to_command). Here we surface the command's flags for any `-` word, and the enum
-// choices for
-// `--field`, `--scheme`, and `--view`.
+// (point-cloud topics), `--gnss` (NavSatFix topics) and `--clock` (any camera,
+// point-cloud or GNSS panel topic) are declared topic slots, so
+// try_topic_completion handles their values before this function is reached;
+// `--cam-pcd` and `--cam-info` are pair-valued slots whose completion defers
+// here (see completion_defers_to_command). Here we surface the command's flags
+// for any `-` word, and the enum choices for `--field`, `--scheme`, `--view`,
+// `--encoder`, and `--preset`.
 //
-//   `movify`(0) -i|--input <bag> --cam <image_topic>... -o|--output <path>
-//   [--clock <image_topic>] [--grid <cols>x<rows>]
-//   [--cam-info <topic>|<image>=<info>] [--no-rectify] [--resize <s>]
+//   `movify`(0) -i|--input <bag> [--cam <image_topic>...] [--pcd <pcd_topic>...]
+//   [--gnss <navsatfix_topic>] -o|--output <path>
+//   [--clock <topic>] [--grid <cols>x<rows>]
+//   [--cam-info <info_topic>|<image>=<info>...] [--no-rectify] [--resize <s>]
 //   [--width <px>] [--cam-pcd <topic>|<image>=<topic>...] [--field <f>]
 //   [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
-//   [--alpha <a>] [--pcd <pcd_topic>...] [--view <3d|bev>...] [--frame <f>]
-//   [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>]
-//   [--gnss <navsatfix_topic>] [--map-range <m>] [-w|--overwrite]
+//   [--alpha <a>] [--view <3d|bev>...] [--frame <f>]
+//   [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>] [--map-range <m>]
+//   [--encoder <auto|x264|nvenc>] [--preset <name>] [-w|--overwrite]
 std::vector<std::string> complete_movify(const CompletionRequest & request)
 {
   const auto current = current_word(request);
   if (current.starts_with("-")) {
     return matching(
-      with_help({"--alpha",      "--azim",       "--cam",    "--cam-info",  "--cam-pcd",
-                 "--clock",      "--dist",       "--elev",   "--field",     "--frame",
-                 "--gnss",       "--grid",       "--input",  "--map-range", "--max",
-                 "--min",        "--no-rectify", "--output", "--overwrite", "--pcd",
-                 "--point-size", "--range",      "--resize", "--scheme",    "--view",
-                 "--width",      "-i",           "-o",       "-w"}),
+      with_help({"--alpha",  "--azim",       "--cam",        "--cam-info", "--cam-pcd",
+                 "--clock",  "--dist",       "--elev",       "--encoder",  "--field",
+                 "--frame",  "--gnss",       "--grid",       "--input",    "--map-range",
+                 "--max",    "--min",        "--no-rectify", "--output",   "--overwrite",
+                 "--pcd",    "--point-size", "--preset",     "--range",    "--resize",
+                 "--scheme", "--view",       "--width",      "-i",         "-o",
+                 "-w"}),
       current);
   }
 
@@ -1321,6 +1323,15 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
   }
   if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--view") {
     return matching({"3d", "bev"}, current);
+  }
+  if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--encoder") {
+    return matching({"auto", "nvenc", "x264"}, current);
+  }
+  if (request.cursor_word > 0 && request.words[request.cursor_word - 1] == "--preset") {
+    return matching(
+      {"fast", "faster", "medium", "slow", "slower", "superfast", "ultrafast", "veryfast",
+       "veryslow"},
+      current);
   }
   return {};
 }

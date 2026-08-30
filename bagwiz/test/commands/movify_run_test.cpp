@@ -1546,6 +1546,46 @@ TEST_F(MovifyRunTest, RunComposesCameraAndPointCloudPanels)
   EXPECT_EQ(probe.height, 8u);
 }
 
+// A JPEG camera shown as decoded (no rectification, resize, overlay or other
+// panel) streams through the direct pass: every frame lands in the video at
+// the decoded geometry.
+TEST_F(MovifyRunTest, RunStreamsAJpegCameraDirect)
+{
+  const auto jpeg = bagwiz::test::encode_still_image("jpeg", 32, 16, 10, 120, 200);
+  if (jpeg.empty()) {
+    GTEST_SKIP() << "no JPEG encoder in this FFmpeg build";
+  }
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic(kCompressedTopic, kCompressedType));
+    for (int i = 0; i < 5; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto payload = make_compressed_payload("jpeg", jpeg);
+      writer->write(kCompressedTopic, ts, {payload.data(), payload.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args(bag, kCompressedTopic, tmp_dir_ / "out.mp4", false);
+  args.rectify = false;
+  args.encoder = bagwiz::core::video::H264Backend::kX264;
+  {
+    bagwiz::core::video::VideoEncoderOptions probe_options;
+    probe_options.backend = args.encoder;
+    if (!bagwiz::core::video::open_video_encoder(
+           tmp_dir_ / "probe.mp4", 32, 16, 10, 1, probe_options)
+           .ok()) {
+      GTEST_SKIP() << "libx264 unavailable in this FFmpeg build";
+    }
+  }
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 5);
+  EXPECT_EQ(probe.width, 32u);
+  EXPECT_EQ(probe.height, 16u);
+}
+
 // Two lidars in different frames merge into one panel through the bag's TF:
 // with --frame naming the vehicle frame, each cloud is looked up at its own
 // stamp and the run succeeds.

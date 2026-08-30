@@ -71,6 +71,16 @@ public:
   [[nodiscard]] std::string render(const CellView & cell) override;
 
 private:
+  struct TopicProjection;
+  // One topic's fetch (or the clock payload's parse), transform into the view
+  // frame, and projection for a tick.
+  [[nodiscard]] TopicProjection project_topic(
+    std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const;
+  // project_topic() without its exception guard (a worker must report, not
+  // throw across its future).
+  [[nodiscard]] TopicProjection project_topic_unguarded(
+    std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const;
+
   Options options_;
   std::optional<SyntheticSizing> sizing_;   // clock role only
   std::optional<std::size_t> clock_topic_;  // clock role only
