@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -156,6 +157,64 @@ inline std::vector<std::byte> movify_bgr8_image_payload(
   b.u32(w * 3);  // step
   b.byte_seq({data.data(), data.size()});
   return b.take();
+}
+
+// A sensor_msgs/msg/PointCloud2 payload: float32 x/y/z points (point_step
+// 12) stamped `timestamp_ns` in `frame_id`.
+inline std::vector<std::byte> movify_pointcloud2_payload(
+  std::int64_t timestamp_ns, const std::string & frame_id,
+  const std::vector<std::array<float, 3>> & points)
+{
+  constexpr std::uint32_t kPointStep = 12;
+  std::vector<std::byte> data(points.size() * kPointStep, std::byte{0});
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    std::memcpy(data.data() + i * kPointStep, points[i].data(), kPointStep);
+  }
+  MovifyCdrBuilder b;
+  b.i32(static_cast<std::int32_t>(timestamp_ns / 1'000'000'000LL));   // sec
+  b.u32(static_cast<std::uint32_t>(timestamp_ns % 1'000'000'000LL));  // nanosec
+  b.str(frame_id);
+  b.u32(1);                                          // height
+  b.u32(static_cast<std::uint32_t>(points.size()));  // width
+  b.u32(3);                                          // fields length
+  b.str("x");
+  b.u32(0);
+  b.u8(7);  // float32
+  b.u32(1);
+  b.str("y");
+  b.u32(4);
+  b.u8(7);
+  b.u32(1);
+  b.str("z");
+  b.u32(8);
+  b.u8(7);
+  b.u32(1);
+  b.u8(0);                                         // is_bigendian
+  b.u32(kPointStep);                               // point_step
+  b.u32(static_cast<std::uint32_t>(data.size()));  // row_step
+  b.byte_seq({data.data(), data.size()});
+  b.u8(1);  // is_dense
+  return b.take();
+}
+
+// A bag with one PointCloud2 topic `topic` in frame `frame_id` carrying
+// `clouds` one-point clouds at 100 ms spacing starting at 1 s, the i-th
+// point at x = i + 1.
+inline std::filesystem::path movify_write_cloud_bag(
+  const std::filesystem::path & dir, const std::string & name, const std::string & topic,
+  const std::string & frame_id, int clouds)
+{
+  const auto path = dir / name;
+  auto w = bagwiz::io::open_write(path, movify_mcap_options());
+  movify_declare_topic(*w, topic, kMovifyPointCloudType);
+  for (int i = 0; i < clouds; ++i) {
+    const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+    const auto payload =
+      movify_pointcloud2_payload(ts, frame_id, {{{static_cast<float>(i + 1), 0.0F, 0.0F}}});
+    w->write(topic, ts, payload);
+  }
+  w->close();
+  return path;
 }
 
 inline void movify_write_file(const std::filesystem::path & path, const std::string & content)

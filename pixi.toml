@@ -60,11 +60,11 @@ geographiclib-cpp = "*"       # GeographicLib C++ library (conda-forge); NOT the
 nlohmann_json = "*"
 sqlite = "*"
 # ffmpeg (conda-forge) supplies the libav* libraries (libavcodec/libavformat/
-# libavutil/libswscale) and their pkg-config files used by `movify cam`
+# libavutil/libswscale) and their pkg-config files used by `movify`
 # (bagwiz_video/src/core/video/video_encoder.cpp). The conda-forge build bundles the libx264
 # (H.264) and mjpeg encoders. Inherited by every distro environment.
 ffmpeg = "*"
-# opencv (conda-forge) backs the `bagwiz movify cam` rectification path: it
+# opencv (conda-forge) backs the `bagwiz movify` rectification path: it
 # reads sensor_msgs/msg/CameraInfo intrinsics and applies cv::undistort to each
 # decoded frame before encoding. Linked PRIVATE into bagwiz_image and
 # bagwiz_pointcloud so it does not leak into their export sets, matching

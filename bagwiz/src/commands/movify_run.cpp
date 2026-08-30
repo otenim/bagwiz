@@ -6,9 +6,9 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/commands/movify_video.hpp"
-
+#include "bagwiz/commands/movify.hpp"
 #include "movify_camera_panel.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_cloud_panel.hpp"   // NOLINT(build/include_subdir) src-local shared header
 #include "movify_cloud_source.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "movify_inputs.hpp"        // NOLINT(build/include_subdir) src-local shared header
 #include "movify_output.hpp"        // NOLINT(build/include_subdir) src-local shared header
@@ -17,14 +17,15 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace bagwiz::commands
 {
 
-int run_movify_video(const MovifyVideoArgs & args)
+int run_movify(const MovifyArgs & args)
 {
   // Validate the source topics, camera infos, point-cloud topics, the grid,
-  // and the output path before touching anything expensive.
+  // the clock, and the output path before touching anything expensive.
   const auto validation = validate_video_inputs(args);
   if (!validation.ok()) {
     return 1;
@@ -32,6 +33,7 @@ int run_movify_video(const MovifyVideoArgs & args)
   if (const auto err = validate_video_output_path(args.output_path, args.overwrite); !err.empty()) {
     return 1;
   }
+  const std::string & clock_topic = clock_topic_of(validation);
 
   // Pass 1: derive the frame rate and scan the point-cloud overlay topics.
   auto scan = scan_video_inputs(args, validation);
@@ -50,19 +52,27 @@ int run_movify_video(const MovifyVideoArgs & args)
   // output and no leftover temp survive a failure.
   const std::filesystem::path tmp_path = partial_tmp_path_for(args.output_path);
   PartialFileGuard guard(tmp_path);
-  auto reader = open_encode_reader(args);
+  auto reader = open_encode_reader(args.input_path, clock_topic);
   if (!reader) {
     return 1;
   }
 
   // The point-cloud sources every panel projects from (they take the pass-1
-  // index entries out of `scan`), then the panels themselves: the first view
-  // as the clock, the rest following it.
+  // index entries out of `scan`), then the panels themselves in grid order,
+  // the clock among them: the camera panels, then one point-cloud panel per
+  // view.
   CloudSources clouds(
     args.input_path, scan, geometry.tf_buffer.has_value() ? &*geometry.tf_buffer : nullptr);
   auto panels = build_camera_panels(args, validation, scan, geometry, clouds);
   if (!panels.has_value()) {
     return 1;
+  }
+  auto cloud_panels = build_cloud_panels(args, validation, scan, clouds);
+  if (!cloud_panels.has_value()) {
+    return 1;
+  }
+  for (auto & panel : *cloud_panels) {
+    panels->push_back(std::move(panel));
   }
   const bool parallel = should_use_parallel_pipeline(
     panels->size(), !scan.pcd_topics.empty(), args.enable_parallel_pipeline, scan.span.count,
@@ -70,12 +80,12 @@ int run_movify_video(const MovifyVideoArgs & args)
 
   VideoFrameEncoder encoder(tmp_path, scan.fps);
   if (
-    run_encode_pass(*reader, *panels, validation.grid, parallel, args.topics.front(), encoder) !=
-    0) {
+    run_encode_pass(
+      *reader, *panels, validation.grid, parallel, validation.clock, clock_topic, encoder) != 0) {
     return 1;
   }
-  if (const auto err = finish_video_encode(
-        encoder, args.topics.front(), tmp_path, args.output_path, args.overwrite);
+  if (const auto err =
+        finish_video_encode(encoder, clock_topic, tmp_path, args.output_path, args.overwrite);
       !err.empty()) {
     return 1;
   }

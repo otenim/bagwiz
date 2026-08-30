@@ -161,17 +161,25 @@ struct PassResult
   std::vector<std::uint64_t> follower_ticks;
 };
 
-PassResult run_pass(const std::filesystem::path & dir, int frames, bool parallel)
+// `clock` is the grid index the clock panel takes; the follower takes the
+// other cell.
+PassResult run_pass(
+  const std::filesystem::path & dir, int frames, bool parallel, std::size_t clock = 0)
 {
   PassResult result;
   const auto bag = write_clock_bag(dir, frames);
   auto reader = open_clock_reader(bag);
   std::vector<std::unique_ptr<Panel>> panels;
-  panels.push_back(std::make_unique<StubPanel>(true, &result.clock_ticks));
-  panels.push_back(std::make_unique<StubPanel>(false, &result.follower_ticks));
+  for (std::size_t i = 0; i < 2; ++i) {
+    const bool is_clock = i == clock;
+    panels.push_back(
+      std::make_unique<StubPanel>(
+        is_clock, is_clock ? &result.clock_ticks : &result.follower_ticks));
+  }
   const auto output = dir / (parallel ? "parallel.avi" : "sync.avi");
   VideoFrameEncoder encoder(output, bagwiz::core::video::FrameRate{10, 1});
-  result.exit_code = run_encode_pass(*reader, panels, GridSpec{2, 1}, parallel, "/clock", encoder);
+  result.exit_code =
+    run_encode_pass(*reader, panels, GridSpec{2, 1}, parallel, clock, "/clock", encoder);
   if (result.exit_code == 0 && encoder.finish().empty()) {
     result.probe = bagwiz::core::video::probe_video(output);
   }
@@ -202,6 +210,20 @@ TEST_F(MovifyTmpDirTest, ParallelLoopDrivesEveryPanelOncePerTick)
   EXPECT_EQ(r.follower_ticks, std::vector<std::uint64_t>({0, 1, 2, 3, 4}));
 }
 
+// The clock panel may sit in any grid cell: with the clock at index 1 both
+// loops still drive it first on every tick and the follower in cell 0.
+TEST_F(MovifyTmpDirTest, ClockPanelMayTakeAnyCell)
+{
+  for (const bool parallel : {false, true}) {
+    const auto r = run_pass(tmp_dir_, 3, parallel, /*clock=*/1);
+    ASSERT_EQ(r.exit_code, 0) << (parallel ? "parallel" : "sync");
+    ASSERT_TRUE(r.probe.ok()) << r.probe.error;
+    EXPECT_EQ(r.probe.frame_count, 3);
+    EXPECT_EQ(r.clock_ticks, std::vector<std::uint64_t>({0, 1, 2}));
+    EXPECT_EQ(r.follower_ticks, std::vector<std::uint64_t>({0, 1, 2}));
+  }
+}
+
 TEST_F(MovifyTmpDirTest, ParallelLoopReportsAClockTopicWithoutFrames)
 {
   const auto bag = write_clock_bag(tmp_dir_, 0);
@@ -211,7 +233,7 @@ TEST_F(MovifyTmpDirTest, ParallelLoopReportsAClockTopicWithoutFrames)
   panels.push_back(std::make_unique<StubPanel>(true, &ticks));
   VideoFrameEncoder encoder(tmp_dir_ / "out.avi", bagwiz::core::video::FrameRate{10, 1});
   EXPECT_EQ(
-    run_encode_pass(*reader, panels, GridSpec{1, 1}, /*parallel=*/true, "/clock", encoder), 1);
+    run_encode_pass(*reader, panels, GridSpec{1, 1}, /*parallel=*/true, 0, "/clock", encoder), 1);
   EXPECT_FALSE(encoder.started());
   EXPECT_TRUE(ticks.empty());
 }
@@ -228,7 +250,7 @@ TEST_F(MovifyTmpDirTest, SynchronousLoopOverAnEmptyClockTopicStartsNoEncoder)
   panels.push_back(std::make_unique<StubPanel>(true, &ticks));
   VideoFrameEncoder encoder(tmp_dir_ / "out.avi", bagwiz::core::video::FrameRate{10, 1});
   EXPECT_EQ(
-    run_encode_pass(*reader, panels, GridSpec{1, 1}, /*parallel=*/false, "/clock", encoder), 0);
+    run_encode_pass(*reader, panels, GridSpec{1, 1}, /*parallel=*/false, 0, "/clock", encoder), 0);
   EXPECT_FALSE(encoder.started());
 }
 

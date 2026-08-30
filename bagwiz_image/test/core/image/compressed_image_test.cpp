@@ -22,7 +22,7 @@ namespace
 using bagwiz::core::image::extract_compressed_image;
 
 // Little-endian CDR-1 builder, matching the wire format the production reader
-// consumes (mirrors the helper in movify_video_test.cpp / raw_image_test.cpp).
+// consumes (mirrors the helper in movify_run_test.cpp / raw_image_test.cpp).
 class CdrBuilder
 {
 public:

@@ -64,6 +64,7 @@ add_library(bagwiz_pointcloud
   src/core/pointcloud/projector.cpp
   src/core/pointcloud/projector_helpers.cpp
   src/core/pointcloud/cloud_view.cpp
+  src/core/pointcloud/point_raster.cpp
   src/core/pointcloud/static_extrinsic.cpp
 )
 target_include_directories(bagwiz_pointcloud
@@ -148,6 +149,13 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_cloud_view_test test/core/pointcloud/cloud_view_test.cpp)
   target_link_libraries(bagwiz_cloud_view_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_point_raster_test test/core/pointcloud/point_raster_test.cpp)
+  target_link_libraries(bagwiz_point_raster_test bagwiz_pointcloud)
+
+  ament_add_gtest(
+    bagwiz_projector_helpers_test test/core/pointcloud/projector_helpers_test.cpp)
+  target_link_libraries(bagwiz_projector_helpers_test bagwiz_pointcloud)
 
   ament_add_gtest(bagwiz_pointcloud_fetcher_test test/core/pointcloud/fetcher_test.cpp)
   target_link_libraries(bagwiz_pointcloud_fetcher_test bagwiz_pointcloud)

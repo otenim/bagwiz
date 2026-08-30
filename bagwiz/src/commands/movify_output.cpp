@@ -202,7 +202,7 @@ void log_video_summary(
 {
   const double fps_value = static_cast<double>(fps.num) / static_cast<double>(fps.den);
   BAGWIZ_LOG_INFO(
-    kLogger, "movify cam: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).", written,
+    kLogger, "movify: wrote %" PRIu64 " frame(s) to %s (%ux%u bgr8 @ %.3g fps).", written,
     output_path.string().c_str(), width, height, fps_value);
 
   if (is_h264_extension(output_path)) {

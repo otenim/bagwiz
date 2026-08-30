@@ -29,7 +29,7 @@ inline constexpr int kMaxFps = 240;
 
 // Derive a constant frame rate from a topic's first and last message
 // timestamps and message count, used to choose the constant encode frame rate
-// for `movify cam` (always derived from the recording; there is no user
+// for `movify` (always derived from the recording; there is no user
 // override).
 //
 //   fps = (count - 1) / ((last_ns - first_ns) / 1e9)

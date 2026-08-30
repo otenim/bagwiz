@@ -31,7 +31,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 
-# FFmpeg/libav (conda-forge `ffmpeg`) backs `bagwiz movify cam`
+# FFmpeg/libav (conda-forge `ffmpeg`) backs `bagwiz movify`
 # (video_encoder.cpp): muxing, H.264/MJPEG encoding, and pixel conversion. No
 # ament/CMake package exists for it, so locate the libraries via pkg-config. It
 # is consumed PRIVATE (the encoder is hidden behind a pimpl), so libav never

@@ -9,7 +9,7 @@
 #ifndef COMMANDS__MOVIFY_CAMERA_PANEL_HPP_
 #define COMMANDS__MOVIFY_CAMERA_PANEL_HPP_
 
-#include "bagwiz/commands/movify_video.hpp"
+#include "bagwiz/commands/movify.hpp"
 #include "bagwiz/core/image/camera_info.hpp"
 #include "bagwiz/core/image/image_decoder.hpp"
 #include "bagwiz/core/image/rectify.hpp"
@@ -266,13 +266,13 @@ private:
   bool warned_empty_ = false;
 };
 
-// Build `movify cam`'s panels, one per validated view in grid order: the
-// first view as the clock panel, every other view as a follower over its own
-// topic. Returns nullopt after logging when a follower's reader fails to open
+// Build `movify`'s camera panels, one per validated view in grid order: the
+// view at validation.clock as the clock panel, every other view as a follower
+// over its own topic. Returns nullopt after logging when a follower's reader fails to open
 // or a view's point-cloud topic is missing from the scan.
 [[nodiscard]] std::optional<std::vector<std::unique_ptr<Panel>>> build_camera_panels(
-  const MovifyVideoArgs & args, const VideoInputValidation & validation,
-  const VideoInputScan & scan, const VideoGeometry & geometry, CloudSources & clouds);
+  const MovifyArgs & args, const VideoInputValidation & validation, const VideoInputScan & scan,
+  const VideoGeometry & geometry, CloudSources & clouds);
 
 }  // namespace bagwiz::commands
 

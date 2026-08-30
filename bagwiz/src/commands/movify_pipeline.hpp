@@ -36,17 +36,17 @@ namespace bagwiz::commands
   std::uint64_t frame_count, unsigned int hardware_concurrency);
 
 // Run the encode pass: `reader` yields the clock topic's messages, one per
-// output tick; panels[0] is the clock panel and the rest fill the grid in
-// order. Per tick every panel selects its input and renders its cell, then
-// the composed grid is encoded. The first tick's clock selection fixes the
-// cell size (and reports an oversized output). `parallel` picks the
-// worker-thread loop, which overlaps a tick's panel jobs with the previous
-// tick's encode, over the synchronous one; both compose identical frames.
-// `clock_topic` names the clock in log lines. Returns a process exit code;
-// errors are logged inside.
+// output tick; panels[clock] is the clock panel and every panel fills the
+// grid cell of its index. Per tick every panel selects its input and renders
+// its cell, then the composed grid is encoded. The first tick's clock
+// selection fixes the cell size (and reports an oversized output). `parallel`
+// picks the worker-thread loop, which overlaps a tick's panel jobs with the
+// previous tick's encode, over the synchronous one; both compose identical
+// frames. `clock_topic` names the clock in log lines. Returns a process exit
+// code; errors are logged inside.
 [[nodiscard]] int run_encode_pass(
   io::BagReader & reader, std::vector<std::unique_ptr<Panel>> & panels, GridSpec grid,
-  bool parallel, const std::string & clock_topic, VideoFrameEncoder & encoder);
+  bool parallel, std::size_t clock, const std::string & clock_topic, VideoFrameEncoder & encoder);
 
 }  // namespace bagwiz::commands
 

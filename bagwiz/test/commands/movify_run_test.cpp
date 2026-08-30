@@ -6,10 +6,9 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-#include "bagwiz/commands/movify_video.hpp"
-
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/movify.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/image/camera_info_resolver.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
@@ -39,8 +38,8 @@
 namespace
 {
 using bagwiz::commands::check_video_source;
-using bagwiz::commands::MovifyVideoArgs;
-using bagwiz::commands::run_movify_video;
+using bagwiz::commands::MovifyArgs;
+using bagwiz::commands::run_movify;
 using bagwiz::commands::VideoSourceStatus;
 
 // Little-endian CDR-1 builder, matching the wire format the production reader
@@ -489,14 +488,14 @@ bool any_partial_left(const std::filesystem::path & dir)
   return false;
 }
 
-class MovifyVideoTest : public ::testing::Test
+class MovifyRunTest : public ::testing::Test
 {
 protected:
   void SetUp() override
   {
     tmp_dir_ =
       std::filesystem::temp_directory_path() /
-      ("bagwiz_movify_video_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) +
+      ("bagwiz_movify_run_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) +
        "_" +
        std::to_string(
          reinterpret_cast<std::uintptr_t>(  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
@@ -513,7 +512,7 @@ protected:
 
 // ---- check_video_source ---------------------------------------------------
 
-TEST_F(MovifyVideoTest, CheckOkForImage)
+TEST_F(MovifyRunTest, CheckOkForImage)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   const auto c = check_video_source(in, kImageTopic);
@@ -521,7 +520,7 @@ TEST_F(MovifyVideoTest, CheckOkForImage)
   EXPECT_EQ(c.topic_type, kImageType);
 }
 
-TEST_F(MovifyVideoTest, CheckOkForCompressedImage)
+TEST_F(MovifyRunTest, CheckOkForCompressedImage)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   const auto c = check_video_source(in, "/cam/image/compressed");
@@ -529,48 +528,48 @@ TEST_F(MovifyVideoTest, CheckOkForCompressedImage)
   EXPECT_EQ(c.topic_type, "sensor_msgs/msg/CompressedImage");
 }
 
-TEST_F(MovifyVideoTest, CheckTopicNotFound)
+TEST_F(MovifyRunTest, CheckTopicNotFound)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   EXPECT_EQ(check_video_source(in, "/nope").status, VideoSourceStatus::kTopicNotFound);
 }
 
-TEST_F(MovifyVideoTest, CheckUnsupportedType)
+TEST_F(MovifyRunTest, CheckUnsupportedType)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   EXPECT_EQ(check_video_source(in, "/sensing/lidar").status, VideoSourceStatus::kUnsupportedType);
 }
 
-TEST_F(MovifyVideoTest, CheckInputUnopenable)
+TEST_F(MovifyRunTest, CheckInputUnopenable)
 {
   EXPECT_EQ(
     check_video_source(tmp_dir_ / "does_not_exist", kImageTopic).status,
     VideoSourceStatus::kInputUnopenable);
 }
 
-// ---- run_movify_video: failure paths ------------------------------------
+// ---- run_movify: failure paths ------------------------------------
 
-TEST_F(MovifyVideoTest, RunMissingTopicFails)
+TEST_F(MovifyRunTest, RunMissingTopicFails)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
-  const MovifyVideoArgs args{in, "/nope", out, false};
-  EXPECT_EQ(run_movify_video(args), 1);
+  const MovifyArgs args{in, "/nope", out, false};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(MovifyVideoTest, RunUnsupportedTypeFails)
+TEST_F(MovifyRunTest, RunUnsupportedTypeFails)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
-  const MovifyVideoArgs args{in, "/sensing/lidar", out, false};
-  EXPECT_EQ(run_movify_video(args), 1);
+  const MovifyArgs args{in, "/sensing/lidar", out, false};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
 // A CompressedImage topic carrying a payload that is neither JPEG nor PNG (by
 // its magic bytes) stops the run with no output and no leftover temp.
-TEST_F(MovifyVideoTest, RunCompressedImageUnrecognizedFormatFails)
+TEST_F(MovifyRunTest, RunCompressedImageUnrecognizedFormatFails)
 {
   const auto path = tmp_dir_ / "input";
   {
@@ -583,42 +582,42 @@ TEST_F(MovifyVideoTest, RunCompressedImageUnrecognizedFormatFails)
     writer->close();
   }
   const auto out = tmp_dir_ / "out.avi";
-  const MovifyVideoArgs args{path, kCompressedTopic, out, false};
-  EXPECT_EQ(run_movify_video(args), 1);
+  const MovifyArgs args{path, kCompressedTopic, out, false};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
   EXPECT_FALSE(any_partial_left(tmp_dir_));
 }
 
-TEST_F(MovifyVideoTest, RunUnsupportedEncodingFailsAndLeavesNothing)
+TEST_F(MovifyRunTest, RunUnsupportedEncodingFailsAndLeavesNothing)
 {
   const auto in = build_bag(tmp_dir_, 3, 16, 16, "mono16");
   const auto out = tmp_dir_ / "out.avi";
-  const MovifyVideoArgs args{in, kImageTopic, out, false};
-  EXPECT_EQ(run_movify_video(args), 1);
+  const MovifyArgs args{in, kImageTopic, out, false};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
   EXPECT_FALSE(any_partial_left(tmp_dir_));
 }
 
-TEST_F(MovifyVideoTest, RunOddDimensionsFails)
+TEST_F(MovifyRunTest, RunOddDimensionsFails)
 {
   const auto in = build_bag(tmp_dir_, 3, 15, 16, "bgr8");  // odd width
   const auto out = tmp_dir_ / "out.avi";
-  const MovifyVideoArgs args{in, kImageTopic, out, false};
-  EXPECT_EQ(run_movify_video(args), 1);
+  const MovifyArgs args{in, kImageTopic, out, false};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
   EXPECT_FALSE(any_partial_left(tmp_dir_));
 }
 
-// ---- run_movify_video: success path -------------------------------------
+// ---- run_movify: success path -------------------------------------
 
-TEST_F(MovifyVideoTest, RunEncodesImageTopicToVideo)
+TEST_F(MovifyRunTest, RunEncodesImageTopicToVideo)
 {
   constexpr int kFrames = 4;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";  // MJPEG: no libx264 dependency
 
-  const MovifyVideoArgs args{in, kImageTopic, out, false};
-  ASSERT_EQ(run_movify_video(args), 0);
+  const MovifyArgs args{in, kImageTopic, out, false};
+  ASSERT_EQ(run_movify(args), 0);
 
   ASSERT_TRUE(std::filesystem::exists(out));
   EXPECT_FALSE(any_partial_left(tmp_dir_));  // no temp left behind
@@ -632,14 +631,14 @@ TEST_F(MovifyVideoTest, RunEncodesImageTopicToVideo)
 
 // A CompressedImage (JPEG) topic decodes frame-by-frame and encodes to a video
 // with the decoded geometry and frame count — the headline new capability.
-TEST_F(MovifyVideoTest, RunEncodesCompressedImageTopicToVideo)
+TEST_F(MovifyRunTest, RunEncodesCompressedImageTopicToVideo)
 {
   constexpr int kFrames = 4;
   const auto in = build_compressed_bag(tmp_dir_, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";  // MJPEG: no libx264 dependency
 
-  const MovifyVideoArgs args{in, kCompressedTopic, out, false};
-  ASSERT_EQ(run_movify_video(args), 0);
+  const MovifyArgs args{in, kCompressedTopic, out, false};
+  ASSERT_EQ(run_movify(args), 0);
 
   ASSERT_TRUE(std::filesystem::exists(out));
   EXPECT_FALSE(any_partial_left(tmp_dir_));
@@ -651,7 +650,7 @@ TEST_F(MovifyVideoTest, RunEncodesCompressedImageTopicToVideo)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, RunExistingOutputWithoutOverwriteFails)
+TEST_F(MovifyRunTest, RunExistingOutputWithoutOverwriteFails)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
@@ -660,8 +659,8 @@ TEST_F(MovifyVideoTest, RunExistingOutputWithoutOverwriteFails)
     f << "SENTINEL";
   }
 
-  const MovifyVideoArgs args{in, kImageTopic, out, false};
-  EXPECT_EQ(run_movify_video(args), 1);
+  const MovifyArgs args{in, kImageTopic, out, false};
+  EXPECT_EQ(run_movify(args), 1);
 
   // The pre-existing file is left untouched.
   std::ifstream f(out, std::ios::binary);
@@ -669,7 +668,7 @@ TEST_F(MovifyVideoTest, RunExistingOutputWithoutOverwriteFails)
   EXPECT_EQ(content, "SENTINEL");
 }
 
-TEST_F(MovifyVideoTest, RunOverwriteReplacesExistingOutput)
+TEST_F(MovifyRunTest, RunOverwriteReplacesExistingOutput)
 {
   constexpr int kFrames = 4;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");
@@ -679,8 +678,8 @@ TEST_F(MovifyVideoTest, RunOverwriteReplacesExistingOutput)
     f << "SENTINEL";
   }
 
-  const MovifyVideoArgs args{in, kImageTopic, out, true};  // --overwrite
-  ASSERT_EQ(run_movify_video(args), 0);
+  const MovifyArgs args{in, kImageTopic, out, true};  // --overwrite
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -689,16 +688,16 @@ TEST_F(MovifyVideoTest, RunOverwriteReplacesExistingOutput)
 
 // ---- camera-info auto-resolution ------------------------------------------
 
-TEST_F(MovifyVideoTest, AutoResolvesCameraInfoForImageRawCompressed)
+TEST_F(MovifyRunTest, AutoResolvesCameraInfoForImageRawCompressed)
 {
   constexpr int kFrames = 2;
   const auto in =
     build_bag_with_camera_info(tmp_dir_, "/cam/image_raw/compressed", true, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_raw/compressed", out, false};
+  MovifyArgs args{in, "/cam/image_raw/compressed", out, false};
   args.rectify = true;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -709,19 +708,19 @@ TEST_F(MovifyVideoTest, AutoResolvesCameraInfoForImageRawCompressed)
 // times the primary frame's cell size — so a run reports one that has grown
 // past 4K. --width drives the cell size here, which keeps the source frames
 // (and the fixture bag) tiny while still composing an oversized canvas.
-TEST_F(MovifyVideoTest, RunWarnsWhenTheComposedOutputIsOversized)
+TEST_F(MovifyRunTest, RunWarnsWhenTheComposedOutputIsOversized)
 {
   constexpr int kFrames = 2;
   // 4096 wide at the source's 16:9 aspect composes 4096x2304 = 9.4 Mpx.
   const auto in = build_bag(tmp_dir_, kFrames, 32, 18, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
+  MovifyArgs args{in, kImageTopic, out, false};
   args.width = 4096;
   args.enable_parallel_pipeline = false;
 
   ::testing::internal::CaptureStderr();
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
   const std::string err = ::testing::internal::GetCapturedStderr();
 
   EXPECT_NE(err.find("4096x2304"), std::string::npos) << err;
@@ -732,48 +731,48 @@ TEST_F(MovifyVideoTest, RunWarnsWhenTheComposedOutputIsOversized)
 
 // An ordinary single-view render is silent: the guard must not nag about sizes
 // nobody would call surprising.
-TEST_F(MovifyVideoTest, RunStaysQuietForAnOrdinaryOutputSize)
+TEST_F(MovifyRunTest, RunStaysQuietForAnOrdinaryOutputSize)
 {
   constexpr int kFrames = 2;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
+  MovifyArgs args{in, kImageTopic, out, false};
   args.enable_parallel_pipeline = false;
 
   ::testing::internal::CaptureStderr();
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
   const std::string err = ::testing::internal::GetCapturedStderr();
 
   EXPECT_EQ(err.find("larger than"), std::string::npos) << err;
 }
 
-TEST_F(MovifyVideoTest, AutoResolvesCameraInfoForImageRectColor)
+TEST_F(MovifyRunTest, AutoResolvesCameraInfoForImageRectColor)
 {
   constexpr int kFrames = 2;
   const auto in =
     build_bag_with_camera_info(tmp_dir_, "/cam/image_rect_color", false, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out, false};
+  MovifyArgs args{in, "/cam/image_rect_color", out, false};
   args.rectify = true;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, AutoResolvesCameraInfoForImageRectColorCompressed)
+TEST_F(MovifyRunTest, AutoResolvesCameraInfoForImageRectColorCompressed)
 {
   constexpr int kFrames = 2;
   const auto in =
     build_bag_with_camera_info(tmp_dir_, "/cam/image_rect_color/compressed", true, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color/compressed", out, false};
+  MovifyArgs args{in, "/cam/image_rect_color/compressed", out, false};
   args.rectify = true;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -783,14 +782,14 @@ TEST_F(MovifyVideoTest, AutoResolvesCameraInfoForImageRectColorCompressed)
 // With rectification on by default, a bag without a derivable CameraInfo
 // still renders: the view is left unrectified with a warning rather than
 // failing the run.
-TEST_F(MovifyVideoTest, RectifyWithoutCameraInfoWarnsAndRendersUnrectified)
+TEST_F(MovifyRunTest, RectifyWithoutCameraInfoWarnsAndRendersUnrectified)
 {
   constexpr int kFrames = 2;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");  // /cam/image, no /cam/camera_info
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
-  ASSERT_EQ(run_movify_video(args), 0);
+  MovifyArgs args{in, kImageTopic, out, false};
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -798,23 +797,23 @@ TEST_F(MovifyVideoTest, RectifyWithoutCameraInfoWarnsAndRendersUnrectified)
 }
 
 // --no-rectify opts out even when a CameraInfo is available.
-TEST_F(MovifyVideoTest, NoRectifyOptsOut)
+TEST_F(MovifyRunTest, NoRectifyOptsOut)
 {
   constexpr int kFrames = 2;
   const auto in =
     build_bag_with_camera_info(tmp_dir_, "/cam/image_rect_color", false, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out, false};
+  MovifyArgs args{in, "/cam/image_rect_color", out, false};
   args.rectify = false;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, ExplicitCameraInfoTopicWorksForRectify)
+TEST_F(MovifyRunTest, ExplicitCameraInfoTopicWorksForRectify)
 {
   constexpr int kFrames = 2;
   const auto in = tmp_dir_ / "input";
@@ -837,74 +836,74 @@ TEST_F(MovifyVideoTest, ExplicitCameraInfoTopicWorksForRectify)
   }
 
   const auto out = tmp_dir_ / "out.avi";
-  MovifyVideoArgs args{in, kImageTopic, out, false};
+  MovifyArgs args{in, kImageTopic, out, false};
   args.camera_info_entries = {"/other/camera_info"};
   args.rectify = true;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, ExplicitCameraInfoTopicWithWrongTypeFails)
+TEST_F(MovifyRunTest, ExplicitCameraInfoTopicWithWrongTypeFails)
 {
   constexpr int kFrames = 2;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
+  MovifyArgs args{in, kImageTopic, out, false};
   args.camera_info_entries = {"/sensing/lidar"};  // PointCloud2, not CameraInfo
   args.rectify = true;
-  EXPECT_EQ(run_movify_video(args), 1);
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
 // ---- point-cloud overlay ----------------------------------------------------
 
-TEST_F(MovifyVideoTest, PointCloudTopicWithWrongTypeFails)
+TEST_F(MovifyRunTest, PointCloudTopicWithWrongTypeFails)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
-  args.pointcloud_topics = {kImageTopic};  // Image, not PointCloud2
-  EXPECT_EQ(run_movify_video(args), 1);
+  MovifyArgs args{in, kImageTopic, out, false};
+  args.cam_pcd_entries = {kImageTopic};  // Image, not PointCloud2
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(MovifyVideoTest, PointCloudTopicNotFoundFails)
+TEST_F(MovifyRunTest, PointCloudTopicNotFoundFails)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
-  args.pointcloud_topics = {"/nope"};
-  EXPECT_EQ(run_movify_video(args), 1);
+  MovifyArgs args{in, kImageTopic, out, false};
+  args.cam_pcd_entries = {"/nope"};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(MovifyVideoTest, PointCloudOverlayRequiresCameraInfo)
+TEST_F(MovifyRunTest, PointCloudOverlayRequiresCameraInfo)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");  // /cam/image, no /cam/camera_info
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
-  args.pointcloud_topics = {"/sensing/lidar"};
-  EXPECT_EQ(run_movify_video(args), 1);
+  MovifyArgs args{in, kImageTopic, out, false};
+  args.cam_pcd_entries = {"/sensing/lidar"};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(MovifyVideoTest, PointCloudOverlayWorksOnRawImage)
+TEST_F(MovifyRunTest, PointCloudOverlayWorksOnRawImage)
 {
   constexpr int kFrames = 3;
   const auto in =
     build_bag_with_pointcloud_overlay(tmp_dir_, "/cam/image_rect_color", false, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out, false};
-  args.pointcloud_topics = {"/points"};
-  ASSERT_EQ(run_movify_video(args), 0);
+  MovifyArgs args{in, "/cam/image_rect_color", out, false};
+  args.cam_pcd_entries = {"/points"};
+  ASSERT_EQ(run_movify(args), 0);
 
   ASSERT_TRUE(std::filesystem::exists(out));
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -912,16 +911,16 @@ TEST_F(MovifyVideoTest, PointCloudOverlayWorksOnRawImage)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, PointCloudOverlayWorksOnCompressedImage)
+TEST_F(MovifyRunTest, PointCloudOverlayWorksOnCompressedImage)
 {
   constexpr int kFrames = 3;
   const auto in =
     build_bag_with_pointcloud_overlay(tmp_dir_, "/cam/image_raw/compressed", true, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_raw/compressed", out, false};
-  args.pointcloud_topics = {"/points"};
-  ASSERT_EQ(run_movify_video(args), 0);
+  MovifyArgs args{in, "/cam/image_raw/compressed", out, false};
+  args.cam_pcd_entries = {"/points"};
+  ASSERT_EQ(run_movify(args), 0);
 
   ASSERT_TRUE(std::filesystem::exists(out));
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -947,7 +946,7 @@ void read_file_bytes(const std::filesystem::path & path, std::vector<std::byte> 
   }
 }
 
-TEST_F(MovifyVideoTest, ThreadedPointCloudOverlayMatchesSynchronous)
+TEST_F(MovifyRunTest, ThreadedPointCloudOverlayMatchesSynchronous)
 {
   // Use enough frames to satisfy the internal threshold for threaded projection.
   constexpr int kFrames = 6;
@@ -956,14 +955,14 @@ TEST_F(MovifyVideoTest, ThreadedPointCloudOverlayMatchesSynchronous)
   const auto out_threaded = tmp_dir_ / "out_threaded.avi";
   const auto out_sync = tmp_dir_ / "out_sync.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out_threaded, false};
-  args.pointcloud_topics = {"/points"};
+  MovifyArgs args{in, "/cam/image_rect_color", out_threaded, false};
+  args.cam_pcd_entries = {"/points"};
   args.enable_parallel_pipeline = true;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   args.output_path = out_sync;
   args.enable_parallel_pipeline = false;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   std::vector<std::byte> threaded_bytes;
   std::vector<std::byte> sync_bytes;
@@ -972,16 +971,16 @@ TEST_F(MovifyVideoTest, ThreadedPointCloudOverlayMatchesSynchronous)
   EXPECT_EQ(threaded_bytes, sync_bytes);
 }
 
-TEST_F(MovifyVideoTest, MultiplePointCloudTopicsOverlayWorks)
+TEST_F(MovifyRunTest, MultiplePointCloudTopicsOverlayWorks)
 {
   constexpr int kFrames = 3;
   const auto in = build_bag_with_two_pointcloud_overlays(
     tmp_dir_, "/cam/image_rect_color", false, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out, false};
-  args.pointcloud_topics = {"/points/front", "/points/rear"};
-  ASSERT_EQ(run_movify_video(args), 0);
+  MovifyArgs args{in, "/cam/image_rect_color", out, false};
+  args.cam_pcd_entries = {"/points/front", "/points/rear"};
+  ASSERT_EQ(run_movify(args), 0);
 
   ASSERT_TRUE(std::filesystem::exists(out));
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -989,31 +988,31 @@ TEST_F(MovifyVideoTest, MultiplePointCloudTopicsOverlayWorks)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, MultiplePointCloudTopicsFailIfOneHasWrongType)
+TEST_F(MovifyRunTest, MultiplePointCloudTopicsFailIfOneHasWrongType)
 {
   const auto in =
     build_bag_with_pointcloud_overlay(tmp_dir_, "/cam/image_rect_color", false, 2, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out, false};
-  args.pointcloud_topics = {"/points", "/cam/image_rect_color"};  // one of them is an image
-  EXPECT_EQ(run_movify_video(args), 1);
+  MovifyArgs args{in, "/cam/image_rect_color", out, false};
+  args.cam_pcd_entries = {"/points", "/cam/image_rect_color"};  // one of them is an image
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(MovifyVideoTest, MultiplePointCloudTopicsFailIfOneMissing)
+TEST_F(MovifyRunTest, MultiplePointCloudTopicsFailIfOneMissing)
 {
   const auto in =
     build_bag_with_pointcloud_overlay(tmp_dir_, "/cam/image_rect_color", false, 2, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out, false};
-  args.pointcloud_topics = {"/points", "/also_missing"};
-  EXPECT_EQ(run_movify_video(args), 1);
+  MovifyArgs args{in, "/cam/image_rect_color", out, false};
+  args.cam_pcd_entries = {"/points", "/also_missing"};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(MovifyVideoTest, ThreadedMultiPointCloudOverlayMatchesSynchronous)
+TEST_F(MovifyRunTest, ThreadedMultiPointCloudOverlayMatchesSynchronous)
 {
   constexpr int kFrames = 6;
   const auto in = build_bag_with_two_pointcloud_overlays(
@@ -1021,14 +1020,14 @@ TEST_F(MovifyVideoTest, ThreadedMultiPointCloudOverlayMatchesSynchronous)
   const auto out_threaded = tmp_dir_ / "out_threaded.avi";
   const auto out_sync = tmp_dir_ / "out_sync.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out_threaded, false};
-  args.pointcloud_topics = {"/points/front", "/points/rear"};
+  MovifyArgs args{in, "/cam/image_rect_color", out_threaded, false};
+  args.cam_pcd_entries = {"/points/front", "/points/rear"};
   args.enable_parallel_pipeline = true;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   args.output_path = out_sync;
   args.enable_parallel_pipeline = false;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   std::vector<std::byte> threaded_bytes;
   std::vector<std::byte> sync_bytes;
@@ -1109,15 +1108,15 @@ std::filesystem::path build_two_camera_bag_with_pointcloud(
   return path;
 }
 
-TEST_F(MovifyVideoTest, TwoViewsRenderSideBySideAtPrimaryRate)
+TEST_F(MovifyRunTest, TwoViewsRenderSideBySideAtPrimaryRate)
 {
   constexpr int kFrames = 4;
   const auto in = build_two_camera_bag(tmp_dir_, kFrames, 2);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/a", out, false};
-  args.topics.push_back("/cam/b");
-  ASSERT_EQ(run_movify_video(args), 0);
+  MovifyArgs args{in, "/cam/a", out, false};
+  args.cam_topics.push_back("/cam/b");
+  ASSERT_EQ(run_movify(args), 0);
 
   ASSERT_TRUE(std::filesystem::exists(out));
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -1129,15 +1128,15 @@ TEST_F(MovifyVideoTest, TwoViewsRenderSideBySideAtPrimaryRate)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, ExplicitGridStacksViewsVertically)
+TEST_F(MovifyRunTest, ExplicitGridStacksViewsVertically)
 {
   const auto in = build_two_camera_bag(tmp_dir_, 2, 2);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/a", out, false};
-  args.topics.push_back("/cam/b");
+  MovifyArgs args{in, "/cam/a", out, false};
+  args.cam_topics.push_back("/cam/b");
   args.grid = "1x2";
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -1145,28 +1144,28 @@ TEST_F(MovifyVideoTest, ExplicitGridStacksViewsVertically)
   EXPECT_EQ(probe.height, 32U);
 }
 
-TEST_F(MovifyVideoTest, GridSmallerThanTheViewCountFails)
+TEST_F(MovifyRunTest, GridSmallerThanTheViewCountFails)
 {
   const auto in = build_two_camera_bag(tmp_dir_, 2, 2);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/a", out, false};
-  args.topics.push_back("/cam/b");
+  MovifyArgs args{in, "/cam/a", out, false};
+  args.cam_topics.push_back("/cam/b");
   args.grid = "1x1";
-  EXPECT_EQ(run_movify_video(args), 1);
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(MovifyVideoTest, GlobalPointCloudProjectsOntoEveryView)
+TEST_F(MovifyRunTest, GlobalPointCloudProjectsOntoEveryView)
 {
   constexpr int kFrames = 3;
   const auto in = build_two_camera_bag_with_pointcloud(tmp_dir_, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/a/image_rect_color", out, false};
-  args.topics.push_back("/cam/b/image_rect_color");
-  args.pointcloud_topics = {"/points"};
-  ASSERT_EQ(run_movify_video(args), 0);
+  MovifyArgs args{in, "/cam/a/image_rect_color", out, false};
+  args.cam_topics.push_back("/cam/b/image_rect_color");
+  args.cam_pcd_entries = {"/points"};
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -1175,16 +1174,16 @@ TEST_F(MovifyVideoTest, GlobalPointCloudProjectsOntoEveryView)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, PerViewPointCloudBindingRenders)
+TEST_F(MovifyRunTest, PerViewPointCloudBindingRenders)
 {
   constexpr int kFrames = 3;
   const auto in = build_two_camera_bag_with_pointcloud(tmp_dir_, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/a/image_rect_color", out, false};
-  args.topics.push_back("/cam/b/image_rect_color");
-  args.pointcloud_topics = {"/cam/a/image_rect_color=/points"};
-  ASSERT_EQ(run_movify_video(args), 0);
+  MovifyArgs args{in, "/cam/a/image_rect_color", out, false};
+  args.cam_topics.push_back("/cam/b/image_rect_color");
+  args.cam_pcd_entries = {"/cam/a/image_rect_color=/points"};
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -1193,18 +1192,18 @@ TEST_F(MovifyVideoTest, PerViewPointCloudBindingRenders)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, PerViewBindingToAnUnlistedViewFails)
+TEST_F(MovifyRunTest, PerViewBindingToAnUnlistedViewFails)
 {
   const auto in = build_two_camera_bag_with_pointcloud(tmp_dir_, 2, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/a/image_rect_color", out, false};
-  args.pointcloud_topics = {"/cam/not_a_view=/points"};
-  EXPECT_EQ(run_movify_video(args), 1);
+  MovifyArgs args{in, "/cam/a/image_rect_color", out, false};
+  args.cam_pcd_entries = {"/cam/not_a_view=/points"};
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
-TEST_F(MovifyVideoTest, ThreadedTwoViewOverlayMatchesSynchronous)
+TEST_F(MovifyRunTest, ThreadedTwoViewOverlayMatchesSynchronous)
 {
   // Use enough frames to satisfy the internal threshold for threaded projection.
   constexpr int kFrames = 6;
@@ -1212,15 +1211,15 @@ TEST_F(MovifyVideoTest, ThreadedTwoViewOverlayMatchesSynchronous)
   const auto out_threaded = tmp_dir_ / "out_threaded.avi";
   const auto out_sync = tmp_dir_ / "out_sync.avi";
 
-  MovifyVideoArgs args{in, "/cam/a/image_rect_color", out_threaded, false};
-  args.topics.push_back("/cam/b/image_rect_color");
-  args.pointcloud_topics = {"/cam/a/image_rect_color=/points"};
+  MovifyArgs args{in, "/cam/a/image_rect_color", out_threaded, false};
+  args.cam_topics.push_back("/cam/b/image_rect_color");
+  args.cam_pcd_entries = {"/cam/a/image_rect_color=/points"};
   args.enable_parallel_pipeline = true;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   args.output_path = out_sync;
   args.enable_parallel_pipeline = false;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   std::vector<std::byte> threaded_bytes;
   std::vector<std::byte> sync_bytes;
@@ -1231,7 +1230,7 @@ TEST_F(MovifyVideoTest, ThreadedTwoViewOverlayMatchesSynchronous)
 
 // Multiple views without --pcd also run the parallel pipeline; it must produce
 // the same bytes as the synchronous loop there too.
-TEST_F(MovifyVideoTest, ThreadedMultiViewWithoutPointCloudMatchesSynchronous)
+TEST_F(MovifyRunTest, ThreadedMultiViewWithoutPointCloudMatchesSynchronous)
 {
   // Use enough frames to satisfy the internal threshold for the parallel pipeline.
   constexpr int kFrames = 6;
@@ -1239,14 +1238,14 @@ TEST_F(MovifyVideoTest, ThreadedMultiViewWithoutPointCloudMatchesSynchronous)
   const auto out_threaded = tmp_dir_ / "out_threaded.avi";
   const auto out_sync = tmp_dir_ / "out_sync.avi";
 
-  MovifyVideoArgs args{in, "/cam/a", out_threaded, false};
-  args.topics.push_back("/cam/b");
+  MovifyArgs args{in, "/cam/a", out_threaded, false};
+  args.cam_topics.push_back("/cam/b");
   args.enable_parallel_pipeline = true;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   args.output_path = out_sync;
   args.enable_parallel_pipeline = false;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   std::vector<std::byte> threaded_bytes;
   std::vector<std::byte> sync_bytes;
@@ -1260,16 +1259,16 @@ TEST_F(MovifyVideoTest, ThreadedMultiViewWithoutPointCloudMatchesSynchronous)
 // --width fixes the composed output width: with two views on the auto 2x1
 // grid, a 16 px width leaves an 8 px cell, and the cell height follows the
 // primary frame's aspect ratio.
-TEST_F(MovifyVideoTest, WidthDerivesTheCellSizeFromTheOutputWidth)
+TEST_F(MovifyRunTest, WidthDerivesTheCellSizeFromTheOutputWidth)
 {
   constexpr int kFrames = 3;
   const auto in = build_two_camera_bag(tmp_dir_, kFrames, 2);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/a", out, false};
-  args.topics.push_back("/cam/b");
+  MovifyArgs args{in, "/cam/a", out, false};
+  args.cam_topics.push_back("/cam/b");
   args.width = 16;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -1279,15 +1278,15 @@ TEST_F(MovifyVideoTest, WidthDerivesTheCellSizeFromTheOutputWidth)
 }
 
 // Single-view, --width behaves like a plain output-width constraint.
-TEST_F(MovifyVideoTest, WidthUpscalesASingleView)
+TEST_F(MovifyRunTest, WidthUpscalesASingleView)
 {
   constexpr int kFrames = 2;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
+  MovifyArgs args{in, kImageTopic, out, false};
   args.width = 32;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -1296,28 +1295,28 @@ TEST_F(MovifyVideoTest, WidthUpscalesASingleView)
   EXPECT_EQ(probe.frame_count, kFrames);
 }
 
-TEST_F(MovifyVideoTest, WidthConflictsWithResize)
+TEST_F(MovifyRunTest, WidthConflictsWithResize)
 {
   const auto in = build_bag(tmp_dir_, 2, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
+  MovifyArgs args{in, kImageTopic, out, false};
   args.width = 32;
   args.resize_scale = 0.5f;
-  EXPECT_EQ(run_movify_video(args), 1);
+  EXPECT_EQ(run_movify(args), 1);
   EXPECT_FALSE(std::filesystem::exists(out));
 }
 
 // A raw image topic can be down-scaled while preserving aspect ratio.
-TEST_F(MovifyVideoTest, ResizeScalesRawImageDimensions)
+TEST_F(MovifyRunTest, ResizeScalesRawImageDimensions)
 {
   constexpr int kFrames = 3;
   const auto in = build_bag(tmp_dir_, kFrames, 16, 16, "bgr8");
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kImageTopic, out, false};
+  MovifyArgs args{in, kImageTopic, out, false};
   args.resize_scale = 0.5f;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -1327,15 +1326,15 @@ TEST_F(MovifyVideoTest, ResizeScalesRawImageDimensions)
 }
 
 // A compressed image topic can be up-scaled while preserving aspect ratio.
-TEST_F(MovifyVideoTest, ResizeScalesCompressedImageDimensions)
+TEST_F(MovifyRunTest, ResizeScalesCompressedImageDimensions)
 {
   constexpr int kFrames = 3;
   const auto in = build_compressed_bag(tmp_dir_, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, kCompressedTopic, out, false};
+  MovifyArgs args{in, kCompressedTopic, out, false};
   args.resize_scale = 2.0f;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -1346,17 +1345,17 @@ TEST_F(MovifyVideoTest, ResizeScalesCompressedImageDimensions)
 
 // Resizing a point-cloud overlay produces output at the scaled resolution while
 // keeping the projected points aligned because the camera info is scaled too.
-TEST_F(MovifyVideoTest, ResizeScalesPointCloudOverlay)
+TEST_F(MovifyRunTest, ResizeScalesPointCloudOverlay)
 {
   constexpr int kFrames = 3;
   const auto in =
     build_bag_with_pointcloud_overlay(tmp_dir_, "/cam/image_rect_color", false, kFrames, 16, 16);
   const auto out = tmp_dir_ / "out.avi";
 
-  MovifyVideoArgs args{in, "/cam/image_rect_color", out, false};
-  args.pointcloud_topics = {"/points"};
+  MovifyArgs args{in, "/cam/image_rect_color", out, false};
+  args.cam_pcd_entries = {"/points"};
   args.resize_scale = 0.5f;
-  ASSERT_EQ(run_movify_video(args), 0);
+  ASSERT_EQ(run_movify(args), 0);
 
   const auto probe = bagwiz::core::video::probe_video(out);
   ASSERT_TRUE(probe.ok()) << probe.error;
@@ -1370,7 +1369,7 @@ TEST_F(MovifyVideoTest, ResizeScalesPointCloudOverlay)
 // test skips gracefully when it is unset or the bag is unavailable (e.g. CI), so
 // it only runs on a machine that has the recording. The topic names and expected
 // video geometry below assume that specific recording.
-TEST_F(MovifyVideoTest, PointCloudOverlayOnRealBag)
+TEST_F(MovifyRunTest, PointCloudOverlayOnRealBag)
 {
   const char * const real_bag_env = std::getenv("BAGWIZ_REAL_BAG");
   if (real_bag_env == nullptr || !std::filesystem::exists(real_bag_env)) {
@@ -1379,9 +1378,9 @@ TEST_F(MovifyVideoTest, PointCloudOverlayOnRealBag)
   const std::string kRealBag = real_bag_env;
 
   const auto out = tmp_dir_ / "out.avi";
-  MovifyVideoArgs args{kRealBag, "/sensing/camera/camera0/image_raw/compressed", out, false};
-  args.pointcloud_topics = {"/sensing/lidar/front/seyond_points"};
-  ASSERT_EQ(run_movify_video(args), 0);
+  MovifyArgs args{kRealBag, "/sensing/camera/camera0/image_raw/compressed", out, false};
+  args.cam_pcd_entries = {"/sensing/lidar/front/seyond_points"};
+  ASSERT_EQ(run_movify(args), 0);
 
   ASSERT_TRUE(std::filesystem::exists(out));
   const auto probe = bagwiz::core::video::probe_video(out);
@@ -1396,15 +1395,177 @@ TEST_F(MovifyVideoTest, PointCloudOverlayOnRealBag)
   EXPECT_NEAR(probe.duration_s, 30.0, 1.0);
 }
 
-// Exercises the real MovifyCommand::configure_cam() — reached through the
+// A point-cloud topic alone renders one 3D panel per cloud at the default
+// 1280x720 cell, one frame per cloud (the topic is the clock).
+TEST_F(MovifyRunTest, RunRendersAPointCloudPanelAlone)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto payload =
+        make_pointcloud2_payload(ts, "lidar", {{static_cast<float>(i + 1), 0.0f, 0.0f}});
+      writer->write("/points", ts, {payload.data(), payload.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.pcd_topics = {"/points"};
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 1280u);
+  EXPECT_EQ(probe.height, 720u);
+}
+
+// A camera and a point-cloud topic compose a 2x1 grid whose cell is the
+// camera frame; both a 3D and a BEV view add a panel each (3 panels -> 2x2).
+TEST_F(MovifyRunTest, RunComposesCameraAndPointCloudPanels)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic(kImageTopic, kImageType));
+    writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto image = make_image_payload(8, 4, "bgr8", static_cast<std::uint8_t>(i * 20));
+      writer->write(kImageTopic, ts, {image.data(), image.size()});
+      const auto cloud =
+        make_pointcloud2_payload(ts, "lidar", {{static_cast<float>(i + 1), 0.0f, 0.0f}});
+      writer->write("/points", ts, {cloud.data(), cloud.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args(bag, kImageTopic, tmp_dir_ / "out.avi", false);
+  args.pcd_topics = {"/points"};
+  EXPECT_EQ(run_movify(args), 0);
+  auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 16u);  // 2x1 grid of 8x4 cells
+  EXPECT_EQ(probe.height, 4u);
+
+  args.overwrite = true;
+  args.views = {
+    bagwiz::core::pointcloud::CloudProjection::kPerspective,
+    bagwiz::core::pointcloud::CloudProjection::kBev};
+  EXPECT_EQ(run_movify(args), 0);
+  probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.width, 16u);  // 3 panels on an auto 2x2 grid
+  EXPECT_EQ(probe.height, 8u);
+}
+
+// Two lidars in different frames merge into one panel through the bag's TF:
+// with --frame naming the vehicle frame, each cloud is looked up at its own
+// stamp and the run succeeds.
+TEST_F(MovifyRunTest, RunMergesPointCloudTopicsThroughTf)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/front", "sensor_msgs/msg/PointCloud2"));
+    writer->declare_topic(make_topic("/rear", "sensor_msgs/msg/PointCloud2"));
+    writer->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+    for (const auto * child : {"front_lidar", "rear_lidar"}) {
+      const auto tf = make_tf_static_payload("base_link", child);
+      writer->write("/tf_static", 1'000'000'000LL, {tf.data(), tf.size()});
+    }
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto front = make_pointcloud2_payload(ts, "front_lidar", {{5.0f, 0.0f, 0.0f}});
+      writer->write("/front", ts, {front.data(), front.size()});
+      const auto rear = make_pointcloud2_payload(ts, "rear_lidar", {{-5.0f, 0.0f, 0.0f}});
+      writer->write("/rear", ts, {rear.data(), rear.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.pcd_topics = {"/front", "/rear"};
+  args.frame = "base_link";
+  args.views = {bagwiz::core::pointcloud::CloudProjection::kBev};
+  args.range_m = 10.0;
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 1280u);
+  EXPECT_EQ(probe.height, 720u);
+}
+
+// Without TF, a cloud outside the view frame cannot be placed: the run stops
+// (leaving no output) instead of drawing it somewhere plausible but wrong.
+TEST_F(MovifyRunTest, RunFailsWhenAPointCloudPanelNeedsMissingTf)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/front", "sensor_msgs/msg/PointCloud2"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto front = make_pointcloud2_payload(ts, "front_lidar", {{5.0f, 0.0f, 0.0f}});
+      writer->write("/front", ts, {front.data(), front.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.pcd_topics = {"/front"};
+  args.frame = "base_link";
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+}
+
+// A camera panel next to a point-cloud clock: the sweeps are the frames, the
+// cell is the point-cloud panel's 1280x720, and the camera fits into it.
+TEST_F(MovifyRunTest, RunComposesCameraAndPointCloudClock)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic(kImageTopic, kImageType));
+    writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto image = make_image_payload(8, 4, "bgr8", static_cast<std::uint8_t>(i * 20));
+      writer->write(kImageTopic, ts, {image.data(), image.size()});
+      const auto cloud =
+        make_pointcloud2_payload(ts, "lidar", {{static_cast<float>(i + 1), 0.0f, 0.0f}});
+      writer->write("/points", ts, {cloud.data(), cloud.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args(bag, kImageTopic, tmp_dir_ / "out.avi", false);
+  args.pcd_topics = {"/points"};
+  args.clock = "/points";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 2560u);
+  EXPECT_EQ(probe.height, 720u);
+}
+
+// Exercises the real MovifyCommand::configure() — reached through the
 // process-wide command registry that movify.cpp's BAGWIZ_REGISTER_COMMAND
 // registrar populates — rather than a hand-mirrored copy of its wiring. The
 // assertions pin down the slot semantics the multi-view surface relies on:
-// -t is a multi-value glob slot (a glob expands to its matches in
-// lexicographic order, so grid placement stays deterministic), --cam-info is
-// a literal pair-optional slot (bare value or <image>=<info>), and --pcd is a
-// glob pair slot whose selector is the right half (<image>=<pcd_selector>).
-TEST(MovifyVideoCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
+// --cam and --pcd are multi-value glob slots (a glob expands to its matches
+// in lexicographic order, so grid placement stays deterministic), neither
+// required at the parser level (the run reports "nothing to render" itself),
+// --clock is a literal single-topic slot, --cam-info is a literal
+// pair-optional slot (bare value or <image>=<info>), and --cam-pcd is a glob
+// pair slot whose selector is the right half (<image>=<pcd_selector>).
+TEST(MovifyCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
 {
   bagwiz::commands::Command * movify_cmd = nullptr;
   for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
@@ -1417,18 +1578,29 @@ TEST(MovifyVideoCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
 
   CLI::App app{"movify"};
   movify_cmd->configure(app);
+  EXPECT_TRUE(app.get_subcommands({}).empty());  // a single-action command
 
-  auto * cam_sub = app.get_subcommand_no_throw("cam");
-  ASSERT_NE(cam_sub, nullptr);
-  const auto slots = bagwiz::commands::topic_slots_of(*cam_sub);
-  ASSERT_EQ(slots.size(), 3U);  // -t/--topic, --cam-info, --pcd
+  const auto slots = bagwiz::commands::topic_slots_of(app);
+  ASSERT_EQ(slots.size(), 5U);  // --cam, --pcd, --clock, --cam-info, --cam-pcd
 
-  const auto * topic_slot = bagwiz::test::slot_for(slots, "topic");
-  ASSERT_NE(topic_slot, nullptr);
-  EXPECT_EQ(topic_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
-  EXPECT_EQ(topic_slot->spec.allowed_types.size(), 2U);  // Image, CompressedImage
-  EXPECT_TRUE(topic_slot->option->get_required());
-  EXPECT_NE(topic_slot->multi_target, nullptr);
+  const auto * cam_slot = bagwiz::test::slot_for(slots, "cam");
+  ASSERT_NE(cam_slot, nullptr);
+  EXPECT_EQ(cam_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
+  EXPECT_EQ(cam_slot->spec.allowed_types.size(), 2U);  // Image, CompressedImage
+  EXPECT_FALSE(cam_slot->option->get_required());
+  EXPECT_NE(cam_slot->multi_target, nullptr);
+
+  const auto * clock_slot = bagwiz::test::slot_for(slots, "clock");
+  ASSERT_NE(clock_slot, nullptr);
+  EXPECT_EQ(clock_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
+  EXPECT_EQ(clock_slot->spec.allowed_types.size(), 3U);  // + PointCloud2
+  EXPECT_FALSE(clock_slot->option->get_required());
+
+  const auto * pcd_panel_slot = bagwiz::test::slot_for(slots, "pcd");
+  ASSERT_NE(pcd_panel_slot, nullptr);
+  EXPECT_EQ(pcd_panel_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
+  EXPECT_FALSE(pcd_panel_slot->spec.pair_value);
+  EXPECT_FALSE(pcd_panel_slot->option->get_required());
 
   const auto * cam_info_slot = bagwiz::test::slot_for(slots, "cam-info");
   ASSERT_NE(cam_info_slot, nullptr);
@@ -1437,7 +1609,7 @@ TEST(MovifyVideoCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
   EXPECT_TRUE(cam_info_slot->spec.pair_optional);
   EXPECT_NE(cam_info_slot->multi_target, nullptr);
 
-  const auto * pcd_slot = bagwiz::test::slot_for(slots, "pcd");
+  const auto * pcd_slot = bagwiz::test::slot_for(slots, "cam-pcd");
   ASSERT_NE(pcd_slot, nullptr);
   EXPECT_EQ(pcd_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kGlob);
   EXPECT_TRUE(pcd_slot->spec.pair_value);
@@ -1446,10 +1618,10 @@ TEST(MovifyVideoCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
 
 // Rectification is requested by default, so the CLI carries the opt-out alone:
 // there is no --rectify to ask for what the command already does. That leaves
-// MovifyVideoArgs::rectify's initializer as the sole carrier of the default —
+// MovifyArgs::rectify's initializer as the sole carrier of the default —
 // CLI11 leaves a negated-only flag's target untouched when the flag is absent
 // — so both halves are pinned here.
-TEST(MovifyVideoCliWiring, RectificationIsOptOutOnly)
+TEST(MovifyCliWiring, RectificationIsOptOutOnly)
 {
   bagwiz::commands::Command * movify_cmd = nullptr;
   for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
@@ -1463,11 +1635,9 @@ TEST(MovifyVideoCliWiring, RectificationIsOptOutOnly)
   CLI::App app{"movify"};
   movify_cmd->configure(app);
 
-  auto * cam_sub = app.get_subcommand_no_throw("cam");
-  ASSERT_NE(cam_sub, nullptr);
-  EXPECT_NE(cam_sub->get_option_no_throw("--no-rectify"), nullptr);
-  EXPECT_EQ(cam_sub->get_option_no_throw("--rectify"), nullptr);
-  EXPECT_TRUE(MovifyVideoArgs{}.rectify);
+  EXPECT_NE(app.get_option_no_throw("--no-rectify"), nullptr);
+  EXPECT_EQ(app.get_option_no_throw("--rectify"), nullptr);
+  EXPECT_TRUE(MovifyArgs{}.rectify);
 }
 
 }  // namespace

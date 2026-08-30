@@ -428,8 +428,8 @@ std::string CameraPanel::render(const CellView & cell)
 }
 
 std::optional<std::vector<std::unique_ptr<Panel>>> build_camera_panels(
-  const MovifyVideoArgs & args, const VideoInputValidation & validation,
-  const VideoInputScan & scan, const VideoGeometry & geometry, CloudSources & clouds)
+  const MovifyArgs & args, const VideoInputValidation & validation, const VideoInputScan & scan,
+  const VideoGeometry & geometry, CloudSources & clouds)
 {
   VideoOverlayParams overlay;
   overlay.property_min = scan.global_property_min;
@@ -448,7 +448,7 @@ std::optional<std::vector<std::unique_ptr<Panel>>> build_camera_panels(
     options.camera_info = (i < geometry.camera_infos.size() && geometry.camera_infos[i].has_value())
                             ? &*geometry.camera_infos[i]
                             : nullptr;
-    // --no-rectify wins even with --pcd; the projection then targets the raw,
+    // --no-rectify wins even with --cam-pcd; the projection then targets the raw,
     // distortion-aware path (see view_rectifies).
     options.rectify = view_rectifies(args.rectify, view);
     options.overlay = overlay;
@@ -462,7 +462,7 @@ std::optional<std::vector<std::unique_ptr<Panel>>> build_camera_panels(
       }
       options.cloud_indexes.push_back(static_cast<std::size_t>(it - scan.pcd_topics.begin()));
     }
-    if (i == 0) {
+    if (i == validation.clock) {
       CameraPanel::ClockSizing sizing;
       sizing.resize_scale = args.resize_scale;
       sizing.total_width = args.width;

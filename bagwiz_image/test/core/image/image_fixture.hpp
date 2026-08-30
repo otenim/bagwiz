@@ -21,7 +21,7 @@ namespace bagwiz::test
 // using libav. `format` selects the codec: "jpeg" -> MJPEG (lossy), "png" ->
 // PNG (lossless). Returns the encoded bytes, or an empty vector if the codec is
 // unavailable in this FFmpeg build or encoding fails. Used to synthesize the
-// CompressedImage payloads the decoder and `movify cam` tests consume.
+// CompressedImage payloads the decoder and `movify` tests consume.
 std::vector<std::byte> encode_still_image(
   const std::string & format, std::uint32_t w, std::uint32_t h, std::uint8_t r, std::uint8_t g,
   std::uint8_t b);
