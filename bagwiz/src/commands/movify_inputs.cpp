@@ -34,7 +34,7 @@ constexpr const char * kLogger = "bagwiz.cmd.movify";
 // kImageType / kCompressedImageType mirror topic_types.hpp's kImageTopicTypes
 // (movify --cam's allowed_types) via is_supported_type() below.
 // kPointCloudType mirrors topic_types.hpp's kPointCloud2Type (--cam-pcd's
-// allowed_types), kNavSatFixMsgType its kNavSatFixMsgType (--gnss's). Keep them in
+// allowed_types), kNavSatFixMsgType its kNavSatFixType (--gnss's). Keep them in
 // sync by hand.
 constexpr const char * kImageType = "sensor_msgs/msg/Image";
 constexpr const char * kCompressedImageType = "sensor_msgs/msg/CompressedImage";
@@ -133,6 +133,33 @@ FirstCloud read_first_cloud(const std::filesystem::path & input, const std::stri
   }
   out.cloud = std::move(*parsed.cloud);
   return out;
+}
+
+// The map panel's topic: present in the bag and a NavSatFix. Returns "" when
+// it is, else the error (already logged).
+std::string validate_gnss_topic(const std::filesystem::path & input, const std::string & topic)
+{
+  std::unique_ptr<io::BagReader> reader;
+  try {
+    reader = io::open_read(input);
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "failed to open '%s': %s", input.string().c_str(), e.what());
+    return "failed to open '" + input.string() + "': " + e.what();
+  }
+  const io::TopicInfo * info = io::find_topic(*reader, topic);
+  if (info == nullptr) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "gnss topic '%s' not found in %s", topic.c_str(), input.string().c_str());
+    return "gnss topic '" + topic + "' not found in " + input.string();
+  }
+  if (info->type != kNavSatFixMsgType) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "gnss topic '%s' has type '%s', expected %s", topic.c_str(), info->type.c_str(),
+      kNavSatFixMsgType);
+    return "gnss topic '" + topic + "' has type '" + info->type + "', expected " +
+           kNavSatFixMsgType;
+  }
+  return "";
 }
 
 }  // namespace
@@ -517,29 +544,8 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
 
   // The map panel's topic must be present and carry NavSatFix messages.
   if (out.gnss_topic.has_value()) {
-    std::unique_ptr<io::BagReader> reader;
-    try {
-      reader = io::open_read(args.input_path);
-    } catch (const std::exception & e) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "failed to open '%s': %s", args.input_path.string().c_str(), e.what());
-      out.error = "failed to open '" + args.input_path.string() + "': " + e.what();
-      return out;
-    }
-    const io::TopicInfo * info = io::find_topic(*reader, *out.gnss_topic);
-    if (info == nullptr) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "gnss topic '%s' not found in %s", out.gnss_topic->c_str(),
-        args.input_path.string().c_str());
-      out.error = "gnss topic '" + *out.gnss_topic + "' not found in " + args.input_path.string();
-      return out;
-    }
-    if (info->type != kNavSatFixMsgType) {
-      BAGWIZ_LOG_ERROR(
-        kLogger, "gnss topic '%s' has type '%s', expected %s", out.gnss_topic->c_str(),
-        info->type.c_str(), kNavSatFixMsgType);
-      out.error = "gnss topic '" + *out.gnss_topic + "' has type '" + info->type + "', expected " +
-                  kNavSatFixMsgType;
+    if (const auto err = validate_gnss_topic(args.input_path, *out.gnss_topic); !err.empty()) {
+      out.error = err;
       return out;
     }
   }

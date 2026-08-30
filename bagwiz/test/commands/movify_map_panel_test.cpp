@@ -232,6 +232,44 @@ TEST(MapPanel, FollowModeCentersTheCurrentFix)
   EXPECT_TRUE(buffer.is_white_at(160, 90));
 }
 
+TEST(MapPanel, RendersASingleFixTrack)
+{
+  MapPanel::Options options;
+  options.track = track_of({at(0, 0, 100)});
+  MapPanel panel(std::move(options));
+  const PanelSize cell{320, 180};
+  CellBuffer buffer(cell);
+  TickInfo tick;
+  tick.record_ns = 100;
+  EXPECT_EQ(panel.select(tick, cell), "");
+  EXPECT_EQ(panel.render(buffer.view()), "");
+  // A one-point track has no line to draw; the fix sits at the center of the
+  // minimum-extent fit, with no heading.
+  EXPECT_TRUE(buffer.is_white_at(160, 90));
+}
+
+TEST(MapPanel, HeadingArrowPointsAlongTheTravel)
+{
+  // Ten meters due north, followed at +-20 m in a 320x180 cell: 4.5 px/m, the
+  // current fix at the center, the arrow (26 px at the 0.5 UI scale) rising
+  // from it to y = 77.
+  MapPanel::Options options;
+  options.track = track_of({at(0, 0, 100), at(0, 10, 200)});
+  options.follow_range_m = 20.0;
+  MapPanel panel(std::move(options));
+  const PanelSize cell{320, 180};
+  CellBuffer buffer(cell);
+  TickInfo tick;
+  tick.record_ns = 200;
+  EXPECT_EQ(panel.select(tick, cell), "");
+  EXPECT_EQ(panel.render(buffer.view()), "");
+  EXPECT_TRUE(buffer.is_white_at(160, 90));   // the marker
+  EXPECT_FALSE(buffer.is_black_at(160, 80));  // the arrow's shaft, above it
+  EXPECT_TRUE(buffer.is_black_at(150, 80));   // nothing beside the shaft
+  EXPECT_TRUE(buffer.is_black_at(170, 80));
+  EXPECT_FALSE(buffer.is_black_at(160, 120));  // the traveled track, below
+}
+
 TEST(MapPanel, RendersNothingBeforeASelection)
 {
   MapPanel::Options options;

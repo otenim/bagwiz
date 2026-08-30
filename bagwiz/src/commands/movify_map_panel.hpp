@@ -16,7 +16,6 @@
 #include "movify_panel.hpp"      // NOLINT(build/include_subdir) src-local shared header
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>

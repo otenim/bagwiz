@@ -174,8 +174,8 @@ set(bagwiz_command_sources
   src/commands/movify_camera_panel.cpp
   src/commands/movify_cloud_panel.cpp
   src/commands/movify_cloud_source.cpp
-    src/commands/movify_map_panel.cpp
-    src/commands/movify_map_track.cpp
+  src/commands/movify_map_panel.cpp
+  src/commands/movify_map_track.cpp
   src/commands/movify_inputs.cpp
   src/commands/movify_layout.cpp
   src/commands/movify_output.cpp

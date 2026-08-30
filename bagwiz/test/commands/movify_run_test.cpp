@@ -239,8 +239,9 @@ std::vector<std::byte> make_navsatfix_payload(
   b.u32(static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL));
   b.str("gnss");
   b.u8(0);  // NavSatStatus.status: FIX
-  // NavSatStatus.service (uint16, GPS): the header's 4+4+4+(4+5) bytes and
-  // the status put it at an even offset, so no alignment padding precedes it.
+  // NavSatStatus.service (uint16, GPS): the stamp's 4+4 bytes, the 4+5-byte
+  // frame_id "gnss" and the status put it at body offset 18 — even, so no
+  // alignment padding precedes it.
   b.u8(1);
   b.u8(0);
   b.f64(latitude);

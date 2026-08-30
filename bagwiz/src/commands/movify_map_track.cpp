@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
