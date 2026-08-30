@@ -1274,7 +1274,8 @@ std::vector<std::string> complete_video_cam_pair_value(
 }
 
 // `movify` renders a rosbag to video. `--cam` (image topics), `--pcd`
-// (point-cloud topics) and `--clock` are declared topic slots, so
+// (point-cloud topics), `--gnss` (NavSatFix topics) and `--clock` are
+// declared topic slots, so
 // try_topic_completion handles their values before this function is reached; `--cam-pcd` and
 // `--cam-info` are pair-valued slots whose completion defers here (see
 // completion_defers_to_command). Here we surface the command's flags for any `-` word, and the enum
@@ -1287,18 +1288,19 @@ std::vector<std::string> complete_video_cam_pair_value(
 //   [--width <px>] [--cam-pcd <topic>|<image>=<topic>...] [--field <f>]
 //   [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
 //   [--alpha <a>] [--pcd <pcd_topic>...] [--view <3d|bev>...] [--frame <f>]
-//   [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>] [-w|--overwrite]
+//   [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>]
+//   [--gnss <navsatfix_topic>] [--map-range <m>] [-w|--overwrite]
 std::vector<std::string> complete_movify(const CompletionRequest & request)
 {
   const auto current = current_word(request);
   if (current.starts_with("-")) {
     return matching(
-      with_help({"--alpha",  "--azim",      "--cam",  "--cam-info",   "--cam-pcd",
-                 "--clock",  "--dist",      "--elev", "--field",      "--frame",
-                 "--grid",   "--input",     "--max",  "--min",        "--no-rectify",
-                 "--output", "--overwrite", "--pcd",  "--point-size", "--range",
-                 "--resize", "--scheme",    "--view", "--width",      "-i",
-                 "-o",       "-w"}),
+      with_help({"--alpha",      "--azim",       "--cam",    "--cam-info",  "--cam-pcd",
+                 "--clock",      "--dist",       "--elev",   "--field",     "--frame",
+                 "--gnss",       "--grid",       "--input",  "--map-range", "--max",
+                 "--min",        "--no-rectify", "--output", "--overwrite", "--pcd",
+                 "--point-size", "--range",      "--resize", "--scheme",    "--view",
+                 "--width",      "-i",           "-o",       "-w"}),
       current);
   }
 

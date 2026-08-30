@@ -36,11 +36,6 @@
 namespace bagwiz::commands
 {
 
-// The cell a point-cloud clock panel renders into when no camera fixes the
-// size: 16:9 at 1280x720, or the output width split across the grid columns.
-inline constexpr std::uint32_t kCloudPanelDefaultWidth = 1280;
-inline constexpr std::uint32_t kCloudPanelDefaultHeight = 720;
-
 class CloudPanel final : public Panel
 {
 public:
@@ -63,17 +58,11 @@ public:
     std::vector<std::string> topics;
   };
 
-  // The clock role's cell-size rule: the default cell, or the output width
-  // split across the grid columns at the default aspect ratio.
-  struct ClockSizing
-  {
-    std::optional<std::uint32_t> total_width;
-    std::uint32_t grid_cols = 1;
-  };
-
   // Clock role: each tick's payload is a message of the panel's topic at
   // position `clock_topic` in `options.topics`; the other topics are fetched.
-  CloudPanel(Options options, ClockSizing sizing, std::size_t clock_topic, CloudSources * clouds);
+  // The cell follows the synthetic clock rule (`sizing`).
+  CloudPanel(
+    Options options, SyntheticSizing sizing, std::size_t clock_topic, CloudSources * clouds);
   // Follower role: every topic is fetched nearest the tick by record time.
   CloudPanel(Options options, CloudSources * clouds);
 
@@ -82,10 +71,8 @@ public:
   [[nodiscard]] std::string render(const CellView & cell) override;
 
 private:
-  [[nodiscard]] PanelSize clock_size() const;
-
   Options options_;
-  std::optional<ClockSizing> sizing_;       // clock role only
+  std::optional<SyntheticSizing> sizing_;   // clock role only
   std::optional<std::size_t> clock_topic_;  // clock role only
   CloudSources * clouds_;
   core::pointcloud::ColorMapper mapper_;

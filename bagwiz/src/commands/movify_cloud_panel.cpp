@@ -15,7 +15,6 @@
 #include "bagwiz/core/pointcloud/projector_helpers.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -36,7 +35,7 @@ std::string on_topic(const std::string & topic, const std::string & error)
 }  // namespace
 
 CloudPanel::CloudPanel(
-  Options options, ClockSizing sizing, std::size_t clock_topic, CloudSources * clouds)
+  Options options, SyntheticSizing sizing, std::size_t clock_topic, CloudSources * clouds)
 : options_(std::move(options)),
   sizing_(sizing),
   clock_topic_(clock_topic),
@@ -50,27 +49,11 @@ CloudPanel::CloudPanel(Options options, CloudSources * clouds)
 {
 }
 
-PanelSize CloudPanel::clock_size() const
-{
-  if (sizing_.has_value() && sizing_->total_width.has_value()) {
-    // --width: the cell width is the width split across the grid columns,
-    // the height keeps the default aspect ratio; both rounded down to even
-    // (the codecs' 4:2:0 formats require even dimensions).
-    const std::uint32_t cell_w = (*sizing_->total_width / sizing_->grid_cols) & ~1U;
-    const auto cell_h =
-      static_cast<std::uint32_t>(std::lround(
-        cell_w * (static_cast<double>(kCloudPanelDefaultHeight) / kCloudPanelDefaultWidth))) &
-      ~1U;
-    return PanelSize{cell_w, cell_h};
-  }
-  return PanelSize{kCloudPanelDefaultWidth, kCloudPanelDefaultHeight};
-}
-
 std::string CloudPanel::select(const TickInfo & tick, PanelSize cell)
 {
   selected_ = false;
   points_.clear();
-  size_ = clock_topic_.has_value() ? clock_size() : cell;
+  size_ = sizing_.has_value() ? synthetic_clock_cell(*sizing_) : cell;
   if (size_.width == 0 || size_.height == 0) {
     return "the point-cloud panel has no cell to render into";
   }
@@ -190,7 +173,7 @@ std::optional<std::vector<std::unique_ptr<Panel>>> build_cloud_panels(
     CloudPanel::Options panel_options = options;
     panel_options.view.projection = validation.pcd_views[i];
     if (i == 0 && validation.clock_pcd.has_value()) {
-      CloudPanel::ClockSizing sizing;
+      SyntheticSizing sizing;
       sizing.total_width = args.width;
       sizing.grid_cols = validation.grid.cols;
       panels.push_back(

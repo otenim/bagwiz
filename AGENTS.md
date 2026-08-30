@@ -303,8 +303,9 @@ code that is not part of the CLI itself.
   reads three topics that each fill a role (`--pcd`, `--pose`,
   `--cam`), so none of them is "the" topic and a bare `-t` would only
   be ambiguous; `movify` likewise takes the camera panels it composes
-  as `--cam`, the point-cloud panels as `--pcd`, and the clouds it
-  projects onto the camera panels as `--cam-pcd`. One shared `-t`
+  as `--cam`, the point-cloud panels as `--pcd`, the GNSS track it
+  maps as `--gnss`, and the clouds it projects onto the camera panels
+  as `--cam-pcd`. One shared `-t`
   cannot say which direction a slot points, which left write targets
   reading like filters: `traj join --traj t.tum --as /slam/tf` says
   the topic is being brought into existence, where `-t /slam/tf` did

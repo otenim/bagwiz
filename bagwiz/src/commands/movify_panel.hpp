@@ -11,6 +11,8 @@
 
 #include "movify_layout.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -45,6 +47,35 @@ struct PanelSize
   std::uint32_t width = 0;
   std::uint32_t height = 0;
 };
+
+// The clock role's cell-size inputs for a panel without a native pixel size
+// (a point-cloud or map panel is drawn, not decoded): the --width the output
+// is fixed to, if any, and the grid's column count it is split across.
+struct SyntheticSizing
+{
+  std::optional<std::uint32_t> total_width;
+  std::uint32_t grid_cols = 1;
+};
+
+// The cell such a panel renders into in the clock role: 16:9 at 1280x720,
+// or the output width split across the grid columns at that aspect ratio,
+// both rounded down to even (the codecs' 4:2:0 formats require even
+// dimensions).
+inline constexpr std::uint32_t kSyntheticCellWidth = 1280;
+inline constexpr std::uint32_t kSyntheticCellHeight = 720;
+
+[[nodiscard]] inline PanelSize synthetic_clock_cell(const SyntheticSizing & sizing)
+{
+  if (!sizing.total_width.has_value()) {
+    return PanelSize{kSyntheticCellWidth, kSyntheticCellHeight};
+  }
+  const std::uint32_t cell_w = (*sizing.total_width / std::max(sizing.grid_cols, 1U)) & ~1U;
+  const auto cell_h =
+    static_cast<std::uint32_t>(
+      std::lround(cell_w * (static_cast<double>(kSyntheticCellHeight) / kSyntheticCellWidth))) &
+    ~1U;
+  return PanelSize{cell_w, cell_h};
+}
 
 class Panel
 {

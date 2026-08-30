@@ -230,6 +230,30 @@ std::vector<std::byte> make_tf_static_payload(const std::string & parent, const 
   return bagwiz::core::serialize_tf_message(transforms);
 }
 
+// A sensor_msgs/msg/NavSatFix payload with a fix at the given position.
+std::vector<std::byte> make_navsatfix_payload(
+  std::int64_t stamp_ns, double latitude, double longitude, double altitude)
+{
+  CdrBuilder b;
+  b.i32(static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL));
+  b.u32(static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL));
+  b.str("gnss");
+  b.u8(0);  // NavSatStatus.status: FIX
+  // NavSatStatus.service (uint16, GPS): the stamp's 4+4 bytes, the 4+5-byte
+  // frame_id "gnss" and the status put it at body offset 18 — even, so no
+  // alignment padding precedes it.
+  b.u8(1);
+  b.u8(0);
+  b.f64(latitude);
+  b.f64(longitude);
+  b.f64(altitude);
+  for (int i = 0; i < 9; ++i) {
+    b.f64(0.0);  // position_covariance
+  }
+  b.u8(0);  // position_covariance_type: UNKNOWN
+  return b.take();
+}
+
 bagwiz::io::TopicInfo make_topic(std::string name, std::string type)
 {
   bagwiz::io::TopicInfo t;
@@ -1423,6 +1447,66 @@ TEST_F(MovifyRunTest, RunRendersAPointCloudPanelAlone)
   EXPECT_EQ(probe.height, 720u);
 }
 
+// A NavSatFix topic alone renders a map panel in the default 1280x720 cell,
+// one frame per message.
+TEST_F(MovifyRunTest, RunRendersAMapPanelAlone)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/gnss", "sensor_msgs/msg/NavSatFix"));
+    for (int i = 0; i < 4; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto payload = make_navsatfix_payload(ts, 35.0 + i * 1e-4, 139.0, 40.0);
+      writer->write("/gnss", ts, {payload.data(), payload.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.gnss_topic = "/gnss";
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 4);
+  EXPECT_EQ(probe.width, 1280u);
+  EXPECT_EQ(probe.height, 720u);
+}
+
+// A point cloud next to the map: the cloud is the clock, the map follows the
+// vehicle at --map-range, and the two compose a 2x1 grid of 1280x720 cells.
+TEST_F(MovifyRunTest, RunComposesAPointCloudAndAMapPanel)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+    writer->declare_topic(make_topic("/gnss", "sensor_msgs/msg/NavSatFix"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto cloud =
+        make_pointcloud2_payload(ts, "lidar", {{static_cast<float>(i + 1), 0.0f, 0.0f}});
+      writer->write("/points", ts, {cloud.data(), cloud.size()});
+      const auto fix = make_navsatfix_payload(ts, 35.0, 139.0 + i * 1e-4, 40.0);
+      writer->write("/gnss", ts, {fix.data(), fix.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.pcd_topics = {"/points"};
+  args.gnss_topic = "/gnss";
+  args.map_range_m = 50.0;
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 2560u);
+  EXPECT_EQ(probe.height, 720u);
+}
+
 // A camera and a point-cloud topic compose a 2x1 grid whose cell is the
 // camera frame; both a 3D and a BEV view add a panel each (3 panels -> 2x2).
 TEST_F(MovifyRunTest, RunComposesCameraAndPointCloudPanels)
@@ -1581,7 +1665,7 @@ TEST(MovifyCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
   EXPECT_TRUE(app.get_subcommands({}).empty());  // a single-action command
 
   const auto slots = bagwiz::commands::topic_slots_of(app);
-  ASSERT_EQ(slots.size(), 5U);  // --cam, --pcd, --clock, --cam-info, --cam-pcd
+  ASSERT_EQ(slots.size(), 6U);  // --cam, --pcd, --gnss, --clock, --cam-info, --cam-pcd
 
   const auto * cam_slot = bagwiz::test::slot_for(slots, "cam");
   ASSERT_NE(cam_slot, nullptr);
@@ -1593,7 +1677,7 @@ TEST(MovifyCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
   const auto * clock_slot = bagwiz::test::slot_for(slots, "clock");
   ASSERT_NE(clock_slot, nullptr);
   EXPECT_EQ(clock_slot->spec.mode, bagwiz::commands::TopicSelectorMode::kLiteral);
-  EXPECT_EQ(clock_slot->spec.allowed_types.size(), 3U);  // + PointCloud2
+  EXPECT_EQ(clock_slot->spec.allowed_types.size(), 4U);  // + PointCloud2, NavSatFix
   EXPECT_FALSE(clock_slot->option->get_required());
 
   const auto * pcd_panel_slot = bagwiz::test::slot_for(slots, "pcd");

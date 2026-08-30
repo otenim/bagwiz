@@ -11,6 +11,7 @@
 #include "movify_cloud_panel.hpp"   // NOLINT(build/include_subdir) src-local shared header
 #include "movify_cloud_source.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "movify_inputs.hpp"        // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_panel.hpp"     // NOLINT(build/include_subdir) src-local shared header
 #include "movify_output.hpp"        // NOLINT(build/include_subdir) src-local shared header
 #include "movify_pipeline.hpp"      // NOLINT(build/include_subdir) src-local shared header
 
@@ -24,8 +25,9 @@ namespace bagwiz::commands
 
 int run_movify(const MovifyArgs & args)
 {
-  // Validate the source topics, camera infos, point-cloud topics, the grid,
-  // the clock, and the output path before touching anything expensive.
+  // Validate the source topics, camera infos, point-cloud and GNSS topics,
+  // the grid, the clock, and the output path before touching anything
+  // expensive.
   const auto validation = validate_video_inputs(args);
   if (!validation.ok()) {
     return 1;
@@ -35,7 +37,8 @@ int run_movify(const MovifyArgs & args)
   }
   const std::string & clock_topic = clock_topic_of(validation);
 
-  // Pass 1: derive the frame rate and scan the point-cloud overlay topics.
+  // Pass 1: derive the frame rate, scan the point-cloud topics, and load the
+  // GNSS track.
   auto scan = scan_video_inputs(args, validation);
   if (!scan.ok()) {
     return 1;
@@ -59,8 +62,8 @@ int run_movify(const MovifyArgs & args)
 
   // The point-cloud sources every panel projects from (they take the pass-1
   // index entries out of `scan`), then the panels themselves in grid order,
-  // the clock among them: the camera panels, then one point-cloud panel per
-  // view.
+  // the clock among them: the camera panels, one point-cloud panel per view,
+  // then the map panel (which takes the pass-1 track out of `scan`).
   CloudSources clouds(
     args.input_path, scan, geometry.tf_buffer.has_value() ? &*geometry.tf_buffer : nullptr);
   auto panels = build_camera_panels(args, validation, scan, geometry, clouds);
@@ -73,6 +76,9 @@ int run_movify(const MovifyArgs & args)
   }
   for (auto & panel : *cloud_panels) {
     panels->push_back(std::move(panel));
+  }
+  if (validation.gnss_topic.has_value()) {
+    panels->push_back(build_map_panel(args, validation, std::move(*scan.map_track)));
   }
   const bool parallel = should_use_parallel_pipeline(
     panels->size(), !scan.pcd_topics.empty(), args.enable_parallel_pipeline, scan.span.count,

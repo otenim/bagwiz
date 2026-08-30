@@ -292,6 +292,8 @@ name only — it offers plain topic names either way, typed as-is.
     `sensor_msgs/msg/CompressedImage`); topics of any other type are omitted
   - `bagwiz movify -i <input> --pcd <pcd_topic>... -o <output>` — restricted to
     `sensor_msgs/msg/PointCloud2` topics
+  - `bagwiz movify -i <input> --gnss <gnss_topic> -o <output>` — restricted to
+    `sensor_msgs/msg/NavSatFix` topics
   - `bagwiz map slam -i <input> --pcd <pcd_topic> -o <output_root>` — restricted to
     `sensor_msgs/msg/PointCloud2` topics (the only type `map slam` ingests);
     topics of any other type are omitted

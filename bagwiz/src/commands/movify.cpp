@@ -45,8 +45,8 @@ public:
       "Image topic(s) to render as camera panels, in grid order (left to right, top to "
       "bottom — see --grid). Supported types: sensor_msgs/msg/Image (bgr8, rgb8) and "
       "sensor_msgs/msg/CompressedImage (JPEG/PNG). A literal name or a '*' glob; a glob's "
-      "matches expand in lexicographic (topic-name) order. At least one --cam or --pcd "
-      "topic is required. Repeatable.",
+      "matches expand in lexicographic (topic-name) order. At least one --cam, --pcd or "
+      "--gnss topic is required. Repeatable.",
       TopicSlotSpec{.allowed_types = kImageTopicTypes})
       ->expected(-1);
     add_topic_option(
@@ -56,6 +56,12 @@ public:
       "stamp. A literal name or a '*' glob. Repeatable.",
       TopicSlotSpec{.allowed_types = kPointCloud2Type})
       ->expected(-1);
+    add_topic_option(
+      app, "--gnss", args_.gnss_topic,
+      "NavSatFix topic to render as a map panel, after the point-cloud panels: the vehicle's "
+      "track in a local East-North-Up plan view with the current fix marked. A literal topic "
+      "name.",
+      TopicSlotSpec{.allowed_types = kNavSatFixType, .mode = TopicSelectorMode::kLiteral});
     app
       .add_option(
         "-o,--output", args_.output_path,
@@ -69,8 +75,8 @@ public:
       app, "--clock", args_.clock,
       "Topic whose messages define the output frames: each message becomes one frame, its "
       "message rate sets the frame rate, and its frame size fixes the grid's cell size. Must "
-      "be one of the --cam or --pcd topics. Default: the first --cam topic, else the first "
-      "--pcd topic.",
+      "be one of the --cam, --pcd or --gnss topics. Default: the first --cam topic, else the "
+      "first --pcd topic, else the --gnss topic.",
       TopicSlotSpec{.allowed_types = kMovifyClockTopicTypes, .mode = TopicSelectorMode::kLiteral});
     app
       .add_option(
@@ -216,6 +222,12 @@ public:
       .add_option(
         "--dist", args_.dist_m, "3d view: camera distance from the --frame origin in meters.")
       ->default_val(30.0)
+      ->check(CLI::PositiveNumber);
+    app
+      .add_option(
+        "--map-range", args_.map_range_m,
+        "Map panel: follow the current fix, the panel spanning +-range meters around it. "
+        "Default: the whole track fitted into the panel.")
       ->check(CLI::PositiveNumber);
     app.footer(
       "Frames stream straight to the encoder (no large temp files); the output is written\n"

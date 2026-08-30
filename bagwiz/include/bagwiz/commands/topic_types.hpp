@@ -105,14 +105,16 @@ inline constexpr std::array<std::string_view, 1> kPointCloud2Type{{
   "sensor_msgs/msg/PointCloud2",
 }};
 
-// The topics `movify --clock` may name: any camera panel topic or any
-// point-cloud panel topic. Must mirror the check in validate_video_inputs()
-// (bagwiz/src/commands/movify_inputs.cpp), which resolves --clock against the
-// --cam and --pcd topics already given.
-inline constexpr std::array<std::string_view, 3> kMovifyClockTopicTypes{{
+// The topics `movify --clock` may name: any camera panel topic, any
+// point-cloud panel topic, or the map panel's NavSatFix topic. Must mirror
+// the check in validate_video_inputs() (bagwiz/src/commands/movify_inputs.cpp),
+// which resolves --clock against the --cam, --pcd and --gnss topics already
+// given.
+inline constexpr std::array<std::string_view, 4> kMovifyClockTopicTypes{{
   "sensor_msgs/msg/Image",
   "sensor_msgs/msg/CompressedImage",
   "sensor_msgs/msg/PointCloud2",
+  "sensor_msgs/msg/NavSatFix",
 }};
 
 // Must mirror the private kImuType constant in

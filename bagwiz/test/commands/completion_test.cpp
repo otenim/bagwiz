@@ -2137,8 +2137,9 @@ TEST(FlagCompletionTest, MovifyDashListsFlags)
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "movify", "-"}),
     "--alpha\n--azim\n--cam\n--cam-info\n--cam-pcd\n--clock\n--dist\n--elev\n--field\n"
-    "--frame\n--grid\n--help\n--input\n--max\n--min\n--no-rectify\n--output\n--overwrite\n"
-    "--pcd\n--point-size\n--range\n--resize\n--scheme\n--view\n--width\n-h\n-i\n-o\n-w\n");
+    "--frame\n--gnss\n--grid\n--help\n--input\n--map-range\n--max\n--min\n--no-rectify\n"
+    "--output\n--overwrite\n--pcd\n--point-size\n--range\n--resize\n--scheme\n--view\n"
+    "--width\n-h\n-i\n-o\n-w\n");
 }
 
 // `--view <TAB>` offers the point-cloud panel projections, sorted.
