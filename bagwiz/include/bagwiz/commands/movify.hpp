@@ -120,6 +120,17 @@ struct MovifyArgs
   std::optional<std::string> gnss_topic;
   std::optional<double> map_range_m;
 
+  // Trajectory overlay (--pose): a pose topic (Odometry, PoseStamped or
+  // PoseWithCovarianceStamped) whose trajectory every camera and point-cloud
+  // panel draws — `pose_window_s` seconds behind and ahead of each frame —
+  // of the body `pose_of` names (unset: Odometry's child frame, else
+  // base_link); a frame the bag's static TF does not know stops the run.
+  std::optional<std::string> pose_topic;
+  std::optional<std::string> pose_of;
+  double pose_window_s = 10.0;
+  // The width of the plates the camera panels lay along the trajectory.
+  double pose_width_m = 2.0;
+
   // Internal toggle for the parallel per-panel pipeline. When false the
   // synchronous loop is used, which composes the same frames without worker
   // threads. Not exposed on the CLI; tests set this directly.

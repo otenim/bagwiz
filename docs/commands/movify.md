@@ -12,7 +12,7 @@ chosen from the `<output>` extension.
 ## Usage
 
 ```text
-bagwiz movify -i <input> [--cam <topic>...] [--pcd <topic>...] [--gnss <topic>] -o <output> [OPTIONS]
+bagwiz movify -i <input> [--cam <topic>...] [--pcd <topic>...] [--gnss <topic>] [--pose <topic>] -o <output> [OPTIONS]
 ```
 
 ## Examples
@@ -88,6 +88,12 @@ bagwiz movify -i drive.mcap -o lidar_map.mp4 \
 bagwiz movify -i drive.mcap -o lidar_map.mp4 \
   --pcd /sensing/lidar/top/points --gnss /sensing/gnss/nav_sat_fix --map-range 100
 
+# The vehicle's trajectory (its odometry) drawn over the camera and the
+# lidar: the ten seconds behind and ahead of every frame.
+bagwiz movify -i drive.mcap -o drive.mp4 \
+  --cam /sensing/camera/front/image_raw/compressed --pcd /sensing/lidar/top/points \
+  --pose /localization/odometry
+
 # Render at half resolution to reduce output file size.
 bagwiz movify -i drive.mcap --cam /sensing/camera/image_raw/compressed -o out.mp4 --resize 0.5
 
@@ -145,6 +151,10 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 | `--cam <topic>...`        | Image topic(s) to render as camera panels, in grid order (left to right, top to bottom). Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)); a glob's matches expand in lexicographic (topic-name) order, so grid placement stays deterministic. At least one `--cam`, `--pcd` or `--gnss` topic is required. Long-form only. Repeatable.                                                                                                                                |
 | `--pcd <topic>...`        | `sensor_msgs/msg/PointCloud2` topic(s) to render as point-cloud panels, after the camera panels in the grid: every listed topic is drawn into one panel per `--view`, each cloud transformed into the `--frame` frame at its own stamp — see [Point-cloud panels](#point-cloud-panels). A literal topic name or a `*` glob. Long-form only. Repeatable.                                                                                                                                                                                                                                                                |
 | `--gnss <topic>`          | `sensor_msgs/msg/NavSatFix` topic to render as a map panel, after the point-cloud panels: the vehicle's track in a local East-North-Up plan view with the current fix marked — see [Map panel](#map-panel). A literal topic name. Long-form only.                                                                                                                                                                                                                                                                                                                                                                      |
+| `--pose <topic>`          | Pose topic (`nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped` or `geometry_msgs/msg/PoseWithCovarianceStamped`) whose trajectory every camera and point-cloud panel draws — see [Trajectory overlay](#trajectory-overlay). A literal topic name. Long-form only.                                                                                                                                                                                                                                                                                                                                                |
+| `--pose-of <frame>`       | The frame the `--pose` trajectory is of. Default: an Odometry message's `child_frame_id`, else `base_link` (the pose topics do not name their body). The bag's static TF must know this frame (and an Odometry's `child_frame_id`, through which another frame is reached). Long-form only.                                                                                                                                                                                                                                                                                                                            |
+| `--pose-window <s>`       | Seconds of the `--pose` trajectory drawn on each side of a frame. Default: 10. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `--pose-width <m>`        | Width of the plates the camera panels lay along the `--pose` trajectory (the vehicle's width, say). Default: 2. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `--encoder <encoder>`     | H.264 encoder for `.mp4`/`.mkv`/`.mov` outputs: `auto` uses NVIDIA NVENC for outputs larger than 1080p (by pixel count, 1920x1080) when this build and a GPU support it, else libx264; `x264` and `nvenc` force one (a forced `nvenc` without a usable GPU stops the run). `.avi` (MJPEG) ignores it. Default: `auto`. Long-form only.                                                                                                                                                                                                                                                                                 |
 | `--preset <preset>`       | H.264 speed/quality preset, by libx264's names: `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`, `medium`, `slow`, `slower`, `veryslow`; NVENC maps them onto its `p1`-`p7`. Default: `medium`. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -225,6 +235,26 @@ follows the vehicle instead, the panel's shorter axis spanning +-m around it
 (the longer axis shows proportionally more). No map tiles are drawn: the
 panel is an offline plan view. A topic whose messages all lack a position
 stops the run.
+
+## Trajectory overlay
+
+`--pose` reads a pose topic whole — the body's trajectory in the messages'
+own frame (`header.frame_id`), the body being an Odometry message's
+`child_frame_id` or the frame `--pose-of` names, bridged through the bag's
+static TF when the two differ — and draws it over every camera and
+point-cloud panel: the stretch driven up to the frame in grey, the stretch
+ahead in orange, `--pose-window` seconds each. For each frame the pose at
+that frame's time is interpolated, the trajectory is moved into the body's
+frame at that time and on into the panel's frame (a camera's optical frame,
+or a point-cloud panel's `--frame`) through the static TF, then projected like the panel's own content. A camera panel shows it as plates laid on the ground along the path — every 2 m, 1.2 m long, `--pose-width` wide across the path, translucent and fading with distance, as end-to-end driving demos show a planned path — projected through the camera model (rectified or raw, like `--cam-pcd`); a point-cloud panel draws the path as a line through the `3d` / `bev` view. A camera panel needs its camera
+info, as `--cam-pcd` does; a bag without static TF draws only in the body's
+own frame, and a body frame the static TF cannot take to a panel's frame
+stops the run. A body frame the bag's static TF does not know at all — an
+Odometry's `child_frame_id` (an INS's own link that was never published,
+say), or the frame `--pose-of` names or the `base_link` a pose topic is
+taken as — stops the run before any frame is rendered: add the frame's
+static transform to the bag (`bagwiz tf static update`) first. The map
+panel does not draw it, and `--pose` cannot be the clock.
 
 ## Multi-view grids
 

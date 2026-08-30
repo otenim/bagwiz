@@ -50,6 +50,79 @@ float read_field(
 
 }  // namespace
 
+// The camera model one projection uses: the intrinsics of the rectified or
+// raw image, and the lens distortion the raw path applies.
+class CameraProjection
+{
+public:
+  CameraProjection(const image::CameraInfo & camera_info, bool use_rectified)
+  : fx_(use_rectified ? camera_info.p[0] : camera_info.k[0]),
+    fy_(use_rectified ? camera_info.p[5] : camera_info.k[4]),
+    cx_(use_rectified ? camera_info.p[2] : camera_info.k[2]),
+    cy_(use_rectified ? camera_info.p[6] : camera_info.k[5]),
+    // When projecting onto the raw image (use_rectified=false) apply the
+    // camera's lens distortion so points land where the distorted image
+    // actually shows them. The rectified path uses camera_info.p, which
+    // already assumes a rectified image, so it stays a plain pinhole
+    // projection; with no distortion coefficients the raw path also reduces
+    // to a plain pinhole.
+    apply_distortion_(!use_rectified && !camera_info.d.empty()),
+    distortion_model_(
+      apply_distortion_ ? image::select_distortion_model(camera_info.distortion_model)
+                        : image::DistortionModel::kNone),
+    d_(camera_info.d)
+  {
+  }
+
+  [[nodiscard]] std::optional<ImagePoint> project(
+    double x, double y, double z, std::uint32_t image_width, std::uint32_t image_height,
+    bool require_inside = true) const
+  {
+    if (z <= 0.0) {
+      return std::nullopt;
+    }
+    double nx = x / z;
+    double ny = y / z;
+    if (apply_distortion_) {
+      // Skip distortion fold-back artifacts: outside the model's valid domain
+      // the forward distortion is non-injective, so far-off-axis points
+      // (beyond the camera FOV) fold back into the image and must not be
+      // drawn.
+      const auto distorted = image::distort_for_raw_image(nx, ny, distortion_model_, d_, fx_, fy_);
+      if (!distorted) {
+        return std::nullopt;
+      }
+      nx = distorted->x;
+      ny = distorted->y;
+    }
+    ImagePoint p;
+    p.u = fx_ * nx + cx_;
+    p.v = fy_ * ny + cy_;
+    p.depth = z;
+    if (require_inside && (p.u < 0.0 || p.u >= image_width || p.v < 0.0 || p.v >= image_height)) {
+      return std::nullopt;
+    }
+    return p;
+  }
+
+private:
+  double fx_;
+  double fy_;
+  double cx_;
+  double cy_;
+  bool apply_distortion_;
+  image::DistortionModel distortion_model_;
+  std::vector<double> d_;  // a copy: the projection outlives no CameraInfo by accident
+};
+
+std::optional<ImagePoint> project_camera_point(
+  double x, double y, double z, const image::CameraInfo & camera_info, std::uint32_t image_width,
+  std::uint32_t image_height, bool use_rectified, bool require_inside)
+{
+  return CameraProjection(camera_info, use_rectified)
+    .project(x, y, z, image_width, image_height, require_inside);
+}
+
 ProjectionResult project_pointcloud(
   const PointCloud2 & cloud, const image::CameraInfo & camera_info,
   const std::array<double, 16> & transform, std::uint32_t image_width, std::uint32_t image_height,
@@ -90,20 +163,7 @@ ProjectionResult project_pointcloud(
     field_intensity = find_field("intensity");
   }
 
-  const double fx = use_rectified ? camera_info.p[0] : camera_info.k[0];
-  const double fy = use_rectified ? camera_info.p[5] : camera_info.k[4];
-  const double cx = use_rectified ? camera_info.p[2] : camera_info.k[2];
-  const double cy = use_rectified ? camera_info.p[6] : camera_info.k[5];
-
-  // When projecting onto the raw image (use_rectified=false) apply the camera's
-  // lens distortion so points land where the distorted image actually shows them.
-  // The rectified path uses camera_info.p, which already assumes a rectified
-  // image, so it stays a plain pinhole projection; with no distortion
-  // coefficients the raw path also reduces to a plain pinhole.
-  const bool apply_distortion = !use_rectified && !camera_info.d.empty();
-  const image::DistortionModel distortion_model =
-    apply_distortion ? image::select_distortion_model(camera_info.distortion_model)
-                     : image::DistortionModel::kNone;
+  const CameraProjection camera(camera_info, use_rectified);
 
   const std::uint32_t n = cloud.height * cloud.width;
   result.points.reserve(n / 4);  // rough estimate
@@ -118,29 +178,12 @@ ProjectionResult project_pointcloud(
     const double ty = transform[1] * px + transform[5] * py + transform[9] * pz + transform[13];
     const double tz = transform[2] * px + transform[6] * py + transform[10] * pz + transform[14];
 
-    if (tz <= 0.0) {
+    const auto pixel = camera.project(tx, ty, tz, image_width, image_height);
+    if (!pixel.has_value()) {
       continue;
     }
-
-    double nx = tx / tz;
-    double ny = ty / tz;
-    if (apply_distortion) {
-      // Skip distortion fold-back artifacts: outside the model's valid domain the
-      // forward distortion is non-injective, so far-off-axis points (beyond the
-      // camera FOV) fold back into the image and must not be drawn.
-      const auto distorted =
-        image::distort_for_raw_image(nx, ny, distortion_model, camera_info.d, fx, fy);
-      if (!distorted) {
-        continue;
-      }
-      nx = distorted->x;
-      ny = distorted->y;
-    }
-    const double u = fx * nx + cx;
-    const double v = fy * ny + cy;
-    if (u < 0.0 || u >= image_width || v < 0.0 || v >= image_height) {
-      continue;
-    }
+    const double u = pixel->u;
+    const double v = pixel->v;
 
     float value = 0.0f;
     switch (property) {

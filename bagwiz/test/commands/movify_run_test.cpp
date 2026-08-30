@@ -15,6 +15,7 @@
 #include "bagwiz/core/video/video_encoder.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "core/image/image_fixture.hpp"
+#include "movify_test_util.hpp"      // NOLINT(build/include_subdir) src-local shared header
 #include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -1586,6 +1587,78 @@ TEST_F(MovifyRunTest, RunStreamsAJpegCameraDirect)
   EXPECT_EQ(probe.height, 16u);
 }
 
+// A point-cloud panel with a --pose trajectory: the Odometry topic is read
+// whole and the trajectory drawn over every sweep.
+TEST_F(MovifyRunTest, RunDrawsAPoseTrajectoryOverAPointCloudPanel)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+    writer->declare_topic(make_topic("/odom", "nav_msgs/msg/Odometry"));
+    writer->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+    const auto tf = make_tf_static_payload("base_link", "lidar");  // the body is known
+    writer->write("/tf_static", 1'000'000'000LL, {tf.data(), tf.size()});
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto cloud = make_pointcloud2_payload(ts, "lidar", {{1.0f, 0.0f, 0.0f}});
+      writer->write("/points", ts, {cloud.data(), cloud.size()});
+      const auto odom = bagwiz::test::movify_odometry_payload(
+        ts, "map", "lidar", static_cast<double>(i), 0.0, 0.0, 0.0);
+      writer->write("/odom", ts, {odom.data(), odom.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.pcd_topics = {"/points"};
+  args.pose_topic = "/odom";
+  args.pose_window_s = 1.0;
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+}
+
+constexpr const char * kPoseCameraInfoTopic = "/cam/pose_camera_info";
+
+// A camera panel with a --pose trajectory: the trajectory of the camera's
+// own frame projects through its camera info.
+TEST_F(MovifyRunTest, RunDrawsAPoseTrajectoryOverACameraPanel)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic(kImageTopic, kImageType));
+    writer->declare_topic(make_topic(kPoseCameraInfoTopic, kCameraInfoType));
+    writer->declare_topic(make_topic("/odom", "nav_msgs/msg/Odometry"));
+    writer->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+    const auto tf = make_tf_static_payload("base_link", "cam");  // the body is known
+    writer->write("/tf_static", 1'000'000'000LL, {tf.data(), tf.size()});
+    const std::array<double, 9> k{8.0, 0.0, 4.0, 0.0, 4.0, 2.0, 0.0, 0.0, 1.0};
+    const auto info = make_camera_info_payload(8, 4, k, "cam");
+    writer->write(kPoseCameraInfoTopic, 1'000'000'000LL, {info.data(), info.size()});
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto image = make_image_payload(8, 4, "bgr8", 0x10);
+      writer->write(kImageTopic, ts, {image.data(), image.size()});
+      const auto odom = bagwiz::test::movify_odometry_payload(
+        ts, "map", "cam", 0.0, 0.0, static_cast<double>(i), 0.0);
+      writer->write("/odom", ts, {odom.data(), odom.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args(bag, kImageTopic, tmp_dir_ / "out.avi", false);
+  args.rectify = false;
+  args.camera_info_entries = {kPoseCameraInfoTopic};
+  args.pose_topic = "/odom";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+}
+
 // Two lidars in different frames merge into one panel through the bag's TF:
 // with --frame naming the vehicle frame, each cloud is looked up at its own
 // stamp and the run succeeds.
@@ -1705,7 +1778,7 @@ TEST(MovifyCliWiring, TopicSlotsAreDeclaredWithPairSemantics)
   EXPECT_TRUE(app.get_subcommands({}).empty());  // a single-action command
 
   const auto slots = bagwiz::commands::topic_slots_of(app);
-  ASSERT_EQ(slots.size(), 6U);  // --cam, --pcd, --gnss, --clock, --cam-info, --cam-pcd
+  ASSERT_EQ(slots.size(), 7U);  // --cam, --pcd, --gnss, --pose, --clock, --cam-info, --cam-pcd
 
   const auto * cam_slot = bagwiz::test::slot_for(slots, "cam");
   ASSERT_NE(cam_slot, nullptr);

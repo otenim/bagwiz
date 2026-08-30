@@ -109,6 +109,9 @@ TEST(CanStreamCameraDirect, AnyOtherPanelOrOverlayComposes)
   run.validation.gnss_topic.reset();
   run.validation.grid.cols = 2;
   EXPECT_FALSE(can_stream_camera_direct(run.args, run.validation));
+  run.validation.grid.cols = 1;
+  run.validation.pose_topic = "/odom";  // the trajectory is drawn over the frame
+  EXPECT_FALSE(can_stream_camera_direct(run.args, run.validation));
 }
 
 TEST(CanStreamCameraDirect, ARawImageTopicComposes)

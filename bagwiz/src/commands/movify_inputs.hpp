@@ -14,8 +14,9 @@
 #include "bagwiz/core/pointcloud/fetcher.hpp"
 #include "bagwiz/core/video/frame_rate.hpp"
 #include "bagwiz/io/bag_io.hpp"
-#include "movify_layout.hpp"     // NOLINT(build/include_subdir) src-local shared header
-#include "movify_map_track.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_layout.hpp"        // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_track.hpp"     // NOLINT(build/include_subdir) src-local shared header
+#include "movify_pose_overlay.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <tf2/buffer_core.hpp>
 
@@ -112,6 +113,8 @@ struct VideoInputValidation
   std::optional<std::size_t> clock_pcd;
   std::optional<std::string> gnss_topic;
   bool clock_gnss = false;
+  // The --pose topic, once present and of a pose type.
+  std::optional<std::string> pose_topic;
   std::string error;
 
   [[nodiscard]] bool ok() const { return error.empty(); }
@@ -203,6 +206,8 @@ struct VideoGeometry
 {
   std::vector<std::optional<core::image::CameraInfo>> camera_infos;
   std::optional<tf2::BufferCore> tf_buffer;
+  // The --pose trajectory and its static TF, set iff the run has one.
+  std::unique_ptr<PoseOverlay> pose;
 };
 
 // Load the pass-2 geometry into `out`: camera info from each view's resolved

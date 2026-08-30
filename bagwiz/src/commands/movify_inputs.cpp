@@ -8,6 +8,7 @@
 
 #include "movify_inputs.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
+#include "bagwiz/commands/topic_types.hpp"
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/image/camera_info_resolver.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
@@ -16,11 +17,13 @@
 #include "movify_map_track.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <exception>
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -158,6 +161,39 @@ std::string validate_gnss_topic(const std::filesystem::path & input, const std::
       kNavSatFixMsgType);
     return "gnss topic '" + topic + "' has type '" + info->type + "', expected " +
            kNavSatFixMsgType;
+  }
+  return "";
+}
+
+// The trajectory overlay's topic: present in the bag and of a pose type.
+// Returns "" when it is, else the error (already logged).
+std::string validate_pose_topic(const std::filesystem::path & input, const std::string & topic)
+{
+  std::unique_ptr<io::BagReader> reader;
+  try {
+    reader = io::open_read(input);
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "failed to open '%s': %s", input.string().c_str(), e.what());
+    return "failed to open '" + input.string() + "': " + e.what();
+  }
+  const io::TopicInfo * info = io::find_topic(*reader, topic);
+  if (info == nullptr) {
+    BAGWIZ_LOG_ERROR(
+      kLogger, "pose topic '%s' not found in %s", topic.c_str(), input.string().c_str());
+    return "pose topic '" + topic + "' not found in " + input.string();
+  }
+  const bool supported = std::any_of(
+    kMovifyPoseTopicTypes.begin(), kMovifyPoseTopicTypes.end(),
+    [&](std::string_view type) { return info->type == type; });
+  if (!supported) {
+    BAGWIZ_LOG_ERROR(
+      kLogger,
+      "pose topic '%s' has type '%s', expected nav_msgs/msg/Odometry, "
+      "geometry_msgs/msg/PoseStamped or geometry_msgs/msg/PoseWithCovarianceStamped",
+      topic.c_str(), info->type.c_str());
+    return "pose topic '" + topic + "' has type '" + info->type +
+           "', expected nav_msgs/msg/Odometry, geometry_msgs/msg/PoseStamped or "
+           "geometry_msgs/msg/PoseWithCovarianceStamped";
   }
   return "";
 }
@@ -481,15 +517,16 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
       if (view.camera_info_topic.has_value()) {
         continue;
       }
-      if (!view.pcd_topics.empty()) {
+      if (!view.pcd_topics.empty() || args.pose_topic.has_value()) {
+        const char * what = !view.pcd_topics.empty() ? "--cam-pcd" : "--pose";
         BAGWIZ_LOG_ERROR(
           kLogger,
-          "A camera-info topic is required for --cam-pcd, but none could be derived from "
+          "A camera-info topic is required for %s, but none could be derived from "
           "'%s'. Pass it explicitly with --cam-info %s=<info_topic>.",
-          view.topic.c_str(), view.topic.c_str());
-        out.error =
-          "A camera-info topic is required for --cam-pcd, but none could be derived from '" +
-          view.topic + "'. Pass it explicitly with --cam-info " + view.topic + "=<info_topic>.";
+          what, view.topic.c_str(), view.topic.c_str());
+        out.error = std::string("A camera-info topic is required for ") + what +
+                    ", but none could be derived from '" + view.topic +
+                    "'. Pass it explicitly with --cam-info " + view.topic + "=<info_topic>.";
         return out;
       }
       if (args.rectify) {
@@ -548,6 +585,21 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
       out.error = err;
       return out;
     }
+  }
+
+  // The trajectory overlay draws on camera and point-cloud panels only.
+  if (args.pose_topic.has_value()) {
+    if (args.cam_topics.empty() && args.pcd_topics.empty()) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "--pose draws on camera and point-cloud panels; pass --cam or --pcd.");
+      out.error = "--pose draws on camera and point-cloud panels; pass --cam or --pcd.";
+      return out;
+    }
+    if (const auto err = validate_pose_topic(args.input_path, *args.pose_topic); !err.empty()) {
+      out.error = err;
+      return out;
+    }
+    out.pose_topic = args.pose_topic;
   }
 
   // The point-cloud panels' view frame and BEV extent come from the first
@@ -721,6 +773,14 @@ std::string load_video_geometry(
   // transform if it turns out to need one.
   const bool panels_may_need_tf =
     !validation.pcd_topics.empty() && (args.frame.has_value() || validation.pcd_topics.size() > 1);
+  if (validation.pose_topic.has_value()) {
+    auto loaded =
+      load_pose_overlay(args.input_path, *validation.pose_topic, args.pose_of, args.pose_window_s);
+    if (!loaded.ok()) {
+      return loaded.error;
+    }
+    out.pose = std::move(loaded.overlay);
+  }
   if (any_pcd || panels_may_need_tf) {
     out.tf_buffer.emplace();
     if (const auto err = core::load_tf_buffer(args.input_path, *out.tf_buffer); err.has_value()) {

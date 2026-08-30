@@ -2138,8 +2138,9 @@ TEST(FlagCompletionTest, MovifyDashListsFlags)
     run_completion({"bagwiz", "__complete", "2", "bagwiz", "movify", "-"}),
     "--alpha\n--azim\n--cam\n--cam-info\n--cam-pcd\n--clock\n--dist\n--elev\n--encoder\n"
     "--field\n--frame\n--gnss\n--grid\n--help\n--input\n--map-range\n--max\n--min\n"
-    "--no-rectify\n--output\n--overwrite\n--pcd\n--point-size\n--preset\n--range\n"
-    "--resize\n--scheme\n--view\n--width\n-h\n-i\n-o\n-w\n");
+    "--no-rectify\n--output\n--overwrite\n--pcd\n--point-size\n--pose\n--pose-of\n"
+    "--pose-width\n--pose-window\n--preset\n--range\n--resize\n--scheme\n--view\n--width\n"
+    "-h\n-i\n-o\n-w\n");
 }
 
 // `--encoder <TAB>` / `--preset <TAB>` offer the H.264 encoder and preset

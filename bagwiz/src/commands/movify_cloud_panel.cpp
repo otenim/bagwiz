@@ -14,10 +14,14 @@
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/pointcloud/projector_helpers.hpp"
 
+#include <opencv2/core.hpp>
+
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -98,6 +102,9 @@ CloudPanel::TopicProjection CloudPanel::project_topic_unguarded(
     }
   }
 
+  if (k == 0 && cloud->timestamp_ns != 0) {
+    stamp_ns_ = cloud->timestamp_ns;  // the tick's capture time, for the overlay
+  }
   // Move the cloud into the view frame at its own capture time, so a cloud
   // published in a moving frame lands where that frame was when the sweep
   // was taken.
@@ -139,6 +146,8 @@ std::string CloudPanel::select(const TickInfo & tick, PanelSize cell)
   core::pointcloud::CloudView view = options_.view;
   view.width = size_.width;
   view.height = size_.height;
+  view_ = view;
+  stamp_ns_ = tick.record_ns;
 
   // Each topic's fetch, transform and projection is independent of the
   // others' (the sources serialize per topic, TF lookups behind their own
@@ -202,12 +211,55 @@ std::string CloudPanel::render(const CellView & cell)
       raster_.bgr().data() + static_cast<std::size_t>(y) * row_bytes, row_bytes,
       cell.data + static_cast<std::size_t>(y) * cell.stride);
   }
+  if (options_.pose != nullptr) {
+    return draw_pose(cell);
+  }
+  return "";
+}
+
+std::string CloudPanel::draw_pose(const CellView & cell) const
+{
+  std::string error;
+  const auto polyline = pose_polyline_in_frame(*options_.pose, options_.frame, stamp_ns_, error);
+  if (!polyline.has_value()) {
+    return on_topic(
+      options_.topics.empty() ? std::string{"point-cloud panel"} : options_.topics.front(), error);
+  }
+  const bool perspective = view_.projection == core::pointcloud::CloudProjection::kPerspective;
+  const core::pointcloud::PerspectiveCamera camera =
+    perspective ? core::pointcloud::make_perspective_camera(view_)
+                : core::pointcloud::PerspectiveCamera{};
+  const auto to_runs = [&](const std::vector<std::array<double, 3>> & points) {
+    std::vector<std::optional<cv::Point>> pixels;
+    pixels.reserve(points.size());
+    for (const auto & p : points) {
+      if (perspective) {
+        const auto projected =
+          core::pointcloud::project_perspective(p[0], p[1], p[2], camera, view_);
+        if (projected.has_value()) {
+          pixels.emplace_back(cv::Point(projected->u, projected->v));
+        } else {
+          pixels.emplace_back(std::nullopt);  // behind the virtual camera: the run breaks
+        }
+      } else {
+        // The BEV places every point; one off the canvas just clips.
+        const auto projected = core::pointcloud::project_bev(p[0], p[1], view_);
+        pixels.emplace_back(cv::Point(projected.u, projected.v));
+      }
+    }
+    return pose_runs(pixels);
+  };
+  cv::Mat canvas(
+    static_cast<int>(cell.height), static_cast<int>(cell.width), CV_8UC3,
+    static_cast<void *>(cell.data), cell.stride);
+  draw_pose_polylines(
+    canvas, to_runs(polyline->past), to_runs(polyline->future), pose_ui_scale(cell.height));
   return "";
 }
 
 std::optional<std::vector<std::unique_ptr<Panel>>> build_cloud_panels(
   const MovifyArgs & args, const VideoInputValidation & validation, const VideoInputScan & scan,
-  CloudSources & clouds)
+  CloudSources & clouds, const PoseOverlay * pose)
 {
   std::vector<std::unique_ptr<Panel>> panels;
   if (validation.pcd_topics.empty()) {
@@ -225,6 +277,7 @@ std::optional<std::vector<std::unique_ptr<Panel>>> build_cloud_panels(
   options.value_min = scan.global_property_min;
   options.value_max = scan.global_property_max;
   options.point_size = args.point_size;
+  options.pose = pose;
   for (const auto & topic : validation.pcd_topics) {
     const auto it = std::find(scan.pcd_topics.begin(), scan.pcd_topics.end(), topic);
     if (it == scan.pcd_topics.end()) {

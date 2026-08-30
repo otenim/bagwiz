@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,25 @@ struct ProjectionResult
 
   [[nodiscard]] bool ok() const noexcept { return error.empty(); }
 };
+
+// A point projected onto the image, in pixels (sub-pixel; the image's
+// top-left is 0,0), with its depth along the camera's optical axis.
+struct ImagePoint
+{
+  double u = 0.0;
+  double v = 0.0;
+  double depth = 0.0;
+};
+
+// Project one point given in the camera frame (x right, y down, z forward)
+// onto the image: a pinhole through `camera_info.p` when `use_rectified`,
+// else through `camera_info.k` with the lens distortion applied so the point
+// lands where the raw image shows it. nullopt for a point behind the camera,
+// outside the distortion model's valid domain, or — unless `require_inside`
+// is false (a polygon corner the drawing clips itself) — off the image.
+[[nodiscard]] std::optional<ImagePoint> project_camera_point(
+  double x, double y, double z, const image::CameraInfo & camera_info, std::uint32_t image_width,
+  std::uint32_t image_height, bool use_rectified, bool require_inside = true);
 
 // Project a point cloud onto an image.
 // When `use_rectified` is true, the projection uses `camera_info.p` (the rectified projection
