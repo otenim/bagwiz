@@ -1280,8 +1280,9 @@ std::vector<std::string> complete_video_cam_pair_value(
 // try_topic_completion handles their values before this function is reached;
 // `--cam-pcd` and `--cam-info` are pair-valued slots whose completion defers
 // here (see completion_defers_to_command). Here we surface the command's flags
-// for any `-` word, and the enum choices for `--field`, `--scheme`, `--view`,
-// `--encoder`, and `--preset`.
+// for any `-` word, the enum choices for `--field`, `--scheme`, `--view`,
+// `--encoder`, and `--preset`, and the bag's static-TF frame ids for
+// `--frame` and `--pose-of`.
 //
 //   `movify`(0) -i|--input <bag> [--cam <image_topic>...] [--pcd <pcd_topic>...]
 //   [--gnss <navsatfix_topic>] -o|--output <path>
@@ -1335,6 +1336,22 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
       {"fast", "faster", "medium", "slow", "slower", "superfast", "ultrafast", "veryfast",
        "veryslow"},
       current);
+  }
+
+  // --frame names the frame the point-cloud panels transform every cloud
+  // into, and --pose-of the body the --pose trajectory is of; both are
+  // resolved through the bag's static TF alone (a frame it lacks stops the
+  // run), so both complete from the static-TF frame ids, like `tf static
+  // drop --frame`.
+  if (request.cursor_word > 0) {
+    const auto & previous = request.words[request.cursor_word - 1];
+    if (previous == "--frame" || previous == "--pose-of") {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
+    }
   }
   return {};
 }

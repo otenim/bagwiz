@@ -2363,6 +2363,92 @@ TEST_F(CompletionTest, MovifyTopicSlotSuppressedWhenInputSlotIsFlag)
   EXPECT_EQ(run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "--cam"}), "");
 }
 
+// `movify <bag> --frame <TAB>` completes from the bag's static-TF frame ids,
+// like `tf static drop --frame`: --frame names the frame the point-cloud
+// panels transform every cloud into through the bag's static TF. The mixed
+// fixture's /tf_static carries map->odom->base_link.
+TEST_F(CompletionTest, MovifyFrameFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "5", "bagwiz", "movify", "-i", "~/mixed.mcap", "--frame"}),
+    "base_link\nmap\nodom\n");
+}
+
+// A typed prefix narrows the `--frame` candidates within the static frame set.
+TEST_F(CompletionTest, MovifyFrameFlagRespectsPrefix)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "5", "bagwiz", "movify", "-i", "~/mixed.mcap", "--frame", "o"}),
+    "odom\n");
+}
+
+// A bag whose TF is only dynamic (/tf, no *tf_static) offers no `--frame`
+// candidates: the panels resolve --frame through the static TF alone.
+TEST_F(CompletionTest, MovifyFrameFlagIgnoresDynamicOnlyTf)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_tf_mcap_fixture(tmp_dir_ / "tf.mcap");
+
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "5", "bagwiz", "movify", "-i", "~/tf.mcap", "--frame"}),
+    "");
+}
+
+// `movify <bag> --pose-of <TAB>` completes from the bag's static-TF frame
+// ids, like `tf static drop --frame`: --pose-of names the body the --pose
+// trajectory is of, which load_pose_overlay requires the static TF to know.
+// The mixed fixture's /tf_static carries map->odom->base_link.
+TEST_F(CompletionTest, MovifyPoseOfFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "5", "bagwiz", "movify", "-i", "~/mixed.mcap", "--pose-of"}),
+    "base_link\nmap\nodom\n");
+}
+
+// A typed prefix narrows the `--pose-of` candidates within the static frame set.
+TEST_F(CompletionTest, MovifyPoseOfFlagRespectsPrefix)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "5", "bagwiz", "movify", "-i", "~/mixed.mcap", "--pose-of", "b"}),
+    "base_link\n");
+}
+
+// A bag whose TF is only dynamic (/tf, no *tf_static) offers no `--pose-of`
+// candidates: a frame the static TF does not know cannot be the overlay's
+// body, so the shell's file completion takes over instead of a wrong hint.
+TEST_F(CompletionTest, MovifyPoseOfFlagIgnoresDynamicOnlyTf)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_tf_mcap_fixture(tmp_dir_ / "tf.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "5", "bagwiz", "movify", "-i", "~/tf.mcap", "--pose-of"}),
+    "");
+}
+
 // `walk <input> <topic> --cam-info <TAB>` offers only the bag's
 // sensor_msgs/msg/CameraInfo topics, mirroring `movify --cam-info`.
 TEST_F(CompletionTest, WalkCameraInfoFlagListsOnlyCameraInfoTopics)
