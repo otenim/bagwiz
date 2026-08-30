@@ -8,10 +8,15 @@
 
 #include "bagwiz/commands/movify_video.hpp"
 
-#include "movify_video_common.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_camera_panel.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_cloud_source.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_inputs.hpp"        // NOLINT(build/include_subdir) src-local shared header
+#include "movify_output.hpp"        // NOLINT(build/include_subdir) src-local shared header
+#include "movify_pipeline.hpp"      // NOLINT(build/include_subdir) src-local shared header
 
 #include <filesystem>
 #include <string>
+#include <thread>
 
 namespace bagwiz::commands
 {
@@ -50,8 +55,23 @@ int run_movify_video(const MovifyVideoArgs & args)
     return 1;
   }
 
+  // The point-cloud sources every panel projects from (they take the pass-1
+  // index entries out of `scan`), then the panels themselves: the first view
+  // as the clock, the rest following it.
+  CloudSources clouds(
+    args.input_path, scan, geometry.tf_buffer.has_value() ? &*geometry.tf_buffer : nullptr);
+  auto panels = build_camera_panels(args, validation, scan, geometry, clouds);
+  if (!panels.has_value()) {
+    return 1;
+  }
+  const bool parallel = should_use_parallel_pipeline(
+    panels->size(), !scan.pcd_topics.empty(), args.enable_parallel_pipeline, scan.span.count,
+    std::thread::hardware_concurrency());
+
   VideoFrameEncoder encoder(tmp_path, scan.fps);
-  if (run_encode_pass(*reader, args, validation, scan, geometry, encoder) != 0) {
+  if (
+    run_encode_pass(*reader, *panels, validation.grid, parallel, args.topics.front(), encoder) !=
+    0) {
     return 1;
   }
   if (const auto err = finish_video_encode(

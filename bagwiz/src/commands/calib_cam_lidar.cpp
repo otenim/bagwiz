@@ -86,7 +86,7 @@ constexpr std::int64_t kSampleMarginNs = 3'000'000'000LL;
 // peek at just the header stamp during the cheap phase-6 scan, so it
 // re-checks the type here too). Mirrors kImageTopicTypes in
 // bagwiz/include/bagwiz/commands/topic_types.hpp together with
-// movify_video_common.cpp's and packed_raster.cpp's copies — keep all four
+// movify_inputs.cpp's and packed_raster.cpp's copies — keep all four
 // in sync by hand.
 constexpr std::string_view kImageMsgType = "sensor_msgs/msg/Image";
 constexpr std::string_view kCompressedImageMsgType = "sensor_msgs/msg/CompressedImage";
