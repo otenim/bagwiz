@@ -1280,8 +1280,9 @@ std::vector<std::string> complete_video_cam_pair_value(
 // try_topic_completion handles their values before this function is reached;
 // `--cam-pcd` and `--cam-info` are pair-valued slots whose completion defers
 // here (see completion_defers_to_command). Here we surface the command's flags
-// for any `-` word, and the enum choices for `--field`, `--scheme`, `--view`,
-// `--encoder`, and `--preset`.
+// for any `-` word, the enum choices for `--field`, `--scheme`, `--view`,
+// `--encoder`, and `--preset`, and the bag's static-TF frame ids for
+// `--frame` and `--pose-of`.
 //
 //   `movify`(0) -i|--input <bag> [--cam <image_topic>...] [--pcd <pcd_topic>...]
 //   [--gnss <navsatfix_topic>] -o|--output <path>
@@ -1335,6 +1336,22 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
       {"fast", "faster", "medium", "slow", "slower", "superfast", "ultrafast", "veryfast",
        "veryslow"},
       current);
+  }
+
+  // --frame names the frame the point-cloud panels transform every cloud
+  // into, and --pose-of the body the --pose trajectory is of; both are
+  // resolved through the bag's static TF alone (a frame it lacks stops the
+  // run), so both complete from the static-TF frame ids, like `tf static
+  // drop --frame`.
+  if (request.cursor_word > 0) {
+    const auto & previous = request.words[request.cursor_word - 1];
+    if (previous == "--frame" || previous == "--pose-of") {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
+    }
   }
   return {};
 }
@@ -1614,8 +1631,9 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 // half. Its candidates mirror the command's resolution scope: once `--pcd`
 // values are on the line, only the PointCloud2 topics those selectors match
 // are offered; before any `--pcd` value, all of the bag's PointCloud2
-// topics. `--frame`, `--tolerance`, and `-o`/`--output` take free-form /
-// numeric / path values, so they get no value completion.
+// topics. `--frame` completes the bag's static-TF frame ids (the frame every
+// cloud is transformed into through the static TF); `--tolerance` and
+// `-o`/`--output` take numeric / path values, so they get no value completion.
 //
 //   concat: `pcd`(0) `concat`(1) -i|--input <bag> --as <output_topic>
 //           --pcd <t...> [--frame <f>] [--tolerance <val>]
@@ -1743,7 +1761,10 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
   // slots, so try_topic_completion handles their values before this function
   // is reached. undistort's --of/--ref complete the bag's TF frame ids,
   // mirroring `traj dump`/`join`; they are not topic slots (a frame id is not
-  // a topic), so they stay here.
+  // a topic), so they stay here. concat's --frame names the frame every cloud
+  // is transformed into through the bag's static TF alone (a frame it lacks
+  // stops the run), so it completes from the static-TF frame ids, like `tf
+  // static drop --frame`.
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
     if (previous == "--of" || previous == "--ref") {
@@ -1752,6 +1773,13 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
         return {};
       }
       return complete_frame_id_value(*bag_arg, current);
+    }
+    if (previous == "--frame" && request.words[kFirstCommandArgWord] == "concat") {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
     }
   }
   return {};

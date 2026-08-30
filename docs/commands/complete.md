@@ -335,6 +335,14 @@ name only — it offers plain topic names either way, typed as-is.
   - `bagwiz tf static drop -i <input> ... --frame <FRAME>` (**only** static
     `*/tf_static` topics, for the same reason: `--frame` names a frame of the
     bag's static TF tree)
+  - `bagwiz pcd concat -i <input> ... --frame <FRAME>` (**only** static
+    `*/tf_static` topics: every cloud is transformed into `--frame` through the
+    bag's static TF alone, so a frame it does not know stops the run)
+  - `bagwiz movify -i <input> ... --frame <FRAME>` / `--pose-of <FRAME>`
+    (**only** static `*/tf_static` topics: the point-cloud panels transform
+    every cloud into `--frame`, and the trajectory overlay places the body
+    `--pose-of` names, through the bag's static TF alone — a frame it does not
+    know stops the run)
   - `bagwiz calib cam-lidar -i <input> ... --parent <FRAME>` /
     `--child <FRAME>` (**only** static `*/tf_static`
     topics: the edited edge must be carried by a static TF topic)
