@@ -195,7 +195,7 @@ manual range at any time.
 | `=` / `+` / `-` | Increase / decrease point size.                                                                                           |
 | `]` / `[`       | Increase / decrease overlay alpha (transparency).                                                                         |
 
-Defaults on first enable are: property `distance`, scheme `viridis`, range `auto`,
+Defaults on first enable are: property `distance`, scheme `jet`, range `auto`,
 point size `2`, alpha `1.0`. Each adjustment key reports its new value
 transiently on the status row (`scheme: turbo`, `point size: 3`, ...), and the
 info row at the top of the preview (directly under the topic name) stays one

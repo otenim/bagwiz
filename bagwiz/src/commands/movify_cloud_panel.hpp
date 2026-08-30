@@ -49,7 +49,7 @@ public:
     // frame). A cloud already in this frame is drawn as is.
     std::string frame;
     core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
-    core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kViridis;
+    core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kJet;
     double value_min = 0.0;
     double value_max = 0.0;
     std::uint32_t point_size = 2;

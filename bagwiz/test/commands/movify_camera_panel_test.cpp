@@ -9,6 +9,7 @@
 #include "movify_camera_panel.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
 #include "bagwiz/core/image/camera_info.hpp"
+#include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "movify_layout.hpp"        // NOLINT(build/include_subdir) src-local shared header
@@ -504,6 +505,14 @@ TEST_F(MovifyTmpDirTest, FollowerPanelWithNoMessagesLeavesTheCellBlack)
   for (const auto b : canvas.pixels()) {
     EXPECT_EQ(b, std::byte{0});
   }
+}
+
+// The overlay styling defaults mirror the CLI's: jet is the colour scheme every
+// bagwiz visualization starts from.
+TEST(VideoOverlayParamsDefaults, SchemeIsJet)
+{
+  const VideoOverlayParams params;
+  EXPECT_EQ(params.colorscheme, bagwiz::core::pointcloud::ColorScheme::kJet);
 }
 
 }  // namespace

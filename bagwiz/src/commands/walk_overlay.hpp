@@ -44,7 +44,7 @@ namespace bagwiz::commands
 {
 
 // Overlay key-handling state. The default view is distance coloured with the
-// viridis scheme, 2px points at full opacity over an auto-computed range —
+// jet scheme, 2px points at full opacity over an auto-computed range —
 // the same defaults `movify --cam-pcd` renders with, so the preview and
 // the encoded video agree without touching any key.
 struct PcdOverlayState
@@ -52,7 +52,7 @@ struct PcdOverlayState
   bool enabled = false;
   std::vector<std::string> topics;
   core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
-  core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kViridis;
+  core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kJet;
   std::uint32_t point_size = 2;
   float alpha = 1.0f;
   bool auto_range = true;
