@@ -613,13 +613,8 @@ VideoInputScan scan_video_inputs(const MovifyArgs & args, const VideoInputValida
         out.error = "failed to scan point-cloud topic '" + out.pcd_topics[i] + "'";
         return out;
       }
+      // (A topic without messages already failed the scan above.)
       out.pcd_topic_has_stamps[i] = out.pcd_spans[i].header_stamps_present;
-      if (out.pcd_spans[i].entries.empty()) {
-        BAGWIZ_LOG_ERROR(
-          kLogger, "topic '%s' has no messages to render.", out.pcd_topics[i].c_str());
-        out.error = "topic '" + out.pcd_topics[i] + "' has no messages to render.";
-        return out;
-      }
       if (!args.property_min.has_value()) {
         running_min = std::min(running_min, out.pcd_spans[i].property_min);
       }

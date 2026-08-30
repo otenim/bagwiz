@@ -153,6 +153,10 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_point_raster_test test/core/pointcloud/point_raster_test.cpp)
   target_link_libraries(bagwiz_point_raster_test bagwiz_pointcloud)
 
+  ament_add_gtest(
+    bagwiz_projector_helpers_test test/core/pointcloud/projector_helpers_test.cpp)
+  target_link_libraries(bagwiz_projector_helpers_test bagwiz_pointcloud)
+
   ament_add_gtest(bagwiz_pointcloud_fetcher_test test/core/pointcloud/fetcher_test.cpp)
   target_link_libraries(bagwiz_pointcloud_fetcher_test bagwiz_pointcloud)
 

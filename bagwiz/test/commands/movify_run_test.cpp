@@ -1462,6 +1462,99 @@ TEST_F(MovifyRunTest, RunComposesCameraAndPointCloudPanels)
   EXPECT_EQ(probe.height, 8u);
 }
 
+// Two lidars in different frames merge into one panel through the bag's TF:
+// with --frame naming the vehicle frame, each cloud is looked up at its own
+// stamp and the run succeeds.
+TEST_F(MovifyRunTest, RunMergesPointCloudTopicsThroughTf)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/front", "sensor_msgs/msg/PointCloud2"));
+    writer->declare_topic(make_topic("/rear", "sensor_msgs/msg/PointCloud2"));
+    writer->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
+    for (const auto * child : {"front_lidar", "rear_lidar"}) {
+      const auto tf = make_tf_static_payload("base_link", child);
+      writer->write("/tf_static", 1'000'000'000LL, {tf.data(), tf.size()});
+    }
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto front = make_pointcloud2_payload(ts, "front_lidar", {{5.0f, 0.0f, 0.0f}});
+      writer->write("/front", ts, {front.data(), front.size()});
+      const auto rear = make_pointcloud2_payload(ts, "rear_lidar", {{-5.0f, 0.0f, 0.0f}});
+      writer->write("/rear", ts, {rear.data(), rear.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.pcd_topics = {"/front", "/rear"};
+  args.frame = "base_link";
+  args.views = {bagwiz::core::pointcloud::CloudProjection::kBev};
+  args.range_m = 10.0;
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 1280u);
+  EXPECT_EQ(probe.height, 720u);
+}
+
+// Without TF, a cloud outside the view frame cannot be placed: the run stops
+// (leaving no output) instead of drawing it somewhere plausible but wrong.
+TEST_F(MovifyRunTest, RunFailsWhenAPointCloudPanelNeedsMissingTf)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/front", "sensor_msgs/msg/PointCloud2"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto front = make_pointcloud2_payload(ts, "front_lidar", {{5.0f, 0.0f, 0.0f}});
+      writer->write("/front", ts, {front.data(), front.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.pcd_topics = {"/front"};
+  args.frame = "base_link";
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+}
+
+// A camera panel next to a point-cloud clock: the sweeps are the frames, the
+// cell is the point-cloud panel's 1280x720, and the camera fits into it.
+TEST_F(MovifyRunTest, RunComposesCameraAndPointCloudClock)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic(kImageTopic, kImageType));
+    writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+    for (int i = 0; i < 3; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto image = make_image_payload(8, 4, "bgr8", static_cast<std::uint8_t>(i * 20));
+      writer->write(kImageTopic, ts, {image.data(), image.size()});
+      const auto cloud =
+        make_pointcloud2_payload(ts, "lidar", {{static_cast<float>(i + 1), 0.0f, 0.0f}});
+      writer->write("/points", ts, {cloud.data(), cloud.size()});
+    }
+    writer->close();
+  }
+  MovifyArgs args(bag, kImageTopic, tmp_dir_ / "out.avi", false);
+  args.pcd_topics = {"/points"};
+  args.clock = "/points";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 3);
+  EXPECT_EQ(probe.width, 2560u);
+  EXPECT_EQ(probe.height, 720u);
+}
+
 // Exercises the real MovifyCommand::configure() — reached through the
 // process-wide command registry that movify.cpp's BAGWIZ_REGISTER_COMMAND
 // registrar populates — rather than a hand-mirrored copy of its wiring. The
