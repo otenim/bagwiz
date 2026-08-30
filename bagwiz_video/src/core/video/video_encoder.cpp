@@ -23,6 +23,7 @@ extern "C" {
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -162,6 +163,7 @@ struct VideoEncoder::Impl
   int width = 0;
   int height = 0;
   AVPixelFormat pix_fmt = AV_PIX_FMT_YUV420P;
+  bool full_range = false;
   SourcePixelFormat sws_src_fmt = SourcePixelFormat::kBgr8;
   bool sws_ready = false;
   bool finished = false;
@@ -263,6 +265,13 @@ std::string VideoEncoder::write_frame(
       im.sws_ready = false;
       return "failed to create swscale conversion context";
     }
+    if (im.full_range && im.pix_fmt == AV_PIX_FMT_YUV420P) {
+      // A full-range stream converts RGB to full-range YUV (the default
+      // targets limited range), so converted frames match planes handed over
+      // straight from a JPEG decoder.
+      const int * coefficients = sws_getCoefficients(SWS_CS_ITU601);
+      sws_setColorspaceDetails(im.sws, coefficients, 1, coefficients, 1, 0, 1 << 16, 1 << 16);
+    }
     im.sws_src_fmt = format;
     im.sws_ready = true;
   }
@@ -279,6 +288,45 @@ std::string VideoEncoder::write_frame(
   const std::array<int, 4> src_stride{static_cast<int>(stride), 0, 0, 0};
   sws_scale(
     im.sws, src_data.data(), src_stride.data(), 0, im.height, im.frame->data, im.frame->linesize);
+
+  im.frame->pts = im.next_pts++;
+  return im.drain(im.frame);
+}
+
+std::string VideoEncoder::write_yuv420(const Yuv420Planes & planes)
+{
+  Impl & im = *impl_;
+  const auto width = static_cast<std::size_t>(im.width);
+  const auto height = static_cast<std::size_t>(im.height);
+  const std::size_t chroma_w = (width + 1) / 2;
+  const std::size_t chroma_h = (height + 1) / 2;
+  if (planes.y == nullptr || planes.u == nullptr || planes.v == nullptr) {
+    return "yuv420 frame is missing a plane";
+  }
+  if (planes.y_stride < width || planes.u_stride < chroma_w || planes.v_stride < chroma_w) {
+    return "yuv420 frame row stride is shorter than the frame width";
+  }
+
+  int ret = av_frame_make_writable(im.frame);
+  if (ret < 0) {
+    return "frame_make_writable failed: " + av_err(ret);
+  }
+  const auto copy_plane = [](
+                            const std::uint8_t * src, std::size_t src_stride, std::uint8_t * dst,
+                            std::size_t dst_stride, std::size_t row_bytes, std::size_t rows) {
+    for (std::size_t r = 0; r < rows; ++r) {
+      std::memcpy(dst + r * dst_stride, src + r * src_stride, row_bytes);
+    }
+  };
+  copy_plane(
+    planes.y, planes.y_stride, im.frame->data[0], static_cast<std::size_t>(im.frame->linesize[0]),
+    width, height);
+  copy_plane(
+    planes.u, planes.u_stride, im.frame->data[1], static_cast<std::size_t>(im.frame->linesize[1]),
+    chroma_w, chroma_h);
+  copy_plane(
+    planes.v, planes.v_stride, im.frame->data[2], static_cast<std::size_t>(im.frame->linesize[2]),
+    chroma_w, chroma_h);
 
   im.frame->pts = im.next_pts++;
   return im.drain(im.frame);
@@ -344,6 +392,7 @@ OpenVideoEncoderResult open_video_encoder(
   im->width = static_cast<int>(width);
   im->height = static_cast<int>(height);
   im->pix_fmt = choice->pix_fmt;
+  im->full_range = options.full_range;
 
   const std::string path_str = output.string();
 
@@ -372,7 +421,7 @@ OpenVideoEncoderResult open_video_encoder(
     im->codec->time_base = AVRational{fps_den, fps_num};  // seconds per frame
     im->codec->framerate = AVRational{fps_num, fps_den};
     im->codec->gop_size = 12;
-    if (choice->jpeg_range) {
+    if (choice->jpeg_range || options.full_range) {
       im->codec->color_range = AVCOL_RANGE_JPEG;
     }
     if ((im->fmt->oformat->flags & AVFMT_GLOBALHEADER) != 0) {

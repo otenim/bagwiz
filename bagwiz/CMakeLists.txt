@@ -174,6 +174,7 @@ set(bagwiz_command_sources
   src/commands/movify_camera_panel.cpp
   src/commands/movify_cloud_panel.cpp
   src/commands/movify_cloud_source.cpp
+  src/commands/movify_direct.cpp
   src/commands/movify_map_panel.cpp
   src/commands/movify_map_track.cpp
   src/commands/movify_inputs.cpp
@@ -725,6 +726,7 @@ if(BUILD_TESTING)
     src/commands/movify_camera_panel.cpp
     src/commands/movify_cloud_panel.cpp
     src/commands/movify_cloud_source.cpp
+    src/commands/movify_direct.cpp
     src/commands/movify_map_panel.cpp
     src/commands/movify_map_track.cpp
     src/commands/movify_inputs.cpp
@@ -760,6 +762,7 @@ if(BUILD_TESTING)
     src/commands/movify_camera_panel.cpp
     src/commands/movify_cloud_panel.cpp
     src/commands/movify_cloud_source.cpp
+    src/commands/movify_direct.cpp
     src/commands/movify_map_panel.cpp
     src/commands/movify_map_track.cpp
     src/commands/movify_inputs.cpp
@@ -776,6 +779,18 @@ if(BUILD_TESTING)
       bagwiz_movify_${movify_unit}_test ${bagwiz_test_libs} fmt::fmt PkgConfig::LIBAV
       ${OpenCV_LIBS})
   endforeach()
+
+  # The direct camera pass decodes real JPEG frames: it links the image test
+  # fixture that encodes them.
+  ament_add_gtest(bagwiz_movify_direct_test
+    test/commands/movify_direct_test.cpp
+    ${bagwiz_movify_unit_sources})
+  target_include_directories(bagwiz_movify_direct_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/commands)
+  target_link_libraries(
+    bagwiz_movify_direct_test ${bagwiz_test_libs} bagwiz_image::bagwiz_image_test_fixture
+    fmt::fmt PkgConfig::LIBAV ${OpenCV_LIBS})
 
   # The walk_*.hpp headers live in src/commands (CLI-internal, not installed),
   # so the walk unit tests add src/commands to their include path

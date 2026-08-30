@@ -279,6 +279,14 @@ output larger than that (a 2x2 grid of 4K cameras) falls back to libx264.
 Both keep B-frames off, so the output plays on hardware decoders that choke
 on negative timestamps.
 
+A single JPEG camera shown as decoded — one `--cam` topic of
+`CompressedImage`, `--no-rectify` (or no camera info to rectify with), no
+`--resize` / `--width`, no `--cam-pcd`, and no other panel — streams each
+frame's decoded YUV planes straight to the encoder, decoding a few frames
+ahead on worker threads, instead of composing a frame through packed BGR
+and back; the run logs "streaming ... as decoded". Every other layout
+composes its frames.
+
 ## Output
 
 Frames are decoded and encoded one at a time; the video is written to a
