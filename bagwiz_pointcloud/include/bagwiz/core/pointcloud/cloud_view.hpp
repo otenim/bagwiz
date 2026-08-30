@@ -99,6 +99,18 @@ struct CloudViewProjection
   [[nodiscard]] bool ok() const noexcept { return error.empty(); }
 };
 
+// The share of a cloud's points a BEV auto-range keeps inside the view: the
+// half-extent is the 95th percentile of the points' ground distances, so a
+// handful of far returns does not shrink the scene to a dot.
+inline constexpr double kBevAutoRangeQuantile = 0.95;
+
+// The BEV half-extent that keeps `fraction` (0 < fraction <= 1) of the
+// cloud's finite points inside the view: the nearest-rank quantile of their
+// ground (XY) distances. nullopt with `error` set when the cloud's layout is
+// unusable, no point is finite, or every point sits at the origin.
+[[nodiscard]] std::optional<double> bev_auto_range(
+  const PointCloud2 & cloud, double fraction, std::string & error);
+
 // Project every finite point of `cloud` onto `view`: each point is moved by
 // `transform` (the pose of the cloud's frame in the view frame, applied as
 // p' = R p + t) and projected; points whose center lands outside the canvas

@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -444,6 +445,33 @@ TEST_F(MovifyTmpDirTest, ValidateInputsClockMustBeACamTopic)
 
 // A point-cloud topic alone: one panel per view, the frame and (for a BEV
 // view) the extent taken from the first cloud, and the topic as the clock.
+// Without --range, the BEV extent is the 95th percentile of the first
+// cloud's ground distances: twenty points 1..20 m out give 19 m, not the
+// farthest point.
+TEST_F(MovifyTmpDirTest, ValidateInputsAutoRangeIsAPercentileOfTheFirstCloud)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, movify_mcap_options());
+    movify_declare_topic(*w, "/points", kMovifyPointCloudType);
+    std::vector<std::array<float, 3>> points;
+    for (int i = 1; i <= 20; ++i) {
+      points.push_back({static_cast<float>(i), 0.0F, 0.0F});
+    }
+    w->write(
+      "/points", 1'000'000'000LL, movify_pointcloud2_payload(1'000'000'000LL, "lidar", points));
+    w->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.output_path = tmp_dir_ / "out.avi";
+  args.pcd_topics = {"/points"};
+  args.views = {bagwiz::core::pointcloud::CloudProjection::kBev};
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  EXPECT_DOUBLE_EQ(v.range_m, 19.0);
+}
+
 TEST_F(MovifyTmpDirTest, ValidateInputsPointCloudPanelsAlone)
 {
   const auto bag = movify_write_cloud_bag(tmp_dir_, "in.mcap", "/points", "lidar", 2);
@@ -460,7 +488,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPointCloudPanelsAlone)
   EXPECT_EQ(v.pcd_topics, std::vector<std::string>({"/points"}));
   EXPECT_EQ(v.pcd_views.size(), 2u);
   EXPECT_EQ(v.frame, "lidar");
-  EXPECT_DOUBLE_EQ(v.range_m, 1.0);  // the first cloud's farthest point
+  EXPECT_DOUBLE_EQ(v.range_m, 1.0);  // the first cloud's one point
   ASSERT_TRUE(v.clock_pcd.has_value());
   EXPECT_EQ(*v.clock_pcd, 0u);
   EXPECT_EQ(v.clock, 0u);

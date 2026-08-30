@@ -198,7 +198,8 @@ public:
       .add_option(
         "--range", args_.range_m,
         "BEV half-extent in meters: the bev view spans +-range on both ground axes. Default: "
-        "the farthest finite point of the first cloud.")
+        "the 95th percentile of the first cloud's point distances from the frame origin, "
+        "so a few far returns do not shrink the scene.")
       ->check(CLI::PositiveNumber);
     app
       .add_option(

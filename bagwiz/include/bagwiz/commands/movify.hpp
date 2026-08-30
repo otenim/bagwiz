@@ -96,8 +96,8 @@ struct MovifyArgs
   std::vector<core::pointcloud::CloudProjection> views{
     core::pointcloud::CloudProjection::kPerspective};
   std::optional<std::string> frame;
-  // BEV half-extent in meters. Unset: the largest finite point distance in the
-  // first cloud of the first topic.
+  // BEV half-extent in meters. Unset: the 95th percentile of the ground
+  // distances of the first cloud of the first topic (see kBevAutoRangeQuantile).
   std::optional<double> range_m;
   // Perspective camera on a sphere of radius dist_m around the view frame's
   // origin, looking at it.

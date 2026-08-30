@@ -19,13 +19,16 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace
 {
 
+using bagwiz::core::pointcloud::bev_auto_range;
 using bagwiz::core::pointcloud::CloudProjection;
 using bagwiz::core::pointcloud::CloudView;
+using bagwiz::core::pointcloud::kBevAutoRangeQuantile;
 using bagwiz::core::pointcloud::make_perspective_camera;
 using bagwiz::core::pointcloud::PointCloud2;
 using bagwiz::core::pointcloud::PointCloudProperty;
@@ -294,4 +297,48 @@ TEST(CloudViewProject, RejectsATruncatedPointBlob)
   const auto r = project_cloud_to_view(
     cloud, RigidTransform{}, bev_view(100, 100, 10.0), PointCloudProperty::kDistance);
   EXPECT_FALSE(r.ok());
+}
+
+// ---- bev_auto_range ------------------------------------------------------------
+
+// Twenty points at ground distances 1..20 m (z varies but is not a ground
+// distance): the nearest-rank quantiles are the 19th, 10th and 20th values.
+TEST(BevAutoRange, IsTheNearestRankQuantileOfGroundDistances)
+{
+  std::vector<std::vector<float>> points;
+  for (int i = 1; i <= 20; ++i) {
+    points.push_back({static_cast<float>(i), 0.0F, static_cast<float>(100 - i), 0.0F});
+  }
+  const PointCloud2 cloud = make_cloud(points);
+  std::string error;
+  EXPECT_DOUBLE_EQ(bev_auto_range(cloud, 0.95, error).value_or(-1.0), 19.0) << error;
+  EXPECT_DOUBLE_EQ(bev_auto_range(cloud, 0.5, error).value_or(-1.0), 10.0) << error;
+  EXPECT_DOUBLE_EQ(bev_auto_range(cloud, 1.0, error).value_or(-1.0), 20.0) << error;
+  EXPECT_DOUBLE_EQ(bev_auto_range(cloud, 0.01, error).value_or(-1.0), 1.0) << error;
+  static_assert(kBevAutoRangeQuantile > 0.0 && kBevAutoRangeQuantile <= 1.0);
+}
+
+TEST(BevAutoRange, UsesTheGroundDistanceAndSkipsNonFinitePoints)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  // (3, 4) is 5 m away on the ground whatever its height; the NaN point and
+  // the infinite one are skipped.
+  const PointCloud2 cloud = make_cloud(
+    {{3.0F, 4.0F, 50.0F, 0.0F},
+     {nan, 1.0F, 0.0F, 0.0F},
+     {std::numeric_limits<float>::infinity(), 0.0F, 0.0F, 0.0F}});
+  std::string error;
+  EXPECT_DOUBLE_EQ(bev_auto_range(cloud, 1.0, error).value_or(-1.0), 5.0) << error;
+}
+
+TEST(BevAutoRange, RejectsCloudsWithoutAUsablePoint)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  std::string error;
+  EXPECT_FALSE(bev_auto_range(make_cloud({{nan, nan, nan, 0.0F}}), 0.95, error).has_value());
+  EXPECT_EQ(error, "point cloud has no finite points");
+  EXPECT_FALSE(bev_auto_range(make_cloud({{0.0F, 0.0F, 7.0F, 0.0F}}), 0.95, error).has_value());
+  EXPECT_EQ(error, "point cloud's points all sit at the origin");
+  EXPECT_FALSE(bev_auto_range(make_cloud({{1.0F, 0.0F, 0.0F, 0.0F}}), 0.0, error).has_value());
+  EXPECT_EQ(error, "the auto-range fraction must be in (0, 1]");
 }

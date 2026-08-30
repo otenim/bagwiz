@@ -501,7 +501,7 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
 
   // The point-cloud panels' view frame and BEV extent come from the first
   // cloud of the first --pcd topic: its frame_id unless --frame names one,
-  // and, for a BEV view without --range, its farthest finite point.
+  // and, for a BEV view without --range, a percentile of its ground distances.
   if (!out.pcd_topics.empty()) {
     const auto first = read_first_cloud(args.input_path, out.pcd_topics.front());
     if (!first.cloud.has_value()) {
@@ -524,23 +524,27 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
       if (args.range_m.has_value()) {
         out.range_m = *args.range_m;
       } else {
-        core::pointcloud::PropertyRanges ranges;
+        // The extent that keeps most of the first cloud in view: a percentile
+        // of its ground distances, so a few far returns do not shrink the scene.
         std::string error;
-        const auto distance =
-          static_cast<std::size_t>(core::pointcloud::PointCloudProperty::kDistance);
-        if (
-          !core::pointcloud::accumulate_property_ranges(*first.cloud, ranges, error) ||
-          ranges.mins[distance] > ranges.maxs[distance] || !(ranges.maxs[distance] > 0.0)) {
+        const auto range = core::pointcloud::bev_auto_range(
+          *first.cloud, core::pointcloud::kBevAutoRangeQuantile, error);
+        if (!range.has_value()) {
           BAGWIZ_LOG_ERROR(
             kLogger,
-            "could not determine --range from the first cloud of topic '%s' (no finite "
-            "points); pass --range explicitly.",
-            out.pcd_topics.front().c_str());
+            "could not determine --range from the first cloud of topic '%s' (%s); pass "
+            "--range explicitly.",
+            out.pcd_topics.front().c_str(), error.c_str());
           out.error = "could not determine --range from the first cloud of topic '" +
-                      out.pcd_topics.front() + "' (no finite points); pass --range explicitly.";
+                      out.pcd_topics.front() + "' (" + error + "); pass --range explicitly.";
           return out;
         }
-        out.range_m = ranges.maxs[distance];
+        out.range_m = *range;
+        BAGWIZ_LOG_INFO(
+          kLogger,
+          "bev: --range not given; using %.1f m, the %.0fth percentile of the first "
+          "cloud's ground distances.",
+          *range, 100.0 * core::pointcloud::kBevAutoRangeQuantile);
       }
     }
   }

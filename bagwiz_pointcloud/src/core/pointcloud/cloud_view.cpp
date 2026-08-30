@@ -10,8 +10,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace bagwiz::core::pointcloud
 {
@@ -183,6 +186,57 @@ std::optional<ProjectedPoint> project_perspective(
   double x, double y, double z, const CloudView & view)
 {
   return project_perspective(x, y, z, make_perspective_camera(view), view);
+}
+
+std::optional<double> bev_auto_range(
+  const PointCloud2 & cloud, double fraction, std::string & error)
+{
+  if (!(fraction > 0.0) || fraction > 1.0) {
+    error = "the auto-range fraction must be in (0, 1]";
+    return std::nullopt;
+  }
+  const PointField * field_x = find_field(cloud, "x");
+  const PointField * field_y = find_field(cloud, "y");
+  if (field_x == nullptr || field_y == nullptr) {
+    error = "point cloud is missing required x/y fields";
+    return std::nullopt;
+  }
+  if (const std::string err = check_layout(cloud); !err.empty()) {
+    error = err;
+    return std::nullopt;
+  }
+
+  std::vector<double> distances;
+  distances.reserve(static_cast<std::size_t>(cloud.height) * cloud.width);
+  const std::uint32_t rstep = cloud.row_step != 0 ? cloud.row_step : cloud.width * cloud.point_step;
+  for (std::uint32_t row = 0; row < cloud.height; ++row) {
+    const std::byte * row_base = cloud.data.data() + static_cast<std::size_t>(row) * rstep;
+    for (std::uint32_t col = 0; col < cloud.width; ++col) {
+      const std::byte * base = row_base + static_cast<std::size_t>(col) * cloud.point_step;
+      const double x = read_field(base, *field_x);
+      const double y = read_field(base, *field_y);
+      if (std::isfinite(x) && std::isfinite(y)) {
+        distances.push_back(std::hypot(x, y));
+      }
+    }
+  }
+  if (distances.empty()) {
+    error = "point cloud has no finite points";
+    return std::nullopt;
+  }
+  // Nearest rank: the smallest distance at or below which `fraction` of the
+  // points fall.
+  const auto rank =
+    static_cast<std::size_t>(std::ceil(fraction * static_cast<double>(distances.size())));
+  const std::size_t index = std::clamp<std::size_t>(rank, 1, distances.size()) - 1;
+  std::nth_element(
+    distances.begin(), distances.begin() + static_cast<std::ptrdiff_t>(index), distances.end());
+  const double range = distances[index];
+  if (!(range > 0.0)) {
+    error = "point cloud's points all sit at the origin";
+    return std::nullopt;
+  }
+  return range;
 }
 
 CloudViewProjection project_cloud_to_view(
