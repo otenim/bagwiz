@@ -14,7 +14,8 @@
 #include "bagwiz/core/pointcloud/fetcher.hpp"
 #include "bagwiz/core/video/frame_rate.hpp"
 #include "bagwiz/io/bag_io.hpp"
-#include "movify_layout.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_layout.hpp"     // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_track.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <tf2/buffer_core.hpp>
 
@@ -92,11 +93,13 @@ struct ViewInput
 // point-cloud panels follow the camera panels in the grid: `pcd_topics` are
 // the --pcd topics they all draw, `pcd_views` the projections (one panel
 // each, in --view order), `frame` the frame every cloud is transformed
-// into, and `range_m` the BEV half-extent. `clock` indexes the clock panel
-// among all panels (camera panels first); when the clock is a point-cloud
-// topic, `clock_pcd` is its index into `pcd_topics` and the clock panel is
-// the first point-cloud panel. `error` is empty on success; on failure it
-// holds the message that was already logged.
+// into, and `range_m` the BEV half-extent. The map panel (`gnss_topic`, a
+// NavSatFix topic) comes last. `clock` indexes the clock panel among all
+// panels (camera panels first); when the clock is a point-cloud topic,
+// `clock_pcd` is its index into `pcd_topics` and the clock panel is the
+// first point-cloud panel; when it is the --gnss topic, `clock_gnss` is set.
+// `error` is empty on success; on failure it holds the message that was
+// already logged.
 struct VideoInputValidation
 {
   std::vector<ViewInput> views;
@@ -107,6 +110,8 @@ struct VideoInputValidation
   std::string frame;
   double range_m = 0.0;
   std::optional<std::size_t> clock_pcd;
+  std::optional<std::string> gnss_topic;
+  bool clock_gnss = false;
   std::string error;
 
   [[nodiscard]] bool ok() const { return error.empty(); }
@@ -117,16 +122,19 @@ struct VideoInputValidation
 // type, the --clock resolution, --cam-pcd and --cam-info entry parsing,
 // per-view cam-info resolution (explicit entry or derivation from the image
 // topic name) and the cam-info requirement of rectification / --cam-pcd,
-// every point-cloud topic's presence + type, and the point-cloud panels'
-// frame and BEV extent (from the first cloud of the first --pcd topic unless
-// --frame / --range name them). Logs the command's errors and returns on the
-// first failure.
+// every point-cloud topic's presence + type, the point-cloud panels' frame
+// and BEV extent (from the first cloud of the first --pcd topic unless
+// --frame / --range name them), and the --gnss topic's presence + type. Logs
+// the command's errors and returns on the first failure.
 [[nodiscard]] VideoInputValidation validate_video_inputs(const MovifyArgs & args);
 
-// The topic whose messages define the ticks: the clock camera panel's, or
-// the point-cloud topic `clock_pcd` names.
+// The topic whose messages define the ticks: the clock camera panel's, the
+// point-cloud topic `clock_pcd` names, or the --gnss topic.
 [[nodiscard]] inline const std::string & clock_topic_of(const VideoInputValidation & validation)
 {
+  if (validation.clock_gnss) {
+    return *validation.gnss_topic;
+  }
   return validation.clock_pcd.has_value() ? validation.pcd_topics[*validation.clock_pcd]
                                           : validation.views[validation.clock].topic;
 }
@@ -167,16 +175,19 @@ struct VideoInputScan
   std::vector<bool> pcd_topic_has_stamps;
   double global_property_min = 0.0;
   double global_property_max = 0.0;
+  // The map panel's track: the whole --gnss topic projected to ENU, set iff
+  // the run has one.
+  std::optional<MapTrack> map_track;
   std::string error;
 
   [[nodiscard]] bool ok() const { return error.empty(); }
 };
 
 // Pass 1: derive the frame rate from the clock topic's message timestamps,
-// require every view's topic to carry at least one message, and, when
-// point-cloud overlay topics are given, scan each for its index and the
-// selected property's global min/max. Logs the command's errors and returns
-// with !ok() on the first failure.
+// require every view's topic to carry at least one message, load the --gnss
+// track, and, when point-cloud topics are given, scan each for its index and
+// the selected property's global min/max. Logs the command's errors and
+// returns with !ok() on the first failure.
 [[nodiscard]] VideoInputScan scan_video_inputs(
   const MovifyArgs & args, const VideoInputValidation & validation);
 

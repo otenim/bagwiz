@@ -42,7 +42,8 @@ struct MovifyArgs
 
   std::filesystem::path input_path;
   // Image topics to render as camera panels, in grid order (left to right,
-  // top to bottom). Together with pcd_topics at least one panel is required.
+  // top to bottom). Together with pcd_topics and gnss_topic at least one
+  // panel is required.
   std::vector<std::string> cam_topics;
   std::filesystem::path output_path;
   // Replace a pre-existing <output>. Without it, an existing output path stops
@@ -50,8 +51,9 @@ struct MovifyArgs
   bool overwrite = false;
   // The topic whose messages define the output frames — one frame per
   // message, its message rate as the frame rate, and its panel's render size
-  // as the grid's cell size. Must be one of cam_topics or pcd_topics; unset
-  // picks the first camera panel, else the first point-cloud panel.
+  // as the grid's cell size. Must be one of cam_topics, pcd_topics or
+  // gnss_topic; unset picks the first camera panel, else the first
+  // point-cloud panel, else the map panel.
   std::optional<std::string> clock;
   // Grid layout as "<cols>x<rows>" (e.g. "2x2"). Empty derives a near-square
   // grid from the panel count.
@@ -105,6 +107,13 @@ struct MovifyArgs
   double azim_deg = 180.0;
   double dist_m = 30.0;
 
+  // Map panel (--gnss): a NavSatFix topic drawn as the vehicle's track in a
+  // local East-North-Up plan view, after the point-cloud panels. `map_range_m`
+  // makes the panel follow the current fix at +-range; unset fits the whole
+  // track into the panel.
+  std::optional<std::string> gnss_topic;
+  std::optional<double> map_range_m;
+
   // Internal toggle for the parallel per-panel pipeline. When false the
   // synchronous loop is used, which composes the same frames without worker
   // threads. Not exposed on the CLI; tests set this directly.
@@ -139,7 +148,8 @@ struct VideoSourceCheck
   const std::filesystem::path & input, const std::string & topic);
 
 // Render the panels named by `args` (camera panels from cam_topics,
-// point-cloud panels from pcd_topics) from `args.input_path` to a video at
+// point-cloud panels from pcd_topics, the map panel from gnss_topic) from
+// `args.input_path` to a video at
 // `args.output_path`, inferring the container/codec from the output extension
 // and the frame rate from the clock topic's message timestamps. The panels are
 // arranged in a grid (see `grid`); every panel other than the clock shows the

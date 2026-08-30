@@ -35,6 +35,7 @@ namespace bagwiz::test
 inline constexpr const char * kMovifyImageType = "sensor_msgs/msg/Image";
 inline constexpr const char * kMovifyCameraInfoType = "sensor_msgs/msg/CameraInfo";
 inline constexpr const char * kMovifyPointCloudType = "sensor_msgs/msg/PointCloud2";
+inline constexpr const char * kMovifyNavSatFixType = "sensor_msgs/msg/NavSatFix";
 
 // A per-test tmp directory, removed on teardown.
 class MovifyTmpDirTest : public ::testing::Test
@@ -114,6 +115,23 @@ public:
     }
   }
   void i32(std::int32_t v) { u32(static_cast<std::uint32_t>(v)); }
+  void i8(std::int8_t v) { u8(static_cast<std::uint8_t>(v)); }
+  void u16(std::uint16_t v)
+  {
+    align(2);
+    buf_.push_back(static_cast<std::byte>(v & 0xFFU));
+    buf_.push_back(static_cast<std::byte>((v >> 8) & 0xFFU));
+  }
+  void f64(double v)
+  {
+    align(8);
+    std::uint64_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(v));
+    std::memcpy(&bits, &v, sizeof(v));
+    for (int i = 0; i < 8; ++i) {
+      buf_.push_back(static_cast<std::byte>((bits >> (8 * i)) & 0xFFU));
+    }
+  }
   void str(const std::string & s)
   {
     u32(static_cast<std::uint32_t>(s.size() + 1));
@@ -132,9 +150,11 @@ public:
   std::vector<std::byte> take() { return std::move(buf_); }
 
 private:
+  // CDR aligns fields relative to the body, which starts after the 4-byte
+  // encapsulation header.
   void align(std::size_t n)
   {
-    while (buf_.size() % n != 0) {
+    while ((buf_.size() - 4) % n != 0) {
       buf_.push_back(std::byte{0});
     }
   }
@@ -212,6 +232,53 @@ inline std::filesystem::path movify_write_cloud_bag(
     const auto payload =
       movify_pointcloud2_payload(ts, frame_id, {{{static_cast<float>(i + 1), 0.0F, 0.0F}}});
     w->write(topic, ts, payload);
+  }
+  w->close();
+  return path;
+}
+
+// One NavSatFix message for a test bag: its stamp (also its record time),
+// NavSatStatus.status (0 FIX, -1 NO_FIX) and WGS84 position.
+struct MovifyGnssFix
+{
+  std::int64_t stamp_ns = 0;
+  std::int8_t status = 0;
+  double latitude = 0.0;
+  double longitude = 0.0;
+  double altitude = 0.0;
+};
+
+// A sensor_msgs/msg/NavSatFix payload: header (stamp, frame_id "gnss"),
+// status, position, a zero covariance of type UNKNOWN.
+inline std::vector<std::byte> movify_navsatfix_payload(const MovifyGnssFix & fix)
+{
+  MovifyCdrBuilder b;
+  b.i32(static_cast<std::int32_t>(fix.stamp_ns / 1'000'000'000LL));
+  b.u32(static_cast<std::uint32_t>(fix.stamp_ns % 1'000'000'000LL));
+  b.str("gnss");
+  b.i8(fix.status);
+  b.u16(1);  // NavSatStatus.service: GPS
+  b.f64(fix.latitude);
+  b.f64(fix.longitude);
+  b.f64(fix.altitude);
+  for (int i = 0; i < 9; ++i) {
+    b.f64(0.0);  // position_covariance
+  }
+  b.u8(0);  // position_covariance_type: UNKNOWN
+  return b.take();
+}
+
+// A bag holding one NavSatFix topic with the given fixes, each recorded at
+// its stamp.
+inline std::filesystem::path movify_write_gnss_bag(
+  const std::filesystem::path & dir, const std::string & name, const std::string & topic,
+  std::span<const MovifyGnssFix> fixes)
+{
+  const auto path = dir / name;
+  auto w = bagwiz::io::open_write(path, movify_mcap_options());
+  movify_declare_topic(*w, topic, kMovifyNavSatFixType);
+  for (const auto & fix : fixes) {
+    w->write(topic, fix.stamp_ns, movify_navsatfix_payload(fix));
   }
   w->close();
   return path;

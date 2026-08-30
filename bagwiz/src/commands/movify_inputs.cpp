@@ -13,6 +13,7 @@
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/tf_buffer_loader.hpp"
 #include "bagwiz/io/topics.hpp"
+#include "movify_map_track.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <algorithm>
 #include <cmath>
@@ -33,10 +34,12 @@ constexpr const char * kLogger = "bagwiz.cmd.movify";
 // kImageType / kCompressedImageType mirror topic_types.hpp's kImageTopicTypes
 // (movify --cam's allowed_types) via is_supported_type() below.
 // kPointCloudType mirrors topic_types.hpp's kPointCloud2Type (--cam-pcd's
-// allowed_types). Keep both in sync by hand.
+// allowed_types), kNavSatFixMsgType its kNavSatFixMsgType (--gnss's). Keep them in
+// sync by hand.
 constexpr const char * kImageType = "sensor_msgs/msg/Image";
 constexpr const char * kCompressedImageType = "sensor_msgs/msg/CompressedImage";
 constexpr const char * kPointCloudType = "sensor_msgs/msg/PointCloud2";
+constexpr const char * kNavSatFixMsgType = "sensor_msgs/msg/NavSatFix";
 
 bool is_supported_type(const std::string & type)
 {
@@ -246,9 +249,9 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
 {
   VideoInputValidation out;
 
-  if (args.cam_topics.empty() && args.pcd_topics.empty()) {
-    BAGWIZ_LOG_ERROR(kLogger, "nothing to render: pass at least one --cam or --pcd topic.");
-    out.error = "nothing to render: pass at least one --cam or --pcd topic.";
+  if (args.cam_topics.empty() && args.pcd_topics.empty() && !args.gnss_topic.has_value()) {
+    BAGWIZ_LOG_ERROR(kLogger, "nothing to render: pass at least one --cam, --pcd or --gnss topic.");
+    out.error = "nothing to render: pass at least one --cam, --pcd or --gnss topic.";
     return out;
   }
 
@@ -271,8 +274,11 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
     }
     out.pcd_views = args.views;
   }
-  const std::size_t panel_count =
-    args.cam_topics.size() + (args.pcd_topics.empty() ? 0 : args.views.size());
+  // The panels in grid order: the camera panels, one point-cloud panel per
+  // view, then the map panel.
+  const std::size_t panel_count = args.cam_topics.size() +
+                                  (args.pcd_topics.empty() ? 0 : args.views.size()) +
+                                  (args.gnss_topic.has_value() ? 1 : 0);
 
   const auto grid = parse_grid_spec(args.grid, panel_count);
   if (!grid.ok()) {
@@ -337,10 +343,12 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
     }
     out.pcd_topics = args.pcd_topics;
   }
+  out.gnss_topic = args.gnss_topic;
 
   // --clock names the panel whose messages define the frames; it must be one
-  // of the --cam or --pcd topics. Unset picks the first camera panel, else the
-  // first point-cloud panel (the panels follow the camera panels in the grid).
+  // of the --cam, --pcd or --gnss topics. Unset picks the first camera panel,
+  // else the first point-cloud panel, else the map panel (the panels follow
+  // the camera panels in the grid, in that order).
   if (args.clock.has_value()) {
     const auto cam_it = std::find(args.cam_topics.begin(), args.cam_topics.end(), *args.clock);
     const auto pcd_it = std::find(args.pcd_topics.begin(), args.pcd_topics.end(), *args.clock);
@@ -349,14 +357,22 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
     } else if (pcd_it != args.pcd_topics.end()) {
       out.clock_pcd = static_cast<std::size_t>(pcd_it - args.pcd_topics.begin());
       out.clock = args.cam_topics.size();
+    } else if (args.gnss_topic.has_value() && *args.gnss_topic == *args.clock) {
+      out.clock_gnss = true;
+      out.clock = args.cam_topics.size() + out.pcd_views.size();
     } else {
       BAGWIZ_LOG_ERROR(
-        kLogger, "--clock '%s' is not one of the --cam or --pcd topics.", args.clock->c_str());
-      out.error = "--clock '" + *args.clock + "' is not one of the --cam or --pcd topics.";
+        kLogger, "--clock '%s' is not one of the --cam, --pcd or --gnss topics.",
+        args.clock->c_str());
+      out.error = "--clock '" + *args.clock + "' is not one of the --cam, --pcd or --gnss topics.";
       return out;
     }
   } else if (args.cam_topics.empty()) {
-    out.clock_pcd = 0;
+    if (!args.pcd_topics.empty()) {
+      out.clock_pcd = 0;
+    } else {
+      out.clock_gnss = true;
+    }
     out.clock = 0;
   }
 
@@ -499,6 +515,35 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
     }
   }
 
+  // The map panel's topic must be present and carry NavSatFix messages.
+  if (out.gnss_topic.has_value()) {
+    std::unique_ptr<io::BagReader> reader;
+    try {
+      reader = io::open_read(args.input_path);
+    } catch (const std::exception & e) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "failed to open '%s': %s", args.input_path.string().c_str(), e.what());
+      out.error = "failed to open '" + args.input_path.string() + "': " + e.what();
+      return out;
+    }
+    const io::TopicInfo * info = io::find_topic(*reader, *out.gnss_topic);
+    if (info == nullptr) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "gnss topic '%s' not found in %s", out.gnss_topic->c_str(),
+        args.input_path.string().c_str());
+      out.error = "gnss topic '" + *out.gnss_topic + "' not found in " + args.input_path.string();
+      return out;
+    }
+    if (info->type != kNavSatFixMsgType) {
+      BAGWIZ_LOG_ERROR(
+        kLogger, "gnss topic '%s' has type '%s', expected %s", out.gnss_topic->c_str(),
+        info->type.c_str(), kNavSatFixMsgType);
+      out.error = "gnss topic '" + *out.gnss_topic + "' has type '" + info->type + "', expected " +
+                  kNavSatFixMsgType;
+      return out;
+    }
+  }
+
   // The point-cloud panels' view frame and BEV extent come from the first
   // cloud of the first --pcd topic: its frame_id unless --frame names one,
   // and, for a BEV view without --range, a percentile of its ground distances.
@@ -586,6 +631,17 @@ VideoInputScan scan_video_inputs(const MovifyArgs & args, const VideoInputValida
       out.error = "topic '" + topic + "' has no messages to render.";
       return out;
     }
+  }
+
+  // The map panel's track: the whole --gnss topic, projected to ENU. A
+  // topic without any positioned fix stops the run here.
+  if (validation.gnss_topic.has_value()) {
+    auto loaded = load_map_track(args.input_path, *validation.gnss_topic);
+    if (!loaded.ok()) {
+      out.error = loaded.error;
+      return out;
+    }
+    out.map_track = std::move(*loaded.track);
   }
 
   // Point clouds: scan timestamps and the selected property's global min/max

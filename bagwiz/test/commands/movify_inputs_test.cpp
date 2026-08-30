@@ -39,12 +39,15 @@ using bagwiz::commands::ViewInput;
 using bagwiz::test::kMovifyCameraInfoType;
 using bagwiz::test::kMovifyGarbagePayload;
 using bagwiz::test::kMovifyImageType;
+using bagwiz::test::kMovifyNavSatFixType;
 using bagwiz::test::kMovifyPointCloudType;
 using bagwiz::test::movify_declare_topic;
 using bagwiz::test::movify_mcap_options;
 using bagwiz::test::movify_pointcloud2_payload;
 using bagwiz::test::movify_write_cloud_bag;
+using bagwiz::test::movify_write_gnss_bag;
 using bagwiz::test::movify_write_image_bag;
+using bagwiz::test::MovifyGnssFix;
 using bagwiz::test::MovifyTmpDirTest;
 
 // ---- parse_pcd_bindings -----------------------------------------------------
@@ -390,6 +393,119 @@ TEST_F(MovifyTmpDirTest, ValidateInputsPcdTopicWrongTypeFails)
     "pcd topic '/points' has type 'sensor_msgs/msg/Image', expected sensor_msgs/msg/PointCloud2");
 }
 
+TEST_F(MovifyTmpDirTest, ValidateInputsGnssTopicNotFoundFails)
+{
+  const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  args.gnss_topic = "/gnss";
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(v.error, "gnss topic '/gnss' not found in " + bag.string());
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsGnssTopicWrongTypeFails)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, movify_mcap_options());
+    movify_declare_topic(*w, "/gnss", kMovifyImageType);  // wrong type
+    w->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.gnss_topic = "/gnss";
+  args.output_path = tmp_dir_ / "out.avi";
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(
+    v.error,
+    "gnss topic '/gnss' has type 'sensor_msgs/msg/Image', expected sensor_msgs/msg/NavSatFix");
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsGnssAloneIsTheClock)
+{
+  const std::vector<MovifyGnssFix> fixes{{1'000'000'000LL, 0, 35.0, 139.0, 40.0}};
+  const auto bag = movify_write_gnss_bag(tmp_dir_, "in.mcap", "/gnss", fixes);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.gnss_topic = "/gnss";
+  args.output_path = tmp_dir_ / "out.avi";
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  EXPECT_TRUE(v.clock_gnss);
+  EXPECT_EQ(v.clock, 0u);
+  EXPECT_EQ(clock_topic_of(v), "/gnss");
+  EXPECT_EQ(v.grid.cols, 1u);
+  EXPECT_EQ(v.grid.rows, 1u);
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsGnssFollowsTheCameraAndTakesTheClockByName)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, movify_mcap_options());
+    movify_declare_topic(*w, "/cam/image_raw", kMovifyImageType);
+    movify_declare_topic(*w, "/cam/camera_info", kMovifyCameraInfoType);
+    movify_declare_topic(*w, "/gnss", kMovifyNavSatFixType);
+    w->close();
+  }
+  MovifyArgs args(bag, "/cam/image_raw", tmp_dir_ / "out.avi", false);
+  args.gnss_topic = "/gnss";
+  // The map panel follows the camera panel: two panels on a 2x1 grid, the
+  // camera the clock.
+  const auto by_default = validate_video_inputs(args);
+  ASSERT_TRUE(by_default.ok()) << by_default.error;
+  EXPECT_FALSE(by_default.clock_gnss);
+  EXPECT_EQ(by_default.clock, 0u);
+  EXPECT_EQ(by_default.grid.cols, 2u);
+  EXPECT_EQ(by_default.grid.rows, 1u);
+  ASSERT_TRUE(by_default.gnss_topic.has_value());
+  EXPECT_EQ(*by_default.gnss_topic, "/gnss");
+  // --clock names the map panel: the second panel drives the frames.
+  args.clock = "/gnss";
+  const auto named = validate_video_inputs(args);
+  ASSERT_TRUE(named.ok()) << named.error;
+  EXPECT_TRUE(named.clock_gnss);
+  EXPECT_EQ(named.clock, 1u);
+  EXPECT_EQ(clock_topic_of(named), "/gnss");
+}
+
+TEST_F(MovifyTmpDirTest, ScanLoadsTheGnssTrack)
+{
+  const std::vector<MovifyGnssFix> fixes{
+    {1'000'000'000LL, 0, 35.0, 139.0, 40.0},
+    {1'100'000'000LL, -1, 0.0, 0.0, 0.0},  // NO_FIX: a frame, but not a track point
+    {1'200'000'000LL, 0, 35.0001, 139.0, 40.0},
+  };
+  const auto bag = movify_write_gnss_bag(tmp_dir_, "in.mcap", "/gnss", fixes);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.gnss_topic = "/gnss";
+  args.output_path = tmp_dir_ / "out.avi";
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  const auto scan = scan_video_inputs(args, v);
+  ASSERT_TRUE(scan.ok()) << scan.error;
+  EXPECT_EQ(scan.span.count, 3u);  // every message is a frame
+  ASSERT_TRUE(scan.map_track.has_value());
+  EXPECT_EQ(scan.map_track->fixes.size(), 2u);
+}
+
+TEST_F(MovifyTmpDirTest, ScanRejectsAGnssTopicWithoutAPosition)
+{
+  const std::vector<MovifyGnssFix> fixes{{1'000'000'000LL, -1, 0.0, 0.0, 0.0}};
+  const auto bag = movify_write_gnss_bag(tmp_dir_, "in.mcap", "/gnss", fixes);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.gnss_topic = "/gnss";
+  args.output_path = tmp_dir_ / "out.avi";
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  const auto scan = scan_video_inputs(args, v);
+  EXPECT_FALSE(scan.ok());
+  EXPECT_EQ(scan.error, "topic '/gnss' carries no fix with a position (every message is NO_FIX).");
+}
+
 TEST_F(MovifyTmpDirTest, ValidateInputsExplicitCamInfoMissingFails)
 {
   const auto bag = movify_write_image_bag(tmp_dir_, "in.mcap", 1);
@@ -430,7 +546,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsWithoutCamTopicsFails)
   args.output_path = tmp_dir_ / "out.avi";
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
-  EXPECT_EQ(v.error, "nothing to render: pass at least one --cam or --pcd topic.");
+  EXPECT_EQ(v.error, "nothing to render: pass at least one --cam, --pcd or --gnss topic.");
 }
 
 TEST_F(MovifyTmpDirTest, ValidateInputsClockMustBeACamTopic)
@@ -440,7 +556,7 @@ TEST_F(MovifyTmpDirTest, ValidateInputsClockMustBeACamTopic)
   args.clock = "/cam/other";
   const auto v = validate_video_inputs(args);
   EXPECT_FALSE(v.ok());
-  EXPECT_EQ(v.error, "--clock '/cam/other' is not one of the --cam or --pcd topics.");
+  EXPECT_EQ(v.error, "--clock '/cam/other' is not one of the --cam, --pcd or --gnss topics.");
 }
 
 // A point-cloud topic alone: one panel per view, the frame and (for a BEV

@@ -1,8 +1,9 @@
 # `bagwiz movify`
 
-Render a rosbag to video: the image topics named with `--cam` and the point
-clouds named with `--pcd` (drawn in 3D and/or from above) become the panels
-of one grid — a single view, or a multi-view grid — with point clouds
+Render a rosbag to video: the image topics named with `--cam`, the point
+clouds named with `--pcd` (drawn in 3D and/or from above) and the GNSS track
+named with `--gnss` (a plan view of the vehicle's position) become the
+panels of one grid — a single view, or a multi-view grid — with point clouds
 optionally projected onto the camera panels. One topic is the clock: each of
 its messages becomes one output frame, its message rate sets the frame rate,
 and its panel's size fixes the grid's cell size. The container/codec is
@@ -11,7 +12,7 @@ chosen from the `<output>` extension.
 ## Usage
 
 ```text
-bagwiz movify -i <input> [--cam <topic>...] [--pcd <topic>...] -o <output> [OPTIONS]
+bagwiz movify -i <input> [--cam <topic>...] [--pcd <topic>...] [--gnss <topic>] -o <output> [OPTIONS]
 ```
 
 ## Examples
@@ -78,6 +79,15 @@ bagwiz movify -i drive.mcap -o cam_lidar.mp4 \
   --cam /sensing/camera/front/image_raw/compressed --pcd /sensing/lidar/top/points \
   --clock /sensing/lidar/top/points
 
+# The lidar next to the vehicle's GNSS track: a plan view of the whole drive
+# with the current position marked.
+bagwiz movify -i drive.mcap -o lidar_map.mp4 \
+  --pcd /sensing/lidar/top/points --gnss /sensing/gnss/nav_sat_fix
+
+# The map following the vehicle instead, 100 m around it.
+bagwiz movify -i drive.mcap -o lidar_map.mp4 \
+  --pcd /sensing/lidar/top/points --gnss /sensing/gnss/nav_sat_fix --map-range 100
+
 # Render at half resolution to reduce output file size.
 bagwiz movify -i drive.mcap --cam /sensing/camera/image_raw/compressed -o out.mp4 --resize 0.5
 
@@ -132,10 +142,11 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 | Flag                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag (directory or single-file). Must exist.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--cam <topic>...`        | Image topic(s) to render as camera panels, in grid order (left to right, top to bottom). Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)); a glob's matches expand in lexicographic (topic-name) order, so grid placement stays deterministic. At least one `--cam` or `--pcd` topic is required. Long-form only. Repeatable.                                                                                                                                          |
+| `--cam <topic>...`        | Image topic(s) to render as camera panels, in grid order (left to right, top to bottom). Supported types: `sensor_msgs/msg/Image` (`bgr8`, `rgb8`) and `sensor_msgs/msg/CompressedImage` (JPEG/PNG). A literal topic name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)); a glob's matches expand in lexicographic (topic-name) order, so grid placement stays deterministic. At least one `--cam`, `--pcd` or `--gnss` topic is required. Long-form only. Repeatable.                                                                                                                                |
 | `--pcd <topic>...`        | `sensor_msgs/msg/PointCloud2` topic(s) to render as point-cloud panels, after the camera panels in the grid: every listed topic is drawn into one panel per `--view`, each cloud transformed into the `--frame` frame at its own stamp — see [Point-cloud panels](#point-cloud-panels). A literal topic name or a `*` glob. Long-form only. Repeatable.                                                                                                                                                                                                                                                                |
+| `--gnss <topic>`          | `sensor_msgs/msg/NavSatFix` topic to render as a map panel, after the point-cloud panels: the vehicle's track in a local East-North-Up plan view with the current fix marked — see [Map panel](#map-panel). A literal topic name. Long-form only.                                                                                                                                                                                                                                                                                                                                                                      |
 | `-o`, `--output <output>` | **Required.** Output video path. Extension selects the container/codec: `.mp4`/`.mkv`/`.mov` -> H.264, `.avi` -> MJPEG.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--clock <topic>`         | The panel whose messages define the output frames: each message becomes one frame, its message rate sets the frame rate, and its panel's size (a camera frame after `--resize` / `--width`, or a point-cloud panel's 1280x720) fixes the grid's cell size — see [The clock panel](#the-clock-panel). Must be one of the `--cam` or `--pcd` topics. A literal topic name, not a glob. Default: the first `--cam` topic, else the first `--pcd` topic. Long-form only.                                                                                                                                                   |
+| `--clock <topic>`         | The panel whose messages define the output frames: each message becomes one frame, its message rate sets the frame rate, and its panel's size (a camera frame after `--resize` / `--width`, or a point-cloud or map panel's 1280x720) fixes the grid's cell size — see [The clock panel](#the-clock-panel). Must be one of the `--cam`, `--pcd` or `--gnss` topics. A literal topic name, not a glob. Default: the first `--cam` topic, else the first `--pcd` topic, else the `--gnss` topic. Long-form only.                                                                                                         |
 | `--grid <cols>x<rows>`    | Grid layout for the panels (e.g. `2x2`). Must provide at least as many cells as panels; extra cells stay black. When omitted, a near-square grid is derived from the panel count (2 panels -> 2x1, 3-4 -> 2x2, 5-6 -> 3x2, ...). Long-form only.                                                                                                                                                                                                                                                                                                                                                                       |
 | `--cam-info <topic>`      | `sensor_msgs/msg/CameraInfo` topic for rectification and `--cam-pcd`: a bare `<info_topic>` applies to every camera panel, an `<image_topic>=<info_topic>` entry overrides one panel. Panels without an entry derive it from the image topic name (`/image_raw`, `/image_raw/compressed`, `/image_rect_color`, and `/image_rect_color/compressed` map their prefix to `/camera_info`). Literal topic names, not globs. Long-form only. Repeatable.                                                                                                                                                                     |
 | `--no-rectify`            | Disable rectification. Each frame is otherwise rectified (lens-distortion correction applied) using the panel's resolved CameraInfo — there is no opt-in flag, since that is the default. `--no-rectify` also covers `--cam-pcd` panels, whose points then project onto the raw image with the camera's lens distortion applied. A panel whose camera-info topic cannot be derived renders unrectified with a warning (name it with `--cam-info`); point-cloud projection still requires one. Long-form only.                                                                                                          |
@@ -152,6 +163,7 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 | `--elev <deg>`            | `3d` view: camera elevation above the XY plane in degrees (range: -89 to 89). Default: 20. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `--azim <deg>`            | `3d` view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks at the scene from behind the sensor. Default: 180. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `--dist <m>`              | `3d` view: camera distance from the `--frame` origin in meters. Default: 30. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `--map-range <m>`         | Map panel: follow the current fix, the panel spanning +-range meters around it. Default: the whole track fitted into the panel. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `--resize <factor>`       | Scale the clock panel's frame by this factor while preserving aspect ratio, which sets the cell size. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so rectification and `--cam-pcd` stay aligned (range: 0.01-10.0). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                                                                                                                                                           |
 | `--width <px>`            | Fix the composed output width in pixels: the cell width is the width split across the grid columns, and the cell height follows the clock panel's aspect ratio (both rounded down to even, so the output can be a few pixels narrower). Mutually exclusive with `--resize`. Long-form only.                                                                                                                                                                                                                                                                                                                            |
 | `-w`, `--overwrite`       | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -159,7 +171,8 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 ## The clock panel
 
 One panel drives the output: the first `--cam` topic — the first `--pcd`
-topic when there is no camera — or the one named with `--clock`.
+topic when there is no camera, the `--gnss` topic when there is neither — or
+the one named with `--clock`.
 
 - The output's frame rate and frame count come from the clock topic's message
   timestamps. Each output frame shows, for every other panel, that topic's
@@ -168,10 +181,11 @@ topic when there is no camera — or the one named with `--clock`.
   a message yet renders as a black cell).
 - The cell size is the clock frame's size after `--resize` — or, when
   `--width` is given, the size derived from the output width and the grid
-  columns; a point-cloud clock panel renders at 1280x720, or at the `--width`
-  split across the columns at 16:9. Every other camera panel is scaled
-  uniformly to fit the cell, preserving aspect ratio, and centered with black
-  bars when the aspect ratios differ; a point-cloud panel fills the cell.
+  columns; a point-cloud or map clock panel renders at 1280x720, or at the
+  `--width` split across the columns at 16:9. Every other camera panel is
+  scaled uniformly to fit the cell, preserving aspect ratio, and centered with
+  black bars when the aspect ratios differ; a point-cloud or map panel fills
+  the cell.
 - The clock topic's frame size must not change mid-bag (a change aborts the
   run); other panels re-fit automatically.
 - A topic that carries no messages at all stops the run with an error, rather
@@ -193,11 +207,26 @@ drawn as `--point-size` squares with a depth test: where points overlap,
 the `3d` panel keeps the one nearest the camera and the `bev` panel the
 highest one.
 
+## Map panel
+
+`--gnss` draws a `sensor_msgs/msg/NavSatFix` topic as a map: every fix with
+a position (`STATUS_NO_FIX` messages are skipped) is projected into a local
+East-North-Up plane anchored at the first fix, and the panel shows the whole
+track dimmed, the part driven so far highlighted, and the fix whose bag
+record time is nearest the clock message's as a marker pointing along its
+direction of travel (read off the last half meter of movement, so a vehicle
+at rest keeps its heading). A north arrow, a scale bar, and the current
+latitude, longitude and altitude are drawn over it. By default the whole
+track is fitted into the panel; `--map-range <m>` follows the vehicle
+instead, the panel spanning +-m around it. No map tiles are drawn: the panel
+is an offline plan view. A topic whose messages all lack a position stops
+the run.
+
 ## Multi-view grids
 
 With several panels, each occupies one grid cell in order — the `--cam`
-topics as given, then one point-cloud panel per `--view` (left to right, top
-to bottom), the clock panel included. The composed
+topics as given, then one point-cloud panel per `--view`, then the map panel
+(left to right, top to bottom), the clock panel included. The composed
 size is the cell size multiplied by the grid, so it grows faster than the
 topic count suggests: nine 1080p cameras on a 3x3 grid compose a 5760x3240
 video. A run reports a composed size above 4K — see
