@@ -2148,14 +2148,20 @@ TEST(FlagCompletionTest, MovifyEncoderFlagListsChoices)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "--encoder"}),
-    "auto\nnvenc\nx264\n");
+    "auto\n"
+    "nvenc\n"
+    "x264\n");
 }
 
 TEST(FlagCompletionTest, MovifyPresetFlagListsChoices)
 {
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "3", "bagwiz", "movify", "--preset"}),
-    "fast\nfaster\nmedium\nslow\nslower\nsuperfast\nultrafast\nveryfast\nveryslow\n");
+    "fast\nfaster\nmedium\nslow\nslower\n"
+    "superfast\n"
+    "ultrafast\n"
+    "veryfast\n"
+    "veryslow\n");
 }
 
 // `--view <TAB>` offers the point-cloud panel projections, sorted.
