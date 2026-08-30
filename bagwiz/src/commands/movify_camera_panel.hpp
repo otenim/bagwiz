@@ -131,7 +131,7 @@ struct VideoOverlayParams
 {
   double property_min = 0.0;
   double property_max = 0.0;
-  core::pointcloud::ColorScheme colorscheme = core::pointcloud::ColorScheme::kViridis;
+  core::pointcloud::ColorScheme colorscheme = core::pointcloud::ColorScheme::kJet;
   std::uint32_t point_size = 2;
   float alpha = 1.0f;
 };

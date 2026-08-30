@@ -9,6 +9,7 @@
 #include "movify_cloud_panel.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
 #include "bagwiz/core/pointcloud/cloud_view.hpp"
+#include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/tf/trajectory.hpp"
 #include "movify_cloud_source.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "movify_inputs.hpp"        // NOLINT(build/include_subdir) src-local shared header
@@ -84,6 +85,14 @@ TEST_F(MovifyTmpDirTest, PanelDrawsThePoseTrajectoryOverTheBev)
   ASSERT_EQ(panel.select(tick, PanelSize{kW, kH}), "");
   const auto error = panel.render(canvas.cell(0));
   EXPECT_NE(error.find("no static TF chain"), std::string::npos) << error;
+}
+
+// The panel's styling defaults mirror the CLI's: jet is the colour scheme every
+// bagwiz visualization starts from.
+TEST(CloudPanelOptionsDefaults, SchemeIsJet)
+{
+  const CloudPanel::Options options;
+  EXPECT_EQ(options.scheme, bagwiz::core::pointcloud::ColorScheme::kJet);
 }
 
 }  // namespace
