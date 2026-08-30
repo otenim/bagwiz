@@ -1803,6 +1803,50 @@ TEST_F(CompletionTest, PcdConcatStampOffsetOffersNothingOnBashSplitValueHalf)
     "");
 }
 
+// `pcd concat <bag> --frame <TAB>` completes from the bag's static-TF frame
+// ids, like `tf static drop --frame`: --frame names the frame every cloud is
+// transformed into through the bag's static TF alone. The mixed fixture's
+// /tf_static carries map->odom->base_link.
+TEST_F(CompletionTest, PcdConcatFrameFlagListsStaticFrameIds)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "concat", "-i", "~/mixed.mcap", "--frame"}),
+    "base_link\nmap\nodom\n");
+}
+
+// A typed prefix narrows the `--frame` candidates within the static frame set.
+TEST_F(CompletionTest, PcdConcatFrameFlagRespectsPrefix)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_mixed_tf_mcap_fixture(tmp_dir_ / "mixed.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "concat", "-i", "~/mixed.mcap", "--frame",
+       "m"}),
+    "map\n");
+}
+
+// A bag whose TF is only dynamic (/tf, no *tf_static) offers no `--frame`
+// candidates: concat resolves --frame through the static TF alone.
+TEST_F(CompletionTest, PcdConcatFrameFlagIgnoresDynamicOnlyTf)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_tf_mcap_fixture(tmp_dir_ / "tf.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "concat", "-i", "~/tf.mcap", "--frame"}),
+    "");
+}
+
 // The command resolves --stamp-offset's <topic> half against the resolved
 // --pcd list, not the whole bag (a literal --pcd value here), so the
 // candidates narrow to the selected topic alone.

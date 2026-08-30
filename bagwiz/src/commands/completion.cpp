@@ -1631,8 +1631,9 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 // half. Its candidates mirror the command's resolution scope: once `--pcd`
 // values are on the line, only the PointCloud2 topics those selectors match
 // are offered; before any `--pcd` value, all of the bag's PointCloud2
-// topics. `--frame`, `--tolerance`, and `-o`/`--output` take free-form /
-// numeric / path values, so they get no value completion.
+// topics. `--frame` completes the bag's static-TF frame ids (the frame every
+// cloud is transformed into through the static TF); `--tolerance` and
+// `-o`/`--output` take numeric / path values, so they get no value completion.
 //
 //   concat: `pcd`(0) `concat`(1) -i|--input <bag> --as <output_topic>
 //           --pcd <t...> [--frame <f>] [--tolerance <val>]
@@ -1760,7 +1761,10 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
   // slots, so try_topic_completion handles their values before this function
   // is reached. undistort's --of/--ref complete the bag's TF frame ids,
   // mirroring `traj dump`/`join`; they are not topic slots (a frame id is not
-  // a topic), so they stay here.
+  // a topic), so they stay here. concat's --frame names the frame every cloud
+  // is transformed into through the bag's static TF alone (a frame it lacks
+  // stops the run), so it completes from the static-TF frame ids, like `tf
+  // static drop --frame`.
   if (request.cursor_word > 0) {
     const auto & previous = request.words[request.cursor_word - 1];
     if (previous == "--of" || previous == "--ref") {
@@ -1769,6 +1773,13 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
         return {};
       }
       return complete_frame_id_value(*bag_arg, current);
+    }
+    if (previous == "--frame" && request.words[kFirstCommandArgWord] == "concat") {
+      const auto bag_arg = find_input_bag(request);
+      if (!bag_arg) {
+        return {};
+      }
+      return complete_frame_id_value(*bag_arg, current, /*static_only=*/true);
     }
   }
   return {};
