@@ -14,6 +14,7 @@
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/tf_buffer_loader.hpp"
 #include "bagwiz/io/topics.hpp"
+#include "movify_map_tiles.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "movify_map_track.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <algorithm>
@@ -579,9 +580,15 @@ VideoInputValidation validate_video_inputs(const MovifyArgs & args)
     }
   }
 
-  // The map panel's topic must be present and carry NavSatFix messages.
+  // The map panel's topic must be present and carry NavSatFix messages, and
+  // its tile template well-formed.
   if (out.gnss_topic.has_value()) {
     if (const auto err = validate_gnss_topic(args.input_path, *out.gnss_topic); !err.empty()) {
+      out.error = err;
+      return out;
+    }
+    if (const auto err = validate_map_tile_template(args.map_tiles); !err.empty()) {
+      BAGWIZ_LOG_ERROR(kLogger, "%s", err.c_str());
       out.error = err;
       return out;
     }

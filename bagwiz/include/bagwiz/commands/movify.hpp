@@ -119,6 +119,11 @@ struct MovifyArgs
   // track into the panel.
   std::optional<std::string> gnss_topic;
   std::optional<double> map_range_m;
+  // The tile server the map under the track is drawn from: a URL template
+  // with {z}, {x} and {y} (http, https or file), or "none" for the bare plan
+  // view. The CLI defaults this to OpenStreetMap; the struct's default keeps
+  // a direct caller (the tests) off the network.
+  std::string map_tiles = "none";
 
   // Trajectory overlay (--pose): a pose topic (Odometry, PoseStamped or
   // PoseWithCovarianceStamped) whose trajectory every camera and point-cloud

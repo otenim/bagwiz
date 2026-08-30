@@ -15,6 +15,7 @@
 #include "bagwiz/core/pointcloud/cloud_view.hpp"
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
+#include "movify_map_tiles.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <map>
 #include <string>
@@ -282,6 +283,14 @@ public:
         "around it (the longer axis shows proportionally more). Default: the whole track "
         "fitted into the panel.")
       ->check(CLI::PositiveNumber);
+    app
+      .add_option(
+        "--map-tiles", args_.map_tiles,
+        "Map panel: the tile server the map under the track is drawn from, as a URL template "
+        "with {z}, {x} and {y} (http, https or file), or 'none' for a plain plan view. Fetched "
+        "tiles are cached under $XDG_CACHE_HOME/bagwiz/tiles (~/.cache by default). Default: "
+        "OpenStreetMap.")
+      ->default_val(kDefaultMapTileTemplate);
     app.footer(
       "Frames stream straight to the encoder (no large temp files); the output is written\n"
       "atomically and a failed run leaves no partial file behind.");

@@ -137,6 +137,12 @@ find_package(zstd REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
   libavcodec libavformat libavutil libswscale)
+# libcurl fetches the map tiles under `movify`'s GNSS panel
+# (src/commands/movify_map_tiles.cpp). CMake's own FindCURL module rather
+# than pkg-config: the conda-forge libcurl.pc lists private requirements
+# (zlib, krb5, ...) whose .pc files the environment does not carry, which
+# makes pkg-config reject it although the library and headers are there.
+find_package(CURL REQUIRED)
 
 # ---------------------------------------------------------------------------
 # bagwiz: CLI executable. Installs to bin/ so users run it directly after
@@ -177,6 +183,8 @@ set(bagwiz_command_sources
   src/commands/movify_direct.cpp
   src/commands/movify_map_panel.cpp
   src/commands/movify_map_track.cpp
+  src/commands/movify_map_tiles.cpp
+  src/commands/movify_map_basemap.cpp
   src/commands/movify_pose_overlay.cpp
   src/commands/movify_inputs.cpp
   src/commands/movify_layout.cpp
@@ -256,6 +264,7 @@ target_link_libraries(bagwiz
     CLI11::CLI11
     fmt::fmt
     rang
+    CURL::libcurl
     ${OpenCV_LIBS}
     ${sensor_msgs_TARGETS}
     ${rmw_TARGETS}
@@ -378,6 +387,7 @@ if(BUILD_TESTING)
     CLI11::CLI11
     fmt::fmt
     rang
+    CURL::libcurl
     ${OpenCV_LIBS}
     ${sensor_msgs_TARGETS}
     ${rmw_TARGETS}
@@ -730,6 +740,8 @@ if(BUILD_TESTING)
     src/commands/movify_direct.cpp
     src/commands/movify_map_panel.cpp
     src/commands/movify_map_track.cpp
+  src/commands/movify_map_tiles.cpp
+  src/commands/movify_map_basemap.cpp
     src/commands/movify_pose_overlay.cpp
     src/commands/pcd_undistort_common.cpp
     src/commands/movify_inputs.cpp
@@ -738,10 +750,11 @@ if(BUILD_TESTING)
     src/commands/movify_pipeline.cpp
     src/commands/topic_option.cpp
     src/commands/registry.cpp)
-  target_include_directories(bagwiz_movify_run_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_include_directories(bagwiz_movify_run_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(
     bagwiz_movify_run_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
-    bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV ${OpenCV_LIBS})
+    bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV CURL::libcurl ${OpenCV_LIBS})
 
   # movify_output_size.hpp lives in src/commands (CLI-internal, not
   # installed), so this test adds src/commands to its include path
@@ -768,14 +781,16 @@ if(BUILD_TESTING)
     src/commands/movify_direct.cpp
     src/commands/movify_map_panel.cpp
     src/commands/movify_map_track.cpp
+  src/commands/movify_map_tiles.cpp
+  src/commands/movify_map_basemap.cpp
     src/commands/movify_pose_overlay.cpp
     src/commands/pcd_undistort_common.cpp
     src/commands/movify_inputs.cpp
     src/commands/movify_layout.cpp
     src/commands/movify_output.cpp
     src/commands/movify_pipeline.cpp)
-  foreach(movify_unit layout output inputs camera_panel cloud_panel pipeline map_track map_panel
-          pose_overlay)
+  foreach(movify_unit layout output inputs camera_panel cloud_panel pipeline map_track map_tiles
+          map_basemap map_panel pose_overlay)
     ament_add_gtest(bagwiz_movify_${movify_unit}_test
       test/commands/movify_${movify_unit}_test.cpp
       ${bagwiz_movify_unit_sources})
@@ -783,7 +798,7 @@ if(BUILD_TESTING)
       PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
     target_link_libraries(
       bagwiz_movify_${movify_unit}_test ${bagwiz_test_libs} fmt::fmt PkgConfig::LIBAV
-      ${OpenCV_LIBS})
+      CURL::libcurl ${OpenCV_LIBS})
   endforeach()
 
   # The direct camera pass decodes real JPEG frames: it links the image test
@@ -796,7 +811,7 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/test/commands)
   target_link_libraries(
     bagwiz_movify_direct_test ${bagwiz_test_libs} bagwiz_image::bagwiz_image_test_fixture
-    fmt::fmt PkgConfig::LIBAV ${OpenCV_LIBS})
+    fmt::fmt PkgConfig::LIBAV CURL::libcurl ${OpenCV_LIBS})
 
   # The walk_*.hpp headers live in src/commands (CLI-internal, not installed),
   # so the walk unit tests add src/commands to their include path

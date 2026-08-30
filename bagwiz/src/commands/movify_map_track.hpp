@@ -38,10 +38,21 @@ struct MapFix
   double altitude = 0.0;
 };
 
-// The whole topic: the fixes in record-time order and their ENU bounding box.
+// The WGS84 fix the ENU plane is anchored at: the first positioned fix in
+// bag order, where east = north = 0.
+struct MapOrigin
+{
+  double latitude = 0.0;
+  double longitude = 0.0;
+  double altitude = 0.0;
+};
+
+// The whole topic: the fixes in record-time order, the plane's origin, and
+// the fixes' ENU bounding box.
 struct MapTrack
 {
   std::vector<MapFix> fixes;
+  MapOrigin origin;
   double min_east = 0.0;
   double max_east = 0.0;
   double min_north = 0.0;
@@ -60,7 +71,8 @@ struct MapTrackResult
 
 // Read every message of the NavSatFix `topic`, drop the fixes without a
 // position (NavSatStatus STATUS_NO_FIX, or a non-finite latitude/longitude),
-// and project the rest into an ENU plane anchored at the first of them.
+// and project the rest into an ENU plane anchored at the first of them (the
+// track's `origin`; a missing altitude anchors at 0 m).
 // Errors (logged): the bag cannot be opened or read, a message fails to
 // parse, the topic has no messages, or no message carries a position.
 [[nodiscard]] MapTrackResult load_map_track(

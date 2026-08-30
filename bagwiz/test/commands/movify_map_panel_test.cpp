@@ -8,16 +8,22 @@
 
 #include "movify_map_panel.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
-#include "movify_layout.hpp"     // NOLINT(build/include_subdir) src-local shared header
-#include "movify_map_track.hpp"  // NOLINT(build/include_subdir) src-local shared header
-#include "movify_panel.hpp"      // NOLINT(build/include_subdir) src-local shared header
+#include "movify_layout.hpp"       // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_basemap.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_tiles.hpp"    // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_track.hpp"    // NOLINT(build/include_subdir) src-local shared header
+#include "movify_panel.hpp"        // NOLINT(build/include_subdir) src-local shared header
+
+#include <opencv2/core.hpp>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -29,10 +35,15 @@ using bagwiz::commands::fit_map_viewport;
 using bagwiz::commands::follow_map_viewport;
 using bagwiz::commands::kMapFitMarginPx;
 using bagwiz::commands::kMapMinExtentM;
+using bagwiz::commands::kMapTileSizePx;
 using bagwiz::commands::map_scale_bar_meters;
 using bagwiz::commands::map_ui_scale;
+using bagwiz::commands::MapBasemap;
 using bagwiz::commands::MapFix;
+using bagwiz::commands::MapOrigin;
 using bagwiz::commands::MapPanel;
+using bagwiz::commands::MapTileKey;
+using bagwiz::commands::MapTileSource;
 using bagwiz::commands::MapTrack;
 using bagwiz::commands::MapViewport;
 using bagwiz::commands::PanelSize;
@@ -88,6 +99,12 @@ struct CellBuffer
     const std::size_t idx = (static_cast<std::size_t>(y) * width + x) * 3U;
     return pixels[idx] == std::byte{255} && pixels[idx + 1] == std::byte{255} &&
            pixels[idx + 2] == std::byte{255};
+  }
+  [[nodiscard]] bool is_color_at(std::uint32_t x, std::uint32_t y, int b, int g, int r) const
+  {
+    const std::size_t idx = (static_cast<std::size_t>(y) * width + x) * 3U;
+    return std::to_integer<int>(pixels[idx]) == b && std::to_integer<int>(pixels[idx + 1]) == g &&
+           std::to_integer<int>(pixels[idx + 2]) == r;
   }
   std::uint32_t width;
   std::uint32_t height;
@@ -268,6 +285,70 @@ TEST(MapPanel, HeadingArrowPointsAlongTheTravel)
   EXPECT_TRUE(buffer.is_black_at(150, 80));   // nothing beside the shaft
   EXPECT_TRUE(buffer.is_black_at(170, 80));
   EXPECT_FALSE(buffer.is_black_at(160, 120));  // the traveled track, below
+}
+
+// A tile source of one solid color, and one that has no tiles at all.
+class SolidTileSource final : public MapTileSource
+{
+public:
+  explicit SolidTileSource(cv::Scalar color) : color_(color) {}
+  std::optional<cv::Mat> tile(const MapTileKey &) override
+  {
+    return cv::Mat(kMapTileSizePx, kMapTileSizePx, CV_8UC3, color_);
+  }
+
+private:
+  cv::Scalar color_;
+};
+
+class MissingTileSource final : public MapTileSource
+{
+public:
+  std::optional<cv::Mat> tile(const MapTileKey &) override { return std::nullopt; }
+  [[nodiscard]] std::string last_error() const override { return "no tiles here"; }
+};
+
+MapPanel::Options options_over(std::shared_ptr<MapTileSource> source)
+{
+  MapPanel::Options options;
+  options.track = track_of({at(0, 0, 100), at(100, 0, 200)});
+  options.track.origin = MapOrigin{35.0, 139.0, 0.0};
+  MapBasemap::Options basemap;
+  basemap.origin = options.track.origin;
+  basemap.source = std::move(source);
+  options.basemap = std::make_shared<MapBasemap>(std::move(basemap));
+  options.attribution = "(c) test tiles";
+  return options;
+}
+
+// The same 320x180 cell as above: the track on the middle row from x = 24
+// to 296, a 20 m grid (lines at y = 35.6, 90, 144.4). (160, 60) is off the
+// track, the grid and every overlay.
+TEST(MapPanel, DrawsTheBasemapUnderTheTrack)
+{
+  MapPanel panel(options_over(std::make_shared<SolidTileSource>(cv::Scalar(70, 80, 90))));
+  const PanelSize cell{320, 180};
+  CellBuffer buffer(cell);
+  TickInfo tick;
+  tick.record_ns = 200;
+  EXPECT_EQ(panel.select(tick, cell), "");
+  EXPECT_EQ(panel.render(buffer.view()), "");
+  EXPECT_TRUE(buffer.is_color_at(160, 60, 70, 80, 90));   // the tiles show through
+  EXPECT_TRUE(buffer.is_white_at(296, 90));               // the marker sits on top
+  EXPECT_FALSE(buffer.is_color_at(160, 90, 70, 80, 90));  // as does the track
+}
+
+TEST(MapPanel, FallsBackToTheGridWhenNoTileCanBeFetched)
+{
+  MapPanel panel(options_over(std::make_shared<MissingTileSource>()));
+  const PanelSize cell{320, 180};
+  CellBuffer buffer(cell);
+  TickInfo tick;
+  tick.record_ns = 200;
+  EXPECT_EQ(panel.select(tick, cell), "");
+  EXPECT_EQ(panel.render(buffer.view()), "");
+  EXPECT_TRUE(buffer.is_black_at(160, 60));  // no no-data fill: the plain plan view
+  EXPECT_TRUE(buffer.is_white_at(296, 90));
 }
 
 TEST(MapPanel, RendersNothingBeforeASelection)
