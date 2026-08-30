@@ -177,6 +177,7 @@ set(bagwiz_command_sources
   src/commands/movify_direct.cpp
   src/commands/movify_map_panel.cpp
   src/commands/movify_map_track.cpp
+  src/commands/movify_pose_overlay.cpp
   src/commands/movify_inputs.cpp
   src/commands/movify_layout.cpp
   src/commands/movify_output.cpp
@@ -729,6 +730,8 @@ if(BUILD_TESTING)
     src/commands/movify_direct.cpp
     src/commands/movify_map_panel.cpp
     src/commands/movify_map_track.cpp
+    src/commands/movify_pose_overlay.cpp
+    src/commands/pcd_undistort_common.cpp
     src/commands/movify_inputs.cpp
     src/commands/movify_layout.cpp
     src/commands/movify_output.cpp
@@ -765,11 +768,14 @@ if(BUILD_TESTING)
     src/commands/movify_direct.cpp
     src/commands/movify_map_panel.cpp
     src/commands/movify_map_track.cpp
+    src/commands/movify_pose_overlay.cpp
+    src/commands/pcd_undistort_common.cpp
     src/commands/movify_inputs.cpp
     src/commands/movify_layout.cpp
     src/commands/movify_output.cpp
     src/commands/movify_pipeline.cpp)
-  foreach(movify_unit layout output inputs camera_panel pipeline map_track map_panel)
+  foreach(movify_unit layout output inputs camera_panel cloud_panel pipeline map_track map_panel
+          pose_overlay)
     ament_add_gtest(bagwiz_movify_${movify_unit}_test
       test/commands/movify_${movify_unit}_test.cpp
       ${bagwiz_movify_unit_sources})

@@ -1274,8 +1274,9 @@ std::vector<std::string> complete_video_cam_pair_value(
 }
 
 // `movify` renders a rosbag to video. `--cam` (image topics), `--pcd`
-// (point-cloud topics), `--gnss` (NavSatFix topics) and `--clock` (any camera,
-// point-cloud or GNSS panel topic) are declared topic slots, so
+// (point-cloud topics), `--gnss` (NavSatFix topics), `--pose` (Odometry / pose
+// topics) and `--clock` (any camera, point-cloud or GNSS panel topic) are
+// declared topic slots, so
 // try_topic_completion handles their values before this function is reached;
 // `--cam-pcd` and `--cam-info` are pair-valued slots whose completion defers
 // here (see completion_defers_to_command). Here we surface the command's flags
@@ -1290,19 +1291,21 @@ std::vector<std::string> complete_video_cam_pair_value(
 //   [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
 //   [--alpha <a>] [--view <3d|bev>...] [--frame <f>]
 //   [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>] [--map-range <m>]
-//   [--encoder <auto|x264|nvenc>] [--preset <name>] [-w|--overwrite]
+//   [--encoder <auto|x264|nvenc>] [--preset <name>]
+//   [--pose <pose_topic>] [--pose-of <frame>] [--pose-window <s>] [--pose-width <m>]
+//   [-w|--overwrite]
 std::vector<std::string> complete_movify(const CompletionRequest & request)
 {
   const auto current = current_word(request);
   if (current.starts_with("-")) {
     return matching(
-      with_help({"--alpha",  "--azim",       "--cam",        "--cam-info", "--cam-pcd",
-                 "--clock",  "--dist",       "--elev",       "--encoder",  "--field",
-                 "--frame",  "--gnss",       "--grid",       "--input",    "--map-range",
-                 "--max",    "--min",        "--no-rectify", "--output",   "--overwrite",
-                 "--pcd",    "--point-size", "--preset",     "--range",    "--resize",
-                 "--scheme", "--view",       "--width",      "-i",         "-o",
-                 "-w"}),
+      with_help({"--alpha",       "--azim",       "--cam",        "--cam-info", "--cam-pcd",
+                 "--clock",       "--dist",       "--elev",       "--encoder",  "--field",
+                 "--frame",       "--gnss",       "--grid",       "--input",    "--map-range",
+                 "--max",         "--min",        "--no-rectify", "--output",   "--overwrite",
+                 "--pcd",         "--point-size", "--pose",       "--pose-of",  "--pose-width",
+                 "--pose-window", "--preset",     "--range",      "--resize",   "--scheme",
+                 "--view",        "--width",      "-i",           "-o",         "-w"}),
       current);
   }
 

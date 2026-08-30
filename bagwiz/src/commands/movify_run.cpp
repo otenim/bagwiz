@@ -109,7 +109,7 @@ int run_movify(const MovifyArgs & args)
   if (!panels.has_value()) {
     return 1;
   }
-  auto cloud_panels = build_cloud_panels(args, validation, scan, clouds);
+  auto cloud_panels = build_cloud_panels(args, validation, scan, clouds, geometry.pose.get());
   if (!cloud_panels.has_value()) {
     return 1;
   }

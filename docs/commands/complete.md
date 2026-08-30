@@ -305,6 +305,8 @@ name only — it offers plain topic names either way, typed as-is.
     `sensor_msgs/msg/PointCloud2` topics
   - `bagwiz movify -i <input> --gnss <gnss_topic> -o <output>` — restricted to
     `sensor_msgs/msg/NavSatFix` topics
+  - `bagwiz movify -i <input> ... --pose <topic>` — restricted to `nav_msgs/msg/Odometry`,
+    `geometry_msgs/msg/PoseStamped` and `geometry_msgs/msg/PoseWithCovarianceStamped`
   - `bagwiz movify -i <input> ... --clock <topic>` — restricted to the types a clock
     topic may have: `sensor_msgs/msg/Image`, `sensor_msgs/msg/CompressedImage`,
     `sensor_msgs/msg/PointCloud2` or `sensor_msgs/msg/NavSatFix` (it must name one of the

@@ -117,6 +117,16 @@ inline constexpr std::array<std::string_view, 4> kMovifyClockTopicTypes{{
   "sensor_msgs/msg/NavSatFix",
 }};
 
+// The pose topics `movify --pose` draws as a trajectory over the camera and
+// point-cloud panels: the body-posing types of kUndistortPoseTopicTypes, not
+// TFMessage (a set of edges, not a body's pose). Must mirror the type check in
+// load_pose_overlay() (bagwiz/src/commands/movify_pose_overlay.cpp).
+inline constexpr std::array<std::string_view, 3> kMovifyPoseTopicTypes{{
+  "nav_msgs/msg/Odometry",
+  "geometry_msgs/msg/PoseStamped",
+  "geometry_msgs/msg/PoseWithCovarianceStamped",
+}};
+
 // Must mirror the private kImuType constant in
 // bagwiz/src/commands/map_slam.cpp (`map slam --imu`).
 inline constexpr std::array<std::string_view, 1> kImuType{{"sensor_msgs/msg/Imu"}};

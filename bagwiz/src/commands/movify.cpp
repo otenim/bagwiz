@@ -63,6 +63,32 @@ public:
       "track in a local East-North-Up plan view with the current fix marked. A literal topic "
       "name.",
       TopicSlotSpec{.allowed_types = kNavSatFixType, .mode = TopicSelectorMode::kLiteral});
+    add_topic_option(
+      app, "--pose", args_.pose_topic,
+      "Pose topic (nav_msgs/msg/Odometry, geometry_msgs/msg/PoseStamped or "
+      "PoseWithCovarianceStamped) whose trajectory every camera and point-cloud panel draws: "
+      "the stretch behind and ahead of each frame (--pose-window), the body's frame taken to "
+      "the panel's through the bag's static TF. A literal topic name.",
+      TopicSlotSpec{.allowed_types = kMovifyPoseTopicTypes, .mode = TopicSelectorMode::kLiteral});
+    app.add_option(
+      "--pose-of", args_.pose_of,
+      "The frame the --pose trajectory is of. Default: an Odometry message's child_frame_id, "
+      "else base_link (the pose topics do not name their body). The bag's static TF must "
+      "know this frame (and an Odometry's child frame, through which another frame is "
+      "reached).");
+    app
+      .add_option(
+        "--pose-window", args_.pose_window_s,
+        "Seconds of the --pose trajectory drawn on each side of a frame.")
+      ->default_val(10.0)
+      ->check(CLI::PositiveNumber);
+    app
+      .add_option(
+        "--pose-width", args_.pose_width_m,
+        "Width in meters of the plates the camera panels lay along the --pose trajectory "
+        "(the vehicle's width, say).")
+      ->default_val(2.0)
+      ->check(CLI::PositiveNumber);
     app
       .add_option(
         "-o,--output", args_.output_path,

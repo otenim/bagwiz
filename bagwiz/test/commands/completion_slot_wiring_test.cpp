@@ -175,6 +175,8 @@ TEST(CompletionSlotWiring, Movify)
   expect_slot(slot_for(slots, "pcd"), TopicSelectorMode::kGlob, bagwiz::commands::kPointCloud2Type);
   expect_slot(
     slot_for(slots, "gnss"), TopicSelectorMode::kLiteral, bagwiz::commands::kNavSatFixType);
+  expect_slot(
+    slot_for(slots, "pose"), TopicSelectorMode::kLiteral, bagwiz::commands::kMovifyPoseTopicTypes);
   // --cam-info takes a bare CameraInfo topic or an <image>=<info> pair; its
   // allowed_types name the pair's left half (like map slam --cam-info), and
   // its value completion defers to complete_movify() (pair_optional).

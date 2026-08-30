@@ -9,10 +9,14 @@
 #include "movify_camera_panel.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
 #include "bagwiz/core/image/camera_info.hpp"
+#include "bagwiz/core/tf/trajectory.hpp"
 #include "bagwiz/io/bag_io.hpp"
-#include "movify_layout.hpp"     // NOLINT(build/include_subdir) src-local shared header
-#include "movify_panel.hpp"      // NOLINT(build/include_subdir) src-local shared header
-#include "movify_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_layout.hpp"        // NOLINT(build/include_subdir) src-local shared header
+#include "movify_panel.hpp"         // NOLINT(build/include_subdir) src-local shared header
+#include "movify_pose_overlay.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_test_util.hpp"     // NOLINT(build/include_subdir) src-local shared header
+
+#include <geometry_msgs/msg/transform_stamped.hpp>
 
 #include <gtest/gtest.h>
 
@@ -337,6 +341,75 @@ TEST_F(MovifyTmpDirTest, ClockPanelReportsAPrefetchedPayloadThatDoesNotDecode)
   panel.prefetch(TickInfo{0, 1'000, kMovifyGarbagePayload});
   const auto error = panel.select(TickInfo{0, 1'000, kMovifyGarbagePayload}, PanelSize{});
   EXPECT_NE(error.find("topic '/cam/image': "), std::string::npos) << error;
+}
+
+// A --pose overlay, through the panel: the body drives along +x in `map`,
+// 1 m below a camera looking along +x (the optical frame's +z); the plates
+// ahead land below the principal point, on the image's center column, and a
+// body frame the static TF cannot reach is the panel's error.
+TEST_F(MovifyTmpDirTest, ClockPanelDrawsThePoseTrajectoryAsPlates)
+{
+  constexpr std::uint32_t kW = 64;
+  constexpr std::uint32_t kH = 32;
+  bagwiz::core::image::CameraInfo info;
+  info.width = kW;
+  info.height = kH;
+  info.frame_id = "cam";
+  info.k = {32.0, 0.0, 32.0, 0.0, 32.0, 16.0, 0.0, 0.0, 1.0};
+  info.p = {32.0, 0.0, 32.0, 0.0, 0.0, 32.0, 16.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+
+  bagwiz::commands::PoseOverlay overlay;
+  overlay.topic = "/odom";
+  overlay.world_frame = "map";
+  overlay.body_frame = "base_link";
+  overlay.window_s = 5.0;
+  for (int i = 0; i <= 5; ++i) {
+    bagwiz::core::TrajectoryPose pose;
+    pose.timestamp_ns = 1'000'000'000LL + i * 1'000'000'000LL;
+    pose.tx = 10.0 * i;
+    pose.qw = 1.0;
+    overlay.poses.push_back(pose);
+  }
+  // The camera: 1 m above base_link, its optical axis along base_link's +x.
+  geometry_msgs::msg::TransformStamped mount;
+  mount.header.frame_id = "base_link";
+  mount.child_frame_id = "cam";
+  mount.transform.translation.z = 1.0;
+  mount.transform.rotation.x = -0.5;
+  mount.transform.rotation.y = 0.5;
+  mount.transform.rotation.z = -0.5;
+  mount.transform.rotation.w = 0.5;
+  overlay.buffer.setTransform(mount, "test", /*is_static=*/true);
+
+  auto clouds = empty_clouds(tmp_dir_ / "unused.mcap");
+  auto options = image_options("/cam/image");
+  options.camera_info = &info;
+  options.pose = &overlay;
+  options.pose_width_m = 2.0;
+  CameraPanel panel(std::move(options), CameraPanel::ClockSizing{}, &clouds);
+
+  const auto payload = movify_bgr8_image_payload(kW, kH, 0x10);
+  ASSERT_EQ(panel.select(TickInfo{0, 1'000'000'000LL, payload}, PanelSize{}), "");
+  GridCanvas canvas(GridSpec{1, 1});
+  canvas.set_cell_size(kW, kH);
+  canvas.clear();
+  ASSERT_EQ(panel.render(canvas.cell(0)), "");
+  // A plate 4 m ahead sits 1 m below the camera: v = 16 + 32 * 1 / 4 = 24,
+  // on the center column — tinted by the orange fill over the grey frame.
+  const auto * px = canvas.pixels().data() + (24 * kW + 32) * 3;
+  EXPECT_GT(static_cast<int>(px[2]), 100);  // red
+  EXPECT_LT(static_cast<int>(px[0]), 40);   // blue stays low
+  // The sky above the horizon is untouched.
+  const auto * sky = canvas.pixels().data() + (4 * kW + 32) * 3;
+  EXPECT_EQ(sky[0], std::byte{0x10});
+  EXPECT_EQ(sky[2], std::byte{0x10});
+
+  // A body frame the static TF does not connect to the camera stops the
+  // panel with the overlay's error.
+  overlay.body_frame = "elsewhere";
+  ASSERT_EQ(panel.select(TickInfo{1, 1'100'000'000LL, payload}, PanelSize{}), "");
+  const auto error = panel.render(canvas.cell(0));
+  EXPECT_NE(error.find("no static TF chain"), std::string::npos) << error;
 }
 
 // --width pins the clock's render size from the output width: 8 px across 2

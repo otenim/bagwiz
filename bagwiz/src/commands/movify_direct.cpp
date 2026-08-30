@@ -86,7 +86,7 @@ bool can_stream_camera_direct(const MovifyArgs & args, const VideoInputValidatio
 {
   if (
     validation.views.size() != 1 || !validation.pcd_topics.empty() ||
-    validation.gnss_topic.has_value()) {
+    validation.gnss_topic.has_value() || validation.pose_topic.has_value()) {
     return false;
   }
   const ViewInput & view = validation.views.front();

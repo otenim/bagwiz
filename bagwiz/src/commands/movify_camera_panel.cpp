@@ -11,6 +11,7 @@
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/core/image/packed_raster.hpp"
 #include "bagwiz/core/pointcloud/overlay.hpp"
+#include "bagwiz/core/pointcloud/projector.hpp"
 #include "bagwiz/core/pointcloud/projector_helpers.hpp"
 
 #include <opencv2/core.hpp>
@@ -19,6 +20,7 @@
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <exception>
 #include <future>
@@ -491,6 +493,70 @@ std::string CameraPanel::render(const CellView & cell)
   if (const auto err = renderer_.render(*cache_, cache_geom_, points_ptr, cell); !err.empty()) {
     return on_topic(options_.topic, err);
   }
+  if (options_.pose != nullptr) {
+    if (const auto err = draw_pose(cell); !err.empty()) {
+      return on_topic(options_.topic, err);
+    }
+  }
+  return "";
+}
+
+std::string CameraPanel::draw_pose(const CellView & cell) const
+{
+  if (!cache_geom_.has_camera_info) {
+    return "the trajectory overlay needs a camera info to project through";
+  }
+  // The frame's own time, like the point-cloud overlays: its stamp when the
+  // message carries one, else its bag record time.
+  const std::int64_t stamp_ns =
+    cache_->header_stamp_ns != 0 ? cache_->header_stamp_ns : cache_->timestamp_ns;
+  std::string error;
+  const auto tiles = pose_tiles_in_frame(
+    *options_.pose, cache_geom_.camera_info.frame_id, stamp_ns, options_.pose_width_m, error);
+  if (!tiles.has_value()) {
+    return error;
+  }
+  const std::uint32_t x_off = (cell.width - cache_geom_.width) / 2U;
+  const std::uint32_t y_off = (cell.height - cache_geom_.height) / 2U;
+  std::vector<ProjectedPoseTile> projected;
+  projected.reserve(tiles->size());
+  for (const auto & tile : *tiles) {
+    ProjectedPoseTile out;
+    out.ahead = tile.ahead;
+    out.fade = tile.fade;
+    bool visible = true;
+    double depth = 0.0;
+    const double max_u = kPoseTileMaxOverhang * cache_geom_.width;
+    const double max_v = kPoseTileMaxOverhang * cache_geom_.height;
+    for (std::size_t k = 0; k < 4 && visible; ++k) {
+      // Corners may fall outside the image (the drawing clips), but a plate
+      // with a corner behind the camera, or one grazing the camera's plane
+      // and shooting off to absurd coordinates, cannot be drawn as a
+      // quadrilateral.
+      const auto & c = tile.corners[k];
+      const auto pixel = core::pointcloud::project_camera_point(
+        c[0], c[1], c[2], cache_geom_.camera_info, cache_geom_.width, cache_geom_.height,
+        cache_geom_.rectify, /*require_inside=*/false);
+      if (
+        !pixel.has_value() || !std::isfinite(pixel->u) || !std::isfinite(pixel->v) ||
+        std::abs(pixel->u) > max_u || std::abs(pixel->v) > max_v) {
+        visible = false;
+        break;
+      }
+      out.corners[k] = cv::Point(
+        static_cast<int>(std::lround(pixel->u)) + static_cast<int>(x_off),
+        static_cast<int>(std::lround(pixel->v)) + static_cast<int>(y_off));
+      depth += pixel->depth / 4.0;
+    }
+    if (visible) {
+      out.depth = depth;
+      projected.push_back(out);
+    }
+  }
+  cv::Mat canvas(
+    static_cast<int>(cell.height), static_cast<int>(cell.width), CV_8UC3,
+    static_cast<void *>(cell.data), cell.stride);
+  draw_pose_tiles(canvas, projected, pose_ui_scale(cell.height));  // sorts far to near itself
   return "";
 }
 
@@ -520,6 +586,8 @@ std::optional<std::vector<std::unique_ptr<Panel>>> build_camera_panels(
     options.rectify = view_rectifies(args.rectify, view);
     options.overlay = overlay;
     options.property = args.property;
+    options.pose = geometry.pose.get();
+    options.pose_width_m = args.pose_width_m;
     for (const auto & topic : view.pcd_topics) {
       const auto it = std::find(scan.pcd_topics.begin(), scan.pcd_topics.end(), topic);
       if (it == scan.pcd_topics.end()) {

@@ -22,6 +22,7 @@
 #include "movify_inputs.hpp"        // NOLINT(build/include_subdir) src-local shared header
 #include "movify_layout.hpp"        // NOLINT(build/include_subdir) src-local shared header
 #include "movify_panel.hpp"         // NOLINT(build/include_subdir) src-local shared header
+#include "movify_pose_overlay.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <cstddef>
 #include <cstdint>
@@ -223,6 +224,10 @@ public:
     core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
     // The panel's point-cloud topics, as indexes into the CloudSources.
     std::vector<std::size_t> cloud_indexes;
+    // The trajectory overlay, drawn over the frame as plates `pose_width_m`
+    // wide; null when the run has none. Must outlive the panel.
+    const PoseOverlay * pose = nullptr;
+    double pose_width_m = 2.0;
   };
 
   // The clock role's render-size rule: a scale factor (--resize) applied to
@@ -250,6 +255,9 @@ public:
 
 private:
   [[nodiscard]] std::string select_clock(const TickInfo & tick);
+  // Draw the --pose trajectory over the frame pasted into `cell` as plates
+  // on the ground, projected through the panel's camera at the frame's time.
+  [[nodiscard]] std::string draw_pose(const CellView & cell) const;
 
   // A decode started by prefetch(): its own decoder, a copy of the payload,
   // the tick it is for, and the frame its select() takes over.

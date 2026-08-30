@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -267,6 +268,57 @@ inline std::vector<std::byte> movify_navsatfix_payload(const MovifyGnssFix & fix
   b.u8(0);  // position_covariance_type: UNKNOWN
   return b.take();
 }
+
+// A nav_msgs/msg/Odometry payload: header (stamp, `frame`), `child`, the pose
+// at (x, y, z) yawed by `yaw` about +z, zero covariances and twist.
+inline std::vector<std::byte> movify_odometry_payload(
+  std::int64_t stamp_ns, const std::string & frame, const std::string & child, double x, double y,
+  double z, double yaw)
+{
+  MovifyCdrBuilder b;
+  b.i32(static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL));
+  b.u32(static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL));
+  b.str(frame);
+  b.str(child);
+  b.f64(x);
+  b.f64(y);
+  b.f64(z);
+  b.f64(0.0);  // orientation x
+  b.f64(0.0);  // y
+  b.f64(std::sin(yaw / 2.0));
+  b.f64(std::cos(yaw / 2.0));
+  for (int i = 0; i < 36; ++i) {
+    b.f64(0.0);  // pose covariance
+  }
+  for (int i = 0; i < 6; ++i) {
+    b.f64(0.0);  // twist
+  }
+  for (int i = 0; i < 36; ++i) {
+    b.f64(0.0);  // twist covariance
+  }
+  return b.take();
+}
+
+// A geometry_msgs/msg/PoseStamped payload at (x, y, z) yawed by `yaw`.
+inline std::vector<std::byte> movify_pose_stamped_payload(
+  std::int64_t stamp_ns, const std::string & frame, double x, double y, double z, double yaw)
+{
+  MovifyCdrBuilder b;
+  b.i32(static_cast<std::int32_t>(stamp_ns / 1'000'000'000LL));
+  b.u32(static_cast<std::uint32_t>(stamp_ns % 1'000'000'000LL));
+  b.str(frame);
+  b.f64(x);
+  b.f64(y);
+  b.f64(z);
+  b.f64(0.0);
+  b.f64(0.0);
+  b.f64(std::sin(yaw / 2.0));
+  b.f64(std::cos(yaw / 2.0));
+  return b.take();
+}
+
+inline constexpr const char * kMovifyOdometryType = "nav_msgs/msg/Odometry";
+inline constexpr const char * kMovifyPoseStampedType = "geometry_msgs/msg/PoseStamped";
 
 // A bag holding one NavSatFix topic with the given fixes, each recorded at
 // its stamp.

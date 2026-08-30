@@ -40,9 +40,11 @@ using bagwiz::test::kMovifyCameraInfoType;
 using bagwiz::test::kMovifyGarbagePayload;
 using bagwiz::test::kMovifyImageType;
 using bagwiz::test::kMovifyNavSatFixType;
+using bagwiz::test::kMovifyOdometryType;
 using bagwiz::test::kMovifyPointCloudType;
 using bagwiz::test::movify_declare_topic;
 using bagwiz::test::movify_mcap_options;
+using bagwiz::test::movify_odometry_payload;
 using bagwiz::test::movify_pointcloud2_payload;
 using bagwiz::test::movify_write_cloud_bag;
 using bagwiz::test::movify_write_gnss_bag;
@@ -504,6 +506,83 @@ TEST_F(MovifyTmpDirTest, ScanRejectsAGnssTopicWithoutAPosition)
   const auto scan = scan_video_inputs(args, v);
   EXPECT_FALSE(scan.ok());
   EXPECT_EQ(scan.error, "topic '/gnss' carries no fix with a position (every message is NO_FIX).");
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsPoseTopicNotFoundOrWrongTypeFails)
+{
+  const auto bag = movify_write_cloud_bag(tmp_dir_, "in.mcap", "/points", "lidar", 1);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.output_path = tmp_dir_ / "out.avi";
+  args.pcd_topics = {"/points"};
+  args.pose_topic = "/odom";
+  const auto missing = validate_video_inputs(args);
+  EXPECT_FALSE(missing.ok());
+  EXPECT_EQ(missing.error, "pose topic '/odom' not found in " + bag.string());
+  args.pose_topic = "/points";  // a PointCloud2 is not a pose
+  const auto wrong = validate_video_inputs(args);
+  EXPECT_FALSE(wrong.ok());
+  EXPECT_NE(wrong.error.find("has type 'sensor_msgs/msg/PointCloud2'"), std::string::npos)
+    << wrong.error;
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsPoseNeedsACameraOrPointCloudPanel)
+{
+  const std::vector<MovifyGnssFix> fixes{{1'000'000'000LL, 0, 35.0, 139.0, 40.0}};
+  const auto bag = movify_write_gnss_bag(tmp_dir_, "in.mcap", "/gnss", fixes);
+  MovifyArgs args;
+  args.input_path = bag;
+  args.output_path = tmp_dir_ / "out.avi";
+  args.gnss_topic = "/gnss";
+  args.pose_topic = "/odom";
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(v.error, "--pose draws on camera and point-cloud panels; pass --cam or --pcd.");
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsPoseOnACameraNeedsItsCameraInfo)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, movify_mcap_options());
+    movify_declare_topic(*w, "/cam/image", kMovifyImageType);  // no derivable camera info
+    movify_declare_topic(*w, "/odom", kMovifyOdometryType);
+    w->close();
+  }
+  MovifyArgs args(bag, "/cam/image", tmp_dir_ / "out.avi", false);
+  args.pose_topic = "/odom";
+  const auto v = validate_video_inputs(args);
+  EXPECT_FALSE(v.ok());
+  EXPECT_EQ(
+    v.error,
+    "A camera-info topic is required for --pose, but none could be derived from '/cam/image'. "
+    "Pass it explicitly with --cam-info /cam/image=<info_topic>.");
+}
+
+TEST_F(MovifyTmpDirTest, ValidateInputsAcceptsAPoseTopic)
+{
+  const auto bag = tmp_dir_ / "in.mcap";
+  {
+    auto w = bagwiz::io::open_write(bag, movify_mcap_options());
+    movify_declare_topic(*w, "/points", kMovifyPointCloudType);
+    movify_declare_topic(*w, "/odom", kMovifyOdometryType);
+    w->write(
+      "/points", 1'000'000'000LL,
+      movify_pointcloud2_payload(1'000'000'000LL, "lidar", {{{1.0F, 0.0F, 0.0F}}}));
+    w->write(
+      "/odom", 1'000'000'000LL,
+      movify_odometry_payload(1'000'000'000LL, "map", "base_link", 0.0, 0.0, 0.0, 0.0));
+    w->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.output_path = tmp_dir_ / "out.avi";
+  args.pcd_topics = {"/points"};
+  args.pose_topic = "/odom";
+  const auto v = validate_video_inputs(args);
+  ASSERT_TRUE(v.ok()) << v.error;
+  ASSERT_TRUE(v.pose_topic.has_value());
+  EXPECT_EQ(*v.pose_topic, "/odom");
 }
 
 TEST_F(MovifyTmpDirTest, ValidateInputsExplicitCamInfoMissingFails)

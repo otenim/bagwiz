@@ -20,6 +20,7 @@
 #include "movify_inputs.hpp"        // NOLINT(build/include_subdir) src-local shared header
 #include "movify_layout.hpp"        // NOLINT(build/include_subdir) src-local shared header
 #include "movify_panel.hpp"         // NOLINT(build/include_subdir) src-local shared header
+#include "movify_pose_overlay.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <cstddef>
 #include <cstdint>
@@ -56,6 +57,9 @@ public:
     // for log lines (parallel vectors).
     std::vector<std::size_t> cloud_indexes;
     std::vector<std::string> topics;
+    // The trajectory overlay, drawn over the points; null when the run has
+    // none. Must outlive the panel.
+    const PoseOverlay * pose = nullptr;
   };
 
   // Clock role: each tick's payload is a message of the panel's topic at
@@ -80,6 +84,9 @@ private:
   // throw across its future).
   [[nodiscard]] TopicProjection project_topic_unguarded(
     std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const;
+  // Draw the --pose trajectory over the points copied into `cell`, in the
+  // view frame at the tick's capture time.
+  [[nodiscard]] std::string draw_pose(const CellView & cell) const;
 
   Options options_;
   std::optional<SyntheticSizing> sizing_;   // clock role only
@@ -87,8 +94,12 @@ private:
   CloudSources * clouds_;
   core::pointcloud::ColorMapper mapper_;
   core::pointcloud::PointRaster raster_;
-  // The current tick: the canvas size and every topic's projected points.
+  // The current tick: the canvas size, the view at that size, the time the
+  // first topic's cloud was captured (what the trajectory is drawn at), and
+  // every topic's projected points.
   PanelSize size_;
+  core::pointcloud::CloudView view_;
+  mutable std::int64_t stamp_ns_ = 0;  // set by the first topic's (this thread's) projection
   std::vector<core::pointcloud::ProjectedPoint> points_;
   bool selected_ = false;
 };
@@ -99,7 +110,7 @@ private:
 // nullopt after logging when a topic is missing from the scan.
 [[nodiscard]] std::optional<std::vector<std::unique_ptr<Panel>>> build_cloud_panels(
   const MovifyArgs & args, const VideoInputValidation & validation, const VideoInputScan & scan,
-  CloudSources & clouds);
+  CloudSources & clouds, const PoseOverlay * pose);
 
 }  // namespace bagwiz::commands
 
