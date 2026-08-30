@@ -48,7 +48,7 @@ struct TileRenderKey
   // can stretch (and then the frame must recolour).
   bool overlay_enabled = false;
   core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
-  core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kViridis;
+  core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kJet;
   std::uint32_t point_size = 0;
   float alpha = 0.0f;
   double range_min = 0.0;

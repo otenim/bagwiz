@@ -229,7 +229,7 @@ public:
       {"rainbow", core::pointcloud::ColorScheme::kRainbow}};
     app.add_option("--scheme", args_.colorscheme, "Color scheme for point coloring.")
       ->transform(CLI::CheckedTransformer{scheme_map})
-      ->default_val(core::pointcloud::ColorScheme::kViridis);
+      ->default_val(core::pointcloud::ColorScheme::kJet);
     app
       .add_option("--point-size", args_.point_size, "Side length of drawn square points in pixels.")
       ->default_val(2U)
