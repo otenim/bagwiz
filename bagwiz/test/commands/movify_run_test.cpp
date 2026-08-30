@@ -1569,6 +1569,15 @@ TEST_F(MovifyRunTest, RunStreamsAJpegCameraDirect)
   MovifyArgs args(bag, kCompressedTopic, tmp_dir_ / "out.mp4", false);
   args.rectify = false;
   args.encoder = bagwiz::core::video::H264Backend::kX264;
+  {
+    bagwiz::core::video::VideoEncoderOptions probe_options;
+    probe_options.backend = args.encoder;
+    if (!bagwiz::core::video::open_video_encoder(
+           tmp_dir_ / "probe.mp4", 32, 16, 10, 1, probe_options)
+           .ok()) {
+      GTEST_SKIP() << "libx264 unavailable in this FFmpeg build";
+    }
+  }
   EXPECT_EQ(run_movify(args), 0);
   const auto probe = bagwiz::core::video::probe_video(args.output_path);
   ASSERT_TRUE(probe.ok()) << probe.error;

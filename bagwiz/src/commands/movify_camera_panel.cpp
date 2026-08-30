@@ -310,27 +310,29 @@ void CameraPanel::prefetch(const TickInfo & tick)
   if (source_ != nullptr) {
     return;  // a follower decodes what it fetches itself
   }
-  AheadSlot * slot = nullptr;
-  {
-    const std::lock_guard<std::mutex> lock(ahead_mutex_);
-    if (ahead_.empty()) {
-      for (std::size_t i = 0; i < kDecodeAheadDepth; ++i) {
-        ahead_.push_back(std::make_unique<AheadSlot>(options_.topic_type));
-      }
+  // The slot is published (busy, index) and its job started under one lock,
+  // so a take_ahead() for this tick never finds the slot without its job.
+  // std::async returns as soon as the thread is spawned; the decode itself
+  // runs unlocked.
+  const std::lock_guard<std::mutex> lock(ahead_mutex_);
+  if (ahead_.empty()) {
+    for (std::size_t i = 0; i < kDecodeAheadDepth; ++i) {
+      ahead_.push_back(std::make_unique<AheadSlot>(options_.topic_type));
     }
-    for (auto & candidate : ahead_) {
-      if (!candidate->busy) {
-        slot = candidate.get();
-        break;
-      }
-    }
-    if (slot == nullptr) {
-      return;  // every decoder is taken: the tick decodes inline
-    }
-    slot->busy = true;
-    slot->index = tick.index;
-    slot->payload.assign(tick.payload.begin(), tick.payload.end());
   }
+  AheadSlot * slot = nullptr;
+  for (auto & candidate : ahead_) {
+    if (!candidate->busy) {
+      slot = candidate.get();
+      break;
+    }
+  }
+  if (slot == nullptr) {
+    return;  // every decoder is taken: the tick decodes inline
+  }
+  slot->busy = true;
+  slot->index = tick.index;
+  slot->payload.assign(tick.payload.begin(), tick.payload.end());
   const std::int64_t record_ns = tick.record_ns;
   slot->job = std::async(std::launch::async, [slot, record_ns] {
     AheadResult result;

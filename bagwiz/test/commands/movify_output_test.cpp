@@ -8,13 +8,17 @@
 
 #include "movify_output.hpp"  // NOLINT(build/include_subdir) src-local shared header under test
 
+#include "bagwiz/core/image/image_decoder.hpp"
 #include "bagwiz/core/video/frame_rate.hpp"
 #include "movify_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 // Unit tests for the movify output side: tmp-path handling, the RAII
 // partial-file guard, finalize (rename/clobber), the output-path pre-flight
@@ -166,3 +170,32 @@ TEST_F(MovifyTmpDirTest, FinishEncodeRequiresAStartedEncoder)
 }
 
 }  // namespace
+// frame in the other range is refused like a size change, since the planes
+// are copied as they are.
+TEST_F(MovifyTmpDirTest, EncodeYuv420RefusesAFrameInTheOtherRange)
+{
+  constexpr std::uint32_t kW = 32;
+  constexpr std::uint32_t kH = 16;
+  std::vector<std::uint8_t> y(static_cast<std::size_t>(kW) * kH, 128);
+  std::vector<std::uint8_t> u(static_cast<std::size_t>(kW / 2) * (kH / 2), 128);
+  std::vector<std::uint8_t> v(u.size(), 128);
+  bagwiz::core::image::DecodedYuvView view;
+  view.width = kW;
+  view.height = kH;
+  view.y = y.data();
+  view.y_stride = static_cast<int>(kW);
+  view.u = u.data();
+  view.u_stride = static_cast<int>(kW / 2);
+  view.v = v.data();
+  view.v_stride = static_cast<int>(kW / 2);
+  view.chroma = bagwiz::core::image::YuvChroma::k420;
+  view.full_range = true;
+
+  VideoFrameEncoder encoder(tmp_dir_ / "out.avi", bagwiz::core::video::FrameRate{10, 1});
+  EXPECT_TRUE(encoder.encode_yuv420(view));  // opens full-range
+  EXPECT_TRUE(encoder.encode_yuv420(view));
+  view.full_range = false;
+  EXPECT_FALSE(encoder.encode_yuv420(view));  // the other range: refused
+  EXPECT_EQ(encoder.written(), 2u);
+  EXPECT_TRUE(encoder.finish().empty());
+}

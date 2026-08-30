@@ -26,7 +26,8 @@ namespace bagwiz::commands
 
 // Whether the run is one camera panel shown as decoded: a CompressedImage
 // topic on a 1x1 grid, no rectification in effect, no --resize / --width,
-// no --cam-pcd overlay, and no other panel. Anything else composes a canvas.
+// no --cam-pcd overlay, and no other panel (no --pcd, no --gnss). Anything
+// else composes a canvas.
 [[nodiscard]] bool can_stream_camera_direct(
   const MovifyArgs & args, const VideoInputValidation & validation);
 

@@ -128,6 +128,15 @@ TEST(DirectDecodeSlots, AQuarterOfTheCoresBetweenTwoAndFour)
   EXPECT_EQ(direct_decode_slots(false, 24), 1u);
 }
 
+// Whether this FFmpeg build encodes H.264 with libx264 (skip otherwise, so the
+// suite stays portable).
+bool x264_available(const std::filesystem::path & dir)
+{
+  bagwiz::core::video::VideoEncoderOptions options;
+  options.backend = bagwiz::core::video::H264Backend::kX264;
+  return bagwiz::core::video::open_video_encoder(dir / "probe.mp4", 32, 16, 10, 1, options).ok();
+}
+
 // A CompressedImage payload wrapping `bitstream` with the given format.
 std::vector<std::byte> compressed_payload(
   const std::string & format, const std::vector<std::byte> & bitstream)
@@ -185,6 +194,9 @@ TEST_F(MovifyDirectTest, StreamsJpegFramesAsPlanes)
   }
   for (const char * name : {"out.avi", "out.mp4"}) {
     const auto output = tmp_dir_ / name;
+    if (output.extension() == ".mp4" && !x264_available(tmp_dir_)) {
+      continue;  // the .avi pass above covered the planes; no H.264 encoder here
+    }
     auto reader = open_topic(bag);
     VideoFrameEncoder encoder(output, bagwiz::core::video::FrameRate{10, 1});
     EXPECT_EQ(run_direct_encode_pass(*reader, kTopic, encoder, 3), 0) << name;

@@ -76,6 +76,10 @@ private:
   // frame, and projection for a tick.
   [[nodiscard]] TopicProjection project_topic(
     std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const;
+  // project_topic() without its exception guard (a worker must report, not
+  // throw across its future).
+  [[nodiscard]] TopicProjection project_topic_unguarded(
+    std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const;
 
   Options options_;
   std::optional<SyntheticSizing> sizing_;   // clock role only

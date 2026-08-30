@@ -443,6 +443,7 @@ OpenVideoEncoderResult open_video_encoder(
   if (choice->id == AV_CODEC_ID_H264) {
     const auto candidates = h264_candidates(options.backend, width, height);
     std::string last_error;
+    std::vector<std::string> failures;
     for (std::size_t i = 0; i < candidates.size(); ++i) {
       const AVCodec * encoder = avcodec_find_encoder_by_name(candidates[i]);
       std::string attempt = encoder == nullptr ? std::string(
@@ -463,13 +464,19 @@ OpenVideoEncoderResult open_video_encoder(
                    "x" + std::to_string(kNvencMaxH264Side) + " on most GPUs)";
       }
       last_error = std::move(attempt);
+      failures.push_back(last_error);
       // kAuto records why NVENC was passed over and moves on to libx264.
       if (i + 1 < candidates.size()) {
         result.fallback_note = last_error;
       }
     }
     if (result.backend.empty()) {
-      result.error = last_error + " (try an .avi output, which uses the built-in MJPEG encoder)";
+      // Every candidate failed: say why each did.
+      std::string all;
+      for (const auto & failure : failures) {
+        all += (all.empty() ? "" : "; ") + failure;
+      }
+      result.error = all + " (try an .avi output, which uses the built-in MJPEG encoder)";
       result.fallback_note.clear();
       return result;
     }

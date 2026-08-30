@@ -10,13 +10,14 @@
 #
 # The topic names below are the merged-corpus defaults (8x 4K JPEG cameras,
 # 4 Seyond lidars, OxTS NavSatFix); override them through the environment
-# (CAM, CAM2-4, LIDAR, LIDARS, GNSS, FRAME) for another bag; EXTRA appends
-# flags to every case.
+# (BAGWIZ_BENCH_CAM, _CAM2-4, _LIDAR, _LIDARS, _GNSS, _FRAME; see
+# docs/environment.md) for another bag; BAGWIZ_BENCH_EXTRA appends flags to
+# every case.
 set -euo pipefail
 
-BIN=${BIN:-bagwiz}
+BIN=${BAGWIZ_BENCH_BIN:-bagwiz}
 REPEAT=2
-OUT=${OUT:-/tmp/bench-movify}
+OUT=${BAGWIZ_BENCH_OUT:-/tmp/bench-movify}
 CASES=()
 while getopts "b:n:o:c:" opt; do
     case $opt in
@@ -37,17 +38,18 @@ shift $((OPTIND - 1))
 }
 BAG=$1
 mkdir -p "$OUT"
-# Extra movify flags appended to every case (e.g. EXTRA='--encoder x264').
-EXTRA=${EXTRA:-}
+failed=0
+# Extra movify flags appended to every case (e.g. BAGWIZ_BENCH_EXTRA='--encoder x264').
+EXTRA=${BAGWIZ_BENCH_EXTRA:-}
 
-CAM=${CAM:-/sensing/camera/camera0/image_raw/compressed}
-CAM2=${CAM2:-/sensing/camera/camera1/image_raw/compressed}
-CAM3=${CAM3:-/sensing/camera/camera2/image_raw/compressed}
-CAM4=${CAM4:-/sensing/camera/camera3/image_raw/compressed}
-LIDAR=${LIDAR:-/sensing/lidar/front/seyond_points}
-LIDARS=${LIDARS:-'/sensing/lidar/*/seyond_points'}
-GNSS=${GNSS:-/sensing/ins/oxts/nav_sat_fix}
-FRAME=${FRAME:-base_link}
+CAM=${BAGWIZ_BENCH_CAM:-/sensing/camera/camera0/image_raw/compressed}
+CAM2=${BAGWIZ_BENCH_CAM2:-/sensing/camera/camera1/image_raw/compressed}
+CAM3=${BAGWIZ_BENCH_CAM3:-/sensing/camera/camera2/image_raw/compressed}
+CAM4=${BAGWIZ_BENCH_CAM4:-/sensing/camera/camera3/image_raw/compressed}
+LIDAR=${BAGWIZ_BENCH_LIDAR:-/sensing/lidar/front/seyond_points}
+LIDARS=${BAGWIZ_BENCH_LIDARS:-'/sensing/lidar/*/seyond_points'}
+GNSS=${BAGWIZ_BENCH_GNSS:-/sensing/ins/oxts/nav_sat_fix}
+FRAME=${BAGWIZ_BENCH_FRAME:-base_link}
 
 # name|args (the output path is appended)
 ALL_CASES=(
@@ -82,5 +84,8 @@ for entry in "${ALL_CASES[@]}"; do
         for c in "${CASES[@]}"; do [ "$c" = "$name" ] && keep=1; done
         [ $keep -eq 1 ] || continue
     fi
-    run_case "$name" "$args"
+    # A failed case is reported and the rest still run; the exit status
+    # says whether every case passed.
+    run_case "$name" "$args" || failed=1
 done
+exit $failed

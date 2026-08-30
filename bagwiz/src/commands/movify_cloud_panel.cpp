@@ -15,6 +15,7 @@
 #include "bagwiz/core/pointcloud/projector_helpers.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <future>
 #include <memory>
 #include <string>
@@ -58,6 +59,19 @@ struct CloudPanel::TopicProjection
 };
 
 CloudPanel::TopicProjection CloudPanel::project_topic(
+  std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const
+{
+  const std::string & topic = options_.topics[k];
+  try {
+    return project_topic_unguarded(k, tick, view);
+  } catch (const std::exception & e) {
+    TopicProjection out;
+    out.error = on_topic(topic, std::string("projection failed: ") + e.what());
+    return out;
+  }
+}
+
+CloudPanel::TopicProjection CloudPanel::project_topic_unguarded(
   std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const
 {
   TopicProjection out;

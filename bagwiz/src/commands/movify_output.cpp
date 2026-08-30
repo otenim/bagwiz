@@ -148,6 +148,7 @@ bool VideoFrameEncoder::open(std::uint32_t frame_w, std::uint32_t frame_h, bool 
   enc_h_ = frame_h;
   core::video::VideoEncoderOptions options = options_;
   options.full_range = full_range;
+  full_range_ = full_range;
   auto opened =
     core::video::open_video_encoder(tmp_path_, enc_w_, enc_h_, fps_.num, fps_.den, options);
   if (!opened.ok()) {
@@ -203,6 +204,14 @@ bool VideoFrameEncoder::encode_yuv420(const core::image::DecodedYuvView & view)
       return false;
     }
   } else if (!same_geometry(view.width, view.height)) {
+    return false;
+  }
+  if (view.full_range != full_range_) {
+    // Planes are copied as they are, so a frame in the other range would
+    // play with wrong levels; stop, as a geometry change does.
+    BAGWIZ_LOG_ERROR(
+      kLogger, "frame %" PRIu64 " decoded %s-range where the stream is %s-range; aborting.",
+      written_, view.full_range ? "full" : "limited", full_range_ ? "full" : "limited");
     return false;
   }
 
