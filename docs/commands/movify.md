@@ -88,6 +88,12 @@ bagwiz movify -i drive.mcap -o lidar_map.mp4 \
 bagwiz movify -i drive.mcap -o lidar_map.mp4 \
   --pcd /sensing/lidar/top/points --gnss /sensing/gnss/nav_sat_fix --map-range 100
 
+# The map panel without a map behind the track (offline), or from another
+# tile server.
+bagwiz movify -i drive.mcap -o track.mp4 --gnss /sensing/gnss/nav_sat_fix --map-tiles none
+bagwiz movify -i drive.mcap -o track.mp4 --gnss /sensing/gnss/nav_sat_fix \
+  --map-tiles 'https://tiles.example.org/{z}/{x}/{y}.png'
+
 # The vehicle's trajectory (its odometry) drawn over the camera and the
 # lidar: the ten seconds behind and ahead of every frame.
 bagwiz movify -i drive.mcap -o drive.mp4 \
@@ -176,6 +182,7 @@ bagwiz movify -i drive.mcap -o overlay_each.mp4 \
 | `--azim <deg>`            | `3d` view: camera azimuth around the +z axis in degrees, measured from +x. 180 looks at the scene from behind the sensor. Default: 180. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `--dist <m>`              | `3d` view: camera distance from the `--frame` origin in meters. Default: 30. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `--map-range <m>`         | Map panel: follow the current fix, the panel's shorter axis spanning +-range meters around it (the longer axis shows proportionally more). Default: the whole track fitted into the panel. Long-form only.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `--map-tiles <template>`  | Map panel: the tile server the map under the track is drawn from, as a URL template with `{z}`, `{x}` and `{y}` (`http`, `https` or `file`), or `none` for a plain plan view. Fetched tiles are cached under `$XDG_CACHE_HOME/bagwiz/tiles` (`~/.cache` by default). Default: OpenStreetMap (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`). Long-form only.                                                                                                                                                                                                                                                        |
 | `--resize <factor>`       | Scale the clock panel's frame by this factor while preserving aspect ratio, which sets the cell size. 1.0 keeps the original size, 0.5 halves both dimensions, 2.0 doubles them. Camera intrinsics are scaled accordingly so rectification and `--cam-pcd` stay aligned (range: 0.01-10.0). Applies only when the clock panel is a camera: a point-cloud or map clock renders at a fixed size and ignores it (use `--width` instead). Default: 1.0. Long-form only. Mutually exclusive with `--width`.                                                                                                                 |
 | `--width <px>`            | Fix the composed output width in pixels: the cell width is the width split across the grid columns, and the cell height follows the clock panel's aspect ratio (both rounded down to even, so the output can be a few pixels narrower). Mutually exclusive with `--resize`. Long-form only.                                                                                                                                                                                                                                                                                                                            |
 | `-w`, `--overwrite`       | Replace an existing `<output>`. Without it, an existing output path stops the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -232,9 +239,25 @@ latitude, longitude and altitude are drawn over it. By default the whole
 track is fitted into the panel, over at least 20 m on each axis so a
 stationary vehicle's GNSS noise is not blown up to fill it; `--map-range <m>`
 follows the vehicle instead, the panel's shorter axis spanning +-m around it
-(the longer axis shows proportionally more). No map tiles are drawn: the
-panel is an offline plan view. A topic whose messages all lack a position
-stops the run.
+(the longer axis shows proportionally more). A topic whose messages all lack
+a position stops the run.
+
+The track is drawn over a map: the Web Mercator tiles of `--map-tiles`
+(OpenStreetMap unless told otherwise) covering the panel, at the zoom level
+whose tiles are at least as fine as the panel (at most 19, OpenStreetMap's
+deepest; a finer panel shows upscaled tiles), warped into the track's
+East-North-Up plane so the track lands on the roads it was driven on. The
+tiles every frame of the run needs are fetched before the first frame is
+encoded — on two download threads, with a User-Agent naming bagwiz, as
+OpenStreetMap's tile usage policy asks — and kept under
+`$XDG_CACHE_HOME/bagwiz/tiles` (`~/.cache/bagwiz/tiles` by default), so a
+second render of the same area reads them from disk. A tile that cannot be
+fetched stays dark grey; when none can (no network), the run warns once and
+draws the plain plan view on a black grid, which `--map-tiles none` selects
+outright. OpenStreetMap's attribution is drawn in the panel's corner for its
+servers; another server's terms are the caller's to honor. A `file://`
+template reads tiles from a local directory laid out as `<z>/<x>/<y>.png`,
+which is how the tests exercise the map without a network.
 
 ## Trajectory overlay
 

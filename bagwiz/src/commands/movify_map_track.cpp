@@ -117,6 +117,11 @@ MapTrackResult load_map_track(const std::filesystem::path & input, const std::st
     return a.record_ns < b.record_ns;
   });
 
+  const auto origin = projector.origin();
+  track.origin.latitude = (*origin)[0];
+  track.origin.longitude = (*origin)[1];
+  track.origin.altitude = (*origin)[2];
+
   MapTrackResult out;
   out.track = with_bounds(std::move(track));
   return out;

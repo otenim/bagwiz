@@ -79,6 +79,10 @@ ffmpeg = "*"
 # bagwiz_pointcloud so it does not leak into their export sets, matching
 # GeographicLib and libav.
 opencv = "*"
+# libcurl (conda-forge) fetches the map tiles behind `bagwiz movify --gnss`'s
+# map panel (bagwiz/src/commands/movify_map_tiles.cpp), located through its
+# pkg-config file like libav. Linked PRIVATE into the CLI only.
+libcurl = "*"
 # libsixel (conda-forge) supplies libsixel + its pkg-config file (`libsixel.pc`)
 # for the Sixel backend of `bagwiz walk`'s image preview
 # (bagwiz_tui/src/core/tui/image/terminal_image_renderer.cpp). Linked PRIVATE

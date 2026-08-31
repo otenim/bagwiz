@@ -16,8 +16,15 @@
 #include "bagwiz/core/video/video_encoder.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "core/image/image_fixture.hpp"
+#include "movify_map_basemap.hpp"    // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_panel.hpp"      // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_tiles.hpp"      // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_track.hpp"      // NOLINT(build/include_subdir) src-local shared header
 #include "movify_test_util.hpp"      // NOLINT(build/include_subdir) src-local shared header
 #include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
@@ -1476,6 +1483,81 @@ TEST_F(MovifyRunTest, RunRendersAMapPanelAlone)
   EXPECT_EQ(probe.height, 720u);
 }
 
+// The map panel over tiles read from a local directory through a file:
+// template: the tiles the fitted 1280x720 view of the track needs are laid
+// out as <z>/<x>/<y>.png, and the run reads them without any network.
+TEST_F(MovifyRunTest, RunDrawsTheMapPanelOverFileTiles)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/gnss", "sensor_msgs/msg/NavSatFix"));
+    for (int i = 0; i < 4; ++i) {
+      const std::int64_t ts = 1'000'000'000LL + i * 100'000'000LL;
+      const auto payload = make_navsatfix_payload(ts, 35.0 + i * 1e-4, 139.0, 40.0);
+      writer->write("/gnss", ts, {payload.data(), payload.size()});
+    }
+    writer->close();
+  }
+  const auto loaded = bagwiz::commands::load_map_track(bag, "/gnss");
+  ASSERT_TRUE(loaded.ok()) << loaded.error;
+  bagwiz::commands::MapBasemap::Options basemap_options;
+  basemap_options.origin = loaded.track->origin;
+  bagwiz::commands::MapBasemap basemap(std::move(basemap_options));
+  const auto range = basemap.tile_range_of(
+    bagwiz::commands::fit_map_viewport(*loaded.track, bagwiz::commands::PanelSize{1280, 720}));
+  ASSERT_FALSE(range.empty());
+  const auto tiles = tmp_dir_ / "tiles";
+  for (int y = range.y0; y <= range.y1; ++y) {
+    for (int x = range.x0; x <= range.x1; ++x) {
+      const auto path =
+        tiles / std::to_string(range.zoom) / std::to_string(x) / (std::to_string(y) + ".png");
+      std::filesystem::create_directories(path.parent_path());
+      const cv::Mat tile(
+        bagwiz::commands::kMapTileSizePx, bagwiz::commands::kMapTileSizePx, CV_8UC3,
+        cv::Scalar(90, 120, 150));
+      ASSERT_TRUE(cv::imwrite(path.string(), tile));
+    }
+  }
+
+  MovifyArgs args;
+  args.input_path = bag;
+  args.gnss_topic = "/gnss";
+  args.map_tiles = "file://" + (tiles / "{z}/{x}/{y}.png").string();
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  const auto probe = bagwiz::core::video::probe_video(args.output_path);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, 4);
+}
+
+// Tiles that cannot be fetched are a warning, not a failure: the run draws
+// the plain plan view. A malformed template is rejected up front.
+TEST_F(MovifyRunTest, RunKeepsGoingWithoutTilesButRejectsABadTemplate)
+{
+  const auto bag = tmp_dir_ / "input";
+  {
+    auto writer = bagwiz::io::open_write(bag, mcap_dir_opts());
+    writer->declare_topic(make_topic("/gnss", "sensor_msgs/msg/NavSatFix"));
+    const std::int64_t ts = 1'000'000'000LL;
+    const auto payload = make_navsatfix_payload(ts, 35.0, 139.0, 40.0);
+    writer->write("/gnss", ts, {payload.data(), payload.size()});
+    writer->close();
+  }
+  MovifyArgs args;
+  args.input_path = bag;
+  args.gnss_topic = "/gnss";
+  args.map_tiles = "file://" + (tmp_dir_ / "no-such-dir" / "{z}/{x}/{y}.png").string();
+  args.output_path = tmp_dir_ / "out.avi";
+  EXPECT_EQ(run_movify(args), 0);
+  EXPECT_TRUE(std::filesystem::exists(args.output_path));
+
+  args.map_tiles = "https://tiles.example/{z}/{x}.png";
+  args.output_path = tmp_dir_ / "rejected.avi";
+  EXPECT_EQ(run_movify(args), 1);
+  EXPECT_FALSE(std::filesystem::exists(args.output_path));
+}
+
 // A point cloud next to the map: the cloud is the clock, the map follows the
 // vehicle at --map-range, and the two compose a 2x1 grid of 1280x720 cells.
 TEST_F(MovifyRunTest, RunComposesAPointCloudAndAMapPanel)
@@ -1862,6 +1944,28 @@ TEST(MovifyCliWiring, SchemeDefaultsToJet)
   ASSERT_NE(scheme, nullptr);
   EXPECT_EQ(scheme->get_default_str(), std::to_string(static_cast<int>(ColorScheme::kJet)));
   EXPECT_EQ(MovifyArgs{}.colorscheme, ColorScheme::kJet);
+}
+
+// The CLI draws the map from OpenStreetMap unless --map-tiles says
+// otherwise, while MovifyArgs itself defaults to no tiles, so a direct
+// caller (these tests) never touches the network.
+TEST(MovifyCliWiring, MapTilesDefaultToOpenStreetMapOnTheCliOnly)
+{
+  bagwiz::commands::Command * movify_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "movify") {
+      movify_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(movify_cmd, nullptr);
+
+  CLI::App app{"movify"};
+  movify_cmd->configure(app);
+  const auto * option = app.get_option_no_throw("--map-tiles");
+  ASSERT_NE(option, nullptr);
+  EXPECT_EQ(option->get_default_str(), bagwiz::commands::kDefaultMapTileTemplate);
+  EXPECT_EQ(MovifyArgs{}.map_tiles, bagwiz::commands::kMapTilesNone);
 }
 
 }  // namespace

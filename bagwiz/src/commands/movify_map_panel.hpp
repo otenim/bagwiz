@@ -10,41 +10,26 @@
 #define COMMANDS__MOVIFY_MAP_PANEL_HPP_
 
 #include "bagwiz/commands/movify.hpp"
-#include "movify_inputs.hpp"     // NOLINT(build/include_subdir) src-local shared header
-#include "movify_layout.hpp"     // NOLINT(build/include_subdir) src-local shared header
-#include "movify_map_track.hpp"  // NOLINT(build/include_subdir) src-local shared header
-#include "movify_panel.hpp"      // NOLINT(build/include_subdir) src-local shared header
+#include "movify_inputs.hpp"        // NOLINT(build/include_subdir) src-local shared header
+#include "movify_layout.hpp"        // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_track.hpp"     // NOLINT(build/include_subdir) src-local shared header
+#include "movify_map_viewport.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "movify_panel.hpp"         // NOLINT(build/include_subdir) src-local shared header
 
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
 
-// The panel that draws the GNSS track: a plan view of the ENU plane with the
-// whole track, the part driven so far, the current fix with its heading, a
-// north arrow, a scale bar, and the fix's coordinates. CLI-internal: this
-// header lives with the command sources and is not installed.
+// The panel that draws the GNSS track: a plan view of the ENU plane — over
+// the map tiles under it, or a bare grid — with the whole track, the part
+// driven so far, the current fix with its heading, a north arrow, a scale
+// bar, and the fix's coordinates. CLI-internal: this header lives with the
+// command sources and is not installed.
 namespace bagwiz::commands
 {
 
-// The map panel's window onto the ENU plane: the point at the cell's center
-// and the scale, mapping east to +x (right) and north to -y (up).
-struct MapViewport
-{
-  double center_east = 0.0;
-  double center_north = 0.0;
-  double px_per_m = 1.0;
-  PanelSize cell;
-
-  [[nodiscard]] double x_of(double east) const noexcept
-  {
-    return cell.width / 2.0 + (east - center_east) * px_per_m;
-  }
-  [[nodiscard]] double y_of(double north) const noexcept
-  {
-    return cell.height / 2.0 - (north - center_north) * px_per_m;
-  }
-};
+class MapBasemap;
 
 // The margin a fitted track keeps from the cell's edges, in pixels of a
 // 720-px-tall cell (it scales with the cell), and the least extent a track is
@@ -80,6 +65,10 @@ public:
     std::string topic;
     // Follow the current fix at +-range; unset fits the whole track.
     std::optional<double> follow_range_m;
+    // The map drawn under the track, and its provider's attribution line;
+    // null draws the bare grid.
+    std::shared_ptr<MapBasemap> basemap;
+    std::string attribution;
   };
 
   // Clock role: the ticks are the topic's own messages; the panel sizes its
@@ -93,16 +82,23 @@ public:
   [[nodiscard]] std::string render(const CellView & cell) override;
 
 private:
+  [[nodiscard]] MapViewport viewport_of(std::size_t fix, PanelSize cell) const;
+  // Fetch the tiles of every viewport the run will draw, once the cell size
+  // is known; a source that yields nothing drops the basemap for the run.
+  void prepare_basemap();
+
   Options options_;
   std::optional<SyntheticSizing> sizing_;  // clock role only
   // The current tick: the cell size and the fix shown.
   PanelSize size_;
   std::size_t fix_ = 0;
   bool selected_ = false;
+  bool basemap_ready_ = false;
 };
 
 // Build `movify`'s map panel around the --gnss track the scan loaded, in the
-// clock role when the clock is the --gnss topic (validation.clock_gnss).
+// clock role when the clock is the --gnss topic (validation.clock_gnss),
+// over the tiles of args.map_tiles unless that is kMapTilesNone.
 [[nodiscard]] std::unique_ptr<Panel> build_map_panel(
   const MovifyArgs & args, const VideoInputValidation & validation, MapTrack track);
 

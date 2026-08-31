@@ -12,6 +12,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 
 namespace bagwiz::core::slam
 {
@@ -47,9 +48,27 @@ std::array<double, 3> GnssProjector::project(double latitude, double longitude, 
   return {east, north, up};
 }
 
+std::array<double, 3> GnssProjector::reverse(double east, double north, double up) const
+{
+  double latitude = 0.0;
+  double longitude = 0.0;
+  double altitude = 0.0;
+  impl_->enu.Reverse(east, north, up, latitude, longitude, altitude);
+  return {latitude, longitude, altitude};
+}
+
 bool GnssProjector::has_origin() const noexcept
 {
   return impl_->origin_set;
+}
+
+std::optional<std::array<double, 3>> GnssProjector::origin() const
+{
+  if (!impl_->origin_set) {
+    return std::nullopt;
+  }
+  return std::array<double, 3>{
+    impl_->enu.LatitudeOrigin(), impl_->enu.LongitudeOrigin(), impl_->enu.HeightOrigin()};
 }
 
 }  // namespace bagwiz::core::slam

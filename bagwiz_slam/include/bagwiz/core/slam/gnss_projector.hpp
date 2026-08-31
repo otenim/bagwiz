@@ -11,6 +11,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 
 // Projects WGS84 GNSS fixes (latitude/longitude/altitude) into a local
 // East-North-Up tangent plane in meters, so the SLAM GNSS constraint can align
@@ -42,8 +43,18 @@ public:
   // call is relative to it.
   [[nodiscard]] std::array<double, 3> project(double latitude, double longitude, double altitude);
 
+  // The inverse: local ENU meters {east, north, up} back to the WGS84 fix
+  // {latitude, longitude, altitude} — for placing a point of the plane on a
+  // map. Before an origin is latched the plane is anchored at the datum's
+  // (0, 0, 0), so callers that need a meaningful answer check has_origin().
+  [[nodiscard]] std::array<double, 3> reverse(double east, double north, double up) const;
+
   // True once the origin has been latched (i.e. project() has been called).
   [[nodiscard]] bool has_origin() const noexcept;
+
+  // The latched origin as {latitude, longitude, altitude}, nullopt before the
+  // first project().
+  [[nodiscard]] std::optional<std::array<double, 3>> origin() const;
 
 private:
   struct Impl;

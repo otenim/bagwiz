@@ -53,4 +53,44 @@ TEST(GnssProjector, FirstFixIsOriginThenRelativeEnu)
   EXPECT_NEAR(up[2], 10.0, 1e-3);
 }
 
+TEST(GnssProjector, OriginIsTheFirstFix)
+{
+  slam::GnssProjector projector;
+  EXPECT_FALSE(projector.origin().has_value());
+  (void)projector.project(35.0, 139.0, 40.0);
+  const auto origin = projector.origin();
+  ASSERT_TRUE(origin.has_value());
+  EXPECT_DOUBLE_EQ((*origin)[0], 35.0);
+  EXPECT_DOUBLE_EQ((*origin)[1], 139.0);
+  EXPECT_DOUBLE_EQ((*origin)[2], 40.0);
+}
+
+TEST(GnssProjector, ReverseUndoesProject)
+{
+  slam::GnssProjector projector;
+  (void)projector.project(35.0, 139.0, 40.0);
+  const std::array<double, 3> enu = projector.project(35.001, 139.002, 45.0);
+  const std::array<double, 3> fix = projector.reverse(enu[0], enu[1], enu[2]);
+  EXPECT_NEAR(fix[0], 35.001, 1e-9);
+  EXPECT_NEAR(fix[1], 139.002, 1e-9);
+  EXPECT_NEAR(fix[2], 45.0, 1e-6);
+
+  // The plane's own points: 100 m north of the origin is ~0.0009 deg of
+  // latitude, on the origin's meridian.
+  const std::array<double, 3> north = projector.reverse(0.0, 100.0, 0.0);
+  EXPECT_GT(north[0], 35.0008);
+  EXPECT_LT(north[0], 35.0010);
+  EXPECT_NEAR(north[1], 139.0, 1e-9);
+}
+
+TEST(GnssProjector, ReverseBeforeAnyFixIsTheDatumOrigin)
+{
+  // Without a latched origin the solver sits at (0, 0, 0): the reverse of the
+  // zero vector is that point, not a crash.
+  slam::GnssProjector projector;
+  const std::array<double, 3> fix = projector.reverse(0.0, 0.0, 0.0);
+  EXPECT_NEAR(fix[0], 0.0, 1e-9);
+  EXPECT_NEAR(fix[1], 0.0, 1e-9);
+}
+
 }  // namespace

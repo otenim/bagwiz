@@ -1292,6 +1292,7 @@ std::vector<std::string> complete_video_cam_pair_value(
 //   [--min <v>] [--max <v>] [--scheme <s>] [--point-size <n>]
 //   [--alpha <a>] [--view <3d|bev>...] [--frame <f>]
 //   [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>] [--map-range <m>]
+//   [--map-tiles <url-template|none>]
 //   [--encoder <auto|x264|nvenc>] [--preset <name>]
 //   [--pose <pose_topic>] [--pose-of <frame>] [--pose-window <s>] [--pose-width <m>]
 //   [-w|--overwrite]
@@ -1300,13 +1301,13 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
   const auto current = current_word(request);
   if (current.starts_with("-")) {
     return matching(
-      with_help({"--alpha",       "--azim",       "--cam",        "--cam-info", "--cam-pcd",
-                 "--clock",       "--dist",       "--elev",       "--encoder",  "--field",
-                 "--frame",       "--gnss",       "--grid",       "--input",    "--map-range",
-                 "--max",         "--min",        "--no-rectify", "--output",   "--overwrite",
-                 "--pcd",         "--point-size", "--pose",       "--pose-of",  "--pose-width",
-                 "--pose-window", "--preset",     "--range",      "--resize",   "--scheme",
-                 "--view",        "--width",      "-i",           "-o",         "-w"}),
+      with_help(
+        {"--alpha",      "--azim",       "--cam",         "--cam-info",  "--cam-pcd",    "--clock",
+         "--dist",       "--elev",       "--encoder",     "--field",     "--frame",      "--gnss",
+         "--grid",       "--input",      "--map-range",   "--map-tiles", "--max",        "--min",
+         "--no-rectify", "--output",     "--overwrite",   "--pcd",       "--point-size", "--pose",
+         "--pose-of",    "--pose-width", "--pose-window", "--preset",    "--range",      "--resize",
+         "--scheme",     "--view",       "--width",       "-i",          "-o",           "-w"}),
       current);
   }
 
