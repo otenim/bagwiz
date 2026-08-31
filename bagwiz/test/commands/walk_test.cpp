@@ -16,6 +16,7 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/commands/topic_types.hpp"
+#include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 #include "walk_overlay.hpp"          // NOLINT(build/include_subdir) src-local shared header
 
@@ -187,6 +188,18 @@ TEST(PcdMatchClockName, ReportsTheClockTheOverlayActuallyUsed)
   pcd.last_match_key = PointCloudMatchKey::kRecordTime;
   pcd.topic_header_stamps = {true, false};
   EXPECT_EQ(pcd_match_clock_name(pcd), "header->record");
+}
+
+// The overlay's first-enable defaults are what `movify --cam-pcd` renders with,
+// so the preview and the encoded video agree without touching any key. jet is
+// the colour scheme every bagwiz visualization starts from.
+TEST(PcdOverlayState, StartsWithTheJetScheme)
+{
+  using bagwiz::core::pointcloud::ColorScheme;
+
+  const bagwiz::commands::PcdOverlayState pcd;
+  EXPECT_EQ(pcd.scheme, ColorScheme::kJet);
+  EXPECT_EQ(bagwiz::commands::pcd_scheme_name(pcd.scheme), "jet");
 }
 
 }  // namespace

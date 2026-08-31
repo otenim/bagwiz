@@ -516,48 +516,36 @@ std::string CameraPanel::draw_pose(const CellView & cell) const
   if (!tiles.has_value()) {
     return error;
   }
-  const std::uint32_t x_off = (cell.width - cache_geom_.width) / 2U;
-  const std::uint32_t y_off = (cell.height - cache_geom_.height) / 2U;
-  std::vector<ProjectedPoseTile> projected;
-  projected.reserve(tiles->size());
-  for (const auto & tile : *tiles) {
-    ProjectedPoseTile out;
-    out.ahead = tile.ahead;
-    out.fade = tile.fade;
-    bool visible = true;
-    double depth = 0.0;
-    const double max_u = kPoseTileMaxOverhang * cache_geom_.width;
-    const double max_v = kPoseTileMaxOverhang * cache_geom_.height;
-    for (std::size_t k = 0; k < 4 && visible; ++k) {
-      // Corners may fall outside the image (the drawing clips), but a plate
-      // with a corner behind the camera, or one grazing the camera's plane
-      // and shooting off to absurd coordinates, cannot be drawn as a
-      // quadrilateral.
-      const auto & c = tile.corners[k];
-      const auto pixel = core::pointcloud::project_camera_point(
-        c[0], c[1], c[2], cache_geom_.camera_info, cache_geom_.width, cache_geom_.height,
-        cache_geom_.rectify, /*require_inside=*/false);
-      if (
-        !pixel.has_value() || !std::isfinite(pixel->u) || !std::isfinite(pixel->v) ||
-        std::abs(pixel->u) > max_u || std::abs(pixel->v) > max_v) {
-        visible = false;
-        break;
-      }
-      out.corners[k] = cv::Point(
-        static_cast<int>(std::lround(pixel->u)) + static_cast<int>(x_off),
-        static_cast<int>(std::lround(pixel->v)) + static_cast<int>(y_off));
-      depth += pixel->depth / 4.0;
-    }
-    if (visible) {
-      out.depth = depth;
-      projected.push_back(out);
-    }
-  }
+  // The frame is pasted centered in the cell, black bars around it; a
+  // frame the cell cannot hold (which prepare() does not produce) pins
+  // the picture to the cell's corner rather than wrapping the offset.
+  PoseTilePlacement placement;
+  placement.width = cache_geom_.width;
+  placement.height = cache_geom_.height;
+  placement.x_off = cell.width > cache_geom_.width ? (cell.width - cache_geom_.width) / 2U : 0U;
+  placement.y_off = cell.height > cache_geom_.height ? (cell.height - cache_geom_.height) / 2U : 0U;
+  const auto projected = project_pose_tiles(*tiles, corner_projector(), placement);
   cv::Mat canvas(
     static_cast<int>(cell.height), static_cast<int>(cell.width), CV_8UC3,
     static_cast<void *>(cell.data), cell.stride);
   draw_pose_tiles(canvas, projected, pose_ui_scale(cell.height));  // sorts far to near itself
   return "";
+}
+
+PoseCornerProjector CameraPanel::corner_projector() const
+{
+  // Corners may fall outside the image (the drawing clips), but a corner
+  // behind the camera does not project.
+  return
+    [geom = cache_geom_](const std::array<double, 3> & c) -> std::optional<ProjectedPoseCorner> {
+      const auto pixel = core::pointcloud::project_camera_point(
+        c[0], c[1], c[2], geom.camera_info, geom.width, geom.height, geom.rectify,
+        /*require_inside=*/false);
+      if (!pixel.has_value()) {
+        return std::nullopt;
+      }
+      return ProjectedPoseCorner{pixel->u, pixel->v, pixel->depth};
+    };
 }
 
 std::optional<std::vector<std::unique_ptr<Panel>>> build_camera_panels(

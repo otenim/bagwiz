@@ -49,7 +49,7 @@ public:
     // frame). A cloud already in this frame is drawn as is.
     std::string frame;
     core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
-    core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kViridis;
+    core::pointcloud::ColorScheme scheme = core::pointcloud::ColorScheme::kJet;
     double value_min = 0.0;
     double value_max = 0.0;
     std::uint32_t point_size = 2;
@@ -57,9 +57,10 @@ public:
     // for log lines (parallel vectors).
     std::vector<std::size_t> cloud_indexes;
     std::vector<std::string> topics;
-    // The trajectory overlay, drawn over the points; null when the run has
-    // none. Must outlive the panel.
+    // The trajectory overlay, drawn over the points as plates `pose_width_m`
+    // wide; null when the run has none. Must outlive the panel.
     const PoseOverlay * pose = nullptr;
+    double pose_width_m = 2.0;
   };
 
   // Clock role: each tick's payload is a message of the panel's topic at
@@ -84,9 +85,13 @@ private:
   // throw across its future).
   [[nodiscard]] TopicProjection project_topic_unguarded(
     std::size_t k, const TickInfo & tick, const core::pointcloud::CloudView & view) const;
-  // Draw the --pose trajectory over the points copied into `cell`, in the
+  // Draw the --pose trajectory over the points copied into `cell` as plates
+  // on the ground, projected by the view (bird's-eye or perspective) in the
   // view frame at the tick's capture time.
   [[nodiscard]] std::string draw_pose(const CellView & cell) const;
+  // The current view's projection of a plate corner: the perspective
+  // camera's, or the bird's-eye mapping.
+  [[nodiscard]] PoseCornerProjector corner_projector() const;
 
   Options options_;
   std::optional<SyntheticSizing> sizing_;   // clock role only

@@ -86,7 +86,7 @@ public:
     app
       .add_option(
         "--pose-width", args_.pose_width_m,
-        "Width in meters of the plates the camera panels lay along the --pose trajectory "
+        "Width in meters of the plates the panels lay along the --pose trajectory "
         "(the vehicle's width, say).")
       ->default_val(2.0)
       ->check(CLI::PositiveNumber);
@@ -230,7 +230,7 @@ public:
       {"rainbow", core::pointcloud::ColorScheme::kRainbow}};
     app.add_option("--scheme", args_.colorscheme, "Color scheme for point coloring.")
       ->transform(CLI::CheckedTransformer{scheme_map})
-      ->default_val(core::pointcloud::ColorScheme::kViridis);
+      ->default_val(core::pointcloud::ColorScheme::kJet);
     app
       .add_option("--point-size", args_.point_size, "Side length of drawn square points in pixels.")
       ->default_val(2U)

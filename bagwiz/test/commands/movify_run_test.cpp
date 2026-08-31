@@ -11,6 +11,7 @@
 #include "bagwiz/commands/movify.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/image/camera_info_resolver.hpp"
+#include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/core/video/video_encoder.hpp"
 #include "bagwiz/io/bag_io.hpp"
@@ -1917,6 +1918,32 @@ TEST(MovifyCliWiring, RectificationIsOptOutOnly)
   EXPECT_NE(app.get_option_no_throw("--no-rectify"), nullptr);
   EXPECT_EQ(app.get_option_no_throw("--rectify"), nullptr);
   EXPECT_TRUE(MovifyArgs{}.rectify);
+}
+
+// jet is the colour scheme every bagwiz visualization starts from. Both
+// carriers of the default are pinned: the CLI option (CLI11 spells an enum
+// default by its underlying value) and MovifyArgs' initializer, which the
+// tests that bypass the parser rely on.
+TEST(MovifyCliWiring, SchemeDefaultsToJet)
+{
+  using bagwiz::core::pointcloud::ColorScheme;
+
+  bagwiz::commands::Command * movify_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "movify") {
+      movify_cmd = cmd.get();
+      break;
+    }
+  }
+  ASSERT_NE(movify_cmd, nullptr);
+
+  CLI::App app{"movify"};
+  movify_cmd->configure(app);
+
+  const auto * scheme = app.get_option("--scheme");
+  ASSERT_NE(scheme, nullptr);
+  EXPECT_EQ(scheme->get_default_str(), std::to_string(static_cast<int>(ColorScheme::kJet)));
+  EXPECT_EQ(MovifyArgs{}.colorscheme, ColorScheme::kJet);
 }
 
 // The CLI draws the map from OpenStreetMap unless --map-tiles says

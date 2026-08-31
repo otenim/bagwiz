@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,7 +29,8 @@
 // PoseWithCovarianceStamped) read whole into the body's trajectory in its
 // world frame, and, per tick, the stretch of it around the tick expressed
 // in a panel's frame — the bag's static TF bridging body and panel frames —
-// which the camera and point-cloud panels draw over their pictures.
+// which the camera and point-cloud panels draw over their pictures as
+// plates laid on the ground along the path.
 // CLI-internal: this header lives with the command sources and is not
 // installed.
 namespace bagwiz::commands
@@ -70,25 +72,7 @@ struct PoseOverlayResult
   const std::filesystem::path & input, const std::string & topic,
   const std::optional<std::string> & body_frame, double window_s);
 
-// The trajectory around one tick, as points in a panel's frame: the part
-// driven up to the tick, ending at the pose interpolated at `stamp_ns`, and
-// the part ahead, starting there.
-struct PosePolyline
-{
-  std::vector<std::array<double, 3>> past;
-  std::vector<std::array<double, 3>> future;
-};
-
-// The overlay's polyline in `frame` at `stamp_ns`: every pose within the
-// window is moved from the world frame into the body's frame at the tick
-// (the inverse of the interpolated pose) and on into `frame` through the
-// static TF. nullopt with `error` set when the static chain body -> frame
-// does not resolve.
-[[nodiscard]] std::optional<PosePolyline> pose_polyline_in_frame(
-  const PoseOverlay & overlay, const std::string & frame, std::int64_t stamp_ns,
-  std::string & error);
-
-// The camera panels' rendering of the trajectory: plates laid on the ground
+// The panels' rendering of the trajectory: plates laid on the ground
 // along the path, every kPoseTileSpacingM meters of it, each
 // kPoseTileLengthRatio of that spacing long and `width_m` wide across the
 // path (the vehicle's width, say), the way end-to-end driving demos show a
@@ -106,10 +90,13 @@ struct PoseTile
   double fade = 1.0;
 };
 
-// The plates in `frame` at `stamp_ns`, like pose_polyline_in_frame's points:
-// laid along the trajectory resampled by arc length, across the ground
-// plane of the world frame (its +z up). A window shorter than one spacing
-// yields none.
+// The plates in `frame` at `stamp_ns`: every pose within the window is
+// moved from the world frame into the body's frame at the tick (the inverse
+// of the interpolated pose) and on into `frame` through the static TF; the
+// plates are laid along the trajectory resampled by arc length, across the
+// ground plane of the world frame (its +z up). A window shorter than one
+// spacing yields none. nullopt with `error` set when the static chain
+// body -> frame does not resolve.
 [[nodiscard]] std::optional<std::vector<PoseTile>> pose_tiles_in_frame(
   const PoseOverlay & overlay, const std::string & frame, std::int64_t stamp_ns, double width_m,
   std::string & error);
@@ -123,10 +110,47 @@ struct ProjectedPoseTile
   double depth = 0.0;  // the plate's mean distance along the optical axis
 };
 
-// How far outside the image a plate's corner may project (as a multiple of
-// the image size) before the plate is dropped: a corner grazing the camera's
-// own plane projects to absurd coordinates that would overflow the drawing.
+// How far outside the picture a plate's corner may project (as a multiple
+// of the picture size) before the plate is dropped: a corner grazing the
+// camera's own plane projects to absurd coordinates that would overflow the
+// drawing.
 inline constexpr double kPoseTileMaxOverhang = 8.0;
+
+// One corner of a plate projected by a panel's view: its pixel in the
+// panel's picture (not yet clipped) and its distance along the view's axis.
+struct ProjectedPoseCorner
+{
+  double u = 0.0;
+  double v = 0.0;
+  double depth = 0.0;
+};
+
+// A corner in the panel's frame to its projection, or nullopt when the
+// view cannot place it (behind a perspective camera, say).
+using PoseCornerProjector =
+  std::function<std::optional<ProjectedPoseCorner>(const std::array<double, 3> &)>;
+
+// Where a panel's picture sits in its cell: the picture's size, which the
+// overhang guard is relative to, and its offset within the cell (a camera
+// frame pasted centered between black bars; zero for a picture that fills
+// the cell).
+struct PoseTilePlacement
+{
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint32_t x_off = 0;
+  std::uint32_t y_off = 0;
+};
+
+// Project plates into a cell through `project`: a plate whose four corners
+// all project to finite pixels within kPoseTileMaxOverhang of the picture
+// becomes a ProjectedPoseTile (its corners offset into the cell, its depth
+// the mean of theirs); one with a corner that does not — behind the camera,
+// or grazing its plane and shooting off to absurd coordinates — cannot be
+// drawn as a quadrilateral and is left out.
+[[nodiscard]] std::vector<ProjectedPoseTile> project_pose_tiles(
+  const std::vector<PoseTile> & tiles, const PoseCornerProjector & project,
+  const PoseTilePlacement & placement);
 
 // Draw the plates over `canvas`, farthest first so nearer plates lie on
 // top: a translucent fill (fading with `fade`) and, on plates tall enough to
@@ -136,22 +160,9 @@ inline constexpr double kPoseTileMaxOverhang = 8.0;
 void draw_pose_tiles(
   cv::Mat & canvas, const std::vector<ProjectedPoseTile> & tiles, double ui_scale);
 
-// The colors and line widths, sized for a 720-px-tall cell and scaled by
-// `ui_scale`: the stretch ahead bright, the stretch behind dimmer and
-// thinner. `past` and `future` are runs of consecutive projected points; a
-// run breaks where a point did not project.
-void draw_pose_polylines(
-  cv::Mat & canvas, const std::vector<std::vector<cv::Point>> & past,
-  const std::vector<std::vector<cv::Point>> & future, double ui_scale);
-
-// The line widths are sized for a 720-px-tall cell and scale with the cell
-// height, within bounds, like the map panel's elements.
+// The outline widths are sized for a 720-px-tall cell and scale with the
+// cell height, within bounds, like the map panel's elements.
 [[nodiscard]] double pose_ui_scale(std::uint32_t cell_height) noexcept;
-
-// Split projected points into runs: consecutive points that projected form
-// one run, a point that did not (nullopt) ends the run.
-[[nodiscard]] std::vector<std::vector<cv::Point>> pose_runs(
-  const std::vector<std::optional<cv::Point>> & points);
 
 }  // namespace bagwiz::commands
 

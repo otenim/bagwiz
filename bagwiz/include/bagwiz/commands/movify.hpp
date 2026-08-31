@@ -92,7 +92,7 @@ struct MovifyArgs
   core::pointcloud::PointCloudProperty property = core::pointcloud::PointCloudProperty::kDistance;
   std::optional<double> property_min;
   std::optional<double> property_max;
-  core::pointcloud::ColorScheme colorscheme = core::pointcloud::ColorScheme::kViridis;
+  core::pointcloud::ColorScheme colorscheme = core::pointcloud::ColorScheme::kJet;
   std::uint32_t point_size = 2;
   // Opacity of the camera overlays (the point-cloud panels draw on black).
   float alpha = 1.0f;
@@ -133,7 +133,7 @@ struct MovifyArgs
   std::optional<std::string> pose_topic;
   std::optional<std::string> pose_of;
   double pose_window_s = 10.0;
-  // The width of the plates the camera panels lay along the trajectory.
+  // The width of the plates the panels lay along the trajectory.
   double pose_width_m = 2.0;
 
   // Internal toggle for the parallel per-panel pipeline. When false the

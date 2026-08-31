@@ -29,12 +29,17 @@ requires-pixi = ">=0.71"
 # RoboStack and win ties over conda-forge.
 channels = ["conda-forge"]
 # The bare "linux-64" entry serves the CPU environments (auto-detected virtual
-# packages). The named rich entry pins __cuda = 12 (host driver supports CUDA
-# 12.x) so the conda CUDA runtime packages solve; only the gpu feature binds to
-# it, so CPU environments stay CUDA-free.
+# packages). The named rich entry pins __cuda = 12.8 (the host driver must
+# support CUDA 12.8+, i.e. driver 570+) so the conda CUDA runtime packages
+# solve; only the gpu feature binds to it, so CPU environments stay CUDA-free.
+# 12.8 rather than a bare 12: conda-forge's NVENC-enabled ffmpeg variant (build
+# number 9xx) carries `constrains: __cuda >=12.8`, and a bare 12 (= 12.0) fails
+# it, which silently dropped the *-cuda environments to the NVENC-less 1xx
+# build. The CPU environments declare no __cuda at all, so the constraint is
+# vacuous there and they already got the NVENC build.
 platforms = [
   "linux-64",
-  { name = "linux-64-cuda", platform = "linux-64", cuda = "12" },
+  { name = "linux-64-cuda", platform = "linux-64", cuda = "12.8" },
 ]
 
 # ---------------------------------------------------------------------------
@@ -62,7 +67,11 @@ sqlite = "*"
 # ffmpeg (conda-forge) supplies the libav* libraries (libavcodec/libavformat/
 # libavutil/libswscale) and their pkg-config files used by `movify`
 # (bagwiz_video/src/core/video/video_encoder.cpp). The conda-forge build bundles the libx264
-# (H.264) and mjpeg encoders. Inherited by every distro environment.
+# (H.264) and mjpeg encoders. Inherited by every distro environment. NVENC
+# (h264_nvenc, `movify --encoder nvenc|auto`) is a conda-forge build *variant*
+# picked by the __cuda virtual package (see the linux-64-cuda platform entry),
+# not a configure flag: `ffmpeg -encoders | grep nvenc` tells the variants
+# apart, `ffmpeg -buildconf` does not.
 ffmpeg = "*"
 # opencv (conda-forge) backs the `bagwiz movify` rectification path: it
 # reads sensor_msgs/msg/CameraInfo intrinsics and applies cv::undistort to each
@@ -258,7 +267,8 @@ eigen = "3.4.*"
 # is fully pixi-managed (no system /usr/local/cuda). Combined with a distro
 # feature into a *-cuda environment; CPU environments stay CUDA-free and lean.
 # Bound to the linux-64-cuda platform entry (see [workspace] platforms), which
-# declares __cuda = 12 so the conda CUDA runtime packages solve.
+# declares __cuda = 12.8 so the conda CUDA runtime packages and the
+# NVENC-enabled ffmpeg variant solve.
 # ---------------------------------------------------------------------------
 [feature.gpu]
 platforms = ["linux-64-cuda"]
