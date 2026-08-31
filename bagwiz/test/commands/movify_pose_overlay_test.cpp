@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,15 +31,17 @@
 namespace
 {
 
-using bagwiz::commands::draw_pose_polylines;
 using bagwiz::commands::draw_pose_tiles;
 using bagwiz::commands::kPoseTileLengthRatio;
+using bagwiz::commands::kPoseTileMaxOverhang;
 using bagwiz::commands::kPoseTileSpacingM;
 using bagwiz::commands::load_pose_overlay;
-using bagwiz::commands::pose_polyline_in_frame;
-using bagwiz::commands::pose_runs;
 using bagwiz::commands::pose_tiles_in_frame;
 using bagwiz::commands::pose_ui_scale;
+using bagwiz::commands::PoseTile;
+using bagwiz::commands::PoseTilePlacement;
+using bagwiz::commands::project_pose_tiles;
+using bagwiz::commands::ProjectedPoseCorner;
 using bagwiz::commands::ProjectedPoseTile;
 using bagwiz::test::kMovifyOdometryType;
 using bagwiz::test::kMovifyPoseStampedType;
@@ -157,54 +160,69 @@ TEST_F(MovifyPoseOverlayTest, RejectsATopicWithoutMessages)
   EXPECT_EQ(loaded.error, "topic '/odom' has no messages to render.");
 }
 
-// At t = 5.5 s the body sits at x = 5.5; with a +-2 s window the past runs
-// from x = 4 (t = 4) up to the body and the future from the body to x = 7
-// (t = 7). In the body's own frame the trajectory is the x axis.
-TEST_F(MovifyPoseOverlayTest, PolylineInTheBodyFrameIsCenteredOnTheBody)
+// At t = 5.5 s the body sits at x = 5.5; with a +-2 s window the path runs
+// from x = 4 (t = 4) to x = 7 (t = 7), 1.5 m each side of the body. In the
+// body's own frame one plate lies ahead along +x from the body and one
+// behind along -x, each a tile length long and `width_m` wide across the
+// path; the fade is 1 at the body.
+TEST_F(MovifyPoseOverlayTest, TilesInTheBodyFrameStartAtTheBody)
 {
   const auto bag = write_odometry_bag();
   const auto loaded = load_pose_overlay(bag, "/odom", std::nullopt, 2.0);
   ASSERT_TRUE(loaded.ok()) << loaded.error;
   std::string error;
-  const auto line = pose_polyline_in_frame(*loaded.overlay, "base_link", kNs * 5 + kNs / 2, error);
-  ASSERT_TRUE(line.has_value()) << error;
-  // past: t = 4, 5, then the body; future: the body, then t = 6, 7.
-  ASSERT_EQ(line->past.size(), 3u);
-  EXPECT_NEAR(line->past[0][0], -1.5, kTol);
-  EXPECT_NEAR(line->past[1][0], -0.5, kTol);
-  EXPECT_NEAR(line->past[2][0], 0.0, kTol);
-  ASSERT_EQ(line->future.size(), 3u);
-  EXPECT_NEAR(line->future[0][0], 0.0, kTol);
-  EXPECT_NEAR(line->future[1][0], 0.5, kTol);
-  EXPECT_NEAR(line->future[2][0], 1.5, kTol);
-  for (const auto & p : line->past) {
-    EXPECT_NEAR(p[1], 0.0, kTol);
-    EXPECT_NEAR(p[2], 0.0, kTol);
+  const auto tiles =
+    pose_tiles_in_frame(*loaded.overlay, "base_link", kNs * 5 + kNs / 2, 2.0, error);
+  ASSERT_TRUE(tiles.has_value()) << error;
+  ASSERT_EQ(tiles->size(), 2u);
+  const double len = kPoseTileSpacingM * kPoseTileLengthRatio;
+  const auto & ahead = (*tiles)[0];
+  EXPECT_TRUE(ahead.ahead);
+  EXPECT_NEAR(ahead.fade, 1.0, kTol);
+  EXPECT_NEAR(ahead.corners[0][0], 0.0, kTol);
+  EXPECT_NEAR(ahead.corners[0][1], 1.0, kTol);
+  EXPECT_NEAR(ahead.corners[1][0], len, kTol);
+  EXPECT_NEAR(ahead.corners[1][1], 1.0, kTol);
+  EXPECT_NEAR(ahead.corners[2][0], len, kTol);
+  EXPECT_NEAR(ahead.corners[2][1], -1.0, kTol);
+  EXPECT_NEAR(ahead.corners[3][0], 0.0, kTol);
+  EXPECT_NEAR(ahead.corners[3][1], -1.0, kTol);
+  const auto & behind = (*tiles)[1];
+  EXPECT_FALSE(behind.ahead);
+  EXPECT_NEAR(behind.corners[0][0], 0.0, kTol);
+  EXPECT_NEAR(behind.corners[1][0], -len, kTol);
+  EXPECT_NEAR(std::abs(behind.corners[0][1]), 1.0, kTol);
+  for (const auto & tile : *tiles) {
+    for (const auto & c : tile.corners) {
+      EXPECT_NEAR(c[2], 0.0, kTol);
+    }
   }
 }
 
 // In the lidar frame (2 m ahead of the body) everything shifts back by 2 m:
-// the body sits at x = -2.
-TEST_F(MovifyPoseOverlayTest, PolylineInAnotherFrameGoesThroughTheStaticTf)
+// the plate ahead starts at x = -2.
+TEST_F(MovifyPoseOverlayTest, TilesInAnotherFrameGoThroughTheStaticTf)
 {
   const auto bag = write_odometry_bag();
   const auto loaded = load_pose_overlay(bag, "/odom", std::nullopt, 2.0);
   ASSERT_TRUE(loaded.ok()) << loaded.error;
   std::string error;
-  const auto line = pose_polyline_in_frame(*loaded.overlay, "lidar", kNs * 5, error);
-  ASSERT_TRUE(line.has_value()) << error;
-  EXPECT_NEAR(line->past.back()[0], -2.0, kTol);
-  EXPECT_NEAR(line->future.front()[0], -2.0, kTol);
-  EXPECT_NEAR(line->future.back()[0], 0.0, kTol);  // t = 7: x = 7, i.e. 2 m ahead of the body
+  const auto tiles = pose_tiles_in_frame(*loaded.overlay, "lidar", kNs * 5, 2.0, error);
+  ASSERT_TRUE(tiles.has_value()) << error;
+  ASSERT_FALSE(tiles->empty());
+  const auto & ahead = tiles->front();
+  EXPECT_TRUE(ahead.ahead);
+  EXPECT_NEAR(ahead.corners[0][0], -2.0, kTol);
+  EXPECT_NEAR(ahead.corners[1][0], -2.0 + kPoseTileSpacingM * kPoseTileLengthRatio, kTol);
   // A frame the static TF does not reach is an error.
-  EXPECT_FALSE(pose_polyline_in_frame(*loaded.overlay, "nowhere", kNs * 5, error).has_value());
+  EXPECT_FALSE(pose_tiles_in_frame(*loaded.overlay, "nowhere", kNs * 5, 2.0, error).has_value());
   EXPECT_NE(error.find("no static TF chain"), std::string::npos) << error;
 }
 
 // The body's yaw turns the world into the body frame: driving along +x while
 // yawed 90 degrees left, the road ahead (+x in the world) lies to the body's
-// right (-y).
-TEST_F(MovifyPoseOverlayTest, PolylineFollowsTheBodyOrientation)
+// right (-y), so the plate ahead runs along -y and spans +-1 m in x.
+TEST_F(MovifyPoseOverlayTest, TilesFollowTheBodyOrientation)
 {
   const auto path = tmp_dir_ / "in.mcap";
   {
@@ -214,7 +232,7 @@ TEST_F(MovifyPoseOverlayTest, PolylineFollowsTheBodyOrientation)
     const std::vector<geometry_msgs::msg::TransformStamped> edges{
       static_edge("base_link", "lidar", 2.0, 0.0, 0.0)};
     w->write("/tf_static", 0, bagwiz::core::serialize_tf_message(edges));
-    for (int i = 1; i <= 3; ++i) {
+    for (int i = 1; i <= 4; ++i) {
       w->write(
         "/odom", i * kNs,
         movify_odometry_payload(i * kNs, "map", "base_link", i, 0.0, 0.0, M_PI / 2.0));
@@ -224,11 +242,20 @@ TEST_F(MovifyPoseOverlayTest, PolylineFollowsTheBodyOrientation)
   const auto loaded = load_pose_overlay(path, "/odom", std::nullopt, 5.0);
   ASSERT_TRUE(loaded.ok()) << loaded.error;
   std::string error;
-  const auto line = pose_polyline_in_frame(*loaded.overlay, "base_link", 2 * kNs, error);
-  ASSERT_TRUE(line.has_value()) << error;
-  ASSERT_EQ(line->future.size(), 2u);
-  EXPECT_NEAR(line->future[1][0], 0.0, kTol);
-  EXPECT_NEAR(line->future[1][1], -1.0, kTol);
+  const auto tiles = pose_tiles_in_frame(*loaded.overlay, "base_link", 2 * kNs, 2.0, error);
+  ASSERT_TRUE(tiles.has_value()) << error;
+  ASSERT_FALSE(tiles->empty());
+  const auto & ahead = tiles->front();
+  EXPECT_TRUE(ahead.ahead);
+  const double len = kPoseTileSpacingM * kPoseTileLengthRatio;
+  EXPECT_NEAR(ahead.corners[0][0], 1.0, kTol);
+  EXPECT_NEAR(ahead.corners[0][1], 0.0, kTol);
+  EXPECT_NEAR(ahead.corners[1][0], 1.0, kTol);
+  EXPECT_NEAR(ahead.corners[1][1], -len, kTol);
+  EXPECT_NEAR(ahead.corners[2][0], -1.0, kTol);
+  EXPECT_NEAR(ahead.corners[2][1], -len, kTol);
+  EXPECT_NEAR(ahead.corners[3][0], -1.0, kTol);
+  EXPECT_NEAR(ahead.corners[3][1], 0.0, kTol);
 }
 
 // A frame the bag's static TF does not know cannot be placed in any panel:
@@ -284,34 +311,84 @@ TEST_F(MovifyPoseOverlayTest, RejectsABodyFrameTheStaticTfDoesNotKnow)
     << no_tf.error;
 }
 
-TEST(PoseRuns, BreakAtPointsThatDidNotProject)
+// A plate in the panel's frame: 1 m ahead of the origin, a tile long along
+// +x and 2 m wide across it, on the ground.
+PoseTile unit_tile()
 {
-  const std::vector<std::optional<cv::Point>> points{cv::Point(0, 0), cv::Point(1, 1), std::nullopt,
-                                                     cv::Point(5, 5), std::nullopt,    std::nullopt,
-                                                     cv::Point(7, 7), cv::Point(8, 8)};
-  const auto runs = pose_runs(points);
-  ASSERT_EQ(runs.size(), 3u);
-  EXPECT_EQ(runs[0].size(), 2u);
-  EXPECT_EQ(runs[1].size(), 1u);
-  EXPECT_EQ(runs[2].size(), 2u);
-  EXPECT_TRUE(pose_runs({}).empty());
+  PoseTile tile;
+  tile.corners = {{{1.0, 1.0, 0.0}, {2.0, 1.0, 0.0}, {2.0, -1.0, 0.0}, {1.0, -1.0, 0.0}}};
+  tile.ahead = false;
+  tile.fade = 0.5;
+  return tile;
 }
 
-TEST(DrawPosePolylines, DrawsTheRunsInTheirColors)
+// A toy projection: x forward is the depth, y left runs left across the
+// picture, z up runs up it, 10 px per meter about the picture's center; a
+// point at or behind the camera's plane (x <= 0) does not project.
+std::optional<ProjectedPoseCorner> toy_project(const std::array<double, 3> & p)
 {
-  cv::Mat canvas(40, 80, CV_8UC3, cv::Scalar(0, 0, 0));
-  draw_pose_polylines(
-    canvas, {{cv::Point(0, 20), cv::Point(30, 20)}}, {{cv::Point(40, 20), cv::Point(79, 20)}},
-    pose_ui_scale(720));
-  const auto past = canvas.at<cv::Vec3b>(20, 15);
-  const auto future = canvas.at<cv::Vec3b>(20, 60);
-  EXPECT_EQ(past, cv::Vec3b(210, 210, 210));
-  EXPECT_EQ(future, cv::Vec3b(0, 170, 255));
-  EXPECT_EQ(canvas.at<cv::Vec3b>(5, 15), cv::Vec3b(0, 0, 0));  // untouched elsewhere
-  // A one-point run draws nothing.
-  cv::Mat blank(40, 80, CV_8UC3, cv::Scalar(0, 0, 0));
-  draw_pose_polylines(blank, {{cv::Point(10, 10)}}, {}, 1.0);
-  EXPECT_EQ(blank.at<cv::Vec3b>(10, 10), cv::Vec3b(0, 0, 0));
+  if (p[0] <= 0.0) {
+    return std::nullopt;
+  }
+  return ProjectedPoseCorner{50.0 - 10.0 * p[1], 50.0 - 10.0 * p[2], p[0]};
+}
+
+// Every corner projected lands in the cell, offset by the picture's place in
+// it, with the plate's depth the mean of its corners' and its `ahead` / `fade`
+// carried over.
+TEST(ProjectPoseTiles, ProjectsEveryCornerIntoTheCell)
+{
+  PoseTilePlacement placement;
+  placement.width = 100;
+  placement.height = 100;
+  placement.x_off = 7;
+  placement.y_off = 3;
+  const auto projected = project_pose_tiles({unit_tile()}, toy_project, placement);
+  ASSERT_EQ(projected.size(), 1u);
+  const auto & tile = projected.front();
+  EXPECT_EQ(tile.corners[0], cv::Point(47, 53));
+  EXPECT_EQ(tile.corners[1], cv::Point(47, 53));
+  EXPECT_EQ(tile.corners[2], cv::Point(67, 53));
+  EXPECT_EQ(tile.corners[3], cv::Point(67, 53));
+  EXPECT_FALSE(tile.ahead);
+  EXPECT_DOUBLE_EQ(tile.fade, 0.5);
+  EXPECT_DOUBLE_EQ(tile.depth, 1.5);
+}
+
+// A plate with a corner that does not project (behind the camera) is dropped
+// whole; the others stay.
+TEST(ProjectPoseTiles, DropsAPlateWithACornerThatDoesNotProject)
+{
+  PoseTilePlacement placement;
+  placement.width = 100;
+  placement.height = 100;
+  PoseTile behind = unit_tile();
+  behind.corners[0][0] = -1.0;
+  const auto projected = project_pose_tiles({behind, unit_tile()}, toy_project, placement);
+  ASSERT_EQ(projected.size(), 1u);
+  EXPECT_DOUBLE_EQ(projected.front().depth, 1.5);
+}
+
+// A corner shooting off past kPoseTileMaxOverhang picture sizes (grazing the
+// camera's plane) drops the plate too, as does one that is not finite; a
+// corner within the overhang, off the picture, is kept for the drawing to
+// clip.
+TEST(ProjectPoseTiles, DropsAPlateThatOverhangsThePictureTooFar)
+{
+  PoseTilePlacement placement;
+  placement.width = 100;
+  placement.height = 100;
+  PoseTile far = unit_tile();
+  far.corners[1][1] = (kPoseTileMaxOverhang + 1.0) * 10.0;  // u = -(overhang + 0.5) * 100
+  PoseTile bad = unit_tile();
+  bad.corners[2][2] = std::numeric_limits<double>::infinity();
+  PoseTile edge = unit_tile();
+  edge.corners[1][1] = (kPoseTileMaxOverhang - 1.0) * 10.0;  // u = -(overhang - 1.5) * 100
+  const auto projected = project_pose_tiles({far, bad, edge}, toy_project, placement);
+  ASSERT_EQ(projected.size(), 1u);
+  EXPECT_EQ(
+    projected.front().corners[1].x,
+    static_cast<int>(std::lround(50.0 - (kPoseTileMaxOverhang - 1.0) * 100.0)));
 }
 
 // Plates draw farthest first whatever their order in the list: where a near

@@ -42,11 +42,9 @@ constexpr const char * kLogger = "bagwiz.cmd.movify";
 constexpr const char * kDefaultBodyFrame = "base_link";
 constexpr std::int64_t kNsPerSecond = 1'000'000'000LL;
 
-// Colors, BGR, and widths at a 720-px-tall cell.
+// Colors, BGR.
 const cv::Scalar kFutureColor(0, 170, 255);  // orange
 const cv::Scalar kPastColor(210, 210, 210);
-constexpr double kFutureWidthPx = 4.0;
-constexpr double kPastWidthPx = 2.0;
 
 // The first message's frames: the world frame every message poses in and,
 // for Odometry, the body frame it poses. nullopt with `error` set when the
@@ -379,24 +377,6 @@ void lay_tiles(
 }
 }  // namespace
 
-std::optional<PosePolyline> pose_polyline_in_frame(
-  const PoseOverlay & overlay, const std::string & frame, std::int64_t stamp_ns,
-  std::string & error)
-{
-  const auto window = world_window(overlay, frame, stamp_ns, error);
-  if (!window.has_value()) {
-    return std::nullopt;
-  }
-  PosePolyline out;
-  for (const auto & p : window->past) {
-    out.past.push_back(apply(window->frame_from_world, p));
-  }
-  for (const auto & p : window->future) {
-    out.future.push_back(apply(window->frame_from_world, p));
-  }
-  return out;
-}
-
 std::optional<std::vector<PoseTile>> pose_tiles_in_frame(
   const PoseOverlay & overlay, const std::string & frame, std::int64_t stamp_ns, double width_m,
   std::string & error)
@@ -412,6 +392,41 @@ std::optional<std::vector<PoseTile>> pose_tiles_in_frame(
   std::vector<std::array<double, 3>> behind(window->past.rbegin(), window->past.rend());
   lay_tiles(behind, width_m, false, window->frame_from_world, tiles);
   return tiles;
+}
+
+std::vector<ProjectedPoseTile> project_pose_tiles(
+  const std::vector<PoseTile> & tiles, const PoseCornerProjector & project,
+  const PoseTilePlacement & placement)
+{
+  const double max_u = kPoseTileMaxOverhang * placement.width;
+  const double max_v = kPoseTileMaxOverhang * placement.height;
+  std::vector<ProjectedPoseTile> out;
+  out.reserve(tiles.size());
+  for (const auto & tile : tiles) {
+    ProjectedPoseTile projected;
+    projected.ahead = tile.ahead;
+    projected.fade = tile.fade;
+    bool visible = true;
+    double depth = 0.0;
+    for (std::size_t k = 0; k < 4; ++k) {
+      const auto corner = project(tile.corners[k]);
+      if (
+        !corner.has_value() || !std::isfinite(corner->u) || !std::isfinite(corner->v) ||
+        std::abs(corner->u) > max_u || std::abs(corner->v) > max_v) {
+        visible = false;
+        break;
+      }
+      projected.corners[k] = cv::Point(
+        static_cast<int>(std::lround(corner->u)) + static_cast<int>(placement.x_off),
+        static_cast<int>(std::lround(corner->v)) + static_cast<int>(placement.y_off));
+      depth += corner->depth / 4.0;
+    }
+    if (visible) {
+      projected.depth = depth;
+      out.push_back(projected);
+    }
+  }
+  return out;
 }
 
 void draw_pose_tiles(
@@ -466,45 +481,6 @@ double pose_ui_scale(std::uint32_t cell_height) noexcept
 {
   constexpr double kReferenceHeight = 720.0;
   return std::clamp(cell_height / kReferenceHeight, 0.5, 4.0);
-}
-
-std::vector<std::vector<cv::Point>> pose_runs(const std::vector<std::optional<cv::Point>> & points)
-{
-  std::vector<std::vector<cv::Point>> runs;
-  std::vector<cv::Point> run;
-  for (const auto & point : points) {
-    if (point.has_value()) {
-      run.push_back(*point);
-      continue;
-    }
-    if (!run.empty()) {
-      runs.push_back(std::move(run));
-      run.clear();
-    }
-  }
-  if (!run.empty()) {
-    runs.push_back(std::move(run));
-  }
-  return runs;
-}
-
-void draw_pose_polylines(
-  cv::Mat & canvas, const std::vector<std::vector<cv::Point>> & past,
-  const std::vector<std::vector<cv::Point>> & future, double ui_scale)
-{
-  const auto width = [ui_scale](double px) {
-    return std::max(1, static_cast<int>(std::lround(px * ui_scale)));
-  };
-  for (const auto & run : past) {
-    if (run.size() >= 2) {
-      cv::polylines(canvas, run, false, kPastColor, width(kPastWidthPx), cv::LINE_AA);
-    }
-  }
-  for (const auto & run : future) {
-    if (run.size() >= 2) {
-      cv::polylines(canvas, run, false, kFutureColor, width(kFutureWidthPx), cv::LINE_AA);
-    }
-  }
 }
 
 }  // namespace bagwiz::commands
