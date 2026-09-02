@@ -10,6 +10,7 @@
 
 #include "bagwiz/core/image/camera_distortion.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -165,7 +166,12 @@ ProjectionResult project_pointcloud(
 
   const CameraProjection camera(camera_info, use_rectified);
 
-  const std::uint32_t n = cloud.height * cloud.width;
+  // Clamp to the points the blob actually holds: a cloud whose data is
+  // shorter than height * width * point_step (a stale header or a truncated
+  // blob) projects its complete points instead of reading out of bounds.
+  const std::uint64_t declared = static_cast<std::uint64_t>(cloud.height) * cloud.width;
+  const std::uint64_t held = cloud.point_step != 0 ? cloud.data.size() / cloud.point_step : 0;
+  const auto n = static_cast<std::uint32_t>(std::min(declared, held));
   result.points.reserve(n / 4);  // rough estimate
 
   for (std::uint32_t i = 0; i < n; ++i) {

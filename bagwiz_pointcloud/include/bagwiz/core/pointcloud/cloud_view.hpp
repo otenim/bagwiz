@@ -106,12 +106,15 @@ inline constexpr double kBevAutoRangeQuantile = 0.95;
 
 // The BEV half-extent that keeps `fraction` (0 < fraction <= 1) of the
 // cloud's finite points inside the view: the nearest-rank quantile of their
-// ground (XY) distances. nullopt with `error` set when the cloud's layout is
-// unusable, no point is finite, or every point sits at the origin.
+// ground (XY) distances. Only the points the blob actually holds are
+// considered: a short blob or a stale row_step trims the walk to the
+// complete points instead of failing. nullopt with `error` set when the blob
+// cannot hold one complete point, no point is finite, or every point sits at
+// the origin.
 [[nodiscard]] std::optional<double> bev_auto_range(
   const PointCloud2 & cloud, double fraction, std::string & error);
 
-// Project every finite point of `cloud` onto `view`: each point is moved by
+// Project the finite points of `cloud` onto `view`: each point is moved by
 // `transform` (the pose of the cloud's frame in the view frame, applied as
 // p' = R p + t) and projected; points whose center lands outside the canvas
 // are dropped. Each output point's `value` is the point's `property`
@@ -119,9 +122,11 @@ inline constexpr double kBevAutoRangeQuantile = 0.95;
 // transform); its `depth` is the camera-space depth of the perspective view
 // or, for the BEV, the negated height in the view frame — so a depth test
 // that keeps the smallest depth shows the point nearest the camera, or the
-// highest point of the bird's-eye view. Fails when the cloud lacks x/y/z
-// fields (or intensity, when that is the property), or its point layout is
-// inconsistent.
+// highest point of the bird's-eye view. Only the points the blob actually
+// holds are projected: a short blob or a stale row_step trims the walk to
+// the complete points instead of failing. Fails when the cloud lacks x/y/z
+// fields (or intensity, when that is the property), or its blob cannot hold
+// even one complete point.
 [[nodiscard]] CloudViewProjection project_cloud_to_view(
   const PointCloud2 & cloud, const RigidTransform & transform, const CloudView & view,
   PointCloudProperty property);

@@ -290,10 +290,59 @@ TEST(CloudViewProject, RequiresXyzAndIntensityWhenAsked)
       .ok());
 }
 
-TEST(CloudViewProject, RejectsATruncatedPointBlob)
+TEST(CloudViewProject, ToleratesAStaleSmallRowStep)
+{
+  // A concatenated cloud whose row_step was left over from a source cloud
+  // (smaller than width * point_step): the blob is densely packed, so the
+  // stale stride is ignored in favor of dense packing.
+  auto cloud = make_cloud({{1.0F, 0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F, 0.0F}});
+  cloud.row_step = cloud.point_step;  // stale: smaller than width * point_step
+  const auto r = project_cloud_to_view(
+    cloud, RigidTransform{}, bev_view(100, 100, 10.0), PointCloudProperty::kDistance);
+  ASSERT_TRUE(r.ok()) << r.error;
+  ASSERT_EQ(r.points.size(), 2);
+  EXPECT_FLOAT_EQ(r.points[0].value, 1.0F);
+  EXPECT_FLOAT_EQ(r.points[1].value, 2.0F);
+}
+
+TEST(CloudViewProject, ProjectsTheCompletePointsOfATruncatedBlob)
 {
   auto cloud = make_cloud({{1.0F, 2.0F, 3.0F, 0.0F}, {4.0F, 5.0F, 6.0F, 0.0F}});
-  cloud.data.resize(20);  // shorter than height * width * point_step
+  cloud.data.resize(20);  // one full point plus a partial one
+  const auto r = project_cloud_to_view(
+    cloud, RigidTransform{}, bev_view(100, 100, 10.0), PointCloudProperty::kDistance);
+  ASSERT_TRUE(r.ok()) << r.error;
+  ASSERT_EQ(r.points.size(), 1);
+  EXPECT_FLOAT_EQ(r.points[0].value, std::sqrt(14.0F));  // distance of (1, 2, 3)
+}
+
+TEST(CloudViewProject, ProjectsTheFullRowsAndPartialTailOfAShortOrganizedBlob)
+{
+  // An organized 2x2 cloud with padded rows whose blob holds one full row
+  // and one point of the second: three of the four declared points project.
+  auto cloud = make_cloud({{1.0F, 0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F, 0.0F}});
+  cloud.height = 2;
+  cloud.width = 2;
+  cloud.row_step = 40;                  // 8 bytes of padding after each 32-byte row
+  cloud.data.assign(64, std::byte{0});  // one full row plus half a row
+  const float xs[3] = {1.0F, 2.0F, 3.0F};
+  const std::size_t offs[3] = {0, 16, 40};
+  for (int i = 0; i < 3; ++i) {
+    std::memcpy(cloud.data.data() + offs[i], &xs[i], sizeof(float));
+  }
+  const auto r = project_cloud_to_view(
+    cloud, RigidTransform{}, bev_view(100, 100, 10.0), PointCloudProperty::kDistance);
+  ASSERT_TRUE(r.ok()) << r.error;
+  ASSERT_EQ(r.points.size(), 3);
+  EXPECT_FLOAT_EQ(r.points[0].value, 1.0F);
+  EXPECT_FLOAT_EQ(r.points[1].value, 2.0F);
+  EXPECT_FLOAT_EQ(r.points[2].value, 3.0F);
+}
+
+TEST(CloudViewProject, RejectsABlobTooSmallForOnePoint)
+{
+  auto cloud = make_cloud({{1.0F, 2.0F, 3.0F, 0.0F}, {4.0F, 5.0F, 6.0F, 0.0F}});
+  cloud.data.resize(8);  // shorter than a single point
   const auto r = project_cloud_to_view(
     cloud, RigidTransform{}, bev_view(100, 100, 10.0), PointCloudProperty::kDistance);
   EXPECT_FALSE(r.ok());
@@ -329,6 +378,14 @@ TEST(BevAutoRange, UsesTheGroundDistanceAndSkipsNonFinitePoints)
      {std::numeric_limits<float>::infinity(), 0.0F, 0.0F, 0.0F}});
   std::string error;
   EXPECT_DOUBLE_EQ(bev_auto_range(cloud, 1.0, error).value_or(-1.0), 5.0) << error;
+}
+
+TEST(BevAutoRange, ToleratesAStaleSmallRowStep)
+{
+  auto cloud = make_cloud({{1.0F, 0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F, 0.0F}});
+  cloud.row_step = cloud.point_step;  // stale: smaller than width * point_step
+  std::string error;
+  EXPECT_DOUBLE_EQ(bev_auto_range(cloud, 1.0, error).value_or(-1.0), 2.0) << error;
 }
 
 TEST(BevAutoRange, RejectsCloudsWithoutAUsablePoint)

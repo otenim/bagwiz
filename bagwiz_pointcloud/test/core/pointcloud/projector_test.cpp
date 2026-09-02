@@ -171,6 +171,23 @@ TEST(Projector, DropsPointOutsideImageBounds)
   EXPECT_TRUE(result.points.empty());
 }
 
+TEST(Projector, ProjectsOnlyThePointsTheBlobHolds)
+{
+  // The header declares two points but the blob holds one: the second point
+  // must not be read. resize() keeps the allocated buffer, so without the
+  // bounds clamp the stale bytes of the second point would still project.
+  auto cloud = make_xyz_cloud({{0.0f, 0.0f, 5.0f}, {0.0f, 0.0f, 6.0f}});
+  cloud.data.resize(cloud.point_step);
+  const auto camera = make_pinhole_camera(100.0, 100.0, 320.0, 240.0, 640, 480);
+
+  const auto result = project_pointcloud(
+    cloud, camera, identity_transform(), 640, 480, PointCloudProperty::kDistance);
+
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result.points.size(), 1u);
+  EXPECT_FLOAT_EQ(result.points[0].value, 5.0f);
+}
+
 TEST(Projector, MissingXYZFieldReturnsError)
 {
   const auto cloud = make_xy_cloud({{1.0f, 2.0f}});
