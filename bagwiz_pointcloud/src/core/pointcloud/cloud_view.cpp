@@ -28,21 +28,68 @@ double rad(double deg)
   return deg * M_PI / 180.0;
 }
 
-// Validate the point layout shared by every per-point walk here: the data
-// blob must cover height * width points at the declared strides. Returns ""
-// on success.
-std::string check_layout(const PointCloud2 & cloud)
+// The point layout a per-point walk iterates: the effective row stride, the
+// number of rows that hold all `width` points, and the number of complete
+// points in the trailing partial row.
+struct CloudLayout
+{
+  std::size_t rstep;
+  std::uint32_t full_rows;
+  std::uint32_t last_cols;
+};
+
+// Resolve the layout shared by every per-point walk here. A row_step smaller
+// than width * point_step cannot describe the blob — a row would not fit in
+// it — so it is treated as dense packing; concatenation pipelines are known
+// to leave a source cloud's row_step behind when they grow the width. A blob
+// shorter than height * stride is walked only up to its last complete point
+// instead of being rejected. Returns nullopt with `error` set when not even
+// one complete point fits.
+std::optional<CloudLayout> resolve_layout(const PointCloud2 & cloud, std::string & error)
 {
   if (cloud.point_step == 0) {
-    return "point cloud has point_step 0";
+    error = "point cloud has point_step 0";
+    return std::nullopt;
   }
-  const std::uint32_t rstep = cloud.row_step != 0 ? cloud.row_step : cloud.width * cloud.point_step;
-  if (
-    static_cast<std::size_t>(cloud.width) * cloud.point_step > rstep ||
-    cloud.data.size() < static_cast<std::size_t>(cloud.height) * rstep) {
-    return "point cloud data is smaller than height * width * point_step";
+  CloudLayout layout{0, 0, 0};
+  if (cloud.height == 0 || cloud.width == 0) {
+    return layout;  // a cloud that declares no points walks nothing
   }
-  return "";
+  const std::size_t dense_step = static_cast<std::size_t>(cloud.width) * cloud.point_step;
+  layout.rstep = cloud.row_step >= dense_step ? cloud.row_step : dense_step;
+  layout.full_rows = static_cast<std::uint32_t>(
+    std::min<std::size_t>(cloud.height, cloud.data.size() / layout.rstep));
+  if (layout.full_rows < cloud.height) {
+    const std::size_t rest = cloud.data.size() - layout.full_rows * layout.rstep;
+    layout.last_cols =
+      static_cast<std::uint32_t>(std::min<std::size_t>(cloud.width, rest / cloud.point_step));
+  }
+  if (layout.full_rows == 0 && layout.last_cols == 0) {
+    error = "point cloud data is too short to hold one complete point";
+    return std::nullopt;
+  }
+  return layout;
+}
+
+// Call `fn` with the address of every complete point of `cloud` under
+// `layout`: the full rows first, then the partial trailing row.
+template <typename Fn>
+void for_each_point(const PointCloud2 & cloud, const CloudLayout & layout, Fn && fn)
+{
+  if (layout.full_rows == 0 && layout.last_cols == 0) {
+    return;
+  }
+  for (std::uint32_t row = 0; row < layout.full_rows; ++row) {
+    const std::byte * row_base = cloud.data.data() + static_cast<std::size_t>(row) * layout.rstep;
+    for (std::uint32_t col = 0; col < cloud.width; ++col) {
+      fn(row_base + static_cast<std::size_t>(col) * cloud.point_step);
+    }
+  }
+  const std::byte * tail_row =
+    cloud.data.data() + static_cast<std::size_t>(layout.full_rows) * layout.rstep;
+  for (std::uint32_t col = 0; col < layout.last_cols; ++col) {
+    fn(tail_row + static_cast<std::size_t>(col) * cloud.point_step);
+  }
 }
 
 // The field named `name` when it fits inside a point, else nullptr.
@@ -201,25 +248,20 @@ std::optional<double> bev_auto_range(
     error = "point cloud is missing required x/y fields";
     return std::nullopt;
   }
-  if (const std::string err = check_layout(cloud); !err.empty()) {
-    error = err;
+  const auto layout = resolve_layout(cloud, error);
+  if (!layout.has_value()) {
     return std::nullopt;
   }
 
   std::vector<double> distances;
   distances.reserve(static_cast<std::size_t>(cloud.height) * cloud.width);
-  const std::uint32_t rstep = cloud.row_step != 0 ? cloud.row_step : cloud.width * cloud.point_step;
-  for (std::uint32_t row = 0; row < cloud.height; ++row) {
-    const std::byte * row_base = cloud.data.data() + static_cast<std::size_t>(row) * rstep;
-    for (std::uint32_t col = 0; col < cloud.width; ++col) {
-      const std::byte * base = row_base + static_cast<std::size_t>(col) * cloud.point_step;
-      const double x = read_field(base, *field_x);
-      const double y = read_field(base, *field_y);
-      if (std::isfinite(x) && std::isfinite(y)) {
-        distances.push_back(std::hypot(x, y));
-      }
+  for_each_point(cloud, *layout, [&](const std::byte * base) {
+    const double x = read_field(base, *field_x);
+    const double y = read_field(base, *field_y);
+    if (std::isfinite(x) && std::isfinite(y)) {
+      distances.push_back(std::hypot(x, y));
     }
-  }
+  });
   if (distances.empty()) {
     error = "point cloud has no finite points";
     return std::nullopt;
@@ -260,8 +302,8 @@ CloudViewProjection project_cloud_to_view(
       return result;
     }
   }
-  if (const std::string err = check_layout(cloud); !err.empty()) {
-    result.error = err;
+  const auto layout = resolve_layout(cloud, result.error);
+  if (!layout.has_value()) {
     return result;
   }
 
@@ -272,62 +314,57 @@ CloudViewProjection project_cloud_to_view(
   const auto & r = transform.rotation;
   const auto & t = transform.translation;
 
-  const std::uint32_t rstep = cloud.row_step != 0 ? cloud.row_step : cloud.width * cloud.point_step;
   result.points.reserve(static_cast<std::size_t>(cloud.height) * cloud.width / 4);
-  for (std::uint32_t row = 0; row < cloud.height; ++row) {
-    const std::byte * row_base = cloud.data.data() + static_cast<std::size_t>(row) * rstep;
-    for (std::uint32_t col = 0; col < cloud.width; ++col) {
-      const std::byte * base = row_base + static_cast<std::size_t>(col) * cloud.point_step;
-      const double x = read_field(base, *field_x);
-      const double y = read_field(base, *field_y);
-      const double z = read_field(base, *field_z);
-      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
-        continue;
-      }
-      // The point in the view frame.
-      double vx = x;
-      double vy = y;
-      double vz = z;
-      if (!identity) {
-        vx = r[0] * x + r[1] * y + r[2] * z + t[0];
-        vy = r[3] * x + r[4] * y + r[5] * z + t[1];
-        vz = r[6] * x + r[7] * y + r[8] * z + t[2];
-      }
-      std::optional<ProjectedPoint> projected;
-      if (perspective) {
-        projected = project_perspective(vx, vy, vz, camera, view);
-      } else {
-        projected = project_bev(vx, vy, view);
-        projected->depth = static_cast<float>(-vz);
-      }
-      if (
-        !projected.has_value() || projected->u < 0 ||
-        projected->u >= static_cast<std::int32_t>(view.width) || projected->v < 0 ||
-        projected->v >= static_cast<std::int32_t>(view.height)) {
-        continue;
-      }
-      double value = 0.0;
-      switch (property) {
-        case PointCloudProperty::kX:
-          value = x;
-          break;
-        case PointCloudProperty::kY:
-          value = y;
-          break;
-        case PointCloudProperty::kZ:
-          value = z;
-          break;
-        case PointCloudProperty::kDistance:
-          value = std::sqrt(x * x + y * y + z * z);
-          break;
-        case PointCloudProperty::kIntensity:
-          value = read_field(base, *field_intensity);
-          break;
-      }
-      projected->value = static_cast<float>(value);
-      result.points.push_back(*projected);
+  for_each_point(cloud, *layout, [&](const std::byte * base) {
+    const double x = read_field(base, *field_x);
+    const double y = read_field(base, *field_y);
+    const double z = read_field(base, *field_z);
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+      return;
     }
-  }
+    // The point in the view frame.
+    double vx = x;
+    double vy = y;
+    double vz = z;
+    if (!identity) {
+      vx = r[0] * x + r[1] * y + r[2] * z + t[0];
+      vy = r[3] * x + r[4] * y + r[5] * z + t[1];
+      vz = r[6] * x + r[7] * y + r[8] * z + t[2];
+    }
+    std::optional<ProjectedPoint> projected;
+    if (perspective) {
+      projected = project_perspective(vx, vy, vz, camera, view);
+    } else {
+      projected = project_bev(vx, vy, view);
+      projected->depth = static_cast<float>(-vz);
+    }
+    if (
+      !projected.has_value() || projected->u < 0 ||
+      projected->u >= static_cast<std::int32_t>(view.width) || projected->v < 0 ||
+      projected->v >= static_cast<std::int32_t>(view.height)) {
+      return;
+    }
+    double value = 0.0;
+    switch (property) {
+      case PointCloudProperty::kX:
+        value = x;
+        break;
+      case PointCloudProperty::kY:
+        value = y;
+        break;
+      case PointCloudProperty::kZ:
+        value = z;
+        break;
+      case PointCloudProperty::kDistance:
+        value = std::sqrt(x * x + y * y + z * z);
+        break;
+      case PointCloudProperty::kIntensity:
+        value = read_field(base, *field_intensity);
+        break;
+    }
+    projected->value = static_cast<float>(value);
+    result.points.push_back(*projected);
+  });
   return result;
 }
 
