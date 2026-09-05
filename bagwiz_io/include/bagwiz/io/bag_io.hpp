@@ -240,6 +240,19 @@ public:
   virtual void declare_topic(const TopicInfo & topic) = 0;
   virtual void write(
     std::string_view topic, int64_t timestamp_ns, std::span<const std::byte> payload) = 0;
+
+  // Owning-write variant: `msg` shares ownership of its payload's backing
+  // store, so a writer that defers encoding past the return of the call (the
+  // parallel mcap chunk writer) may retain the payload without copying it.
+  // The payload span must stay valid until this call returns; ownership keeps
+  // it alive afterwards.
+  //
+  // Default: forwards to write() — correct for every writer that consumes the
+  // payload before returning, at the cost of that writer's usual copy.
+  virtual void write_frozen(std::string_view topic, FrozenMessage msg)
+  {
+    write(topic, msg.timestamp_ns, msg.payload);
+  }
   virtual void close() = 0;
 };
 

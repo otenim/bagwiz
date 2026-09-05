@@ -138,7 +138,7 @@ RewriteCounts PipelinedBackend::run(
       QueuedMessage msg;
       while (queue.pop(msg)) {
         auto s = write_prof.time(Stage::kWrite);
-        writer.write(msg.out_topic, msg.frozen.timestamp_ns, msg.frozen.payload);
+        writer.write_frozen(msg.out_topic, std::move(msg.frozen));
       }
     } catch (...) {
       queue.fail(std::current_exception());
