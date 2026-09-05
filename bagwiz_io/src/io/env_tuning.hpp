@@ -16,9 +16,10 @@
 #include <cstdlib>
 #include <thread>
 
-// Src-local tuning knobs shared by the parallel read paths. Both storage
-// backends read the same BAGWIZ_READ_THREADS variable so a differential run
-// (`0` = serial) switches every backend at once.
+// Src-local tuning knobs shared by the parallel read and write paths. Both
+// storage backends read the same BAGWIZ_READ_THREADS / BAGWIZ_WRITE_THREADS
+// variables so a differential run (`0` = serial) switches every backend at
+// once.
 namespace bagwiz::io::detail
 {
 
@@ -56,6 +57,22 @@ inline int resolve_read_threads(const char * logger)
   const std::int64_t fallback =
     hw == 0 ? kDefault : std::min<std::int64_t>(kDefault, static_cast<std::int64_t>(hw));
   return static_cast<int>(resolve_env_int("BAGWIZ_READ_THREADS", fallback, 0, kMax, logger));
+}
+
+// Worker count for the parallel compression write paths: the parallel mcap
+// chunk writer and the sqlite3 FILE-mode envelope compressor
+// (compress_file_to_zstd). Defaults to 8, capped at the host's hardware
+// concurrency so low-core machines keep a smaller worker count.
+// BAGWIZ_WRITE_THREADS overrides the default, and 0 or 1 selects the serial
+// writer (the debugging escape hatch).
+inline int resolve_write_threads(const char * logger)
+{
+  constexpr std::int64_t kDefault = 8;
+  constexpr std::int64_t kMax = 16;
+  const unsigned int hw = std::thread::hardware_concurrency();
+  const std::int64_t fallback =
+    hw == 0 ? kDefault : std::min<std::int64_t>(kDefault, static_cast<std::int64_t>(hw));
+  return static_cast<int>(resolve_env_int("BAGWIZ_WRITE_THREADS", fallback, 0, kMax, logger));
 }
 
 // Page size for newly written .db3 files, from BAGWIZ_DB3_PAGE_SIZE.

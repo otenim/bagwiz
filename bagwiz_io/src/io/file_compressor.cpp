@@ -8,7 +8,7 @@
 
 #include "bagwiz/io/file_compressor.hpp"
 
-#include "mcap_parallel_chunk_writer.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "env_tuning.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <zstd.h>
 
@@ -28,6 +28,8 @@ namespace bagwiz::io
 
 namespace
 {
+
+constexpr const char * kLogger = "bagwiz.io";
 
 struct ZstdCStreamDeleter
 {
@@ -94,7 +96,7 @@ void compress_file_to_zstd(
   // pool instead. 0 or 1 workers keeps the single-threaded layout; >= 2 lets
   // zstd split the input into parallel jobs, which changes the frame's block
   // layout but not what it decompresses to.
-  const int threads = detail::resolve_write_threads();
+  const int threads = detail::resolve_write_threads(kLogger);
   if (threads >= 2) {
     const auto workers_rc = ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_nbWorkers, threads);
     if (ZSTD_isError(workers_rc) != 0U) {
