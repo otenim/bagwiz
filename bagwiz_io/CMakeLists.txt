@@ -203,6 +203,9 @@ if(BUILD_TESTING)
     bagwiz_file_decompressor_test test/io/file_decompressor_test.cpp)
   target_link_libraries(bagwiz_file_decompressor_test bagwiz_io zstd::zstd)
 
+  ament_add_gtest(bagwiz_file_compressor_test test/io/file_compressor_test.cpp)
+  target_link_libraries(bagwiz_file_compressor_test bagwiz_io zstd::zstd)
+
   ament_add_gtest(
     bagwiz_file_compression_e2e_test test/io/file_compression_e2e_test.cpp)
   target_link_libraries(

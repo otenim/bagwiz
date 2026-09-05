@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstddef>
-#include <cstdlib>
 #include <deque>
 #include <map>
 #include <memory>
@@ -80,27 +79,6 @@ struct Job
 };
 
 }  // namespace
-
-int resolve_write_threads()
-{
-  constexpr int kDefault = 8;
-  constexpr int kMax = 16;
-  const auto default_threads = [&] {
-    const unsigned int hw = std::thread::hardware_concurrency();
-    return hw == 0 ? kDefault : std::min<int>(kDefault, static_cast<int>(hw));
-  };
-  const char * env = std::getenv("BAGWIZ_WRITE_THREADS");
-  if (env == nullptr || *env == '\0') {
-    return default_threads();
-  }
-  char * end = nullptr;
-  const long parsed = std::strtol(env, &end, 10);  // NOLINT(runtime/int) strtol API
-  if (end == env || *end != '\0') {
-    BAGWIZ_LOG_WARN(kLogger, "ignoring unparsable BAGWIZ_WRITE_THREADS='%s'", env);
-    return default_threads();
-  }
-  return static_cast<int>(std::clamp<long>(parsed, 0, kMax));  // NOLINT(runtime/int)
-}
 
 class ParallelChunkMcapWriter::Impl
 {
