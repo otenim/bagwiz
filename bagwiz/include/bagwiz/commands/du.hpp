@@ -38,13 +38,15 @@ struct DuArgs
   std::optional<int> depth;
 };
 
-// Report each topic's total serialized payload size in `args.input_path`,
-// one row per topic sorted by size descending, followed by a `total` row.
-// With `args.depth` set, rows are instead the per-depth-group aggregates of
-// the topics' first N name components (0: only the total row). The size is
-// the sum of the uncompressed serialized payload bytes (the logical message
-// size), not the on-disk footprint, which per-topic chunk compression makes
-// unrecoverable. Requires a full scan of the bag's messages. Returns a
+// Report each topic's on-disk size in `args.input_path`, one row per topic
+// sorted by size descending, followed by a `total` row. With `args.depth`
+// set, rows are instead the per-depth-group aggregates of the topics' first
+// N name components (0: only the total row). The size is what the topic's
+// messages occupy in the bag's files, read from the storage's indexes and
+// row headers (BagReader::compute_topic_sizes); a container that pools
+// several topics (an MCAP chunk, a FILE-mode envelope) is split among them
+// proportionally. Falls back to a full message scan only for an MCAP with
+// no chunk index. Returns a
 // process exit code: 0 on success, 1 on any error (input open failure, a
 // selector naming no topic, or a read error).
 int run_du(const DuArgs & args);

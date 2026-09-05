@@ -1509,6 +1509,22 @@ std::vector<std::string> complete_ls(const CompletionRequest & request)
   return {};
 }
 
+// `info -i|--input <bag>` prints bag-level metadata. Its flags are `-l/--long`
+// (one row per storage file) and `-b/--bytes` (raw byte counts); <input> is a
+// path that falls through to the shell's file completion. We surface
+// `-b`/`--bytes`, `-i`/`--input` and `-l`/`--long` plus the implicit help flags
+// for any `-` word.
+//
+//   info: `info`(0) -i|--input <bag> [-l|--long] [-b|--bytes]
+std::vector<std::string> complete_info(const CompletionRequest & request)
+{
+  const auto current = current_word(request);
+  if (current.starts_with("-")) {
+    return matching(with_help({"--bytes", "--input", "--long", "-b", "-i", "-l"}), current);
+  }
+  return {};
+}
+
 // `trim -i|--input <bag>` copies only the messages inside a time window. All
 // its flags are surfaced for any `-` word; <input> is a path that falls through
 // to the shell's file completion. `--align`'s and `--keep`'s values are
@@ -1922,6 +1938,9 @@ std::vector<std::string> complete_request(const CLI::App & app, const Completion
   }
   if (command == "ls") {
     return complete_ls(request);
+  }
+  if (command == "info") {
+    return complete_info(request);
   }
   if (command == "trim") {
     return complete_trim(request);
