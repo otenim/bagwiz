@@ -19,10 +19,12 @@
 namespace bagwiz::io::detail
 {
 
-// Chunk-compression worker count for the parallel mcap write path. Defaults to
-// 8, capped at the host's hardware concurrency so low-core machines keep a
-// smaller worker count. BAGWIZ_WRITE_THREADS overrides the default, and 0 or 1
-// selects the serial libmcap writer (the debugging escape hatch).
+// Worker count for bagwiz's compression write paths: the parallel mcap chunk
+// writer and the sqlite3 FILE-mode envelope compressor
+// (compress_file_to_zstd). Defaults to 8, capped at the host's hardware
+// concurrency so low-core machines keep a smaller worker count.
+// BAGWIZ_WRITE_THREADS overrides the default, and 0 or 1 selects the serial
+// path (the debugging escape hatch).
 int resolve_write_threads();
 
 // Chunked mcap file writer that moves chunk compression off the caller thread:
