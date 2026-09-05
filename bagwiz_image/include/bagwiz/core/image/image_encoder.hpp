@@ -44,6 +44,27 @@ struct EncodePngResult
 // failure.
 [[nodiscard]] EncodePngResult encode_png(const PackedRaster & raster);
 
+// Outcome of encode_jpeg(), shaped like EncodePngResult.
+struct EncodeJpegResult
+{
+  std::optional<std::vector<std::byte>> jpeg;
+  std::string error;
+
+  [[nodiscard]] bool ok() const noexcept { return jpeg.has_value() && error.empty(); }
+};
+
+// Bounds of encode_jpeg()'s quality, on the libjpeg-style 1 (smallest) to 100
+// (best) scale that ROS image_transport's `jpeg_quality` parameter uses too.
+inline constexpr int kJpegQualityMin = 1;
+inline constexpr int kJpegQualityMax = 100;
+
+// Encode `raster` (packed 8-bit BGR24, no row padding) into a baseline JPEG
+// bitstream: 4:2:0 chroma subsampling, full (JPEG) range, so it decodes back
+// the way a camera driver's own JPEG would. `quality` maps onto the MJPEG
+// encoder's quantizer scale. Same failure conditions as encode_png(), plus a
+// quality outside [kJpegQualityMin, kJpegQualityMax].
+[[nodiscard]] EncodeJpegResult encode_jpeg(const PackedRaster & raster, int quality);
+
 }  // namespace bagwiz::core::image
 
 #endif  // BAGWIZ__CORE__IMAGE__IMAGE_ENCODER_HPP_

@@ -30,6 +30,7 @@ struct CompressedImageView
   std::span<const std::byte> data;  // compressed bitstream, borrowed from payload
   // header.stamp as sec * 1e9 + nanosec. 0 when the publisher left it unset.
   std::int64_t header_stamp_ns = 0;
+  std::string header_frame_id;
 };
 
 // Outcome of extract_compressed_image(). On success `image` holds the view and

@@ -1786,6 +1786,83 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
   return {};
 }
 
+// `video` is a command group converting image topics to video topics and
+// back. Its subcommands are `encode` and `decode`. At the subcommand slot
+// (word 1) the candidates are those two (or the implicit help flags for a `-`
+// word). `-i`/`--input` names a path that falls through to the shell's file
+// completion. Past the subcommand we surface each subcommand's own flags for
+// any `-` word.
+//
+// `-t`/`--topics` is a declared topic slot on both subcommands (encode: Image
+// / CompressedImage; decode: foxglove_msgs/msg/CompressedVideo), so
+// try_topic_completion handles its values. `--as` names a new topic to
+// create — a declared literal slot with a reject_reason, so
+// try_topic_completion leaves it alone and it offers nothing here either.
+// The fixed value sets of `--codec`, `--encoder` and `--preset` (encode) and
+// `--format` (decode) are completed here; `--crf`, `--gop`, `-j`/`--threads`
+// and `--quality` take numbers and `-o`/`--output` a path, so they get no
+// value completion.
+//
+//   encode: `video`(0) `encode`(1) -i|--input <bag> -t|--topics <t...>
+//           [--as <topic>] [-o <out>] [-w|--overwrite] [--keep-inputs]
+//           [--codec h264|h265] [--encoder auto|cpu|nvenc] [--preset <p>]
+//           [--crf <N>] [--gop <N>] [-j|--threads <N>]
+//   decode: `video`(0) `decode`(1) -i|--input <bag> -t|--topics <t...>
+//           [--as <topic>] [-o <out>] [-w|--overwrite] [--keep-inputs]
+//           [--format jpeg|png|raw] [--quality <N>]
+std::vector<std::string> complete_video(const CompletionRequest & request)
+{
+  const auto current = current_word(request);
+  if (request.cursor_word == kFirstCommandArgWord) {
+    if (current.starts_with("-")) {
+      return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
+    }
+    return matching({"decode", "encode"}, current);
+  }
+  if (request.cursor_word < kSecondCommandArgWord) {
+    return {};
+  }
+
+  const auto & sub = request.words[kFirstCommandArgWord];
+  if (current.starts_with("-")) {
+    if (sub == "encode") {
+      return matching(
+        with_help(
+          {"--as", "--codec", "--crf", "--encoder", "--gop", "--input", "--keep-inputs", "--output",
+           "--overwrite", "--preset", "--threads", "--topics", "-i", "-j", "-o", "-t", "-w"}),
+        current);
+    }
+    if (sub == "decode") {
+      return matching(
+        with_help(
+          {"--as", "--format", "--input", "--keep-inputs", "--output", "--overwrite", "--quality",
+           "--topics", "-i", "-o", "-t", "-w"}),
+        current);
+    }
+    return {};
+  }
+
+  const auto & previous = request.words[request.cursor_word - 1];
+  if (sub == "encode") {
+    if (previous == "--codec") {
+      return matching({"h264", "h265"}, current);
+    }
+    if (previous == "--encoder") {
+      return matching({"auto", "cpu", "nvenc"}, current);
+    }
+    if (previous == "--preset") {
+      return matching(
+        {"fast", "faster", "medium", "slow", "slower", "superfast", "ultrafast", "veryfast",
+         "veryslow"},
+        current);
+    }
+  }
+  if (sub == "decode" && previous == "--format") {
+    return matching({"jpeg", "png", "raw"}, current);
+  }
+  return {};
+}
+
 std::vector<std::string> complete_request(const CLI::App & app, const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1836,6 +1913,9 @@ std::vector<std::string> complete_request(const CLI::App & app, const Completion
   }
   if (command == "pcd") {
     return complete_pcd(request);
+  }
+  if (command == "video") {
+    return complete_video(request);
   }
   if (command == "walk") {
     return complete_walk(request);

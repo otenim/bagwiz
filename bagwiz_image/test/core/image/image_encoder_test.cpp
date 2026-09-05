@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <vector>
@@ -175,4 +176,115 @@ TEST(ImageEncoderTest, PredictionFilteringIsEnabled)
   EXPECT_LT(encoded.png->size(), source.bgr.size() / 4)
     << "PNG is " << encoded.png->size() << " bytes for a " << source.bgr.size()
     << "-byte raster; prediction filtering looks disabled";
+}
+
+namespace
+{
+
+using bagwiz::core::image::encode_jpeg;
+
+// A smooth ramp that JPEG reproduces closely, unlike the high-frequency
+// gradient the PNG tests use to exercise lossless coding.
+PackedRaster make_smooth(std::uint32_t w, std::uint32_t h)
+{
+  PackedRaster raster;
+  raster.width = w;
+  raster.height = h;
+  raster.encoding = "bgr8";
+  raster.bgr.resize(static_cast<std::size_t>(w) * h * 3);
+  for (std::uint32_t y = 0; y < h; ++y) {
+    for (std::uint32_t x = 0; x < w; ++x) {
+      const std::size_t base = (static_cast<std::size_t>(y) * w + x) * 3;
+      raster.bgr[base + 0] = static_cast<std::byte>(40 + (x * 80U) / w);   // blue
+      raster.bgr[base + 1] = static_cast<std::byte>(60 + (y * 60U) / h);   // green
+      raster.bgr[base + 2] = static_cast<std::byte>(200 - (x * 60U) / w);  // red
+    }
+  }
+  return raster;
+}
+
+// Per-channel mean absolute error and signed mean error (bias) between two
+// packed BGR rasters of the same size.
+struct ChannelError
+{
+  std::array<double, 3> mean_abs{};
+  std::array<double, 3> bias{};
+};
+
+ChannelError channel_error(const std::vector<std::byte> & a, const std::vector<std::byte> & b)
+{
+  ChannelError err;
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    const int diff = static_cast<int>(a[i]) - static_cast<int>(b[i]);
+    err.mean_abs[i % 3] += std::abs(diff);
+    err.bias[i % 3] += diff;
+  }
+  const auto per_channel = static_cast<double>(a.size() / 3);
+  for (std::size_t c = 0; c < 3; ++c) {
+    err.mean_abs[c] /= per_channel;
+    err.bias[c] /= per_channel;
+  }
+  return err;
+}
+
+}  // namespace
+
+TEST(ImageEncoderTest, JpegRoundTripsWithinLossyTolerance)
+{
+  const PackedRaster source = make_smooth(64, 48);
+
+  const auto encoded = encode_jpeg(source, 90);
+  ASSERT_TRUE(encoded.ok()) << encoded.error;
+
+  const auto & jpeg = *encoded.jpeg;
+  // JPEG/JFIF signature: SOI marker.
+  ASSERT_GE(jpeg.size(), 2U);
+  EXPECT_EQ(jpeg[0], std::byte{0xFF});
+  EXPECT_EQ(jpeg[1], std::byte{0xD8});
+
+  const auto decoded = decode_compressed_image({jpeg.data(), jpeg.size()}, "jpeg");
+  ASSERT_TRUE(decoded.ok()) << decoded.error;
+  EXPECT_EQ(decoded.image->width, source.width);
+  EXPECT_EQ(decoded.image->height, source.height);
+  ASSERT_EQ(decoded.image->bgr.size(), source.bgr.size());
+  // Full-range JPEG of a gentle ramp: a few LSBs of chroma-subsampling and
+  // quantization noise, with no systematic offset. A limited-range mix-up
+  // (encoding as MPEG levels, decoded as JPEG levels or vice versa) shows up
+  // as a bias of ~16 steps at the dark end and a stretched ramp, far outside
+  // both bounds.
+  const ChannelError err = channel_error(decoded.image->bgr, source.bgr);
+  for (std::size_t c = 0; c < 3; ++c) {
+    EXPECT_LT(err.mean_abs[c], 4.0) << "channel " << c;
+    EXPECT_LT(std::abs(err.bias[c]), 2.0) << "channel " << c;
+  }
+}
+
+TEST(ImageEncoderTest, JpegQualityOrdersOutputSize)
+{
+  const PackedRaster source = make_gradient(64, 48);
+  const auto high = encode_jpeg(source, 95);
+  const auto low = encode_jpeg(source, 30);
+  ASSERT_TRUE(high.ok()) << high.error;
+  ASSERT_TRUE(low.ok()) << low.error;
+  EXPECT_GT(high.jpeg->size(), low.jpeg->size());
+}
+
+TEST(ImageEncoderTest, JpegAcceptsOddDimensions)
+{
+  const PackedRaster source = make_smooth(7, 5);
+  const auto encoded = encode_jpeg(source, 80);
+  ASSERT_TRUE(encoded.ok()) << encoded.error;
+  const auto & jpeg = *encoded.jpeg;
+  const auto decoded = decode_compressed_image({jpeg.data(), jpeg.size()}, "jpeg");
+  ASSERT_TRUE(decoded.ok()) << decoded.error;
+  EXPECT_EQ(decoded.image->width, 7U);
+  EXPECT_EQ(decoded.image->height, 5U);
+}
+
+TEST(ImageEncoderTest, JpegRejectsOutOfRangeQualityAndEmptyRaster)
+{
+  const PackedRaster source = make_smooth(8, 8);
+  EXPECT_FALSE(encode_jpeg(source, 0).ok());
+  EXPECT_FALSE(encode_jpeg(source, 101).ok());
+  EXPECT_FALSE(encode_jpeg(PackedRaster{}, 80).ok());
 }

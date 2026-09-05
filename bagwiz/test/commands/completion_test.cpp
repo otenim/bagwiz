@@ -344,6 +344,31 @@ std::filesystem::path write_image_topics_fixture(const std::filesystem::path & p
   return path;
 }
 
+// MCAP carrying one CompressedVideo topic (/cam/video) next to a raw image
+// topic (/image). Used to verify `video decode -t` completion offers only
+// the foxglove_msgs/msg/CompressedVideo topics while `video encode -t` keeps
+// offering the image ones. Topic metadata alone drives completion, so the
+// payloads are arbitrary bytes.
+std::filesystem::path write_video_topics_fixture(const std::filesystem::path & path)
+{
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "none";
+
+  constexpr std::array<std::byte, 4> kPayload{
+    std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
+  const auto bytes = std::span<const std::byte>(kPayload.data(), kPayload.size());
+
+  auto writer = bagwiz::io::open_write(path, options);
+  writer->declare_topic(make_topic("/cam/video", "foxglove_msgs/msg/CompressedVideo"));
+  writer->declare_topic(make_topic("/image", "sensor_msgs/msg/Image"));
+  writer->write("/cam/video", 1'000'000'000, bytes);
+  writer->write("/image", 2'000'000'000, bytes);
+  writer->close();
+  return path;
+}
+
 // MCAP carrying an image topic (/cam/image_raw/compressed) and its sibling
 // CameraInfo topic (/cam/camera_info), plus an unrelated topic (/points). Used
 // to verify `--cam-info` completion offers only CameraInfo topics (plus pair
@@ -3088,4 +3113,91 @@ TEST_F(CompletionTest, TrajDumpRefFlagSkipsFileModeZstd)
       {"bagwiz", "__complete", "10", "bagwiz", "traj", "dump", "-i", bag.string(), "-t", "/tf",
        "-o", "out.tum", "--ref"}),
     "");
+}
+
+// `video <TAB>` offers the group's subcommands; `video encode -` / `video
+// decode -` surface each subcommand's flags plus the implicit help flags,
+// sorted.
+TEST(FlagCompletionTest, VideoSubcommandSlotListsEncodeAndDecode)
+{
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "video"}), "decode\nencode\n");
+  EXPECT_EQ(run_completion({"bagwiz", "__complete", "2", "bagwiz", "video", "-"}), "--help\n-h\n");
+}
+
+TEST(FlagCompletionTest, VideoEncodeDashListsFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "video", "encode", "-"}),
+    "--as\n--codec\n--crf\n--encoder\n--gop\n--help\n--input\n--keep-inputs\n--output\n"
+    "--overwrite\n--preset\n--threads\n--topics\n-h\n-i\n-j\n-o\n-t\n-w\n");
+}
+
+TEST(FlagCompletionTest, VideoDecodeDashListsFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "video", "decode", "-"}),
+    "--as\n--format\n--help\n--input\n--keep-inputs\n--output\n--overwrite\n--quality\n"
+    "--topics\n-h\n-i\n-o\n-t\n-w\n");
+}
+
+// The fixed value sets of `video encode`'s codec / encoder / preset flags and
+// `video decode`'s format flag, sorted.
+TEST(FlagCompletionTest, VideoEncodeValueFlagsListChoices)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "video", "encode", "--codec"}),
+    "h264\nh265\n");
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "video", "encode", "--encoder"}),
+    "auto\ncpu\nnvenc\n");
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "video", "encode", "--preset"}),
+    "fast\nfaster\nmedium\nslow\nslower\nsuperfast\nultrafast\nveryfast\nveryslow\n");
+  // A number-valued flag offers nothing.
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "video", "encode", "--crf"}), "");
+}
+
+TEST(FlagCompletionTest, VideoDecodeFormatFlagListsChoices)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "video", "decode", "--format"}),
+    "jpeg\npng\nraw\n");
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "4", "bagwiz", "video", "decode", "--quality"}), "");
+}
+
+// `video encode -t <TAB>` completes the bag's image topics (raw and
+// compressed) via the declared topic slot; `video decode -t <TAB>` only its
+// CompressedVideo topics. `--as` names a topic to create, so it offers nothing.
+TEST_F(CompletionTest, VideoEncodeTopicsListsOnlyImageTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_image_topics_fixture(tmp_dir_ / "images.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "video", "encode", "-i", "~/images.mcap", "-t"}),
+    "/image\n/image/compressed\n");
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "video", "encode", "-i", "~/images.mcap", "--as"}),
+    "");
+}
+
+TEST_F(CompletionTest, VideoDecodeTopicsListsOnlyCompressedVideoTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  write_video_topics_fixture(tmp_dir_ / "video.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "video", "decode", "-i", "~/video.mcap", "-t"}),
+    "/cam/video\n");
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "video", "encode", "-i", "~/video.mcap", "-t"}),
+    "/image\n");
 }
