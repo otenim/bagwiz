@@ -18,6 +18,8 @@
 
 #include "bagwiz/io/file_compressor.hpp"
 
+#include "bagwiz/io/file_decompressor.hpp"
+
 #include <gtest/gtest.h>
 #include <zstd.h>
 
@@ -35,9 +37,10 @@
 namespace
 {
 
-// 8 MiB of blocky, moderately compressible data: varied enough that zstd's
-// multi-threaded job splitting (job size ~512 KiB at the default level)
-// produces a different frame layout than the single-threaded stream.
+// 8 MiB of blocky, moderately compressible data: large enough that zstd's
+// multi-threaded mode splits it into several compression jobs (the job size
+// derives from the level's window — ~2 MiB at level 3), which produces a
+// different frame layout than the single-threaded stream.
 std::vector<std::byte> make_input()
 {
   constexpr std::size_t kSize = 8U * 1024U * 1024U;
@@ -87,7 +90,11 @@ std::vector<std::byte> zstd_decompress(const std::vector<std::byte> & compressed
   if (dctx == nullptr) {
     throw std::runtime_error("failed to allocate ZSTD_DStream");
   }
-  ZSTD_initDStream(dctx.get());
+  const auto init_rc = ZSTD_initDStream(dctx.get());
+  if (ZSTD_isError(init_rc) != 0U) {
+    throw std::runtime_error(
+      std::string("failed to init ZSTD_DStream: ") + ZSTD_getErrorName(init_rc));
+  }
 
   std::vector<std::byte> out_buf(ZSTD_DStreamOutSize());
   std::vector<std::byte> out;
@@ -107,7 +114,9 @@ std::vector<std::byte> zstd_decompress(const std::vector<std::byte> & compressed
   return out;
 }
 
-std::vector<std::byte> compress_with_threads(
+// Compress `input` to <dir>/<name>.zstd with BAGWIZ_WRITE_THREADS set to
+// `write_threads`, returning the compressed file's path.
+std::filesystem::path compress_with_threads(
   const std::filesystem::path & dir, const std::string & name, const std::vector<std::byte> & input,
   const char * write_threads)
 {
@@ -116,7 +125,7 @@ std::vector<std::byte> compress_with_threads(
   const auto dst = dir / (name + ".zstd");
   write_file(src, input);
   bagwiz::io::compress_file_to_zstd(src, dst, /*level=*/3);
-  return read_file(dst);
+  return dst;
 }
 
 class FileCompressorTest : public ::testing::Test
@@ -144,9 +153,14 @@ protected:
 TEST_F(FileCompressorTest, MultiThreadedOutputRoundTripsToInput)
 {
   const auto input = make_input();
-  const auto compressed = compress_with_threads(tmp_, "mt", input, "4");
+  const auto dst = compress_with_threads(tmp_, "mt", input, "4");
 
-  EXPECT_EQ(zstd_decompress(compressed), input);
+  EXPECT_EQ(zstd_decompress(read_file(dst)), input);
+
+  // The shipped reader path (whole-file decompress to a temp file, what every
+  // FILE-mode bag read goes through) must accept a multi-job MT frame too.
+  const auto plain = bagwiz::io::decompress_zstd_file_to_temp(dst);
+  EXPECT_EQ(read_file(plain.path()), input);
 }
 
 // A worker count >= 2 must actually reach ZSTD_c_nbWorkers: zstd's
@@ -156,8 +170,8 @@ TEST_F(FileCompressorTest, MultiThreadedOutputRoundTripsToInput)
 TEST_F(FileCompressorTest, WorkerCountChangesCompressedLayout)
 {
   const auto input = make_input();
-  const auto serial = compress_with_threads(tmp_, "serial", input, "1");
-  const auto parallel = compress_with_threads(tmp_, "parallel", input, "4");
+  const auto serial = read_file(compress_with_threads(tmp_, "serial", input, "1"));
+  const auto parallel = read_file(compress_with_threads(tmp_, "parallel", input, "4"));
 
   EXPECT_NE(serial, parallel);
   EXPECT_EQ(zstd_decompress(serial), input);
