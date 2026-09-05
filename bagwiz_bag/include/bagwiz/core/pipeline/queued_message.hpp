@@ -11,7 +11,7 @@
 
 #include "bagwiz/io/bag_io.hpp"
 
-#include <string>
+#include <string_view>
 
 namespace bagwiz::core::pipeline
 {
@@ -26,9 +26,11 @@ namespace bagwiz::core::pipeline
 // moved on. PipelinedBackend is the only user.
 struct QueuedMessage
 {
-  // The resolved OUTPUT topic name (after routing/rename), owned so it outlives
-  // the input TopicInfo the router viewed.
-  std::string out_topic;
+  // The resolved OUTPUT topic name (after routing/rename) as a view. Per the
+  // Emit contract this views either reader-owned TopicInfo storage (alive for
+  // the whole run) or router-owned selector storage (caller-owned, likewise),
+  // so it stays valid on the write thread without a per-message copy.
+  std::string_view out_topic;
   io::FrozenMessage frozen;
 };
 

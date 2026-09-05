@@ -169,7 +169,9 @@ TEST(BackendSelectTest, ParseOverrideRecognizesNamesCaseInsensitively)
 
 // Stand-in for what the read stage queues: a FrozenMessage owning its own
 // buffer, which is also the exact shape the transform path produces.
-pipeline::QueuedMessage make_queued(const std::string & topic, std::size_t bytes)
+// `topic` must outlive the queued message (the Emit contract: a view into
+// run-lifetime storage), which the callers' string literals satisfy.
+pipeline::QueuedMessage make_queued(std::string_view topic, std::size_t bytes)
 {
   auto buf = std::make_shared<std::vector<std::byte>>(bytes, std::byte{0x7F});
   pipeline::QueuedMessage msg;

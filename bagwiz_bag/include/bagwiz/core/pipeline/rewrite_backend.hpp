@@ -42,9 +42,13 @@ struct Emit
 {
   // false -> drop the message entirely (neither written nor counted as copied).
   bool keep = true;
-  // Output topic name when kept. Must stay valid for the duration of the
-  // corresponding writer.write() call; routers return a view into the input
-  // topic name or into their caller-owned selector containers.
+  // Output topic name when kept. Must stay valid until the backend run ends,
+  // not just for the corresponding writer call: the pipelined backend hands
+  // the view to its write thread without copying. Every current router
+  // satisfies this by returning a view into the input topic name (reader-owned
+  // for the whole run) or into caller-owned selector containers that are not
+  // mutated during the run; a router that builds a name on the fly must store
+  // it in storage it owns for the run's duration.
   std::string_view out_topic;
 };
 
