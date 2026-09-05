@@ -438,6 +438,33 @@ TEST(Deskew, BlobShorterThanDeclaredPointsIsError)
   EXPECT_NE(r.error.find("too small"), std::string::npos);
 }
 
+TEST(Deskew, EmptyCloudWithAStaleRowStepIsPassedThrough)
+{
+  // A cloud that declares no points (width 0) walks nothing, whatever its
+  // row_step or blob say -- the same shortcut the movify cloud walks take
+  // (cloud_view.cpp). Reading a stale non-zero row_step as the stride would
+  // otherwise demand row_step bytes per row of a blob that holds nothing.
+  auto cloud = make_cloud_xyzt({});
+  cloud.row_step = 451120;  // a narrower source cloud's, left behind by concatenation
+  auto r = deskew_pointcloud2(cloud, 0, std::vector<TrajectoryPose>{{0, 0, 0, 0, 0, 0, 0, 1}});
+  ASSERT_TRUE(r.ok()) << r.error;
+  EXPECT_EQ(r.points_total, 0u);
+  EXPECT_TRUE(r.cloud->data.empty());
+  EXPECT_EQ(r.cloud->row_step, 451120u);  // the header is written through as-is
+}
+
+TEST(Deskew, OrganizedZeroWidthCloudWithAStaleRowStepIsPassedThrough)
+{
+  // height > 1 changes nothing: zero columns is still zero points.
+  auto cloud = make_cloud_xyzt({});
+  cloud.height = 3;
+  cloud.row_step = 16;
+  auto r = deskew_pointcloud2(cloud, 0, std::vector<TrajectoryPose>{{0, 0, 0, 0, 0, 0, 0, 1}});
+  ASSERT_TRUE(r.ok()) << r.error;
+  EXPECT_EQ(r.points_total, 0u);
+  EXPECT_TRUE(r.cloud->data.empty());
+}
+
 TEST(Deskew, HugeWidthTimesPointStepIsRejectedNotWrapped)
 {
   // width * point_step (0x2000'0000 * 16 = 2^33) overflows 32 bits. The
@@ -637,6 +664,14 @@ TEST(DeskewCdr, MatchesStructPathOnStaleRowStepCloud)
   auto cloud = make_cloud_xyzt({{0.0f, 0.0f, 0.0f, 0.1f}, {1.0f, 2.0f, 3.0f, 0.0f}});
   cloud.row_step = cloud.point_step;  // 16, but width*point_step = 32
   std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  expect_cdr_matches_struct_path(cloud, traj);
+}
+
+TEST(DeskewCdr, MatchesStructPathOnEmptyCloudWithAStaleRowStep)
+{
+  auto cloud = make_cloud_xyzt({});
+  cloud.row_step = 451120;
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}};
   expect_cdr_matches_struct_path(cloud, traj);
 }
 
