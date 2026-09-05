@@ -300,3 +300,28 @@ TEST(CompletionSlotWiring, MapSlam)
     slot_for(slots, "cam-info"), TopicSelectorMode::kLiteral, bagwiz::commands::kImageTopicTypes);
 }
 #endif  // BAGWIZ_WITH_SLAM
+
+TEST(CompletionSlotWiring, VideoEncodeAndDecode)
+{
+  auto * cmd = command_named("video");
+  ASSERT_NE(cmd, nullptr);
+  CLI::App app{"video"};
+  cmd->configure(app);
+
+  auto * encode = app.get_subcommand_no_throw("encode");
+  ASSERT_NE(encode, nullptr);
+  const auto encode_slots = topic_slots_of(*encode);
+  expect_slot(
+    slot_for(encode_slots, "topics"), TopicSelectorMode::kGlob, bagwiz::commands::kImageTopicTypes);
+  // --as names the new video topic to create — a new name, not a selection
+  // — so it declares no allowed_types.
+  expect_slot(slot_for(encode_slots, "as"), TopicSelectorMode::kLiteral);
+
+  auto * decode = app.get_subcommand_no_throw("decode");
+  ASSERT_NE(decode, nullptr);
+  const auto decode_slots = topic_slots_of(*decode);
+  expect_slot(
+    slot_for(decode_slots, "topics"), TopicSelectorMode::kGlob,
+    bagwiz::commands::kCompressedVideoTopicTypes);
+  expect_slot(slot_for(decode_slots, "as"), TopicSelectorMode::kLiteral);
+}

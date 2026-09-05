@@ -100,6 +100,28 @@ void set_zero_latency_options(
   av_dict_set(opts, "sc_threshold", "0", 0);
 }
 
+// The plain YUV* format behind a deprecated full-range YUVJ* one, marking
+// `full_range` when the mapping applied; any other format passes through.
+AVPixelFormat normalize_pixel_format(AVPixelFormat fmt, bool & full_range)
+{
+  switch (fmt) {
+    case AV_PIX_FMT_YUVJ420P:
+      full_range = true;
+      return AV_PIX_FMT_YUV420P;
+    case AV_PIX_FMT_YUVJ422P:
+      full_range = true;
+      return AV_PIX_FMT_YUV422P;
+    case AV_PIX_FMT_YUVJ444P:
+      full_range = true;
+      return AV_PIX_FMT_YUV444P;
+    case AV_PIX_FMT_YUVJ440P:
+      full_range = true;
+      return AV_PIX_FMT_YUV440P;
+    default:
+      return fmt;
+  }
+}
+
 bool starts_with_start_code(const AVCodecContext * codec)
 {
   return codec->extradata != nullptr && codec->extradata_size >= 4 &&
@@ -424,11 +446,15 @@ struct FrameDecoder::Impl
   }
 
   // (Re)build the conversion for the decoded frame's geometry, pixel format
-  // and range; the stream's own range tag (VUI) decides the source range.
+  // and range; the stream's own range tag (VUI) decides the source range. A
+  // full-range stream comes back in the deprecated YUVJ* formats, which
+  // sws_getContext warns about on every call; map them to the plain YUV*
+  // format and carry the range separately, as the image decoder does.
   std::string ensure_conversion(const AVFrame & f)
   {
-    const auto fmt = static_cast<AVPixelFormat>(f.format);
-    const bool full_range = f.color_range == AVCOL_RANGE_JPEG;
+    bool full_range = f.color_range == AVCOL_RANGE_JPEG;
+    const AVPixelFormat fmt =
+      normalize_pixel_format(static_cast<AVPixelFormat>(f.format), full_range);
     if (
       sws != nullptr && sws_w == f.width && sws_h == f.height && sws_fmt == fmt &&
       sws_full_range == full_range) {

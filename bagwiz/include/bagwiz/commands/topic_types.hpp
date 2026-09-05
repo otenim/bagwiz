@@ -129,6 +129,11 @@ inline constexpr std::array<std::string_view, 3> kMovifyPoseTopicTypes{{
 
 // Must mirror the private kImuType constant in
 // bagwiz/src/commands/map_slam.cpp (`map slam --imu`).
+// The topics `video decode` reads; `video encode` writes this type.
+inline constexpr std::array<std::string_view, 1> kCompressedVideoTopicTypes{{
+  "foxglove_msgs/msg/CompressedVideo",
+}};
+
 inline constexpr std::array<std::string_view, 1> kImuType{{"sensor_msgs/msg/Imu"}};
 
 // Must mirror the private kNavSatFixType constant in

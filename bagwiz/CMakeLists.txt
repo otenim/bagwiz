@@ -231,6 +231,10 @@ set(bagwiz_command_sources
   src/commands/stamp_sync.cpp
   src/commands/trim.cpp
   src/commands/trim_stamp.cpp
+  src/commands/video.cpp
+  src/commands/video_common.cpp
+  src/commands/video_decode.cpp
+  src/commands/video_encode.cpp
 )
 set(bagwiz_command_slam_sources
   src/commands/map.cpp
@@ -755,6 +759,24 @@ if(BUILD_TESTING)
   target_link_libraries(
     bagwiz_movify_run_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
     bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV CURL::libcurl ${OpenCV_LIBS})
+
+  # video.cpp carries the VideoCommand registrar + CLI11 wiring for both
+  # `video encode` and `video decode`, so the test compiles it together with
+  # topic_option.cpp + registry.cpp to drive the real configure() through
+  # Registry::instance(), and both runners for end-to-end round trips.
+  ament_add_gtest(bagwiz_video_test
+    test/commands/video_test.cpp
+    src/commands/video.cpp
+    src/commands/video_common.cpp
+    src/commands/video_decode.cpp
+    src/commands/video_encode.cpp
+    src/commands/topic_option.cpp
+    src/commands/registry.cpp)
+  target_include_directories(bagwiz_video_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(
+    bagwiz_video_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt
+    bagwiz_image::bagwiz_image_test_fixture PkgConfig::LIBAV)
 
   # movify_output_size.hpp lives in src/commands (CLI-internal, not
   # installed), so this test adds src/commands to its include path
