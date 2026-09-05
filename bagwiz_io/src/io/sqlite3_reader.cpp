@@ -15,6 +15,7 @@
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "bagwiz/io/sqlite3_helpers.hpp"
 #include "env_tuning.hpp"              // NOLINT(build/include_subdir) src-local shared header
+#include "prorate_bytes.hpp"           // NOLINT(build/include_subdir) src-local shared header
 #include "shard_multiplexer.hpp"       // NOLINT(build/include_subdir) src-local shared header
 #include "sqlite3_payload_sizes.hpp"   // NOLINT(build/include_subdir) src-local shared header
 #include "sqlite3_slice_prefetch.hpp"  // NOLINT(build/include_subdir) src-local shared header
@@ -60,11 +61,15 @@ public:
   // bag's metadata declares `compression_mode: MESSAGE`. When set, every
   // `messages.data` blob is routed through it before being exposed via
   // `next()`.
+  //
+  // `temp` and `envelope` go together for a FILE-mode bag: `path` is then the
+  // temp .db3 decompressed out of the on-disk `.db3.zstd` at `envelope`.
   SqliteFileReader(
     const std::filesystem::path & path, std::shared_ptr<MessageDecompressor> decompressor,
-    TempFile temp = {})
+    TempFile temp = {}, std::filesystem::path envelope = {})
   : path_(path),
     temp_(std::move(temp)),
+    envelope_(std::move(envelope)),
     db_(sqlite_open_or_throw(
       path.string(), SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, "sqlite3 open")),
     decompressor_(std::move(decompressor))
@@ -240,11 +245,9 @@ public:
   std::optional<std::unordered_map<std::string, std::uint64_t>> compute_topic_sizes(
     std::span<const std::string> names) override
   {
-    // MESSAGE-mode bags store each payload compressed, so the BLOB length is
-    // the compressed size; only a real decompression recovers the logical one.
-    if (decompressor_) {
-      return std::nullopt;
-    }
+    // A MESSAGE-mode bag (rosbag2 per-message zstd) needs no special case:
+    // the compressed BLOB in each row is what occupies the disk, and its
+    // length is exactly what the row headers report.
 
     std::string topic_clause;
     if (!names.empty()) {
@@ -263,13 +266,38 @@ public:
       return std::nullopt;
     }
 
+    // A FILE-mode bag is one zstd frame around the whole database, so no
+    // per-topic byte count exists on disk. What does exist is the ratio the
+    // envelope achieved over the database it holds; each topic's row bytes
+    // are scaled by it, to the nearest byte.
+    std::uint64_t envelope_bytes = 0;
+    std::uint64_t database_bytes = 0;
+    if (!envelope_.empty()) {
+      std::error_code ec;
+      envelope_bytes = std::filesystem::file_size(envelope_, ec);
+      if (ec) {
+        BAGWIZ_LOG_DEBUG(
+          kLogger, "envelope size unavailable for %s (%s); falling back to a scan",
+          envelope_.c_str(), ec.message().c_str());
+        return std::nullopt;
+      }
+      database_bytes = std::filesystem::file_size(path_, ec);
+      if (ec) {
+        BAGWIZ_LOG_DEBUG(
+          kLogger, "database size unavailable for %s (%s); falling back to a scan", path_.c_str(),
+          ec.message().c_str());
+        return std::nullopt;
+      }
+    }
+
     std::unordered_map<std::string, std::uint64_t> result;
     // cppcheck-suppress unassignedVariable
     for (const auto & [topic_id, bytes] : sizes.per_topic_id) {
       // Rows referencing a topic_id the topics table does not carry are
       // dropped, exactly as next() skips them.
       if (auto idx_it = topic_id_to_idx_.find(topic_id); idx_it != topic_id_to_idx_.end()) {
-        result[topics_[idx_it->second].name] += bytes;
+        result[topics_[idx_it->second].name] +=
+          envelope_.empty() ? bytes : prorate_bytes(bytes, envelope_bytes, database_bytes);
       }
     }
     return result;
@@ -704,6 +732,9 @@ private:
   // for ordinary on-disk bags. Declared before db_ so that on destruction db_
   // is closed first and then the temp file is removed.
   TempFile temp_;
+  // The on-disk `.db3.zstd` that temp_ was decompressed from; empty for
+  // ordinary on-disk bags. Its size is what the shard really occupies.
+  std::filesystem::path envelope_;
   SqlitePtr db_;
   // One of these two drives iteration: `read_stmt_` for the serial scan, or
   // `scanner_` below.
@@ -755,7 +786,8 @@ private:
       // ownership of the temp file to the reader so it is removed on close.
       TempFile temp = decompress_zstd_file_to_temp(shard_path);
       const auto temp_path = temp.path();
-      return std::make_unique<SqliteFileReader>(temp_path, decompressor_, std::move(temp));
+      return std::make_unique<SqliteFileReader>(
+        temp_path, decompressor_, std::move(temp), shard_path);
     }
     // Share the decompressor across shards so the ZSTD_DCtx is reused for
     // the entire iteration (per-thread context reuse is the hot-path
@@ -775,9 +807,10 @@ private:
 
 std::unique_ptr<BagReader> open_sqlite3_file(
   const std::filesystem::path & path, std::shared_ptr<MessageDecompressor> decompressor,
-  TempFile temp)
+  TempFile temp, std::filesystem::path envelope)
 {
-  return std::make_unique<SqliteFileReader>(path, std::move(decompressor), std::move(temp));
+  return std::make_unique<SqliteFileReader>(
+    path, std::move(decompressor), std::move(temp), std::move(envelope));
 }
 
 std::unique_ptr<BagReader> open_sqlite3_directory(

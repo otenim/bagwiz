@@ -183,7 +183,7 @@ if(BUILD_TESTING)
   target_link_libraries(bagwiz_sqlite3_parallel_read_test bagwiz_io)
 
   ament_add_gtest(bagwiz_topic_sizes_test test/io/topic_sizes_test.cpp)
-  target_link_libraries(bagwiz_topic_sizes_test bagwiz_io ${mcap_vendor_TARGETS})
+  target_link_libraries(bagwiz_topic_sizes_test bagwiz_io ${mcap_vendor_TARGETS} zstd::zstd)
 
   ament_add_gtest(bagwiz_metadata_computer_test test/io/metadata_computer_test.cpp)
   target_link_libraries(bagwiz_metadata_computer_test bagwiz_io)
