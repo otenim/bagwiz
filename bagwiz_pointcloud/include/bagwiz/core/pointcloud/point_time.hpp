@@ -70,8 +70,10 @@ struct PointTimeSpan
 // span in nanoseconds, applying the same relative/absolute classification as
 // deskew_pointcloud2 (kRelativeTimeThresholdSec); relative times are resolved
 // against `t_ref_ns` (the cloud's header.stamp). Non-finite time values are
-// ignored. Returns nullopt when the field is declared out of bounds, the point
-// layout is inconsistent, or no point carried a finite time.
+// ignored. A row_step smaller than width * point_step is read as dense packing
+// (deskew_pointcloud2 applies the same rule). Returns nullopt when the field is
+// declared out of bounds, the data blob does not hold every declared point, or
+// no point carried a finite time.
 [[nodiscard]] std::optional<PointTimeSpan> absolute_point_time_span_ns(
   const PointCloud2 & cloud, const PointTimeField & field, std::int64_t t_ref_ns);
 
