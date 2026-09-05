@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <span>
@@ -35,6 +36,16 @@ namespace bagwiz::io::detail
 namespace
 {
 constexpr const char * kLogger = "bagwiz.io.mcap";
+
+// Transparent string hashing so per-message channel/count lookups can find()
+// by string_view without materializing a std::string per message.
+struct StringHash
+{
+  using is_transparent = void;
+  size_t operator()(std::string_view v) const { return std::hash<std::string_view>{}(v); }
+};
+template <typename V>
+using StringMap = std::unordered_map<std::string, V, StringHash, std::equal_to<>>;
 
 mcap::Compression parse_compression(std::string_view name)
 {
@@ -189,15 +200,12 @@ public:
   }
 
   void write(
+    // cppcheck-suppress passedByValue  // std::string_view is a cheap value type
     std::string_view topic, int64_t timestamp_ns, std::span<const std::byte> payload) override
   {
-    auto it = topic_to_channel_.find(std::string(topic));
-    if (it == topic_to_channel_.end()) {
-      throw std::runtime_error(
-        "mcap write on undeclared topic: " + std::string(topic) + " (call declare_topic() first)");
-    }
+    const mcap::ChannelId channel_id = lookup_channel(topic);
     mcap::Message msg;
-    msg.channelId = it->second;
+    msg.channelId = channel_id;
     msg.sequence = 0;
     msg.logTime = static_cast<mcap::Timestamp>(timestamp_ns);
     msg.publishTime = msg.logTime;
@@ -214,6 +222,21 @@ public:
     }
   }
 
+  // cppcheck-suppress passedByValue  // std::string_view is a cheap value type
+  void write_frozen(std::string_view topic, FrozenMessage msg) override
+  {
+    // The parallel writer pins the payload through the shared owner instead of
+    // copying it into a staging buffer. Without an owner the span's lifetime
+    // is call-scoped, so fall back to the copying entry point.
+    if (parallel_ && msg.owner) {
+      parallel_->write_message_owned(
+        lookup_channel(topic), static_cast<mcap::Timestamp>(msg.timestamp_ns), msg.payload,
+        std::move(msg.owner));
+      return;
+    }
+    write(topic, msg.timestamp_ns, msg.payload);
+  }
+
   void close() override
   {
     if (closed_) {
@@ -228,11 +251,21 @@ public:
   }
 
 private:
+  mcap::ChannelId lookup_channel(std::string_view topic) const
+  {
+    const auto it = topic_to_channel_.find(topic);
+    if (it == topic_to_channel_.end()) {
+      throw std::runtime_error(
+        "mcap write on undeclared topic: " + std::string(topic) + " (call declare_topic() first)");
+    }
+    return it->second;
+  }
+
   mcap::McapWriter writer_;
   std::unique_ptr<ParallelChunkMcapWriter> parallel_;
   mcap::SchemaId next_schema_id_ = 1;
   mcap::ChannelId next_channel_id_ = 1;
-  std::unordered_map<std::string, mcap::ChannelId> topic_to_channel_;
+  StringMap<mcap::ChannelId> topic_to_channel_;
   std::unordered_map<std::string, mcap::SchemaId> type_to_schema_;
   bool closed_ = false;
 };
@@ -281,10 +314,28 @@ public:
   }
 
   void write(
+    // cppcheck-suppress passedByValue  // std::string_view is a cheap value type
     std::string_view topic, int64_t timestamp_ns, std::span<const std::byte> payload) override
   {
     inner_->write(topic, timestamp_ns, payload);
-    ++topic_counts_[std::string(topic)];
+    // Every written topic was declared (inner_ throws otherwise), so the
+    // string_view find always hits the entry declare_topic() inserted.
+    ++topic_counts_.find(topic)->second;
+    ++total_messages_;
+    if (timestamp_ns < start_ns_) {
+      start_ns_ = timestamp_ns;
+    }
+    if (timestamp_ns > end_ns_) {
+      end_ns_ = timestamp_ns;
+    }
+  }
+
+  // cppcheck-suppress passedByValue  // std::string_view is a cheap value type
+  void write_frozen(std::string_view topic, FrozenMessage msg) override
+  {
+    const auto timestamp_ns = msg.timestamp_ns;
+    inner_->write_frozen(topic, std::move(msg));
+    ++topic_counts_.find(topic)->second;
     ++total_messages_;
     if (timestamp_ns < start_ns_) {
       start_ns_ = timestamp_ns;
@@ -314,7 +365,8 @@ public:
     MetadataYamlInfo info;
     info.storage_identifier = "mcap";
     info.topics = topics_;
-    info.per_topic_counts = topic_counts_;
+    info.per_topic_counts =
+      std::unordered_map<std::string, int64_t>(topic_counts_.begin(), topic_counts_.end());
     info.total_messages = total_messages_;
     info.start_ns = start_ns_;
     info.end_ns = end_ns_;
@@ -329,7 +381,7 @@ private:
   std::unique_ptr<McapFileWriter> inner_;
 
   std::vector<TopicInfo> topics_;
-  std::unordered_map<std::string, int64_t> topic_counts_;
+  StringMap<int64_t> topic_counts_;
   int64_t total_messages_ = 0;
   int64_t start_ns_ = std::numeric_limits<int64_t>::max();
   int64_t end_ns_ = std::numeric_limits<int64_t>::min();

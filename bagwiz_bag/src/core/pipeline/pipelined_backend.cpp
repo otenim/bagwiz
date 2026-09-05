@@ -74,7 +74,7 @@ RewriteCounts read_loop(
     // rename test (out_topic != input name) needs the input name still valid.
     const bool renamed = emit.out_topic != raw.topic->name;
     QueuedMessage msg;
-    msg.out_topic = std::string(emit.out_topic);
+    msg.out_topic = emit.out_topic;
     bool transformed = false;
     if (transforming) {
       xform_buf.clear();
@@ -138,7 +138,7 @@ RewriteCounts PipelinedBackend::run(
       QueuedMessage msg;
       while (queue.pop(msg)) {
         auto s = write_prof.time(Stage::kWrite);
-        writer.write(msg.out_topic, msg.frozen.timestamp_ns, msg.frozen.payload);
+        writer.write_frozen(msg.out_topic, std::move(msg.frozen));
       }
     } catch (...) {
       queue.fail(std::current_exception());

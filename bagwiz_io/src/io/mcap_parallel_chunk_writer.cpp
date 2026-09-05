@@ -14,13 +14,17 @@
 #include <mcap/writer.hpp>
 
 #include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -52,10 +56,50 @@ protected:
   }
 };
 
+// mcap Message record prefix: opcode + record length + channelId + sequence +
+// logTime + publishTime, serialized little-endian the same way libmcap's
+// record writers do (31 bytes; the payload follows it inside the chunk).
+constexpr std::size_t kMessageHeaderBytes = 1 + 8 + 2 + 4 + 8 + 8;
+
+// Serialize the 31-byte Message record prefix. The caller-side fields match
+// what McapFileWriter sets on every message: sequence 0, publishTime ==
+// logTime.
+void serialize_message_header(
+  std::array<std::byte, kMessageHeaderBytes> & out, mcap::ChannelId channel,
+  mcap::Timestamp log_time, std::uint64_t payload_size)
+{
+  const std::uint8_t op = static_cast<std::uint8_t>(mcap::OpCode::Message);
+  const std::uint64_t record_len = 2 + 4 + 8 + 8 + payload_size;
+  const std::uint32_t sequence = 0;
+  std::byte * p = out.data();
+  const auto put = [&p](const auto & v) {
+    std::memcpy(p, &v, sizeof(v));
+    p += sizeof(v);
+  };
+  put(op);
+  put(record_len);
+  put(channel);
+  put(sequence);
+  put(log_time);
+  put(log_time);  // publishTime
+}
+
+// One message inside a chunk: the serialized record prefix plus a gather
+// reference to the payload bytes. `owner` pins the payload's backing store
+// (a reader chunk buffer, a transform's output buffer, or a spill copy) until
+// the compression worker has consumed the segment.
+struct Segment
+{
+  std::array<std::byte, kMessageHeaderBytes> header;
+  const std::byte * payload = nullptr;
+  std::uint64_t payload_size = 0;
+  std::shared_ptr<const void> owner;
+};
+
 // One unit of output, in emission order. A records job carries serialized
 // top-level Schema/Channel records verbatim; a chunk job carries one chunk's
-// uncompressed records blob (serialized Message records) and is compressed by
-// a worker before the sequencer writes it.
+// messages as gather segments and is compressed by a worker before the
+// sequencer writes it.
 struct Job
 {
   std::uint64_t seq = 0;
@@ -68,8 +112,8 @@ struct Job
   std::vector<std::byte> bytes;
 
   // Chunk job payload.
-  std::vector<std::byte> uncompressed;
-  std::uint64_t uncompressed_size = 0;  // staging size; survives the handoff
+  std::vector<Segment> segments;
+  std::uint64_t uncompressed_size = 0;  // sum of segment bytes
   std::vector<std::byte> compressed;
   std::string compression;  // codec chosen for THIS chunk ("" on fallback)
   mcap::Timestamp start_time = 0;
@@ -144,14 +188,45 @@ public:
 
   void write_message(const mcap::Message & message)
   {
+    // The caller transfers no ownership, so the payload may dangle once this
+    // call returns while compression runs later on a worker. Copy it into an
+    // owned spill buffer and feed the same gather path. This is the rare
+    // entry (direct write() callers: tests, the sequential backend, command
+    // code with local buffers); the pipeline's frozen messages arrive through
+    // the owning overload below with no copy at all.
+    const std::span<const std::byte> payload(message.data, message.dataSize);
+    if (payload.empty()) {
+      // No bytes to pin: skip the spill copy (and its null-iterator corner).
+      write_message_owned(message.channelId, message.logTime, payload, nullptr);
+      return;
+    }
+    auto spill = std::make_shared<std::vector<std::byte>>(payload.begin(), payload.end());
+    // Build the span and the owner in separate statements: constructing the
+    // by-value shared_ptr parameter directly from std::move(spill) in the same
+    // call expression would let the span read spill AFTER it was moved from
+    // (argument evaluation order is unspecified).
+    const std::span<const std::byte> owned(spill->data(), spill->size());
+    std::shared_ptr<const void> owner = std::move(spill);
+    write_message_owned(message.channelId, message.logTime, owned, std::move(owner));
+  }
+
+  void write_message_owned(
+    mcap::ChannelId channel, mcap::Timestamp log_time, std::span<const std::byte> payload,
+    std::shared_ptr<const void> owner)
+  {
     throw_if_failed();
-    const std::uint64_t offset = staging_.size();
-    mcap::McapWriter::write(staging_, message);
-    staging_index_[message.channelId].emplace_back(message.logTime, offset);
-    staging_times_min_ = std::min(staging_times_min_, message.logTime);
-    staging_times_max_ = std::max(staging_times_max_, message.logTime);
+    Segment seg;
+    serialize_message_header(seg.header, channel, log_time, payload.size());
+    seg.payload = payload.data();
+    seg.payload_size = payload.size();
+    seg.owner = std::move(owner);
+    staging_index_[channel].emplace_back(log_time, staging_size_);
+    staging_size_ += seg.header.size() + seg.payload_size;
+    staging_times_min_ = std::min(staging_times_min_, log_time);
+    staging_times_max_ = std::max(staging_times_max_, log_time);
     ++staging_count_;
-    if (staging_.size() >= chunk_size_) {
+    staging_segments_.push_back(std::move(seg));
+    if (staging_size_ >= chunk_size_) {
       flush_staging();
     }
   }
@@ -220,16 +295,16 @@ private:
     cv_.notify_all();
   }
 
-  // Hand the staging buffer to the pool as the next chunk job and start a
-  // fresh one. Caller thread only.
+  // Hand the staged segments to the pool as the next chunk job and start a
+  // fresh staging set. Caller thread only.
   void flush_staging()
   {
     wait_for_room();
     auto job = std::make_unique<Job>();
     job->seq = next_seq_++;
     job->is_chunk = true;
-    job->uncompressed = std::move(staging_.buffer_);
-    job->uncompressed_size = job->uncompressed.size();
+    job->segments = std::move(staging_segments_);
+    job->uncompressed_size = staging_size_;
     job->start_time = staging_times_min_;
     job->end_time = staging_times_max_;
     job->message_count = staging_count_;
@@ -240,8 +315,9 @@ private:
     }
     cv_.notify_all();
 
-    staging_.buffer_ = take_pooled_buffer();
+    staging_segments_.clear();
     staging_index_.clear();
+    staging_size_ = 0;
     staging_times_min_ = mcap::MaxTime;
     staging_times_max_ = 0;
     staging_count_ = 0;
@@ -284,10 +360,10 @@ private:
     }
     buf.clear();
     std::lock_guard lock(mutex_);
-    // Bound the pool: every chunk returns its staging buffer and (if not the
-    // fallback) its compressed buffer, but the caller consumes only one
-    // staging buffer per chunk — an unbounded pool would grow by ~chunk_size
-    // per chunk written. Buffers past the cap are freed instead.
+    // Bound the pool: every chunk returns its compressed buffer, but a worker
+    // consumes only one per chunk — an unbounded pool would grow by
+    // ~compressed-chunk-size per chunk written. Buffers past the cap are
+    // freed instead.
     if (buffer_pool_.size() >= max_inflight_ * 2) {
       return;
     }
@@ -319,7 +395,6 @@ private:
         job->error = std::string("mcap chunk compression failed: ") + e.what();
       }
 
-      std::vector<std::byte> spare = std::move(job->uncompressed);
       {
         std::lock_guard lock(mutex_);
         job->ready = true;
@@ -327,7 +402,6 @@ private:
           error_ = job->error;
         }
       }
-      recycle(std::move(spare));
       cv_.notify_all();
     }
   }
@@ -342,27 +416,37 @@ private:
     return nullptr;
   }
 
-  // Compress one chunk one-shot. Each chunk is compressed single-threaded, so
-  // the output bytes depend only on the input, never on the worker count —
-  // output is byte-identical for any BAGWIZ_WRITE_THREADS >= 2. Mirrors
-  // libmcap's forceCompression=false rule: a chunk that does not shrink is
-  // stored uncompressed.
+  // Compress one chunk one-shot over its gather segments. Each chunk is
+  // compressed single-threaded, so the output bytes depend only on the input,
+  // never on the worker count — output is byte-identical for any
+  // BAGWIZ_WRITE_THREADS >= 2. Mirrors libmcap's forceCompression=false rule:
+  // a chunk that does not shrink is stored uncompressed.
   void compress_chunk(Job & job, Encoder & encoder)
   {
     mcap::IChunkWriter * w = compression_ == "zstd"
                                ? static_cast<mcap::IChunkWriter *>(&encoder.zstd)
                                : static_cast<mcap::IChunkWriter *>(&encoder.lz4);
     w->clear();
-    w->write(job.uncompressed.data(), job.uncompressed_size);
+    for (const auto & seg : job.segments) {
+      w->write(seg.header.data(), seg.header.size());
+      if (seg.payload_size != 0) {
+        w->write(seg.payload, seg.payload_size);
+      }
+    }
     w->end();
+    // The encoder's internal buffer now holds every byte, so the segments —
+    // and the reader buffers / spill copies they pin — can go immediately.
+    job.segments.clear();
     const std::uint64_t compressed_size = w->compressedSize();
     if (compressed_size >= job.uncompressed_size) {
       job.compression.clear();
-      job.compressed = std::move(job.uncompressed);
+      job.compressed = take_pooled_buffer();
+      job.compressed.assign(w->data(), w->data() + job.uncompressed_size);
       return;
     }
     const std::byte * data = w->compressedData();
     job.compression = compression_;
+    job.compressed = take_pooled_buffer();
     job.compressed.assign(data, data + compressed_size);
   }
 
@@ -521,7 +605,8 @@ private:
   bool closed_ = false;
 
   // Caller-thread staging state.
-  VectorWritable staging_;
+  std::vector<Segment> staging_segments_;
+  std::uint64_t staging_size_ = 0;  // record bytes staged so far
   std::map<mcap::ChannelId, std::vector<std::pair<mcap::Timestamp, mcap::ByteOffset>>>
     staging_index_;
   mcap::Timestamp staging_times_min_ = mcap::MaxTime;
@@ -576,6 +661,13 @@ void ParallelChunkMcapWriter::write_channel(const mcap::Channel & channel)
 void ParallelChunkMcapWriter::write_message(const mcap::Message & message)
 {
   impl_->write_message(message);
+}
+
+void ParallelChunkMcapWriter::write_message_owned(
+  mcap::ChannelId channel, mcap::Timestamp log_time, std::span<const std::byte> payload,
+  std::shared_ptr<const void> owner)
+{
+  impl_->write_message_owned(channel, log_time, payload, std::move(owner));
 }
 
 void ParallelChunkMcapWriter::close()
