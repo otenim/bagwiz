@@ -8,6 +8,8 @@
 
 #include "bagwiz/io/file_compressor.hpp"
 
+#include "env_tuning.hpp"  // NOLINT(build/include_subdir) src-local shared header
+
 #include <zstd.h>
 
 #include <cstddef>
@@ -26,6 +28,8 @@ namespace bagwiz::io
 
 namespace
 {
+
+constexpr const char * kLogger = "bagwiz.io";
 
 struct ZstdCStreamDeleter
 {
@@ -86,6 +90,20 @@ void compress_file_to_zstd(
     throw std::runtime_error(
       std::string("failed to set zstd level for ") + src.string() + ": " +
       ZSTD_getErrorName(init_rc));
+  }
+  // Whole-database envelopes are large enough that single-threaded streaming
+  // dominates the writer's close(): fan compression out over zstd's worker
+  // pool instead. 0 or 1 workers keeps the single-threaded layout; >= 2 lets
+  // zstd split the input into parallel jobs, which changes the frame's block
+  // layout but not what it decompresses to.
+  const int threads = detail::resolve_write_threads(kLogger);
+  if (threads >= 2) {
+    const auto workers_rc = ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_nbWorkers, threads);
+    if (ZSTD_isError(workers_rc) != 0U) {
+      throw std::runtime_error(
+        std::string("failed to set zstd worker count for ") + src.string() + ": " +
+        ZSTD_getErrorName(workers_rc));
+    }
   }
 
   std::ofstream out(dst, std::ios::binary | std::ios::trunc);

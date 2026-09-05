@@ -16,9 +16,10 @@
 #include <cstdlib>
 #include <thread>
 
-// Src-local tuning knobs shared by the parallel read paths. Both storage
-// backends read the same BAGWIZ_READ_THREADS variable so a differential run
-// (`0` = serial) switches every backend at once.
+// Src-local tuning knobs shared by the parallel read and write paths. Both
+// storage backends read the same BAGWIZ_READ_THREADS / BAGWIZ_WRITE_THREADS
+// variables so a differential run (`0` = serial) switches every backend at
+// once.
 namespace bagwiz::io::detail
 {
 
@@ -56,6 +57,28 @@ inline int resolve_read_threads(const char * logger)
   const std::int64_t fallback =
     hw == 0 ? kDefault : std::min<std::int64_t>(kDefault, static_cast<std::int64_t>(hw));
   return static_cast<int>(resolve_env_int("BAGWIZ_READ_THREADS", fallback, 0, kMax, logger));
+}
+
+// Worker count for the parallel compression write paths: the parallel mcap
+// chunk writer and the sqlite3 FILE-mode envelope compressor
+// (compress_file_to_zstd). Defaults to 16, capped at the host's hardware
+// concurrency so low-core machines keep a smaller worker count.
+// BAGWIZ_WRITE_THREADS overrides the default, and 0 or 1 selects the serial
+// writer (the debugging escape hatch).
+//
+// 16 as the default: with gather-based chunk assembly the mcap write path's
+// caller thread no longer copies payloads, so the worker pool is the
+// throughput constraint and scales past 8 (measured on a 19.5 GiB
+// uncompressed->zstd rewrite: 9.9 s at 8 workers, 7.7 s at 16). The kMax cap
+// keeps per-worker encoder memory bounded.
+inline int resolve_write_threads(const char * logger)
+{
+  constexpr std::int64_t kDefault = 16;
+  constexpr std::int64_t kMax = 16;
+  const unsigned int hw = std::thread::hardware_concurrency();
+  const std::int64_t fallback =
+    hw == 0 ? kDefault : std::min<std::int64_t>(kDefault, static_cast<std::int64_t>(hw));
+  return static_cast<int>(resolve_env_int("BAGWIZ_WRITE_THREADS", fallback, 0, kMax, logger));
 }
 
 // Page size for newly written .db3 files, from BAGWIZ_DB3_PAGE_SIZE.

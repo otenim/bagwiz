@@ -8,7 +8,7 @@
 
 #include "mcap_index_sizes.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
-#include "mcap_chunk_codec.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "prorate_bytes.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <algorithm>
 #include <atomic>
@@ -30,33 +30,21 @@ namespace bagwiz::io::detail
 namespace
 {
 
-constexpr std::uint8_t kMessageOpCode = 0x05;
 constexpr std::uint8_t kMessageIndexOpCode = 0x07;
 
 // Every mcap record is a 1-byte opcode plus a uint64 content length.
 constexpr std::uint64_t kRecordPrefixBytes = 9;
 
 // A Message record's fixed header, ahead of the payload: channel id (2),
-// sequence (4), log time (8), publish time (8). The payload is the rest of
-// the record, so payload size == record content length - 22.
+// sequence (4), log time (8), publish time (8). The smallest message record
+// is an empty payload behind that header and the record prefix.
 constexpr std::uint64_t kMessageHeaderBytes = 22;
+constexpr std::uint64_t kMinMessageRecordBytes = kRecordPrefixBytes + kMessageHeaderBytes;
 
-// What we read at each message offset: the record prefix plus the channel id
-// that follows it. The channel id is redundant with the message index, which
-// is exactly why it is worth reading — it makes a wrong offset detectable.
-constexpr std::uint64_t kMessageProbeBytes = kRecordPrefixBytes + 2;
-
-// A Chunk record's body ahead of its records blob: message start/end time
-// (8+8), uncompressed size (8), uncompressed CRC (4), the compression string's
-// own length prefix (4), and the records blob's length prefix (8).
-constexpr std::uint64_t kChunkBodyPrefixBytes = 8 + 8 + 8 + 4 + 4 + 8;
-
-// Two message headers no further apart than this are fetched in one read
-// rather than two. It makes the per-message probing adapt to the bag's shape
-// on its own: a chunk of a few multi-MiB point clouds costs one small read per
-// message, while a chunk packed with tiny messages collapses into a single
-// read of the chunk — never more bytes than reading the chunk outright.
-constexpr std::uint64_t kCoalesceWindowBytes = 64 * 1024;
+// A MessageIndex record's content ahead of its entry array: channel id (2)
+// and the array's byte length (4). Each entry is (log time, offset).
+constexpr std::uint64_t kMessageIndexHeaderBytes = 2 + 4;
+constexpr std::uint64_t kMessageIndexEntryBytes = 16;
 
 std::uint16_t read_u16(const std::byte * p)
 {
@@ -79,13 +67,15 @@ std::uint64_t read_u64(const std::byte * p)
   return v;
 }
 
-// One message record's position inside its chunk's decompressed records blob,
-// as the message index reports it.
+// One message record's position inside its chunk's records blob, as the
+// message index reports it.
 struct MessageRef
 {
   std::uint64_t offset = 0;
   std::uint16_t channel_id = 0;
 };
+
+using ChannelBytes = std::unordered_map<std::uint16_t, std::uint64_t>;
 
 // Read `length` bytes at `offset` into `out`. Returns false on a short read.
 bool read_at(
@@ -98,9 +88,10 @@ bool read_at(
   return static_cast<bool>(file) && static_cast<std::uint64_t>(file.gcount()) == length;
 }
 
-// Parse the MessageIndex records that belong to one chunk, keeping the
-// messages whose channel passes `channels` (empty = keep all). `block` must be
-// the chunk's whole message index region, `block_offset` its file offset.
+// Parse the MessageIndex records that belong to one chunk: every message's
+// position into `refs`, and each record's own on-disk bytes into
+// `index_bytes` under its channel. `block` must be the chunk's whole message
+// index region, `block_offset` its file offset.
 //
 // Every record is checked against the ChunkIndex's own messageIndexOffsets
 // map, so a block that is not the expected sequence of MessageIndex records is
@@ -108,7 +99,7 @@ bool read_at(
 std::string parse_message_index(
   std::span<const std::byte> block, std::uint64_t block_offset,
   const std::unordered_map<mcap::ChannelId, mcap::ByteOffset> & expected_offsets,
-  const std::unordered_set<std::uint16_t> & channels, std::vector<MessageRef> & out)
+  std::vector<MessageRef> & refs, ChannelBytes & index_bytes)
 {
   std::size_t pos = 0;
   while (pos < block.size()) {
@@ -125,7 +116,7 @@ std::string parse_message_index(
     const std::byte * body = block.data() + pos;
     pos += content_length;
 
-    if (content_length < 2 + 4) {
+    if (content_length < kMessageIndexHeaderBytes) {
       return "truncated message index body";
     }
     const std::uint16_t channel_id = read_u16(body);
@@ -134,173 +125,132 @@ std::string parse_message_index(
       return "message index record does not match the chunk index";
     }
     const std::uint32_t array_bytes = read_u32(body + 2);
-    if (array_bytes % 16 != 0 || array_bytes > content_length - 6) {
+    if (
+      array_bytes % kMessageIndexEntryBytes != 0 ||
+      array_bytes > content_length - kMessageIndexHeaderBytes) {
       return "malformed message index entry array";
     }
-    if (!channels.empty() && channels.count(channel_id) == 0) {
-      continue;
-    }
-    const std::uint32_t entries = array_bytes / 16;
-    out.reserve(out.size() + entries);
-    for (std::uint32_t i = 0; i < entries; ++i) {
+    index_bytes[channel_id] += kRecordPrefixBytes + content_length;
+    const std::uint32_t entries = array_bytes / kMessageIndexEntryBytes;
+    refs.reserve(refs.size() + entries);
+    const std::byte * entry = body + kMessageIndexHeaderBytes;
+    for (std::uint32_t i = 0; i < entries; ++i, entry += kMessageIndexEntryBytes) {
       // Each entry is (log time, offset); only the offset is needed here.
-      out.push_back({read_u64(body + 6 + (std::size_t{i} * 16) + 8), channel_id});
+      refs.push_back({read_u64(entry + 8), channel_id});
     }
+  }
+  // Every record matched a distinct entry of the map (two records at one
+  // offset cannot both parse), so fewer records than entries means a channel
+  // the chunk index promises is missing from the region — its messages would
+  // go uncounted, and worse, the gap before them would be charged elsewhere.
+  if (index_bytes.size() != expected_offsets.size()) {
+    return "message index region does not cover every channel in the chunk index";
   }
   return {};
 }
 
-// Whether a message record probe at `offset` lies inside a records blob of
-// `records_size` bytes. Written as a subtraction on the size so an offset
-// straight out of the file cannot overflow the comparison.
-bool probe_fits(std::uint64_t offset, std::uint64_t records_size)
+// Whether any of `channels` (empty = all) has messages in the chunk, judged
+// from the chunk index alone.
+bool chunk_holds_selected(
+  const mcap::ChunkIndex & index, const std::unordered_set<std::uint16_t> & channels)
 {
-  return records_size >= kMessageProbeBytes && offset <= records_size - kMessageProbeBytes;
+  if (channels.empty()) {
+    return true;
+  }
+  return std::any_of(
+    index.messageIndexOffsets.begin(), index.messageIndexOffsets.end(),
+    [&channels](const auto & entry) { return channels.count(entry.first) != 0; });
 }
 
-// Add one message's payload size, given the 11 bytes at its record offset.
-// `probe` is the record's opcode + content length + channel id. The caller
-// must have established probe_fits(ref.offset, records_size).
-std::string accumulate_message(
-  const std::byte * probe, const MessageRef & ref, std::uint64_t records_size,
-  std::unordered_map<std::uint16_t, std::uint64_t> & sizes)
+// Each channel's record bytes inside one chunk's records blob: the gap from
+// each of its messages to the next record, the blob's end closing the last
+// one. `refs` is sorted by offset on return.
+std::string measure_record_gaps(
+  std::vector<MessageRef> & refs, std::uint64_t records_size, ChannelBytes & record_bytes)
 {
-  if (static_cast<std::uint8_t>(*probe) != kMessageOpCode) {
-    return "message index points at a non-message record";
-  }
-  const std::uint64_t content_length = read_u64(probe + 1);
-  if (
-    content_length < kMessageHeaderBytes ||
-    content_length > records_size - ref.offset - kRecordPrefixBytes) {
-    return "message record length runs past the end of its chunk";
-  }
-  if (read_u16(probe + kRecordPrefixBytes) != ref.channel_id) {
-    return "message record channel id disagrees with the message index";
-  }
-  sizes[ref.channel_id] += content_length - kMessageHeaderBytes;
-  return {};
-}
-
-// Sum the payload sizes of an uncompressed chunk's selected messages by
-// reading only their record headers, straight out of the file: an
-// uncompressed chunk's records blob is stored verbatim, so an offset within
-// it is just a file offset.
-std::string accumulate_uncompressed_chunk(
-  std::ifstream & file, const mcap::ChunkIndex & index, std::vector<MessageRef> & refs,
-  std::vector<std::byte> & scratch, std::unordered_map<std::uint16_t, std::uint64_t> & sizes)
-{
-  const std::uint64_t blob_offset =
-    index.chunkStartOffset + kRecordPrefixBytes + kChunkBodyPrefixBytes + index.compression.size();
-  const std::uint64_t records_size = index.uncompressedSize;
-
-  // Bound every offset before any arithmetic on it: the values come straight
-  // out of the file, and the grouping below adds to them.
-  for (const auto & ref : refs) {
-    if (!probe_fits(ref.offset, records_size)) {
-      return "message index points past the end of its chunk";
-    }
-  }
   std::sort(refs.begin(), refs.end(), [](const MessageRef & a, const MessageRef & b) {
     return a.offset < b.offset;
   });
-  for (std::size_t first = 0; first < refs.size();) {
-    // Extend the group while the next header is within one window of the
-    // current one's end.
-    std::size_t last = first;
-    while (last + 1 < refs.size() &&
-           refs[last + 1].offset <= refs[last].offset + kMessageProbeBytes + kCoalesceWindowBytes) {
-      ++last;
+  for (std::size_t i = 0; i < refs.size(); ++i) {
+    const std::uint64_t end = i + 1 < refs.size() ? refs[i + 1].offset : records_size;
+    // A message record cannot be shorter than its prefix and header, so two
+    // offsets closer than that — or one past the blob's end — are not the
+    // positions of message records.
+    if (end < refs[i].offset || end - refs[i].offset < kMinMessageRecordBytes) {
+      return "message index offsets do not fit message records";
     }
-    const std::uint64_t span_start = refs[first].offset;
-    const std::uint64_t span_end = refs[last].offset + kMessageProbeBytes;
-    if (span_end > records_size) {
-      return "message index points past the end of its chunk";
-    }
-    if (!read_at(file, blob_offset + span_start, span_end - span_start, scratch)) {
-      return "short read of message record headers";
-    }
-    for (std::size_t i = first; i <= last; ++i) {
-      auto error = accumulate_message(
-        scratch.data() + (refs[i].offset - span_start), refs[i], records_size, sizes);
-      if (!error.empty()) {
-        return error;
-      }
-    }
-    first = last + 1;
+    record_bytes[refs[i].channel_id] += end - refs[i].offset;
   }
   return {};
 }
 
-// Same for a compressed chunk. Its record headers only exist after
-// decompression, so the chunk is read and decompressed in full — the payload
-// bytes are still never copied out, but this chunk costs what a normal read
-// of it costs.
-std::string accumulate_compressed_chunk(
-  std::ifstream & file, const mcap::ChunkIndex & index, const std::vector<MessageRef> & refs,
-  std::vector<std::byte> & scratch, std::unordered_map<std::uint16_t, std::uint64_t> & sizes)
-{
-  if (!read_at(file, index.chunkStartOffset, index.chunkLength, scratch)) {
-    return "short read of chunk record";
-  }
-  auto decoded = decompress_chunk_record(std::span<const std::byte>(scratch));
-  if (!decoded.error.empty()) {
-    return decoded.error;
-  }
-  const std::uint64_t records_size = decoded.records.size();
-  for (const auto & ref : refs) {
-    if (!probe_fits(ref.offset, records_size)) {
-      return "message index points past the end of its chunk";
-    }
-    auto error = accumulate_message(decoded.records.data() + ref.offset, ref, records_size, sizes);
-    if (!error.empty()) {
-      return error;
-    }
-  }
-  return {};
-}
-
-// Sum one chunk's selected messages into `sizes`. `refs` and `scratch` are the
-// caller's reusable buffers.
+// Charge one chunk's selected channels into `sizes`. `refs`, `scratch` and
+// the two byte maps are the caller's reusable buffers.
 std::string accumulate_chunk(
   std::ifstream & file, const mcap::ChunkIndex & index,
   const std::unordered_set<std::uint16_t> & channels, std::vector<MessageRef> & refs,
-  std::vector<std::byte> & scratch, std::unordered_map<std::uint16_t, std::uint64_t> & sizes)
+  std::vector<std::byte> & scratch, ChannelBytes & record_bytes, ChannelBytes & index_bytes,
+  ChannelBytes & sizes)
 {
   if (index.messageIndexOffsets.empty() || index.messageIndexLength == 0) {
     return "chunk carries no message index";
   }
+  if (!chunk_holds_selected(index, channels)) {
+    // No selected channel appears in this chunk: not even its message index
+    // region is read, which is what makes a narrow `-t` selection cheap on a
+    // topic that lives in few chunks. This trusts the summary's per-chunk
+    // channel map the way every indexed mcap reader does — the filtered
+    // message stream (mcap_indexed_stream.cpp) skips chunks on the same map
+    // — so a summary that omits a channel mis-serves `-t` here exactly as it
+    // already mis-serves `walk -t` and `topic keep`; an unfiltered run still
+    // reads every region and refuses one that contradicts its chunk index.
+    return {};
+  }
   std::uint64_t block_offset = index.messageIndexOffsets.begin()->second;
-  for (const auto & [channel_id, offset] : index.messageIndexOffsets) {
-    block_offset = std::min(block_offset, static_cast<std::uint64_t>(offset));
+  for (const auto & entry : index.messageIndexOffsets) {
+    block_offset = std::min(block_offset, static_cast<std::uint64_t>(entry.second));
   }
   if (!read_at(file, block_offset, index.messageIndexLength, scratch)) {
     return "short read of message index records";
   }
 
+  // Every channel's messages are needed, selected or not: a selected
+  // message's extent ends where the next message starts, whichever channel
+  // that one belongs to.
   refs.clear();
+  record_bytes.clear();
+  index_bytes.clear();
   auto error = parse_message_index(
-    std::span<const std::byte>(scratch), block_offset, index.messageIndexOffsets, channels, refs);
+    std::span<const std::byte>(scratch), block_offset, index.messageIndexOffsets, refs,
+    index_bytes);
   if (!error.empty()) {
     return error;
   }
-  if (refs.empty()) {
-    // No selected channel appears in this chunk: it is never read at all,
-    // which is what makes a narrow `-t` selection cheap.
-    return {};
+  error = measure_record_gaps(refs, index.uncompressedSize, record_bytes);
+  if (!error.empty()) {
+    return error;
   }
 
-  const bool uncompressed = index.compression.empty() || index.compression == "none";
-  return uncompressed ? accumulate_uncompressed_chunk(file, index, refs, scratch, sizes)
-                      : accumulate_compressed_chunk(file, index, refs, scratch, sizes);
+  for (const auto & [channel_id, bytes] : record_bytes) {
+    if (channels.empty() || channels.count(channel_id) != 0) {
+      sizes[channel_id] += prorate_bytes(bytes, index.compressedSize, index.uncompressedSize);
+    }
+  }
+  for (const auto & [channel_id, bytes] : index_bytes) {
+    if (channels.empty() || channels.count(channel_id) != 0) {
+      sizes[channel_id] += bytes;
+    }
+  }
+  return {};
 }
 
 }  // namespace
 
-ChannelPayloadSizes compute_channel_sizes_from_index(
+ChannelDiskSizes compute_channel_sizes_from_index(
   const std::filesystem::path & path, const mcap::McapReader & reader,
   const std::unordered_set<std::uint16_t> & channels, int num_threads)
 {
-  ChannelPayloadSizes result;
+  ChannelDiskSizes result;
   const auto & chunk_indexes = reader.chunkIndexes();
   if (chunk_indexes.empty()) {
     result.error = "no chunk index";
@@ -309,7 +259,7 @@ ChannelPayloadSizes compute_channel_sizes_from_index(
 
   const std::size_t workers =
     std::min<std::size_t>(std::max(num_threads, 1), std::max<std::size_t>(chunk_indexes.size(), 1));
-  std::vector<std::unordered_map<std::uint16_t, std::uint64_t>> partial_sizes(workers);
+  std::vector<ChannelBytes> partial_sizes(workers);
   std::vector<std::string> partial_errors(workers);
   std::atomic<std::size_t> next_chunk{0};
   std::atomic<bool> failed{false};
@@ -326,13 +276,16 @@ ChannelPayloadSizes compute_channel_sizes_from_index(
       }
       std::vector<MessageRef> refs;
       std::vector<std::byte> scratch;
+      ChannelBytes record_bytes;
+      ChannelBytes index_bytes;
       for (;;) {
         const std::size_t i = next_chunk.fetch_add(1);
         if (i >= chunk_indexes.size() || failed.load()) {
           return;
         }
-        auto error =
-          accumulate_chunk(file, chunk_indexes[i], channels, refs, scratch, partial_sizes[slot]);
+        auto error = accumulate_chunk(
+          file, chunk_indexes[i], channels, refs, scratch, record_bytes, index_bytes,
+          partial_sizes[slot]);
         if (!error.empty()) {
           partial_errors[slot] = std::move(error);
           failed.store(true);

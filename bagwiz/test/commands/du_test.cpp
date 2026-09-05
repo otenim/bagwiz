@@ -39,24 +39,30 @@ std::span<const std::byte> payload_view(const std::vector<std::byte> & bytes)
   return std::span<const std::byte>(bytes.data(), bytes.size());
 }
 
-bagwiz::io::CreateOptions mcap_dir_opts()
+bagwiz::io::CreateOptions sqlite_dir_opts()
 {
   bagwiz::io::CreateOptions opts;
-  opts.format = bagwiz::io::Format::Mcap;
+  opts.format = bagwiz::io::Format::Sqlite3;
   opts.layout = bagwiz::io::Layout::Directory;
-  opts.mcap_compression = "none";
   return opts;
 }
 
-// Build an MCAP directory bag with four topics at mixed name depths:
+// Build a SQLite3 directory bag with four topics at mixed name depths:
 //   /sensing/lidar/points  (2 messages x 1024 bytes = 2048)
 //   /sensing/camera/image  (1 message  x 1536 bytes = 1536)
 //   /perception/objects    (1 message  x    4 bytes =    4)
 //   /silent                (declared, no messages   =    0)
+//
+// `du` reports on-disk bytes. On a plain .db3 a topic's bytes are exactly its
+// rows' BLOB lengths — the payload sizes above — so the expected table stays
+// hand-computable here. An MCAP's on-disk bytes also carry record framing,
+// message index records and chunk proration; those rules belong to the io
+// layer and are pinned by bagwiz_io's topic_sizes_test, not by this command
+// test.
 std::filesystem::path build_input(const std::filesystem::path & dir)
 {
   const auto path = dir / "input";
-  auto writer = bagwiz::io::open_write(path, mcap_dir_opts());
+  auto writer = bagwiz::io::open_write(path, sqlite_dir_opts());
   writer->declare_topic(make_topic("/sensing/lidar/points", "sensor_msgs/msg/PointCloud2"));
   writer->declare_topic(make_topic("/sensing/camera/image", "sensor_msgs/msg/Image"));
   writer->declare_topic(make_topic("/perception/objects", "std_msgs/msg/String"));

@@ -163,7 +163,7 @@ public:
       // workers available it moves onto a pool that the insert loop drains in
       // submission order; the knob's 0/1 serial value keeps the historical
       // inline compressor.
-      const int workers = resolve_write_threads();
+      const int workers = resolve_write_threads(kLogger);
       if (workers >= 2) {
         pool_.emplace(workers, compression_.zstd_level);
       } else {

@@ -11,6 +11,7 @@
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
+#include "env_tuning.hpp"                  // NOLINT(build/include_subdir) src-local shared header
 #include "mcap_parallel_chunk_writer.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <mcap/writer.hpp>
@@ -103,10 +104,10 @@ public:
     // threads are available: chunk compression is the write path's CPU
     // bottleneck and parallelizes across chunks. Uncompressed output has no
     // chunk encode to parallelize and stays on the serial libmcap writer.
-    if (compression != mcap::Compression::None && resolve_write_threads() > 1) {
+    if (compression != mcap::Compression::None && resolve_write_threads(kLogger) > 1) {
       parallel_ = std::make_unique<ParallelChunkMcapWriter>(
         path, compression == mcap::Compression::Zstd ? "zstd" : "lz4", level,
-        options.mcap_chunk_size, resolve_write_threads());
+        options.mcap_chunk_size, resolve_write_threads(kLogger));
       return;
     }
 
