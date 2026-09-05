@@ -52,9 +52,11 @@ add_library(bagwiz_image
   src/core/image/camera_info.cpp
   src/core/image/camera_info_resolver.cpp
   src/core/image/compressed_image.cpp
+  src/core/image/compressed_video.cpp
   src/core/image/gradient.cpp
   src/core/image/image_decoder.cpp
   src/core/image/image_encoder.cpp
+  src/core/image/image_wire.cpp
   src/core/image/packed_raster.cpp
   src/core/image/projection_matrix.cpp
   src/core/image/raw_image.cpp
@@ -152,6 +154,12 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_compressed_image_test test/core/image/compressed_image_test.cpp)
   target_link_libraries(bagwiz_compressed_image_test bagwiz_image)
+
+  ament_add_gtest(bagwiz_compressed_video_test test/core/image/compressed_video_test.cpp)
+  target_link_libraries(bagwiz_compressed_video_test bagwiz_image)
+
+  ament_add_gtest(bagwiz_image_wire_test test/core/image/image_wire_test.cpp)
+  target_link_libraries(bagwiz_image_wire_test bagwiz_image)
 
   ament_add_gtest(bagwiz_image_sampling_test test/core/image/sampling_test.cpp)
   target_link_libraries(bagwiz_image_sampling_test bagwiz_image)
