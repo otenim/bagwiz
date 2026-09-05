@@ -1,10 +1,10 @@
 # `bagwiz du`
 
-Report each topic's total serialized payload size in a single ROS 2 rosbag,
-in the spirit of du(1): one row per topic sorted by size descending, each
-row carrying that size's share of the reported total, plus a closing `total`
-row. Sizes print in 1024-based human-readable units by default (`-b` for raw
-byte counts). ROS 1 `*.bag` inputs are not supported.
+Report each topic's on-disk size in a single ROS 2 rosbag, in the spirit of
+du(1): one row per topic sorted by size descending, each row carrying that
+size's share of the reported total, plus a closing `total` row. Sizes print
+in 1024-based human-readable units by default (`-b` for raw byte counts).
+ROS 1 `*.bag` inputs are not supported.
 
 ## Usage
 
@@ -51,10 +51,10 @@ name), with a `total` row last:
 868.0M 100.0% total
 ```
 
-- `SIZE` is the sum of the topic's uncompressed serialized payload bytes —
-  the logical message size, not the on-disk footprint. Per-topic chunk
-  compression makes the latter unrecoverable, so a compressed bag's reported
-  total can exceed its file size.
+- `SIZE` is what the topic's messages occupy on disk, so compressing a bag
+  shrinks its report the way it shrinks the file. See "What is counted" for
+  exactly which bytes each storage format charges to a topic, and where the
+  figure is a proportional estimate rather than an exact count.
 - `%` is the row's share of the reported `total`, to one decimal. The
   denominator is the total actually reported, so `-t/--topics` narrows it
   too and the selected topics still add up to `100.0%`. Rounding is per row,
@@ -65,33 +65,69 @@ name), with a `total` row last:
 - Column widths are computed from the actual data, so long sizes / topic
   names do not push later columns out of alignment.
 
+## What is counted
+
+A topic is charged the bytes its own messages occupy in the bag's files.
+The parts of a file that belong to no topic in particular — file headers,
+schema and channel declarations, the MCAP summary section, SQLite3 page and
+row overhead, `metadata.yaml` — are charged to none, so the `total` row
+falls a little short of the file size. Exactly what is charged depends on
+the storage format:
+
+- MCAP: each message record in full (its 31-byte framing plus the payload)
+  and the topic's own message index records. In a compressed chunk the
+  records of several topics are compressed together, so no exact per-topic
+  byte count exists on disk: the chunk's compressed bytes are split among
+  its topics in proportion to their uncompressed record bytes, to the
+  nearest byte. That split assumes every topic in the chunk compressed
+  equally well, so a topic of already-compressed data (JPEG images, say)
+  sharing chunks with compressible neighbours is credited some of their
+  shrinkage. An uncompressed chunk is charged exactly. A bag written with
+  rosbag2's `compression_mode: MESSAGE` over MCAP storage is charged its
+  compressed records as they are.
+- SQLite3: each row's `data` BLOB as stored — the plain payload, or the zstd
+  frame a `compression_mode: MESSAGE` bag keeps in its place. A
+  `compression_mode: FILE` bag wraps the whole database in one zstd
+  envelope, so each topic's BLOB bytes are scaled by the envelope's
+  compression ratio (envelope bytes over decompressed database bytes), to
+  the nearest byte.
+
+One approximation is deliberate on MCAP. `du` never reads records, only the
+indexes, and a record's size is the gap to the next record in its chunk.
+libmcap-based writers (rosbag2 included) emit a channel's schema and channel
+declarations into the chunk that first carries one of its messages, between
+other records; those bytes are invisible to the index and are charged to the
+topic of the message ahead of them. The error is bounded by the size of the
+bag's declarations — kilobytes against gigabytes.
+
 ## Performance
 
 `du` does not read message payloads. Neither the MCAP summary nor
 `metadata.yaml` records per-topic byte totals — there is no summary shortcut
-like `ls -l`'s counts — but both storage formats record every message's own
-length, and reading only those lengths is far cheaper than reading the bytes
-they describe:
+like `ls -l`'s counts — but both storage formats carry enough framing to
+answer without reading the bytes it describes:
 
 - SQLite3: `LENGTH(data)` is answered from the row header, so the payload's
   overflow pages stay unread. Disjoint rowid ranges are scanned in parallel
   (`BAGWIZ_READ_THREADS` workers, 8 by default).
-- MCAP: the chunk and message indexes already say where every message record
-  starts, so only each record's own length prefix is read. A chunk stored
-  uncompressed is addressed in place, so those few bytes per message are all
-  that is read of it; a compressed chunk still has to be read and
-  decompressed to reach its record headers, so a fully compressed bag stays
-  closer to the cost of a full read.
+- MCAP: the chunk index says what every chunk compressed from and to, and
+  the message indexes say where every message record starts inside it.
+  Those indexes are all that is read — well under 0.1 % of a bag — and no
+  chunk is decompressed, so a compressed bag costs the same as an
+  uncompressed one.
 
-So the shape of the bag decides the size of the win. Measured cold-cache on
-one NVMe host: a 12.3 GB uncompressed-chunk MCAP went from 13.1s to 0.47s, a
-12.9 GB `.db3` from 20.5s to 2.4s, and an 8.0 GB MCAP whose chunks are mostly
-zstd from 11.6s to 5.2s.
+Measured cold-cache on one NVMe host, against a 60 s capture of 929 k
+messages over 805 topics stored as a 20.6 GB MCAP with uncompressed chunks
+and as its 11.0 GB zstd-compressed twin: reading only the indexes answers
+the uncompressed bag in 2.6-2.9s where reading each record's length prefix
+took 8.7-11.1s, and the compressed bag in 3.7s where decompressing every
+chunk to reach those prefixes took 33.8s. Warm, both answer in about 0.9s,
+most of it spent opening the bag. A 12.9 GB `.db3` reads its row headers in
+2.4s cold-cache against 20.5s for a full scan.
 
-Two bag shapes cannot be answered this way and fall back to a full message
-scan, with identical output: bags recorded with `compression_mode: MESSAGE`
-(where the stored length is the compressed one) and MCAPs carrying no chunk
-index — written with chunking off, or never finalized.
+One bag shape cannot be answered this way and falls back to a full message
+scan: an MCAP carrying no chunk index — written with chunking off, or never
+finalized. The scan charges each message its payload bytes.
 
 Passing `-t/--topics` narrows the work further. The selection is pushed down
 into the storage layer, and on MCAP a chunk that holds none of the selected

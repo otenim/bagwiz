@@ -133,13 +133,14 @@ int run_du(const DuArgs & args)
     }
   }
 
-  // Every topic's size is the sum of its serialized payload bytes. Neither
-  // the MCAP summary nor metadata.yaml records those totals, but both storage
-  // formats do record each message's own length — in a SQLite3 row header, in
-  // an MCAP message record's length prefix — and reading only those is far
-  // cheaper than reading the payloads. compute_topic_sizes() takes that route
-  // when the bag allows it; when it cannot (individually compressed messages,
-  // an MCAP without a chunk index), the honest full scan below stands in.
+  // Every topic's size is what its messages occupy on disk. Neither the MCAP
+  // summary nor metadata.yaml records those totals, but both storage formats
+  // carry enough to derive them without reading a payload: a SQLite3 row
+  // header states its BLOB's length, and an MCAP's chunk and message indexes
+  // state where every record starts and what each chunk compressed to.
+  // compute_topic_sizes() takes that route when the bag allows it; when it
+  // cannot (an MCAP without a chunk index), the full scan below stands in
+  // with each message's payload size — the record's bytes, less its framing.
   std::unordered_map<std::string, std::uint64_t> sizes;
   try {
     const auto selection =
@@ -219,26 +220,27 @@ int run_du(const DuArgs & args)
   return 0;
 }
 
-// `bagwiz du -i <input>` reports each topic's total serialized payload size,
-// in the spirit of du(1): a size column first, that size's share of the
-// reported total next to it, the topic name after that, rows sorted by size
-// descending, and a closing `total` row. Sizes print in 1024-based
-// human-readable units by default (`-b/--bytes` switches to raw byte counts,
-// du(1)'s own `-b`), and `-d/--depth` aggregates topics by their first N
-// name components (du(1)'s `--max-depth`). The size is the sum
-// of the uncompressed serialized payload bytes (the logical message size),
-// not the on-disk footprint — per-topic chunk compression makes the latter
-// unrecoverable — so a compressed bag's reported total can exceed its file
-// size. Computing it reads each message's declared length rather than its
-// payload (BagReader::compute_topic_sizes), and falls back to a full message
-// scan only for the bag shapes where that length is not the payload's.
+// `bagwiz du -i <input>` reports each topic's on-disk size, in the spirit of
+// du(1): a size column first, that size's share of the reported total next to
+// it, the topic name after that, rows sorted by size descending, and a
+// closing `total` row. Sizes print in 1024-based human-readable units by
+// default (`-b/--bytes` switches to raw byte counts, du(1)'s own `-b`), and
+// `-d/--depth` aggregates topics by their first N name components (du(1)'s
+// `--max-depth`). The size is what the topic's messages occupy in the file,
+// so compressing a bag shrinks its report the way it shrinks the file. Where
+// compression pools several topics' bytes into one container — an MCAP
+// chunk, a FILE-mode .db3.zstd envelope — no exact per-topic count exists on
+// disk, and the container's bytes are split among its topics in proportion
+// to what each contributed to it. Computing it reads indexes and row headers
+// rather than payloads (BagReader::compute_topic_sizes), and falls back to a
+// full message scan only for an MCAP with no chunk index.
 class DuCommand : public Command
 {
 public:
   [[nodiscard]] std::string_view name() const override { return "du"; }
   [[nodiscard]] std::string_view description() const override
   {
-    return "Report per-topic serialized payload sizes in a rosbag";
+    return "Report per-topic on-disk sizes in a rosbag";
   }
 
   void configure(CLI::App & app) override

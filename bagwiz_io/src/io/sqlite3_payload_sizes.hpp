@@ -14,13 +14,15 @@
 #include <string>
 #include <unordered_map>
 
-// Src-local building block of `bagwiz du`: per-topic payload byte totals read
-// out of one .db3's row headers instead of out of its payloads.
+// Src-local building block of `bagwiz du`: per-topic totals of the bytes each
+// row's `messages.data` BLOB occupies — a plain payload or a MESSAGE-mode
+// zstd frame alike — read out of one .db3's row headers instead of out of the
+// BLOBs themselves.
 namespace bagwiz::io::detail
 {
 
-// Per-topic-id sum of message payload bytes. Meaningful only when `error` is
-// empty.
+// Per-topic-id sum of stored `messages.data` BLOB bytes. Meaningful only when
+// `error` is empty.
 struct TopicPayloadSizes
 {
   std::unordered_map<std::int64_t, std::uint64_t> per_topic_id;
