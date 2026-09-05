@@ -310,10 +310,14 @@ For each cloud on a `--pcd` topic:
   clouds included), and `frame_id` are unchanged — points never leave
   their own cloud's frame;
 - `FLOAT32` and `FLOAT64` xyz are both supported (computed internally as
-  `double`). A malformed cloud — big-endian, missing/misshapen x/y/z, or an
-  inconsistent point/row layout — aborts the whole run rather than being
-  skipped; a cloud that merely fails to parse as `PointCloud2` is instead
-  copied through unchanged with a warning.
+  `double`). A malformed cloud — big-endian, missing/misshapen x/y/z, or a
+  data blob that does not hold every declared point — aborts the whole run
+  rather than being skipped; a cloud that merely fails to parse as
+  `PointCloud2` is instead copied through unchanged with a warning. A
+  `row_step` smaller than `width * point_step` (a stale value some
+  concatenation pipelines leave behind when they grow the width) is not an
+  error: the points are read densely packed, and the header is written
+  through as-is.
 - a cloud that reaches Pass 2 with no usable per-point time field is **not**
   an error — it is written through un-deskewed and reported with a
   `had nothing deskewed … passed through un-deskewed` warning (the upfront

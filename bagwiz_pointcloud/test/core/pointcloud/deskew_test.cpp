@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -383,17 +384,93 @@ TEST(Deskew, TimeFieldExceedingPointStepTreatedAsNoTime)
   EXPECT_NEAR(xyz1[2], 6.0f, 1e-6);
 }
 
-TEST(Deskew, RowStepSmallerThanWidthTimesPointStepIsError)
+TEST(Deskew, StaleRowStepSmallerThanWidthTimesPointStepIsDensePacked)
 {
-  // width=2, point_step=16 needs row_step >= 32; row_step is set to 16 (one
-  // point's worth), which would let col=1's point run past the row (and, on
-  // the last row, past `data`). Verifies the row_step hardening added
-  // alongside the time-field bounds fix actually rejects this.
-  auto cloud = make_cloud_xyzt({{0, 0, 0, 0}, {0, 0, 0, 0}});
+  // width=2, point_step=16 needs row_step >= 32, but row_step is 16: the
+  // leftover of a narrower source cloud that a concatenation pipeline did not
+  // update when it grew the width. Such a row_step cannot describe the blob
+  // (a row would not fit in it), so the points are read densely packed --
+  // the same rule the movify cloud walks apply -- and both are deskewed.
+  // Same geometry as PureTranslationMovesPointToRefPose.
+  auto cloud = make_cloud_xyzt({{0.0f, 0.0f, 0.0f, 0.1f}, {0.0f, 0.0f, 0.0f, 0.1f}});
   cloud.row_step = cloud.point_step;  // 16, but width*point_step = 32
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  auto r = deskew_pointcloud2(cloud, /*t_ref_ns=*/0, traj);
+  ASSERT_TRUE(r.ok()) << r.error;
+  EXPECT_EQ(r.points_deskewed, 2u);
+  EXPECT_NEAR(xyz_at(*r.cloud, 0)[0], 2.0f, 1e-4);
+  EXPECT_NEAR(xyz_at(*r.cloud, 1)[0], 2.0f, 1e-4);
+}
+
+TEST(Deskew, OrganizedCloudWithStaleRowStepIsDensePackedToo)
+{
+  // The dense-packing fallback does not depend on height: height=2, width=2
+  // with row_step 16 (< 32) is read as two dense rows of 32 bytes. All four
+  // points move to the reference pose, including row 1's, which a stride of
+  // 16 would have placed inside row 0.
+  auto cloud = make_cloud_xyzt(
+    {{0.0f, 0.0f, 0.0f, 0.1f},
+     {0.0f, 0.0f, 0.0f, 0.1f},
+     {0.0f, 0.0f, 0.0f, 0.1f},
+     {0.0f, 0.0f, 0.0f, 0.1f}});
+  cloud.height = 2;
+  cloud.width = 2;
+  cloud.row_step = cloud.point_step;  // 16, but width*point_step = 32
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
+  auto r = deskew_pointcloud2(cloud, /*t_ref_ns=*/0, traj);
+  ASSERT_TRUE(r.ok()) << r.error;
+  EXPECT_EQ(r.points_deskewed, 4u);
+  for (std::size_t i = 0; i < 4; ++i) {
+    EXPECT_NEAR(xyz_at(*r.cloud, i)[0], 2.0f, 1e-4) << "point " << i;
+  }
+}
+
+TEST(Deskew, BlobShorterThanDeclaredPointsIsError)
+{
+  // Unlike the movify cloud walks, deskew rewrites the cloud, so a blob that
+  // does not hold every declared point stays a hard error rather than being
+  // trimmed: the output would otherwise be a cloud whose header promises
+  // points its data does not carry.
+  auto cloud = make_cloud_xyzt({{0, 0, 0, 0}, {0, 0, 0, 0}});
+  cloud.data.pop_back();
   auto r = deskew_pointcloud2(cloud, 0, std::vector<TrajectoryPose>{{0, 0, 0, 0, 0, 0, 0, 1}});
   EXPECT_FALSE(r.ok());
-  EXPECT_NE(r.error.find("row_step"), std::string::npos);
+  EXPECT_NE(r.error.find("too small"), std::string::npos);
+}
+
+TEST(Deskew, HugeWidthTimesPointStepIsRejectedNotWrapped)
+{
+  // width * point_step (0x2000'0000 * 16 = 2^33) overflows 32 bits. The
+  // stride must be computed in std::size_t so the cloud is rejected on data
+  // size rather than wrapped into a small, accepted stride.
+  auto cloud = make_cloud_xyzt({{0, 0, 0, 0}, {0, 0, 0, 0}});
+  cloud.width = 0x2000'0000U;
+  cloud.row_step = 0;
+  auto r = deskew_pointcloud2(cloud, 0, std::vector<TrajectoryPose>{{0, 0, 0, 0, 0, 0, 0, 1}});
+  EXPECT_FALSE(r.ok());
+}
+
+TEST(Deskew, HeightTimesRowStrideDoesNotWrap)
+{
+  // A header declaring height 2 and a width * point_step just over 2^63
+  // needs ~18.4 EB of data, but the product height * stride wraps std::size_t
+  // to ~16 MB -- so a 20 MB blob would pass a multiplied size check and the
+  // row-1 walk would then index ~9.2 EB past it. The check must compare
+  // without multiplying.
+  const std::uint32_t width = 3037012209U;
+  const std::uint32_t point_step = 3036988791U;
+  const std::size_t row_bytes = static_cast<std::size_t>(width) * point_step;
+  ASSERT_GT(row_bytes, SIZE_MAX / 2);
+  ASSERT_LT(static_cast<std::size_t>(2) * row_bytes, row_bytes);  // unsigned wrap
+
+  auto cloud = make_cloud_xyzt({{0, 0, 0, 0}});
+  cloud.height = 2;
+  cloud.width = width;
+  cloud.point_step = point_step;
+  cloud.row_step = 0;
+  cloud.data.assign(20U * 1024 * 1024, std::byte{0});
+  auto r = deskew_pointcloud2(cloud, 0, std::vector<TrajectoryPose>{{0, 0, 0, 0, 0, 0, 0, 1}});
+  EXPECT_FALSE(r.ok());
 }
 
 TEST(Deskew, OrganizedCloudWithRowPadding)
@@ -550,6 +627,16 @@ TEST(DeskewCdr, MatchesStructPathOnFloat32Cloud)
   cloud.timestamp_ns = 2'000'000'000;
   std::vector<TrajectoryPose> traj{
     {2'000'000'000, 0, 0, 0, 0, 0, 0, 1}, {2'100'000'000, 2, 0, 0, 0, 0, 0.3826834, 0.9238795}};
+  expect_cdr_matches_struct_path(cloud, traj);
+}
+
+TEST(DeskewCdr, MatchesStructPathOnStaleRowStepCloud)
+{
+  // The stale row_step travels verbatim through serialize/parse, so the CDR
+  // path must apply the same dense-packing fallback as the struct path.
+  auto cloud = make_cloud_xyzt({{0.0f, 0.0f, 0.0f, 0.1f}, {1.0f, 2.0f, 3.0f, 0.0f}});
+  cloud.row_step = cloud.point_step;  // 16, but width*point_step = 32
+  std::vector<TrajectoryPose> traj{{0, 0, 0, 0, 0, 0, 0, 1}, {100'000'000, 2, 0, 0, 0, 0, 0, 1}};
   expect_cdr_matches_struct_path(cloud, traj);
 }
 
