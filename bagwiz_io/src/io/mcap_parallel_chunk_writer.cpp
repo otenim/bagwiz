@@ -127,7 +127,11 @@ struct Job
 
 int resolve_write_threads()
 {
-  constexpr int kDefault = 8;
+  // With gather-based chunk assembly the caller thread no longer copies
+  // payloads, so the worker pool is the throughput constraint and scales past
+  // 8 (measured on a 19.5 GiB uncompressed->zstd rewrite: 9.8 s at 8 workers,
+  // 7.7 s at 16). The kMax cap keeps the per-worker encoder memory bounded.
+  constexpr int kDefault = 16;
   constexpr int kMax = 16;
   const auto default_threads = [&] {
     const unsigned int hw = std::thread::hardware_concurrency();
