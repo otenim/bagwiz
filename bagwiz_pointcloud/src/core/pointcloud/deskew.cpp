@@ -271,20 +271,23 @@ KernelLayout resolve_kernel_layout(
     lay.error = "x/y/z field exceeds point_step";
     return lay;
   }
-  // A row_step smaller than width * point_step cannot describe the blob -- a
-  // row would not fit in it -- so it is treated as dense packing, the same
-  // rule the movify cloud walks apply (cloud_view.cpp); concatenation
-  // pipelines are known to leave a narrower source cloud's row_step behind
-  // when they grow the width. Unlike those walks, deskew rewrites the cloud,
-  // so a blob that does not hold every declared point stays a hard error.
-  // The size check divides rather than multiplies: height * rstep can wrap
-  // std::size_t for a corrupt header, and the wrapped product would accept a
-  // blob far too small for the walk that follows.
-  const std::size_t dense_step = static_cast<std::size_t>(width) * point_step;
-  lay.rstep = std::max<std::size_t>(row_step, dense_step);
-  if (lay.rstep != 0 && data_size / lay.rstep < height) {
-    lay.error = "point data buffer too small";
-    return lay;
+  // Same layout rule as the movify cloud walks (cloud_view.cpp). A cloud that
+  // declares no points walks nothing, whatever its row_step or blob say.
+  // Otherwise a row_step smaller than width * point_step cannot describe the
+  // blob -- a row would not fit in it -- so it is treated as dense packing;
+  // concatenation pipelines are known to leave a narrower source cloud's
+  // row_step behind when they grow the width. Unlike those walks, deskew
+  // rewrites the cloud, so a blob that does not hold every declared point
+  // stays a hard error. The size check divides rather than multiplies:
+  // height * rstep can wrap std::size_t for a corrupt header, and the wrapped
+  // product would accept a blob far too small for the walk that follows.
+  if (width != 0 && height != 0) {
+    const std::size_t dense_step = static_cast<std::size_t>(width) * point_step;
+    lay.rstep = std::max<std::size_t>(row_step, dense_step);
+    if (data_size / lay.rstep < height) {
+      lay.error = "point data buffer too small";
+      return lay;
+    }
   }
   lay.fx = *fx;
   lay.fy = *fy;

@@ -78,14 +78,18 @@ std::optional<PointTimeSpan> absolute_point_time_span_ns(
     static_cast<std::size_t>(field.offset) + datatype_size(field.datatype) > cloud.point_step) {
     return std::nullopt;
   }
-  // Same layout rule as deskew_pointcloud2: a row_step smaller than
-  // width * point_step cannot describe the blob and is read as dense packing;
-  // a blob that does not hold every declared point is rejected. Divide rather
-  // than multiply so height * rstep cannot wrap std::size_t.
-  const std::size_t dense_step = static_cast<std::size_t>(cloud.width) * cloud.point_step;
-  const std::size_t rstep = std::max<std::size_t>(cloud.row_step, dense_step);
-  if (rstep != 0 && cloud.data.size() / rstep < cloud.height) {
-    return std::nullopt;
+  // Same layout rule as deskew_pointcloud2: a cloud that declares no points
+  // walks nothing; otherwise a row_step smaller than width * point_step cannot
+  // describe the blob and is read as dense packing, and a blob that does not
+  // hold every declared point is rejected. Divide rather than multiply so
+  // height * rstep cannot wrap std::size_t.
+  std::size_t rstep = 0;
+  if (cloud.width != 0 && cloud.height != 0) {
+    const std::size_t dense_step = static_cast<std::size_t>(cloud.width) * cloud.point_step;
+    rstep = std::max<std::size_t>(cloud.row_step, dense_step);
+    if (cloud.data.size() / rstep < cloud.height) {
+      return std::nullopt;
+    }
   }
 
   // Classify relative vs absolute exactly like deskew_pointcloud2: one scan
