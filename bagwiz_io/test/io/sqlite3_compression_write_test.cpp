@@ -18,7 +18,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -155,6 +157,33 @@ TEST_F(Sqlite3CompressionWriteTest, MessageModeDirectoryRoundTrips)
   // And the shared reader path (metadata-driven MessageDecompressor) returns
   // the original bytes.
   verify_round_trip(dir);
+}
+
+TEST_F(Sqlite3CompressionWriteTest, MessageModeByteIdenticalAcrossWorkerCounts)
+{
+  // Exact byte equality is asserted here because each stored frame is a
+  // per-element computation that reads only immutable input (zstd is
+  // deterministic for a fixed level and payload) and inserts stay in
+  // submission order — neither depends on the compression worker count.
+  std::vector<std::byte> serial_shard;
+  std::vector<std::byte> pooled_shard;
+  for (const auto * workers : {"1", "4"}) {
+    // Same directory basename on both runs: the shard name is derived from it
+    // and embedded in the bag's own metadata row.
+    const auto dir = tmp_dir_ / workers / "bag";
+    ::setenv("BAGWIZ_WRITE_THREADS", workers, 1);
+    write_fixture(dir, sqlite3_dir_options("message", "zstd"));
+    ::unsetenv("BAGWIZ_WRITE_THREADS");
+
+    const auto shard = dir / "bag_0.db3";
+    std::ifstream in(shard, std::ios::binary | std::ios::ate);
+    ASSERT_TRUE(in.good());
+    std::vector<std::byte> bytes(static_cast<std::size_t>(in.tellg()));
+    in.seekg(0);
+    in.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    (workers[0] == '1' ? serial_shard : pooled_shard) = std::move(bytes);
+  }
+  EXPECT_EQ(serial_shard, pooled_shard);
 }
 
 TEST_F(Sqlite3CompressionWriteTest, MessageModeEmbeddedRowDeclaresCompression)
