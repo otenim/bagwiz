@@ -229,12 +229,9 @@ public:
   std::optional<std::unordered_map<std::string, std::uint64_t>> compute_topic_sizes(
     std::span<const std::string> names) override
   {
-    // MESSAGE-mode bags store each payload compressed inside the message
-    // record, so the record length is the compressed size; only a real
-    // decompression recovers the logical one.
-    if (decompressor_) {
-      return std::nullopt;
-    }
+    // A MESSAGE-mode bag (rosbag2 per-message zstd) needs no special case:
+    // the record holding the compressed payload is what occupies the disk,
+    // and that is exactly what the index-derived extents measure.
 
     // A bag the summary reports as empty has no chunks to index-scan, and
     // every topic's size is zero. Answering that here keeps the caller off a

@@ -28,11 +28,13 @@ namespace bagwiz::io::detail
 // `temp` lets the caller hand off ownership of a temporary .db3 that was
 // decompressed from a FILE-mode `.db3.zstd` envelope: the reader keeps it
 // alive for its whole lifetime and the file is removed when the reader is
-// destroyed. Pass a default-constructed (empty) TempFile for ordinary
-// on-disk bags.
+// destroyed. `envelope` then names that on-disk `.db3.zstd`, whose byte size
+// is what the bag actually occupies (compute_topic_sizes() scales its per-topic
+// figures by it). Pass a default-constructed (empty) TempFile and an empty
+// `envelope` for ordinary on-disk bags.
 std::unique_ptr<BagReader> open_sqlite3_file(
   const std::filesystem::path & path, std::shared_ptr<MessageDecompressor> decompressor = nullptr,
-  TempFile temp = {});
+  TempFile temp = {}, std::filesystem::path envelope = {});
 
 // Open a directory of .db3 shards. `metadata` must describe the layout
 // (storage_identifier and relative_file_paths at minimum) — the caller is

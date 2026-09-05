@@ -18,7 +18,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -124,31 +123,6 @@ struct Job
 };
 
 }  // namespace
-
-int resolve_write_threads()
-{
-  // With gather-based chunk assembly the caller thread no longer copies
-  // payloads, so the worker pool is the throughput constraint and scales past
-  // 8 (measured on a 19.5 GiB uncompressed->zstd rewrite: 9.8 s at 8 workers,
-  // 7.7 s at 16). The kMax cap keeps the per-worker encoder memory bounded.
-  constexpr int kDefault = 16;
-  constexpr int kMax = 16;
-  const auto default_threads = [&] {
-    const unsigned int hw = std::thread::hardware_concurrency();
-    return hw == 0 ? kDefault : std::min<int>(kDefault, static_cast<int>(hw));
-  };
-  const char * env = std::getenv("BAGWIZ_WRITE_THREADS");
-  if (env == nullptr || *env == '\0') {
-    return default_threads();
-  }
-  char * end = nullptr;
-  const long parsed = std::strtol(env, &end, 10);  // NOLINT(runtime/int) strtol API
-  if (end == env || *end != '\0') {
-    BAGWIZ_LOG_WARN(kLogger, "ignoring unparsable BAGWIZ_WRITE_THREADS='%s'", env);
-    return default_threads();
-  }
-  return static_cast<int>(std::clamp<long>(parsed, 0, kMax));  // NOLINT(runtime/int)
-}
 
 class ParallelChunkMcapWriter::Impl
 {

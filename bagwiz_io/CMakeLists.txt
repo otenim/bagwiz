@@ -183,7 +183,7 @@ if(BUILD_TESTING)
   target_link_libraries(bagwiz_sqlite3_parallel_read_test bagwiz_io)
 
   ament_add_gtest(bagwiz_topic_sizes_test test/io/topic_sizes_test.cpp)
-  target_link_libraries(bagwiz_topic_sizes_test bagwiz_io ${mcap_vendor_TARGETS})
+  target_link_libraries(bagwiz_topic_sizes_test bagwiz_io ${mcap_vendor_TARGETS} zstd::zstd)
 
   ament_add_gtest(bagwiz_metadata_computer_test test/io/metadata_computer_test.cpp)
   target_link_libraries(bagwiz_metadata_computer_test bagwiz_io)
@@ -202,6 +202,9 @@ if(BUILD_TESTING)
   ament_add_gtest(
     bagwiz_file_decompressor_test test/io/file_decompressor_test.cpp)
   target_link_libraries(bagwiz_file_decompressor_test bagwiz_io zstd::zstd)
+
+  ament_add_gtest(bagwiz_file_compressor_test test/io/file_compressor_test.cpp)
+  target_link_libraries(bagwiz_file_compressor_test bagwiz_io zstd::zstd)
 
   ament_add_gtest(
     bagwiz_file_compression_e2e_test test/io/file_compression_e2e_test.cpp)

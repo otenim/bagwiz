@@ -20,12 +20,6 @@
 namespace bagwiz::io::detail
 {
 
-// Chunk-compression worker count for the parallel mcap write path. Defaults to
-// 16, capped at the host's hardware concurrency so low-core machines keep a
-// smaller worker count. BAGWIZ_WRITE_THREADS overrides the default, and 0 or 1
-// selects the serial libmcap writer (the debugging escape hatch).
-int resolve_write_threads();
-
 // Chunked mcap file writer that moves chunk compression off the caller thread:
 // the calling thread assembles each chunk as a list of gather segments (a
 // serialized record header plus a reference to payload bytes pinned by shared

@@ -106,8 +106,10 @@ input's storage backend and layout:
 
 The re-encode streams every message through the decoded pipeline; nothing is
 chunk-copied, since copying chunks would preserve the input's compression —
-the exact thing this command changes. MCAP chunk compression parallelizes
-across write threads when available. SQLite3 FILE-mode reads best on
+the exact thing this command changes. Both compression write paths
+parallelize across `BAGWIZ_WRITE_THREADS` workers: MCAP chunk compression,
+and the whole-shard zstd envelope of SQLite3 FILE-mode, which otherwise runs
+as a single-threaded pass at close. SQLite3 FILE-mode reads best on
 machines with free temp space roughly the size of the decompressed database
 (readers expand the envelope to a temporary `.db3`).
 

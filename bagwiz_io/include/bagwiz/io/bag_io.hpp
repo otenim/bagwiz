@@ -170,18 +170,25 @@ public:
   virtual std::unordered_map<std::string, int64_t> compute_topic_counts(
     std::span<const std::string> topics) = 0;
 
-  // Per-topic sum of serialized payload bytes, answered from the storage's
-  // own record framing instead of from the payloads themselves: SQLite3 reads
-  // each row's BLOB length, which leaves the payload's overflow pages unread,
-  // and MCAP reads each message record's length prefix at the offsets its
-  // message index already lists. Both are exact, and both read a small
-  // fraction of the bytes a full scan would.
+  // Per-topic on-disk bytes — what each topic's messages occupy in the bag's
+  // files — answered from the storage's own framing instead of from the
+  // payloads themselves. SQLite3 reads each row's BLOB length, which leaves
+  // the payload's overflow pages unread; that is the on-disk size whether the
+  // BLOB is a plain payload or a MESSAGE-mode zstd frame. MCAP reads only its
+  // chunk and message indexes: each record's extent is the gap to the next
+  // record, and each chunk's bytes are then scaled by the ratio the chunk
+  // compressed at. Both read a small fraction of the bytes a full scan would.
+  //
+  // Where compression pools several topics into one container — an MCAP
+  // chunk, a FILE-mode `.db3.zstd` envelope — no exact per-topic count exists
+  // on disk, and the container's bytes are split among its topics in
+  // proportion to their uncompressed bytes, to the nearest byte. Container
+  // framing, schema records and summary sections are charged to no topic, so
+  // the sum over topics falls a little short of the file size.
   //
   // Returns nullopt when the storage cannot answer that way, leaving the
-  // caller to fall back to its own scan. That covers a bag whose messages are
-  // individually compressed (`compression_mode: MESSAGE`), where the stored
-  // length is the compressed one and only a real decompression recovers the
-  // logical size, and an MCAP with no chunk index to read offsets from.
+  // caller to fall back to its own scan: an MCAP with no chunk index to read
+  // offsets from.
   //
   // `topics` empty = every topic in the bag. Topics that are absent or carry
   // no messages may be omitted from the result.

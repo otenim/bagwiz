@@ -78,10 +78,13 @@ std::optional<PointTimeSpan> absolute_point_time_span_ns(
     static_cast<std::size_t>(field.offset) + datatype_size(field.datatype) > cloud.point_step) {
     return std::nullopt;
   }
-  const std::uint32_t rstep = cloud.row_step != 0 ? cloud.row_step : cloud.width * cloud.point_step;
-  if (
-    static_cast<std::size_t>(cloud.width) * cloud.point_step > rstep ||
-    cloud.data.size() < static_cast<std::size_t>(cloud.height) * rstep) {
+  // Same layout rule as deskew_pointcloud2: a row_step smaller than
+  // width * point_step cannot describe the blob and is read as dense packing;
+  // a blob that does not hold every declared point is rejected. Divide rather
+  // than multiply so height * rstep cannot wrap std::size_t.
+  const std::size_t dense_step = static_cast<std::size_t>(cloud.width) * cloud.point_step;
+  const std::size_t rstep = std::max<std::size_t>(cloud.row_step, dense_step);
+  if (rstep != 0 && cloud.data.size() / rstep < cloud.height) {
     return std::nullopt;
   }
 

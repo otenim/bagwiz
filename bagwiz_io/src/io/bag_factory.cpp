@@ -344,7 +344,7 @@ std::unique_ptr<BagReader> open_read(const std::filesystem::path & path, OpenOpt
     const Format inner = sniff_file_magic(temp.path());
     if (inner == Format::Sqlite3) {
       const auto temp_path = temp.path();
-      return detail::open_sqlite3_file(temp_path, nullptr, std::move(temp));
+      return detail::open_sqlite3_file(temp_path, nullptr, std::move(temp), path);
     }
     if (inner == Format::Mcap) {
       throw std::runtime_error(
