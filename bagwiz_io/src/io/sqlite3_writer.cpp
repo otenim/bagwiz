@@ -14,13 +14,16 @@
 #include "bagwiz/io/message_compressor.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "bagwiz/io/sqlite3_helpers.hpp"
-#include "env_tuning.hpp"  // NOLINT(build/include_subdir) src-local shared header
+#include "env_tuning.hpp"                   // NOLINT(build/include_subdir) src-local shared header
+#include "mcap_parallel_chunk_writer.hpp"   // NOLINT(build/include_subdir) src-local shared header
+#include "parallel_message_compressor.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <sqlite3.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -42,6 +45,20 @@ constexpr const char * kLogger = "bagwiz.io.sqlite3";
 // at most a bounded number of messages but large enough to amortize commit
 // overhead.
 constexpr int kBatchSize = 1024;
+// Cap on payload bytes pinned inside the MESSAGE-mode compression pool. The
+// pipeline's own queue already bounds 128 MiB upstream; this keeps the pool
+// from growing unboundedly when inserts (not compression) are the laggard.
+constexpr std::uint64_t kPoolInFlightCap = 128ULL * 1024 * 1024;
+
+// Transparent string hashing so per-message topic-id lookups can find() by
+// string_view without materializing a std::string per message.
+struct StringHash
+{
+  using is_transparent = void;
+  size_t operator()(std::string_view v) const { return std::hash<std::string_view>{}(v); }
+};
+template <typename V>
+using StringMap = std::unordered_map<std::string, V, StringHash, std::equal_to<>>;
 // rosbag2 bagfile-information schema version written into the `metadata` table.
 // Pinned to the humble baseline (and matched by write_metadata_yaml) so one
 // output shape stays readable on every supported distro: rosbag2 reads older
@@ -142,7 +159,16 @@ public:
       // MESSAGE-mode in the directory's metadata.yaml); create_sqlite3_file()
       // rejects MESSAGE mode for standalone single-file outputs, whose
       // reader has no metadata.yaml to learn the compression from.
-      compressor_.emplace("zstd", compression_.zstd_level);
+      // Per-message compression is the write path's CPU bottleneck, so with
+      // workers available it moves onto a pool that the insert loop drains in
+      // submission order; the knob's 0/1 serial value keeps the historical
+      // inline compressor.
+      const int workers = resolve_write_threads(kLogger);
+      if (workers >= 2) {
+        pool_.emplace(workers, compression_.zstd_level);
+      } else {
+        compressor_.emplace("zstd", compression_.zstd_level);
+      }
     }
 
     // page_size must come first: SQLite only honours it while the database is
@@ -206,7 +232,7 @@ public:
 
     topic_to_id_[topic.name] = sqlite3_last_insert_rowid(db_.get());
     topics_.push_back(topic);
-    topic_counts_[topic.name] = 0;
+    topic_counts_.push_back(0);
 
     // Insert message_definitions row once per type (deduped). Iron+ rosbag2
     // readers query this table directly for self-description; the row is
@@ -235,50 +261,52 @@ public:
   }
 
   void write(
+    // cppcheck-suppress passedByValue  // std::string_view is a cheap value type
     std::string_view topic, int64_t timestamp_ns, std::span<const std::byte> payload) override
   {
-    auto it = topic_to_id_.find(std::string(topic));
-    if (it == topic_to_id_.end()) {
-      throw std::runtime_error(
-        "sqlite3 write on undeclared topic: " + std::string(topic) +
-        " (call declare_topic() first)");
+    if (pool_) {
+      write_pooled(topic, timestamp_ns, payload, nullptr);
+      return;
     }
 
-    sqlite3_bind_int64(insert_stmt_.get(), 1, it->second);
-    sqlite3_bind_int64(insert_stmt_.get(), 2, timestamp_ns);
+    const int64_t topic_id = lookup_topic(topic);
     // MESSAGE mode stores each payload as a bare zstd frame (rosbag2
     // compression plugin contract). SQLITE_STATIC stays correct in both
     // branches: the bound bytes must only outlive the sqlite3_step() below,
     // and the compressor's internal buffer is valid until the next write().
     const std::span<const std::byte> stored =
       compressor_.has_value() ? compressor_->compress(payload) : payload;
-    sqlite3_bind_blob(
-      insert_stmt_.get(), 3, stored.data(), static_cast<int>(stored.size()), SQLITE_STATIC);
-    if (sqlite3_step(insert_stmt_.get()) != SQLITE_DONE) {
-      throw std::runtime_error("message insert failed: " + sqlite_errmsg(db_.get()));
-    }
-    sqlite3_reset(insert_stmt_.get());
+    insert_row(topic_id, timestamp_ns, stored);
+    update_accounting(topic_id, timestamp_ns);
+  }
 
-    ++topic_counts_[it->first];
-    ++total_messages_;
-    if (timestamp_ns < start_ns_) {
-      start_ns_ = timestamp_ns;
+  // cppcheck-suppress passedByValue  // std::string_view is a cheap value type
+  void write_frozen(std::string_view topic, FrozenMessage msg) override
+  {
+    // The pool pins the payload through the shared owner instead of copying
+    // it. Without an owner the span's lifetime is call-scoped, so it takes
+    // the spill copy inside write_pooled (or the serial path below).
+    if (pool_) {
+      write_pooled(topic, msg.timestamp_ns, msg.payload, std::move(msg.owner));
+      return;
     }
-    if (timestamp_ns > end_ns_) {
-      end_ns_ = timestamp_ns;
-    }
-
-    if (++pending_in_tx_ >= kBatchSize) {
-      commit_transaction();
-      begin_transaction();
-      pending_in_tx_ = 0;
-    }
+    write(topic, msg.timestamp_ns, msg.payload);
   }
 
   void close() override
   {
     if (closed_) {
       return;
+    }
+    if (pool_) {
+      // Drain in submission order, then join the workers. A latched
+      // compression error throws from take_blocking()/finish().
+      ParallelMessageCompressor::Job job;
+      while (!pool_->empty()) {
+        pool_->take_blocking(job);
+        insert_row(job.topic_id, job.timestamp_ns, job.compressed);
+      }
+      pool_->finish();
     }
     commit_transaction();
     write_metadata_row();
@@ -297,7 +325,9 @@ public:
     MetadataYamlInfo info;
     info.storage_identifier = "sqlite3";
     info.topics = topics_;
-    info.per_topic_counts = topic_counts_;
+    for (std::size_t i = 0; i < topics_.size(); ++i) {
+      info.per_topic_counts[topics_[i].name] = topic_counts_[i];
+    }
     info.total_messages = total_messages_;
     info.start_ns = start_ns_;
     info.end_ns = end_ns_;
@@ -312,6 +342,92 @@ public:
   }
 
 private:
+  int64_t lookup_topic(std::string_view topic) const
+  {
+    const auto it = topic_to_id_.find(topic);
+    if (it == topic_to_id_.end()) {
+      throw std::runtime_error(
+        "sqlite3 write on undeclared topic: " + std::string(topic) +
+        " (call declare_topic() first)");
+    }
+    return it->second;
+  }
+
+  void insert_row(int64_t topic_id, int64_t timestamp_ns, std::span<const std::byte> stored)
+  {
+    sqlite3_bind_int64(insert_stmt_.get(), 1, topic_id);
+    sqlite3_bind_int64(insert_stmt_.get(), 2, timestamp_ns);
+    // SQLITE_STATIC is correct: the bound bytes must only outlive the
+    // sqlite3_step() below, and every producer (the serial compressor's
+    // internal buffer, a drained pool job's vector, the caller's own span)
+    // outlives it.
+    sqlite3_bind_blob(
+      insert_stmt_.get(), 3, stored.data(), static_cast<int>(stored.size()), SQLITE_STATIC);
+    if (sqlite3_step(insert_stmt_.get()) != SQLITE_DONE) {
+      throw std::runtime_error("message insert failed: " + sqlite_errmsg(db_.get()));
+    }
+    sqlite3_reset(insert_stmt_.get());
+
+    if (++pending_in_tx_ >= kBatchSize) {
+      commit_transaction();
+      begin_transaction();
+      pending_in_tx_ = 0;
+    }
+  }
+
+  void update_accounting(int64_t topic_id, int64_t timestamp_ns)
+  {
+    // Topic rowids are assigned sequentially from 1 on this fresh table, so
+    // the count vector is indexed by rowid - 1 (declare order).
+    ++topic_counts_[static_cast<std::size_t>(topic_id - 1)];
+    ++total_messages_;
+    if (timestamp_ns < start_ns_) {
+      start_ns_ = timestamp_ns;
+    }
+    if (timestamp_ns > end_ns_) {
+      end_ns_ = timestamp_ns;
+    }
+  }
+
+  // MESSAGE-mode write through the compression pool. Inserts happen on this
+  // (the caller) thread in submission order; only compression runs on workers.
+  void write_pooled(
+    // cppcheck-suppress passedByValue  // std::string_view is a cheap value type
+    std::string_view topic, int64_t timestamp_ns, std::span<const std::byte> payload,
+    std::shared_ptr<const void> owner)
+  {
+    const int64_t topic_id = lookup_topic(topic);
+
+    // The pool defers compression past this call, so the payload must be
+    // pinned. A caller that transferred no owner (plain write()) pays one
+    // spill copy. Build the span and the owner in separate statements:
+    // mixing std::move(spill) into the submit() call expression would let the
+    // span read the owner after the move (unspecified argument order).
+    std::shared_ptr<const void> pinned = std::move(owner);
+    std::span<const std::byte> bytes = payload;
+    FrozenMessage spill;
+    if (!pinned && !payload.empty()) {
+      spill = own_payload(std::vector<std::byte>(payload.begin(), payload.end()));
+      bytes = spill.payload;
+      pinned = spill.owner;
+    }
+
+    // Keep the in-flight window under the cap by inserting the oldest
+    // completed jobs first. An empty pool always admits: a single message
+    // larger than the cap is admitted whole rather than deadlocking.
+    while (!pool_->empty() && pool_->in_flight_bytes() + bytes.size() > kPoolInFlightCap) {
+      ParallelMessageCompressor::Job job;
+      pool_->take_blocking(job);
+      insert_row(job.topic_id, job.timestamp_ns, job.compressed);
+    }
+    pool_->submit(topic_id, timestamp_ns, bytes, std::move(pinned));
+    ParallelMessageCompressor::Job job;
+    while (pool_->try_take(job)) {
+      insert_row(job.topic_id, job.timestamp_ns, job.compressed);
+    }
+    update_accounting(topic_id, timestamp_ns);
+  }
+
   // rosbag2 iron+ stores the bag summary in the `metadata` table so a
   // single-file .db3 is self-describing without a metadata.yaml beside it.
   // Filling it lets compute_stats() answer per-topic counts without scanning
@@ -396,11 +512,16 @@ private:
   std::string shard_rel_;
   Sqlite3Compression compression_;
   // Present only in MESSAGE mode; compresses each payload before the insert.
+  // With write workers available the pool owns compression instead and the
+  // insert loop drains it in submission order.
   std::optional<MessageCompressor> compressor_;
-  std::unordered_map<std::string, int64_t> topic_to_id_;
+  std::optional<ParallelMessageCompressor> pool_;
+  StringMap<int64_t> topic_to_id_;
   // Message accounting for the embedded metadata row (see summary()).
   std::vector<TopicInfo> topics_;
-  std::unordered_map<std::string, int64_t> topic_counts_;
+  // Per-topic message counts indexed by topic rowid - 1 (declare order on a
+  // fresh table); summary() keys them by name for MetadataYamlInfo.
+  std::vector<int64_t> topic_counts_;
   int64_t total_messages_ = 0;
   int64_t start_ns_ = std::numeric_limits<int64_t>::max();
   int64_t end_ns_ = std::numeric_limits<int64_t>::min();
@@ -461,6 +582,12 @@ public:
     std::string_view topic, int64_t timestamp_ns, std::span<const std::byte> payload) override
   {
     inner_->write(topic, timestamp_ns, payload);
+  }
+
+  // cppcheck-suppress passedByValue  // std::string_view is a cheap value type
+  void write_frozen(std::string_view topic, FrozenMessage msg) override
+  {
+    inner_->write_frozen(topic, std::move(msg));
   }
 
   void close() override

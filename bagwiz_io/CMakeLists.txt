@@ -89,6 +89,7 @@ add_library(bagwiz_io
   src/io/message_decompressor.cpp
   src/io/metadata_computer.cpp
   src/io/metadata_yaml.cpp
+  src/io/parallel_message_compressor.cpp
   src/io/sqlite3_payload_sizes.cpp
   src/io/sqlite3_reader.cpp
   src/io/sqlite3_slice_prefetch.cpp
@@ -280,6 +281,15 @@ if(BUILD_TESTING)
   target_include_directories(
     bagwiz_writeback_window_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(bagwiz_writeback_window_test bagwiz_io)
+
+  # The MESSAGE-mode compression pool is likewise src-local; the test submits
+  # owned payloads and checks drain order plus frame bytes against the serial
+  # compressor.
+  ament_add_gtest(
+    bagwiz_parallel_message_compressor_test test/io/parallel_message_compressor_test.cpp)
+  target_include_directories(
+    bagwiz_parallel_message_compressor_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(bagwiz_parallel_message_compressor_test bagwiz_io)
 endif()
 
 ament_package()
