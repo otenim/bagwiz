@@ -20,6 +20,11 @@ namespace bagwiz::io
 // (whole-database `.db3.zstd` envelope) bags: the finished plain shard is
 // compressed in one pass and then unlinked by the caller.
 //
+// Compression runs multi-threaded when BAGWIZ_WRITE_THREADS selects two or
+// more workers (the knob shared with the parallel mcap write path); MT frames
+// are plain zstd on read, so consumers need nothing new. The knob's 0/1
+// serial value keeps the legacy single-threaded byte layout.
+//
 // `level` is a zstd level (1..22; 0 selects ZSTD_defaultCLevel()).
 // `dst` is created with truncation and must not equal `src`. On any failure
 // the function throws std::runtime_error and removes a partially written

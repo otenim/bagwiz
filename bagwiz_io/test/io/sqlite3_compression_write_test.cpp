@@ -18,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -200,6 +201,27 @@ TEST_F(Sqlite3CompressionWriteTest, FileModeDirectoryRoundTrips)
     << "plain shard was not removed after envelope compression";
 
   // The envelope-decompressing reader path returns the original bytes.
+  verify_round_trip(dir);
+}
+
+TEST_F(Sqlite3CompressionWriteTest, FileModeMultiWorkerEnvelopeRoundTrips)
+{
+  // BAGWIZ_WRITE_THREADS multi-threads the envelope build (zstd nbWorkers).
+  // The MT frame's block layout differs from the serial build's, but the
+  // decompressed content must round-trip identically.
+  struct EnvGuard
+  {
+    EnvGuard() { ::setenv("BAGWIZ_WRITE_THREADS", "4", 1); }
+    ~EnvGuard() { ::unsetenv("BAGWIZ_WRITE_THREADS"); }
+  } guard;
+
+  const auto dir = tmp_dir_ / "file_mode_mt";
+  write_fixture(dir, sqlite3_dir_options("file", "zstd"));
+
+  const auto md = bagwiz::io::load_metadata_yaml(dir / "metadata.yaml");
+  ASSERT_EQ(md.relative_file_paths.size(), 1U);
+  const auto envelope = dir / md.relative_file_paths[0];
+  EXPECT_TRUE(bagwiz::io::is_zstd_file(envelope));
   verify_round_trip(dir);
 }
 

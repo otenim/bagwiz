@@ -8,6 +8,8 @@
 
 #include "bagwiz/io/file_compressor.hpp"
 
+#include "mcap_parallel_chunk_writer.hpp"  // NOLINT(build/include_subdir) src-local shared header
+
 #include <zstd.h>
 
 #include <cstddef>
@@ -86,6 +88,20 @@ void compress_file_to_zstd(
     throw std::runtime_error(
       std::string("failed to set zstd level for ") + src.string() + ": " +
       ZSTD_getErrorName(init_rc));
+  }
+
+  // Multi-thread the frame build with the shared write-side worker knob.
+  // ZSTD_c_nbWorkers only takes effect through the streaming API used below;
+  // MT frames are plain zstd on read, so rosbag2 compatibility is unaffected.
+  // The knob's 0/1 serial value keeps the legacy single-threaded byte layout.
+  const int workers = detail::resolve_write_threads();
+  if (workers >= 2) {
+    const auto mt_rc = ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_nbWorkers, workers);
+    if (ZSTD_isError(mt_rc) != 0U) {
+      throw std::runtime_error(
+        std::string("failed to set zstd worker count for ") + src.string() + ": " +
+        ZSTD_getErrorName(mt_rc));
+    }
   }
 
   std::ofstream out(dst, std::ios::binary | std::ios::trunc);
