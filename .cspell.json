@@ -3,9 +3,11 @@
   "ignoreRegExpList": ["[A-Za-z0-9+/=]{64,}"],
   "words": [
     "Amanatides",
+    "annexb",
     "antialias",
     "antigravitycli",
     "asin",
+    "AVCC",
     "avcodec",
     "avcol",
     "averror",
@@ -110,10 +112,12 @@
     "inbytes",
     "Indeterminant",
     "interleavings",
+    "IRAP",
     "irapkaist",
     "ISAM",
     "Jamo",
     "jazzy",
+    "JFIF",
     "jsdelivr",
     "Kabsch",
     "Kanade",
@@ -192,7 +196,9 @@
     "pushdown",
     "pwc",
     "pypi",
+    "qscale",
     "qwxyz",
+    "RADL",
     "ranav",
     "randomsampling",
     "readelf",
@@ -328,6 +334,7 @@
     "ldexp",
     "IMREAD",
     "imdecode",
-    "imwrite"
+    "imwrite",
+    "zerolatency"
   ]
 }
