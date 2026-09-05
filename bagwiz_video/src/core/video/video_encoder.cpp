@@ -8,22 +8,20 @@
 
 #include "bagwiz/core/video/video_encoder.hpp"
 
+#include "libav_support.hpp"  // NOLINT(build/include_subdir) src-local shared header
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libavutil/error.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
-#include <libswscale/swscale.h>
 }
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -39,21 +37,7 @@ namespace bagwiz::core::video
 namespace
 {
 
-std::string av_err(int errnum)
-{
-  std::array<char, AV_ERROR_MAX_STRING_SIZE> buf{};
-  av_strerror(errnum, buf.data(), buf.size());
-  return std::string(buf.data());
-}
-
-constexpr const char * kX264Name = "libx264";
-constexpr const char * kNvencName = "h264_nvenc";
-// The largest frame side NVENC's H.264 encoder takes on most GPUs.
-constexpr std::uint32_t kNvencMaxH264Side = 4096;
-// kAuto reaches for NVENC only above this many pixels per frame (1080p): the
-// GPU's setup and per-frame submission cost more than libx264 saves on
-// smaller frames, and libx264's cost grows with the frame.
-constexpr std::uint64_t kNvencAutoMinPixels = 1920ULL * 1080ULL;
+using detail::av_err;
 
 // Container + codec selection derived from the output extension.
 struct CodecChoice
@@ -82,46 +66,17 @@ std::optional<CodecChoice> codec_for_extension(
   return std::nullopt;
 }
 
-// The H.264 encoders to try, in order, for a backend choice and frame size.
-std::vector<const char *> h264_candidates(
-  H264Backend backend, std::uint32_t width, std::uint32_t height)
+detail::BackendPolicy policy_for(H264Backend backend)
 {
   switch (backend) {
     case H264Backend::kX264:
-      return {kX264Name};
+      return detail::BackendPolicy::kCpuOnly;
     case H264Backend::kNvenc:
-      return {kNvencName};
+      return detail::BackendPolicy::kNvencOnly;
     case H264Backend::kAuto:
     default:
-      if (static_cast<std::uint64_t>(width) * height > kNvencAutoMinPixels) {
-        return {kNvencName, kX264Name};
-      }
-      return {kX264Name};
+      return detail::BackendPolicy::kAuto;
   }
-}
-
-// The NVENC preset (p1 fastest .. p7 slowest) standing in for a libx264 one.
-const char * nvenc_preset_for(std::string_view x264_preset)
-{
-  if (x264_preset == "ultrafast") {
-    return "p1";
-  }
-  if (x264_preset == "superfast") {
-    return "p2";
-  }
-  if (x264_preset == "veryfast") {
-    return "p3";
-  }
-  if (x264_preset == "slow") {
-    return "p5";
-  }
-  if (x264_preset == "slower") {
-    return "p6";
-  }
-  if (x264_preset == "veryslow") {
-    return "p7";
-  }
-  return "p4";  // faster, fast, medium
 }
 
 // The encoder-specific options for one H.264 encoder. Both keep B-frames off:
@@ -135,10 +90,10 @@ void set_h264_options(
 {
   codec->max_b_frames = 0;
   av_dict_set(opts, "bf", "0", 0);
-  if (std::string_view{encoder_name} == kNvencName) {
+  if (detail::is_nvenc_encoder(encoder_name)) {
     // Constant-quality VBR at the quality libx264's crf 23 lands near; the
     // bitrate is left unset so the quality target drives the rate.
-    av_dict_set(opts, "preset", nvenc_preset_for(options.preset), 0);
+    av_dict_set(opts, "preset", detail::nvenc_preset_for(options.preset), 0);
     av_dict_set(opts, "rc", "vbr", 0);
     av_dict_set(opts, "cq", "23", 0);
     return;
@@ -157,15 +112,9 @@ struct VideoEncoder::Impl
   AVFormatContext * fmt = nullptr;
   AVCodecContext * codec = nullptr;
   AVStream * stream = nullptr;
-  SwsContext * sws = nullptr;
   AVFrame * frame = nullptr;
   AVPacket * pkt = nullptr;
-  int width = 0;
-  int height = 0;
-  AVPixelFormat pix_fmt = AV_PIX_FMT_YUV420P;
-  bool full_range = false;
-  SourcePixelFormat sws_src_fmt = SourcePixelFormat::kBgr8;
-  bool sws_ready = false;
+  std::unique_ptr<detail::FrameUploader> uploader;
   bool finished = false;
   std::int64_t next_pts = 0;
 
@@ -177,9 +126,6 @@ struct VideoEncoder::Impl
 
   ~Impl()
   {
-    if (sws != nullptr) {
-      sws_freeContext(sws);
-    }
     if (frame != nullptr) {
       av_frame_free(&frame);
     }
@@ -237,58 +183,9 @@ std::string VideoEncoder::write_frame(
   std::span<const std::byte> pixels, std::size_t stride, SourcePixelFormat format)
 {
   Impl & im = *impl_;
-
-  // sws_scale takes int strides; a stride past INT_MAX would narrow to a
-  // negative value and corrupt the conversion.
-  if (stride > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-    return "row stride " + std::to_string(stride) + " exceeds the supported maximum";
+  if (auto e = im.uploader->upload_packed(im.frame, pixels, stride, format); !e.empty()) {
+    return e;
   }
-  const auto need = stride * static_cast<std::size_t>(im.height);
-  if (pixels.size() < need) {
-    return "frame buffer too small: have " + std::to_string(pixels.size()) + " bytes, need " +
-           std::to_string(need);
-  }
-
-  const AVPixelFormat src =
-    (format == SourcePixelFormat::kBgr8) ? AV_PIX_FMT_BGR24 : AV_PIX_FMT_RGB24;
-  if (!im.sws_ready || im.sws_src_fmt != format) {
-    if (im.sws != nullptr) {
-      sws_freeContext(im.sws);
-      im.sws = nullptr;
-    }
-    im.sws = sws_getContext(
-      im.width, im.height, src, im.width, im.height, im.pix_fmt, SWS_BILINEAR, nullptr, nullptr,
-      nullptr);
-    if (im.sws == nullptr) {
-      // Leave sws_ready false so a later call retries instead of running
-      // sws_scale on a null context (which would be undefined behavior).
-      im.sws_ready = false;
-      return "failed to create swscale conversion context";
-    }
-    if (im.full_range && im.pix_fmt == AV_PIX_FMT_YUV420P) {
-      // A full-range stream converts RGB to full-range YUV (the default
-      // targets limited range), so converted frames match planes handed over
-      // straight from a JPEG decoder.
-      const int * coefficients = sws_getCoefficients(SWS_CS_ITU601);
-      sws_setColorspaceDetails(im.sws, coefficients, 1, coefficients, 1, 0, 1 << 16, 1 << 16);
-    }
-    im.sws_src_fmt = format;
-    im.sws_ready = true;
-  }
-
-  int ret = av_frame_make_writable(im.frame);
-  if (ret < 0) {
-    return "frame_make_writable failed: " + av_err(ret);
-  }
-
-  const auto * src_ptr =
-    reinterpret_cast<const std::uint8_t *>(  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-      pixels.data());
-  const std::array<const std::uint8_t *, 4> src_data{src_ptr, nullptr, nullptr, nullptr};
-  const std::array<int, 4> src_stride{static_cast<int>(stride), 0, 0, 0};
-  sws_scale(
-    im.sws, src_data.data(), src_stride.data(), 0, im.height, im.frame->data, im.frame->linesize);
-
   im.frame->pts = im.next_pts++;
   return im.drain(im.frame);
 }
@@ -296,38 +193,9 @@ std::string VideoEncoder::write_frame(
 std::string VideoEncoder::write_yuv420(const Yuv420Planes & planes)
 {
   Impl & im = *impl_;
-  const auto width = static_cast<std::size_t>(im.width);
-  const auto height = static_cast<std::size_t>(im.height);
-  const std::size_t chroma_w = (width + 1) / 2;
-  const std::size_t chroma_h = (height + 1) / 2;
-  if (planes.y == nullptr || planes.u == nullptr || planes.v == nullptr) {
-    return "yuv420 frame is missing a plane";
+  if (auto e = im.uploader->upload_yuv420(im.frame, planes); !e.empty()) {
+    return e;
   }
-  if (planes.y_stride < width || planes.u_stride < chroma_w || planes.v_stride < chroma_w) {
-    return "yuv420 frame row stride is shorter than the frame width";
-  }
-
-  int ret = av_frame_make_writable(im.frame);
-  if (ret < 0) {
-    return "frame_make_writable failed: " + av_err(ret);
-  }
-  const auto copy_plane = [](
-                            const std::uint8_t * src, std::size_t src_stride, std::uint8_t * dst,
-                            std::size_t dst_stride, std::size_t row_bytes, std::size_t rows) {
-    for (std::size_t r = 0; r < rows; ++r) {
-      std::memcpy(dst + r * dst_stride, src + r * src_stride, row_bytes);
-    }
-  };
-  copy_plane(
-    planes.y, planes.y_stride, im.frame->data[0], static_cast<std::size_t>(im.frame->linesize[0]),
-    width, height);
-  copy_plane(
-    planes.u, planes.u_stride, im.frame->data[1], static_cast<std::size_t>(im.frame->linesize[1]),
-    chroma_w, chroma_h);
-  copy_plane(
-    planes.v, planes.v_stride, im.frame->data[2], static_cast<std::size_t>(im.frame->linesize[2]),
-    chroma_w, chroma_h);
-
   im.frame->pts = im.next_pts++;
   return im.drain(im.frame);
 }
@@ -389,10 +257,10 @@ OpenVideoEncoderResult open_video_encoder(
   }
 
   auto im = std::make_unique<VideoEncoder::Impl>();
-  im->width = static_cast<int>(width);
-  im->height = static_cast<int>(height);
-  im->pix_fmt = choice->pix_fmt;
-  im->full_range = options.full_range;
+  const int frame_w = static_cast<int>(width);
+  const int frame_h = static_cast<int>(height);
+  im->uploader =
+    std::make_unique<detail::FrameUploader>(frame_w, frame_h, choice->pix_fmt, options.full_range);
 
   const std::string path_str = output.string();
 
@@ -415,8 +283,8 @@ OpenVideoEncoderResult open_video_encoder(
     if (im->codec == nullptr) {
       return "could not allocate codec context";
     }
-    im->codec->width = im->width;
-    im->codec->height = im->height;
+    im->codec->width = frame_w;
+    im->codec->height = frame_h;
     im->codec->pix_fmt = choice->pix_fmt;
     im->codec->time_base = AVRational{fps_den, fps_num};  // seconds per frame
     im->codec->framerate = AVRational{fps_num, fps_den};
@@ -441,45 +309,15 @@ OpenVideoEncoderResult open_video_encoder(
   };
 
   if (choice->id == AV_CODEC_ID_H264) {
-    const auto candidates = h264_candidates(options.backend, width, height);
-    std::string last_error;
-    std::vector<std::string> failures;
-    for (std::size_t i = 0; i < candidates.size(); ++i) {
-      const AVCodec * encoder = avcodec_find_encoder_by_name(candidates[i]);
-      std::string attempt = encoder == nullptr ? std::string(
-                                                   "encoder not available in this "
-                                                   "FFmpeg build: ") +
-                                                   candidates[i]
-                                               : open_codec(encoder);
-      if (attempt.empty()) {
-        result.backend = candidates[i];
-        break;
-      }
-      // NVENC's H.264 encoder refuses frames past 4096x4096 on most GPUs with
-      // only a generic error; say so, since a 2x2 grid of 4K cameras hits it.
-      if (
-        std::string_view{candidates[i]} == kNvencName &&
-        (width > kNvencMaxH264Side || height > kNvencMaxH264Side)) {
-        attempt += " (NVENC's H.264 encoder tops out at " + std::to_string(kNvencMaxH264Side) +
-                   "x" + std::to_string(kNvencMaxH264Side) + " on most GPUs)";
-      }
-      last_error = std::move(attempt);
-      failures.push_back(last_error);
-      // kAuto records why NVENC was passed over and moves on to libx264.
-      if (i + 1 < candidates.size()) {
-        result.fallback_note = last_error;
-      }
-    }
-    if (result.backend.empty()) {
-      // Every candidate failed: say why each did.
-      std::string all;
-      for (const auto & failure : failures) {
-        all += (all.empty() ? "" : "; ") + failure;
-      }
-      result.error = all + " (try an .avi output, which uses the built-in MJPEG encoder)";
-      result.fallback_note.clear();
+    const auto candidates =
+      detail::encoder_candidates(AV_CODEC_ID_H264, policy_for(options.backend), width, height);
+    detail::EncoderAttempt attempt = detail::try_encoders(candidates, width, height, open_codec);
+    if (attempt.backend.empty()) {
+      result.error = attempt.error + " (try an .avi output, which uses the built-in MJPEG encoder)";
       return result;
     }
+    result.backend = std::move(attempt.backend);
+    result.fallback_note = std::move(attempt.fallback_note);
   } else {
     const AVCodec * encoder = avcodec_find_encoder(choice->id);
     if (encoder == nullptr) {
@@ -521,8 +359,8 @@ OpenVideoEncoderResult open_video_encoder(
     return result;
   }
   im->frame->format = choice->pix_fmt;
-  im->frame->width = im->width;
-  im->frame->height = im->height;
+  im->frame->width = frame_w;
+  im->frame->height = frame_h;
   ret = av_frame_get_buffer(im->frame, 0);
   if (ret < 0) {
     result.error = "could not allocate frame buffer: " + av_err(ret);

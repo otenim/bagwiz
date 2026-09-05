@@ -32,7 +32,8 @@ endif()
 find_package(ament_cmake REQUIRED)
 
 # FFmpeg/libav (conda-forge `ffmpeg`) backs `bagwiz movify`
-# (video_encoder.cpp): muxing, H.264/MJPEG encoding, and pixel conversion. No
+# (video_encoder.cpp: muxing, H.264/MJPEG encoding, pixel conversion) and
+# `bagwiz video` (frame_codec.cpp: per-frame H.264/H.265 encode and decode). No
 # ament/CMake package exists for it, so locate the libraries via pkg-config. It
 # is consumed PRIVATE (the encoder is hidden behind a pimpl), so libav never
 # enters the export set. pkg_check_modules creates the imported target
@@ -42,7 +43,11 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
   libavcodec libavformat libavutil libswscale)
 
 add_library(bagwiz_video
+  src/core/video/annexb.cpp
+  src/core/video/frame_codec.cpp
   src/core/video/frame_rate.cpp
+  src/core/video/libav_support.cpp
+  src/core/video/video_codec.cpp
   src/core/video/video_encoder.cpp
 )
 target_include_directories(bagwiz_video
@@ -77,6 +82,14 @@ if(BUILD_TESTING)
   # bagwiz_slam's gnss_projector_test re-links GeographicLib).
   ament_add_gtest(bagwiz_video_encoder_test test/core/video/video_encoder_test.cpp)
   target_link_libraries(bagwiz_video_encoder_test bagwiz_video PkgConfig::LIBAV)
+
+  ament_add_gtest(bagwiz_annexb_test test/core/video/annexb_test.cpp)
+  target_link_libraries(bagwiz_annexb_test bagwiz_video)
+
+  # frame_codec drives libav encoders and decoders directly; like the file
+  # encoder test above it re-links libav for the static-lib build.
+  ament_add_gtest(bagwiz_frame_codec_test test/core/video/frame_codec_test.cpp)
+  target_link_libraries(bagwiz_frame_codec_test bagwiz_video PkgConfig::LIBAV)
 endif()
 
 ament_package()

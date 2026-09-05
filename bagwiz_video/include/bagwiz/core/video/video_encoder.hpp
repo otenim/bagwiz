@@ -9,6 +9,8 @@
 #ifndef BAGWIZ__CORE__VIDEO__VIDEO_ENCODER_HPP_
 #define BAGWIZ__CORE__VIDEO__VIDEO_ENCODER_HPP_
 
+#include "bagwiz/core/video/pixel_source.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -24,22 +26,6 @@
 // how bagwiz_slam's GnssProjector hides GeographicLib.
 namespace bagwiz::core::video
 {
-
-// Pixel layout of the source frames passed to VideoEncoder::write_frame. Both
-// are 8-bit, 3-channel, interleaved — matching ROS "bgr8" / "rgb8".
-enum class SourcePixelFormat { kBgr8, kRgb8 };
-
-// One 4:2:0 planar frame, borrowed: the luma plane and the two half-size
-// chroma planes, each with its own row stride in bytes.
-struct Yuv420Planes
-{
-  const std::uint8_t * y = nullptr;
-  std::size_t y_stride = 0;
-  const std::uint8_t * u = nullptr;
-  std::size_t u_stride = 0;
-  const std::uint8_t * v = nullptr;
-  std::size_t v_stride = 0;
-};
 
 // One instance writes exactly one video file. Frames are pushed one at a time
 // and encoded on the fly (no whole-stream buffering); finish() flushes the
