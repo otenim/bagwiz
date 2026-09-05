@@ -179,6 +179,55 @@ TEST(PointTime, AbsoluteSpanSkipsNonFiniteTimes)
   EXPECT_FALSE(absolute_point_time_span_ns(all_nan, *field, 1'000'000'000).has_value());
 }
 
+TEST(PointTime, AbsoluteSpanToleratesAStaleRowStep)
+{
+  // row_step 16 is smaller than width * point_step (32): the leftover of a
+  // narrower source cloud that a concatenation pipeline did not update. It
+  // cannot describe the blob, so the points are read densely packed and the
+  // span still covers both of them.
+  auto c = cloud_rel_times_f32({0.01F, 0.09F});
+  c.row_step = c.point_step;
+  const auto field = find_point_time_field(c);
+  ASSERT_TRUE(field.has_value());
+  const auto span = absolute_point_time_span_ns(c, *field, 1'000'000'000);
+  ASSERT_TRUE(span.has_value());
+  EXPECT_NEAR(span->min_ns, 1'010'000'000, 10);
+  EXPECT_NEAR(span->max_ns, 1'090'000'000, 10);
+}
+
+TEST(PointTime, AbsoluteSpanRejectsABlobShorterThanTheDeclaredPoints)
+{
+  // The dense-packing fallback does not extend to short blobs: a data blob
+  // that does not hold every declared point cannot be scanned.
+  auto c = cloud_rel_times_f32({0.01F, 0.09F});
+  c.data.pop_back();
+  const auto field = find_point_time_field(c);
+  ASSERT_TRUE(field.has_value());
+  EXPECT_FALSE(absolute_point_time_span_ns(c, *field, 1'000'000'000).has_value());
+}
+
+TEST(PointTime, AbsoluteSpanDoesNotWrapHeightTimesRowStride)
+{
+  // Same trap as deskew's HeightTimesRowStrideDoesNotWrap: height 2 with a
+  // width * point_step just over 2^63 wraps height * stride to ~16 MB, so a
+  // multiplied size check would accept a 20 MB blob and the scan would then
+  // index ~9.2 EB past it.
+  const std::uint32_t width = 3037012209U;
+  const std::uint32_t point_step = 3036988791U;
+  const std::size_t row_bytes = static_cast<std::size_t>(width) * point_step;
+  ASSERT_GT(row_bytes, SIZE_MAX / 2);
+  ASSERT_LT(static_cast<std::size_t>(2) * row_bytes, row_bytes);  // unsigned wrap
+
+  auto c = cloud_rel_times_f32({0.01F});
+  c.height = 2;
+  c.width = width;
+  c.point_step = point_step;
+  c.row_step = 0;
+  c.data.assign(20U * 1024 * 1024, std::byte{0});
+  const bagwiz::core::pointcloud::PointTimeField field{12, PointFieldType::kFloat32};
+  EXPECT_FALSE(absolute_point_time_span_ns(c, field, 1'000'000'000).has_value());
+}
+
 TEST(PointTime, AbsoluteSpanRejectsOutOfBoundsField)
 {
   auto c = cloud_rel_times_f32({0.01F});

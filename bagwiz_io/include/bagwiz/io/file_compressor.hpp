@@ -20,6 +20,13 @@ namespace bagwiz::io
 // (whole-database `.db3.zstd` envelope) bags: the finished plain shard is
 // compressed in one pass and then unlinked by the caller.
 //
+// Compression fans out over zstd's worker pool (ZSTD_c_nbWorkers) with the
+// count from resolve_write_threads() (BAGWIZ_WRITE_THREADS, default 8): 0 or 1
+// keeps the single-threaded stream, >= 2 splits the input into parallel jobs.
+// Job splitting changes the frame's internal block layout, so the compressed
+// bytes depend on the worker count; the frame stays a stock single zstd frame
+// that any decompressor reads back to the same bytes.
+//
 // `level` is a zstd level (1..22; 0 selects ZSTD_defaultCLevel()).
 // `dst` is created with truncation and must not equal `src`. On any failure
 // the function throws std::runtime_error and removes a partially written

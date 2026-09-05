@@ -230,7 +230,7 @@ struct KernelLayout
 {
   PointField fx, fy, fz;  // copies: valid independently of the source field table
   std::optional<PointTimeField> time_field;
-  std::uint32_t rstep = 0;
+  std::size_t rstep = 0;
   std::string error;
 };
 
@@ -271,12 +271,18 @@ KernelLayout resolve_kernel_layout(
     lay.error = "x/y/z field exceeds point_step";
     return lay;
   }
-  lay.rstep = row_step != 0 ? row_step : width * point_step;
-  if (static_cast<std::size_t>(width) * point_step > lay.rstep) {
-    lay.error = "row_step is smaller than width*point_step";
-    return lay;
-  }
-  if (data_size < static_cast<std::size_t>(height) * lay.rstep) {
+  // A row_step smaller than width * point_step cannot describe the blob -- a
+  // row would not fit in it -- so it is treated as dense packing, the same
+  // rule the movify cloud walks apply (cloud_view.cpp); concatenation
+  // pipelines are known to leave a narrower source cloud's row_step behind
+  // when they grow the width. Unlike those walks, deskew rewrites the cloud,
+  // so a blob that does not hold every declared point stays a hard error.
+  // The size check divides rather than multiplies: height * rstep can wrap
+  // std::size_t for a corrupt header, and the wrapped product would accept a
+  // blob far too small for the walk that follows.
+  const std::size_t dense_step = static_cast<std::size_t>(width) * point_step;
+  lay.rstep = std::max<std::size_t>(row_step, dense_step);
+  if (lay.rstep != 0 && data_size / lay.rstep < height) {
     lay.error = "point data buffer too small";
     return lay;
   }
@@ -350,7 +356,7 @@ void run_deskew_kernel(
   const FrameComposition & fc, KernelCounters & out, bool keep_point_time)
 {
   const PointTimeField & time_field = *lay.time_field;
-  const std::uint32_t rstep = lay.rstep;
+  const std::size_t rstep = lay.rstep;
 
   // Detect relative vs absolute times (one scan of the time field).
   double max_abs_sec = 0.0;
