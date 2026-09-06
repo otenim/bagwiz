@@ -8,7 +8,9 @@
 
 #include "bagwiz/commands/stamp_sync.hpp"
 
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "bagwiz/io/metadata_yaml.hpp"
 #include "trim_stamp.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <gtest/gtest.h>
@@ -129,10 +131,11 @@ std::map<std::string, std::vector<CollectedMessage>> collect(const std::filesyst
 // stamps deliberately differ from their receive times, and /chatter
 // (headerless) with one message. Receive times: /imu at kT0 + {0, 1s, 2s},
 // /chatter at kT0 + 0.5s.
-std::filesystem::path build_input(const std::filesystem::path & dir)
+std::filesystem::path build_input(
+  const std::filesystem::path & dir, const bagwiz::io::CreateOptions & opts = mcap_dir_opts())
 {
   const auto path = dir / "input";
-  auto writer = bagwiz::io::open_write(path, mcap_dir_opts());
+  auto writer = bagwiz::io::open_write(path, opts);
   writer->declare_topic(make_stamped_topic("/imu"));
   writer->declare_topic(make_headerless_topic("/chatter"));
   for (int i = 0; i < 3; ++i) {
@@ -279,6 +282,85 @@ TEST_F(StampSyncTest, InPlaceRewrite)
     EXPECT_EQ(bagwiz::commands::read_leading_header_stamp_ns(msg.payload), msg.timestamp_ns);
   }
   ASSERT_EQ(in.at("/chatter").size(), 1U);
+}
+
+// A directory -o output takes the input's storage backend and carries its
+// compression over — stamp sync goes through the shared rewrite dispatch
+// like every other rewrite command, so a sqlite3 MESSAGE-mode input stays a
+// sqlite3 MESSAGE-mode bag rather than becoming a plain MCAP one.
+TEST_F(StampSyncTest, DirectoryOutputInheritsStorageAndCompression)
+{
+  bagwiz::io::CreateOptions opts;
+  opts.format = bagwiz::io::Format::Sqlite3;
+  opts.layout = bagwiz::io::Layout::Directory;
+  opts.sqlite3_compression_mode = "message";
+  opts.sqlite3_compression_format = "zstd";
+  const auto in_path = build_input(tmp_dir_, opts);
+  const auto out_path = tmp_dir_ / "out";
+
+  bagwiz::commands::StampSyncArgs args;
+  args.input_path = in_path;
+  args.output_path = out_path;
+  ASSERT_EQ(bagwiz::commands::run_stamp_sync(args), 0);
+
+  ASSERT_TRUE(std::filesystem::is_directory(out_path));
+  EXPECT_EQ(bagwiz::io::detect_format(out_path), bagwiz::io::Format::Sqlite3);
+  const auto md = bagwiz::io::load_metadata_yaml(out_path / "metadata.yaml");
+  EXPECT_EQ(md.compression_mode, "message");
+  EXPECT_EQ(md.compression_format, "zstd");
+  const auto out = collect(out_path);
+  ASSERT_EQ(out.at("/imu").size(), 3U);
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto & msg = out.at("/imu")[i];
+    EXPECT_EQ(msg.timestamp_ns, kT0 + static_cast<std::int64_t>(i) * kSecond);
+    EXPECT_EQ(bagwiz::commands::read_leading_header_stamp_ns(msg.payload), msg.timestamp_ns);
+  }
+}
+
+// The MCAP counterpart: lz4 chunks in, lz4 chunks out, on the decoded
+// pipeline that every stamp sync run takes. lz4 rather than zstd, so a
+// run that left the writer's zstd default in place would fail here.
+TEST_F(StampSyncTest, OutputCarriesTheInputsChunkCompression)
+{
+  auto opts = mcap_dir_opts();
+  opts.mcap_compression = "lz4";
+  const auto in_path = build_input(tmp_dir_, opts);
+  const auto out_path = tmp_dir_ / "out.mcap";
+
+  bagwiz::commands::StampSyncArgs args;
+  args.input_path = in_path;
+  args.output_path = out_path;
+  ASSERT_EQ(bagwiz::commands::run_stamp_sync(args), 0);
+
+  const auto d = bagwiz::io::describe_bag(out_path);
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+}
+
+// In place, the input's compression survives the swap: a MESSAGE-mode
+// sqlite3 directory comes back as one.
+TEST_F(StampSyncTest, InPlaceRewritePreservesCompression)
+{
+  bagwiz::io::CreateOptions opts;
+  opts.format = bagwiz::io::Format::Sqlite3;
+  opts.layout = bagwiz::io::Layout::Directory;
+  opts.sqlite3_compression_mode = "message";
+  opts.sqlite3_compression_format = "zstd";
+  const auto in_path = build_input(tmp_dir_, opts);
+
+  bagwiz::commands::StampSyncArgs args;
+  args.input_path = in_path;
+  ASSERT_EQ(bagwiz::commands::run_stamp_sync(args), 0);
+
+  const auto md = bagwiz::io::load_metadata_yaml(in_path / "metadata.yaml");
+  EXPECT_EQ(md.storage_identifier, "sqlite3");
+  EXPECT_EQ(md.compression_mode, "message");
+  EXPECT_EQ(md.compression_format, "zstd");
+  const auto out = collect(in_path);
+  ASSERT_EQ(out.at("/imu").size(), 3U);
+  EXPECT_EQ(
+    bagwiz::commands::read_leading_header_stamp_ns(out.at("/imu")[0].payload),
+    out.at("/imu")[0].timestamp_ns);
 }
 
 TEST_F(StampSyncTest, ExistingOutputRequiresOverwrite)

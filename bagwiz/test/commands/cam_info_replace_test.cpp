@@ -9,6 +9,7 @@
 #include "bagwiz/commands/cam_info_replace.hpp"
 
 #include "bagwiz/core/introspection/introspection_loader.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <sensor_msgs/msg/camera_info.hpp>
@@ -121,9 +122,10 @@ constexpr std::array<std::byte, 4> kOtherPayload{
 // the multi-topic tests confirm a shared YAML is applied to every listed topic
 // (and a per-topic <topic>=<yaml> lands on its own topic) while a non-listed
 // CameraInfo topic is still copied verbatim.
-void write_input_bag(const std::filesystem::path & path)
+void write_input_bag(
+  const std::filesystem::path & path, const bagwiz::io::CreateOptions & options = mcap_options())
 {
-  auto writer = bagwiz::io::open_write(path, mcap_options());
+  auto writer = bagwiz::io::open_write(path, options);
   writer->declare_topic(camera_info_topic_info("/camera/camera_info"));
   writer->declare_topic(camera_info_topic_info("/camera2/camera_info"));
 
@@ -355,6 +357,44 @@ TEST_F(CamInfoReplaceTest, ReplacesToOutputAndCopiesOthers)
   const auto in_readback = read_camera_info(in);
   ASSERT_EQ(in_readback.count, 2);
   EXPECT_EQ(in_readback.messages[0].width, 1U);
+}
+
+// A directory -o output takes the input's storage backend and carries its
+// compression over, through the shared rewrite dispatch: a sqlite3 input
+// yields a sqlite3 directory, and an lz4 MCAP input an lz4 MCAP directory,
+// never a plain MCAP directory.
+TEST_F(CamInfoReplaceTest, DirectoryOutputInheritsStorageAndCompression)
+{
+  const auto db3_in = tmp_dir_ / "in.db3";
+  bagwiz::io::CreateOptions sqlite3;
+  sqlite3.format = bagwiz::io::Format::Sqlite3;
+  sqlite3.layout = bagwiz::io::Layout::SingleFile;
+  write_input_bag(db3_in, sqlite3);
+
+  bagwiz::commands::CamInfoReplaceArgs args;
+  args.input_path = db3_in;
+  args.yaml_path = calib_path_;
+  args.topics = {"/camera/camera_info"};
+  args.output_path = tmp_dir_ / "out_db3_dir";
+  ASSERT_EQ(bagwiz::commands::run_cam_info_replace(args), 0);
+  ASSERT_TRUE(std::filesystem::is_directory(*args.output_path));
+  EXPECT_EQ(bagwiz::io::detect_format(*args.output_path), bagwiz::io::Format::Sqlite3);
+  EXPECT_EQ(read_camera_info(*args.output_path).count, 2);
+
+  // lz4 rather than zstd, so a run that left the writer's zstd default in
+  // place would fail here.
+  const auto lz4_in = tmp_dir_ / "in_lz4.mcap";
+  auto lz4 = mcap_options();
+  lz4.mcap_compression = "lz4";
+  write_input_bag(lz4_in, lz4);
+  args.input_path = lz4_in;
+  args.output_path = tmp_dir_ / "out_lz4_dir";
+  ASSERT_EQ(bagwiz::commands::run_cam_info_replace(args), 0);
+  const auto d = bagwiz::io::describe_bag(*args.output_path);
+  EXPECT_EQ(d.format, bagwiz::io::Format::Mcap);
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+  EXPECT_EQ(read_camera_info(*args.output_path).count, 2);
 }
 
 TEST_F(CamInfoReplaceTest, ReplacesInPlace)

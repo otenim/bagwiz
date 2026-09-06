@@ -1022,11 +1022,13 @@ private:
     }
 
     // 5. -o vs in-place dispatch, shared with the other rewrite-style
-    //    commands: -o writes a fresh bag (format/layout resolved from the
-    //    output path's extension) and leaves <input> untouched; otherwise
-    //    <input> is rewritten atomically via a sibling tmp, preserving its
-    //    storage identity (Format::Auto would misread the tmp's synthetic
-    //    suffix and silently convert db3 inputs to mcap on swap).
+    //    commands: -o writes a fresh bag shaped like the input (storage
+    //    format from the output extension or else the input's, compression
+    //    carried over) and leaves <input> untouched; otherwise <input> is
+    //    rewritten atomically via a sibling tmp, preserving its storage
+    //    format, layout and compression (Format::Auto would misread the
+    //    tmp's synthetic suffix and silently convert db3 inputs to mcap on
+    //    swap).
     core::BagRewriteOptions rewrite_opts;
     rewrite_opts.logger = kLogger;
     rewrite_opts.format_unknown_error =

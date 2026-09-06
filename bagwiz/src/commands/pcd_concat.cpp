@@ -353,7 +353,6 @@ core::BagRewriteOptions pcd_concat_rewrite_options(const char * logger)
   opts.logger = logger;
   opts.format_unknown_error = "pcd concat: could not detect storage format of input bag '%s'.";
   opts.pass_failed_error = "pcd concat: pass failed; aborting in-place swap";
-  opts.inherit_output_format = true;
   return opts;
 }
 

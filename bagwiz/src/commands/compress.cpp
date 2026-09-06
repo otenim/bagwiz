@@ -232,9 +232,8 @@ int run_compress(const CompressArgs & args)
     rewrite_opts.mcap_compression = (mode == "none") ? "none" : args.codec;
     rewrite_opts.mcap_compression_level = args.level;
   } else {
-    // mcap_compression keeps the dispatch's "none" default and is simply
-    // inert here — only the mcap writer reads it. The sqlite3 triple is what
-    // configures this write.
+    // mcap_compression stays empty and is simply inert here — only the mcap
+    // writer reads it. The sqlite3 triple is what configures this write.
     rewrite_opts.sqlite3_compression_mode = mode;
     rewrite_opts.sqlite3_compression_format = (mode == "none") ? "none" : "zstd";
     rewrite_opts.sqlite3_compression_level = args.level;

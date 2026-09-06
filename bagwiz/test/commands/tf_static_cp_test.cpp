@@ -11,6 +11,7 @@
 #include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/core/tf/tf_value_extract.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -91,7 +92,9 @@ void write_src_bag(const std::filesystem::path & path)
 
 // Destination bag: a single non-TF topic whose earliest message fixes the bag's
 // start time at `start_ns`.
-void write_dst_bag(const std::filesystem::path & path, std::int64_t start_ns)
+void write_dst_bag(
+  const std::filesystem::path & path, std::int64_t start_ns,
+  const bagwiz::io::CreateOptions & options = mcap_options())
 {
   bagwiz::io::TopicInfo clock;
   clock.name = "/clock";
@@ -102,7 +105,7 @@ void write_dst_bag(const std::filesystem::path & path, std::int64_t start_ns)
     std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
   const auto bytes = std::span<const std::byte>(kPayload.data(), kPayload.size());
 
-  auto writer = bagwiz::io::open_write(path, mcap_options());
+  auto writer = bagwiz::io::open_write(path, options);
   writer->declare_topic(clock);
   writer->write("/clock", start_ns, bytes);
   writer->write("/clock", start_ns + 1'000'000'000LL, bytes);
@@ -220,6 +223,48 @@ TEST_F(TfStaticCpTest, CopiesStaticTfToOutputStampedAtDstStart)
   EXPECT_TRUE(topic_present(out, "/clock"));
   // The destination bag itself is untouched in -o mode.
   EXPECT_FALSE(topic_present(dst, "/tf_static"));
+}
+
+// The rewritten bag is <dst>, so the output's shape comes from <dst> and
+// <src> has no say: a directory -o output takes <dst>'s storage backend and
+// carries <dst>'s compression over, and an in-place run preserves them. The
+// plain MCAP <src> would give a plain MCAP output if it were consulted.
+TEST_F(TfStaticCpTest, OutputShapeFollowsTheDestination)
+{
+  const auto src = tmp_dir_ / "src.mcap";
+  write_src_bag(src);
+  constexpr std::int64_t kDstStart = 5'000'000'000LL;
+
+  // sqlite3 MESSAGE-mode directory <dst> -> directory output of the same kind.
+  const auto db3_dst = tmp_dir_ / "dst_db3_dir";
+  bagwiz::io::CreateOptions message_mode;
+  message_mode.format = bagwiz::io::Format::Sqlite3;
+  message_mode.layout = bagwiz::io::Layout::Directory;
+  message_mode.sqlite3_compression_mode = "message";
+  message_mode.sqlite3_compression_format = "zstd";
+  write_dst_bag(db3_dst, kDstStart, message_mode);
+  const auto db3_out = tmp_dir_ / "out_db3_dir";
+  ASSERT_EQ(
+    bagwiz::commands::run_tf_static_cp(src, db3_dst, db3_out, /*force=*/false, /*overwrite=*/false),
+    0);
+  ASSERT_TRUE(std::filesystem::is_directory(db3_out));
+  EXPECT_EQ(bagwiz::io::detect_format(db3_out), bagwiz::io::Format::Sqlite3);
+  EXPECT_EQ(bagwiz::io::describe_bag(db3_out).compression.mode, "message");
+  EXPECT_TRUE(read_tf_topic(db3_out, "/tf_static").present);
+
+  // lz4 MCAP <dst>, rewritten in place: the codec survives the swap.
+  const auto lz4_dst = tmp_dir_ / "dst_lz4.mcap";
+  auto lz4 = mcap_options();
+  lz4.mcap_compression = "lz4";
+  write_dst_bag(lz4_dst, kDstStart, lz4);
+  ASSERT_EQ(
+    bagwiz::commands::run_tf_static_cp(
+      src, lz4_dst, std::nullopt, /*force=*/false, /*overwrite=*/false),
+    0);
+  const auto d = bagwiz::io::describe_bag(lz4_dst);
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+  EXPECT_TRUE(read_tf_topic(lz4_dst, "/tf_static").present);
 }
 
 TEST_F(TfStaticCpTest, InjectedStaticTfIsEmittedInTimestampOrder)

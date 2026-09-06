@@ -6,6 +6,8 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
+#include "bagwiz/commands/convert.hpp"
+
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/core/bag/bag_copy.hpp"
@@ -69,6 +71,120 @@ io::Format resolve_target_storage(
 
 }  // namespace
 
+int run_convert_format(const ConvertFormatArgs & args)
+{
+  // Detect the input's storage backend up-front so it can (a) feed
+  // resolve_target_storage as the fallback for directory-layout outputs
+  // without --storage, and (b) anchor the same-storage repack check
+  // below. Magic-byte / metadata.yaml based, so renamed .mcap / .db3
+  // inputs still classify correctly; the extension is consulted only
+  // to resolve the inner storage of a single-file .zstd envelope,
+  // where the magic sniff cannot see past the compression.
+  const auto source_format = io::detect_format(args.input_path);
+
+  std::string err;
+  const io::Format target_format =
+    resolve_target_storage(args.storage, args.output_path, source_format, err);
+  if (target_format == io::Format::Auto) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", err.c_str());
+    return 1;
+  }
+
+  // Refuse an occupied output path before opening the input. The check
+  // removes nothing, so the repack rejection below can still bail without
+  // having destroyed the user's file; prepare_output_path() does the removal
+  // once the run is committed to writing.
+  if (const auto r = core::check_output_path_free(args.output_path, args.overwrite); !r.ok) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+    return 1;
+  }
+
+  auto reader = io::open_read_or_log(args.input_path, kLogger);
+  if (!reader) {
+    return 1;
+  }
+
+  // Reject same-storage + same-layout repacks: a plain `cp` is what the
+  // user actually wants. When the layouts differ (e.g. file → directory
+  // on the same backend) the run is allowed since the output shape
+  // genuinely changes. Input layout is read from the filesystem (input
+  // is guaranteed to exist by CLI::ExistingPath); output layout is read
+  // from the path's extension (no `.mcap`/`.db3` → directory layout).
+  if (source_format == target_format) {
+    std::error_code ec;
+    const bool input_is_directory = std::filesystem::is_directory(args.input_path, ec);
+    const bool output_is_directory =
+      io::infer_format_from_extension(args.output_path) == io::Format::Auto;
+    if (input_is_directory == output_is_directory) {
+      const char * fmt_name = (target_format == io::Format::Sqlite3) ? "sqlite3" : "mcap";
+      BAGWIZ_LOG_ERROR(
+        kLogger,
+        "input is already in '%s' storage with the same layout; nothing to convert "
+        "(use `cp -r` for a verbatim copy)",
+        fmt_name);
+      return 1;
+    }
+  }
+
+  io::CreateOptions copts;
+  copts.format = target_format;
+  copts.layout = io::Layout::Auto;  // factory picks SingleFile if extension matches
+  // A repack changes the container, not how the bytes are compressed: carry
+  // the input's compression over, translated to the target storage (see
+  // io::create_options_inheriting_compression). `bagwiz compress` is the
+  // command that changes it. Read it before the output path is claimed:
+  // under -w/--overwrite prepare_output_path removes whatever is there.
+  copts = io::create_options_inheriting_compression(args.input_path, args.output_path, copts);
+
+  // The run is committed now: claim the output path for real, clearing any
+  // pre-existing entry under -w/--overwrite.
+  if (const auto r = core::prepare_output_path(args.output_path, args.overwrite); !r.ok) {
+    BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
+    return 1;
+  }
+
+  std::unique_ptr<io::BagWriter> writer;
+  try {
+    writer = io::open_write(args.output_path, copts);
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "Failed to open output %s: %s", args.output_path.c_str(), e.what());
+    return 1;
+  }
+
+  // Declare every input topic with schema backfill so the output keeps
+  // self-description across the repack.
+  const std::size_t declared = declare_reader_topics(*reader, *writer, kLogger);
+
+  // convert re-encodes nothing (only the storage container changes), so it runs
+  // through the shared rewrite seam with an empty suppress set on the threaded
+  // backend. Note this is the decoded pipeline, not the mcap chunk
+  // pass-through — convert never calls try_bag_passthrough_rewrite. A
+  // read/write error now aborts the run (fail-fast) instead of silently
+  // skipping messages, which could mask partial output corruption.
+  core::BagCopyCounts counts;
+  try {
+    const std::unordered_set<std::string> none;
+    counts = core::bag_copy_filtered(
+      *reader, *writer, none, "convert", core::pipeline::BackendKind::Pipelined);
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "convert read/write failed: %s", e.what());
+    return 1;
+  }
+
+  try {
+    writer->close();
+  } catch (const std::exception & e) {
+    BAGWIZ_LOG_ERROR(kLogger, "writer->close failed: %s", e.what());
+    return 1;
+  }
+
+  BAGWIZ_LOG_INFO(
+    kLogger, "Repack done: %" PRIu64 " message(s) written across %zu topic(s)", counts.copied,
+    declared);
+
+  return 0;
+}
+
 // `bagwiz convert` is a command group for cross-format bag conversion.
 // Ships `format` (ROS 2 mcap <-> sqlite3 repack, plus file <-> directory
 // layout transitions inferred from the output path). It stays a group rather
@@ -93,7 +209,7 @@ public:
   {
     switch (selected_) {
       case Subcommand::kFormat:
-        return run_format();
+        return run_convert_format(format_args_);
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
@@ -104,14 +220,7 @@ public:
 private:
   enum class Subcommand { kNone, kFormat };
   Subcommand selected_ = Subcommand::kNone;
-
-  struct FormatArgs
-  {
-    std::filesystem::path input_path;
-    std::filesystem::path output_path;
-    std::string storage;     // empty when --storage not passed; resolved at run time
-    bool overwrite = false;  // replace any pre-existing output_path
-  } format_args_;
+  ConvertFormatArgs format_args_;
 
   void configure_format(CLI::App & app)
   {
@@ -137,119 +246,6 @@ private:
       "Replace <output> if it already exists. Without this flag, an "
       "existing output path stops the run.");
     sub->callback([this]() { selected_ = Subcommand::kFormat; });
-  }
-
-  int run_format()
-  {
-    const auto & args = format_args_;
-
-    // Detect the input's storage backend up-front so it can (a) feed
-    // resolve_target_storage as the fallback for directory-layout outputs
-    // without --storage, and (b) anchor the same-storage repack check
-    // below. Magic-byte / metadata.yaml based, so renamed .mcap / .db3
-    // inputs still classify correctly; the extension is consulted only
-    // to resolve the inner storage of a single-file .zstd envelope,
-    // where the magic sniff cannot see past the compression.
-    const auto source_format = io::detect_format(args.input_path);
-
-    std::string err;
-    const io::Format target_format =
-      resolve_target_storage(args.storage, args.output_path, source_format, err);
-    if (target_format == io::Format::Auto) {
-      BAGWIZ_LOG_ERROR(kLogger, "%s", err.c_str());
-      return 1;
-    }
-
-    // Refuse an occupied output path before opening the input. The check
-    // removes nothing, so the repack rejection below can still bail without
-    // having destroyed the user's file; prepare_output_path() does the removal
-    // once the run is committed to writing.
-    if (const auto r = core::check_output_path_free(args.output_path, args.overwrite); !r.ok) {
-      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
-      return 1;
-    }
-
-    auto reader = io::open_read_or_log(args.input_path, kLogger);
-    if (!reader) {
-      return 1;
-    }
-
-    // Reject same-storage + same-layout repacks: a plain `cp` is what the
-    // user actually wants. When the layouts differ (e.g. file → directory
-    // on the same backend) the run is allowed since the output shape
-    // genuinely changes. Input layout is read from the filesystem (input
-    // is guaranteed to exist by CLI::ExistingPath); output layout is read
-    // from the path's extension (no `.mcap`/`.db3` → directory layout).
-    if (source_format == target_format) {
-      std::error_code ec;
-      const bool input_is_directory = std::filesystem::is_directory(args.input_path, ec);
-      const bool output_is_directory =
-        io::infer_format_from_extension(args.output_path) == io::Format::Auto;
-      if (input_is_directory == output_is_directory) {
-        const char * fmt_name = (target_format == io::Format::Sqlite3) ? "sqlite3" : "mcap";
-        BAGWIZ_LOG_ERROR(
-          kLogger,
-          "input is already in '%s' storage with the same layout; nothing to convert "
-          "(use `cp -r` for a verbatim copy)",
-          fmt_name);
-        return 1;
-      }
-    }
-
-    // The run is committed now: claim the output path for real, clearing any
-    // pre-existing entry under -w/--overwrite.
-    if (const auto r = core::prepare_output_path(args.output_path, args.overwrite); !r.ok) {
-      BAGWIZ_LOG_ERROR(kLogger, "%s", r.error.c_str());
-      return 1;
-    }
-
-    io::CreateOptions copts;
-    copts.format = target_format;
-    copts.layout = io::Layout::Auto;  // factory picks SingleFile if extension matches
-    // Leave compression off so the output is predictable; callers can
-    // recompress with `bagwiz compress` if they want.
-    copts.mcap_compression = "none";
-
-    std::unique_ptr<io::BagWriter> writer;
-    try {
-      writer = io::open_write(args.output_path, copts);
-    } catch (const std::exception & e) {
-      BAGWIZ_LOG_ERROR(kLogger, "Failed to open output %s: %s", args.output_path.c_str(), e.what());
-      return 1;
-    }
-
-    // Declare every input topic with schema backfill so the output keeps
-    // self-description across the repack.
-    const std::size_t declared = declare_reader_topics(*reader, *writer, kLogger);
-
-    // convert re-encodes nothing (only the storage container changes), so it runs
-    // through the shared rewrite seam with an empty suppress set on the threaded
-    // backend. Note this is the decoded pipeline, not the mcap chunk
-    // pass-through — convert never calls try_bag_passthrough_rewrite. A
-    // read/write error now aborts the run (fail-fast) instead of silently
-    // skipping messages, which could mask partial output corruption.
-    core::BagCopyCounts counts;
-    try {
-      const std::unordered_set<std::string> none;
-      counts = core::bag_copy_filtered(
-        *reader, *writer, none, "convert", core::pipeline::BackendKind::Pipelined);
-    } catch (const std::exception & e) {
-      BAGWIZ_LOG_ERROR(kLogger, "convert read/write failed: %s", e.what());
-      return 1;
-    }
-
-    try {
-      writer->close();
-    } catch (const std::exception & e) {
-      BAGWIZ_LOG_ERROR(kLogger, "writer->close failed: %s", e.what());
-      return 1;
-    }
-
-    BAGWIZ_LOG_INFO(
-      kLogger, "Repack done: %" PRIu64 " message(s) written across %zu topic(s)", counts.copied,
-      declared);
-
-    return 0;
   }
 };
 

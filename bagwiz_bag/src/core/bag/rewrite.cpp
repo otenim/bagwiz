@@ -24,10 +24,21 @@ namespace bagwiz::core
 namespace
 {
 
+// Whether the command pinned the compression of the storage the write
+// resolves to. Only the codec / mode knob decides: a level on its own still
+// inherits the codec.
+bool pins_compression(const BagRewriteOptions & options, io::Format target_format)
+{
+  if (target_format == io::Format::Sqlite3) {
+    return !options.sqlite3_compression_mode.empty();
+  }
+  return !options.mcap_compression.empty();
+}
+
 // Stamp the command's compression choices onto the CreateOptions the branch
 // composed. Shared by both branches so an override behaves identically
 // whether it lands on an -o output or on the in-place tmp; an empty string
-// leaves that knob at the storage default.
+// leaves that knob as composed.
 void apply_compression_overrides(io::CreateOptions & copts, const BagRewriteOptions & options)
 {
   if (!options.mcap_compression.empty()) {
@@ -47,6 +58,23 @@ void apply_compression_overrides(io::CreateOptions & copts, const BagRewriteOpti
   }
 }
 
+// Settle the compression of a write whose storage format and layout `copts`
+// already resolves: the input's, carried over and translated to the output
+// storage, unless the command pinned it, and then the command's overrides
+// on top. Shared by both branches so an -o output and an in-place tmp are
+// compressed identically.
+io::CreateOptions with_compression(
+  io::CreateOptions copts, const std::filesystem::path & input_path,
+  const std::filesystem::path & output_path, const BagRewriteOptions & options)
+{
+  const auto target = io::resolve_write_layout(output_path, copts);
+  if (!pins_compression(options, target.format)) {
+    copts = io::create_options_inheriting_compression(input_path, output_path, copts);
+  }
+  apply_compression_overrides(copts, options);
+  return copts;
+}
+
 }  // namespace
 
 int run_bag_rewrite(
@@ -56,12 +84,9 @@ int run_bag_rewrite(
 {
   // -o mode: write a new bag whose storage follows the output path (its
   // extension picks a single-file backend; a directory inherits the input's
-  // backend when inherit_output_format is set) and leave <input> untouched.
+  // backend) and whose compression follows the input, and leave <input>
+  // untouched.
   if (output_path.has_value()) {
-    if (const auto r = core::prepare_output_path(*output_path, overwrite); !r.ok) {
-      BAGWIZ_LOG_ERROR(options.logger, "%s", r.error.c_str());
-      return 1;
-    }
     const auto output = *output_path;
     io::CreateOptions copts;
     if (options.output_format != io::Format::Auto) {
@@ -69,13 +94,21 @@ int run_bag_rewrite(
       // the output path's extension.
       copts.format = options.output_format;
       copts.layout = io::Layout::Auto;
-    } else if (options.inherit_output_format) {
-      copts = io::create_options_inheriting_format(input_path, output);
     } else {
-      copts.format = io::Format::Auto;
-      copts.layout = io::Layout::Auto;
+      copts = io::create_options_inheriting_format(input_path, output);
     }
-    apply_compression_overrides(copts, options);
+    // Refuse an occupied output before doing any work on the input, then
+    // read the input's compression before the output path is claimed: under
+    // -w/--overwrite prepare_output_path removes whatever is there.
+    if (const auto r = core::check_output_path_free(output, overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(options.logger, "%s", r.error.c_str());
+      return 1;
+    }
+    copts = with_compression(copts, input_path, output, options);
+    if (const auto r = core::prepare_output_path(output, overwrite); !r.ok) {
+      BAGWIZ_LOG_ERROR(options.logger, "%s", r.error.c_str());
+      return 1;
+    }
     const io::WriterFactory make_writer = [output, copts]() {
       return io::open_write(output, copts);
     };
@@ -83,16 +116,16 @@ int run_bag_rewrite(
   }
 
   // In-place mode: rewrite <input> atomically via a staged sibling copy,
-  // preserving its storage format and layout. The staged path keeps the
-  // bag's own name, but a directory bag's name carries no extension for
-  // Format::Auto to resolve from (it would fall through to the
-  // Directory + Mcap default), so pin both explicitly.
+  // preserving its storage format, layout and compression. The staged path
+  // keeps the bag's own name, but a directory bag's name carries no
+  // extension for Format::Auto to resolve from (it would fall through to
+  // the Directory + Mcap default), so pin both explicitly.
   auto inplace_copts = io::create_options_preserving_storage(input_path);
   if (inplace_copts.format == io::Format::Auto) {
     BAGWIZ_LOG_ERROR(options.logger, options.format_unknown_error, input_path.string().c_str());
     return 1;
   }
-  apply_compression_overrides(inplace_copts, options);
+  inplace_copts = with_compression(inplace_copts, input_path, input_path, options);
 
   // The pass reports command-level failures via its return value rather than
   // throwing, so capture the status and translate a non-zero exit into a

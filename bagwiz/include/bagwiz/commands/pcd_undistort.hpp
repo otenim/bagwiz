@@ -36,9 +36,10 @@ struct PcdUndistortArgs
   // parsed with core::parse_duration_ns (no unit = ms). Empty => 1s.
   std::optional<std::string> max_extrap_duration;
   // --compression; mcap chunk codec for the output: "zstd", "lz4", or
-  // "none". Empty => the storage default (zstd). mcap outputs only.
+  // "none". Empty => the input bag's codec is carried over (a plain input
+  // stays plain), like every other rewrite command. mcap outputs only.
   std::optional<std::string> compression;
-  // --compression-level; encoder effort for the chosen (or default) codec:
+  // --compression-level; encoder effort for the chosen (or inherited) codec:
   // "fastest", "fast", "default", "slow", or "slowest". Empty => "default" for
   // zstd, "fastest" for lz4. Rejected together with --compression none.
   std::optional<std::string> compression_level;

@@ -64,10 +64,12 @@ int run_tf_static_cp(
   }
 
   // 3. -o vs in-place dispatch, shared with the other rewrite-style commands:
-  //    -o writes a fresh bag (format/layout resolved from the output path's
-  //    extension) and leaves <dst> untouched; otherwise <dst> is rewritten
-  //    atomically via a sibling tmp, preserving its storage identity. The
-  //    dispatch rewrites the destination bag, so it is passed as the input.
+  //    -o writes a fresh bag shaped like <dst> (storage format from the
+  //    output extension or else <dst>'s, compression carried over) and
+  //    leaves <dst> untouched; otherwise <dst> is rewritten atomically via a
+  //    sibling tmp, preserving its storage format, layout and compression.
+  //    The dispatch rewrites the destination bag, so it is passed as the
+  //    input.
   core::BagRewriteOptions rewrite_opts;
   rewrite_opts.logger = kLogger;
   rewrite_opts.format_unknown_error =

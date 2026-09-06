@@ -215,15 +215,16 @@ int run_topic_drop(const TopicDropArgs & args)
   }
 
   // 2. -o vs in-place dispatch, shared with the other rewrite-style commands:
-  //    -o writes a new bag and leaves <input> untouched; otherwise <input> is
-  //    rewritten atomically via a sibling tmp, preserving its storage format
-  //    and layout.
+  //    -o writes a fresh bag shaped like the input (storage format from the
+  //    output extension or else the input's, compression carried over) and
+  //    leaves <input> untouched; otherwise <input> is rewritten atomically
+  //    via a sibling tmp, preserving its storage format, layout and
+  //    compression.
   core::BagRewriteOptions rewrite_opts;
   rewrite_opts.logger = kLogger;
   rewrite_opts.format_unknown_error =
     "topic drop: could not detect storage format of input bag '%s'.";
   rewrite_opts.pass_failed_error = "topic drop: pass failed; aborting in-place swap";
-  rewrite_opts.inherit_output_format = true;
   return core::run_bag_rewrite(
     args.input_path, args.output_path, args.overwrite, rewrite_opts,
     [&](const io::WriterFactory & open_writer, const core::RewriteTarget & target) {

@@ -18,6 +18,7 @@
 #include "bagwiz/core/image/raw_image.hpp"
 #include "bagwiz/core/video/annexb.hpp"
 #include "bagwiz/core/video/video_codec.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
 #include "core/image/image_fixture.hpp"
@@ -137,10 +138,12 @@ struct BagSpec
 
 // Build an MCAP directory bag per `spec`, with `frames` messages per image
 // topic at 10 fps. Returns the bag path.
-std::filesystem::path build_image_bag(const std::filesystem::path & dir, const BagSpec & spec)
+std::filesystem::path build_image_bag(
+  const std::filesystem::path & dir, const BagSpec & spec,
+  const bagwiz::io::CreateOptions & opts = mcap_dir_opts())
 {
   const auto path = dir / "input";
-  auto writer = bagwiz::io::open_write(path, mcap_dir_opts());
+  auto writer = bagwiz::io::open_write(path, opts);
   if (spec.raw) {
     writer->declare_topic(img::make_image_topic_info(kImageTopic));
   }
@@ -397,6 +400,39 @@ TEST_F(VideoCommandTest, InPlaceRewriteReplacesTheInputBag)
   EXPECT_EQ(topics.count(kImageTopic), 0U);
   EXPECT_EQ(topics.count("/cam/image_raw/video"), 1U);
   EXPECT_EQ(read_topic(input, "/cam/image_raw/video").size(), 6U);
+}
+
+// The output bag is shaped like the input: a directory -o output takes the
+// input's storage backend and carries its compression over, and an in-place
+// run preserves both. lz4 rather than zstd, so a run that left the writer's
+// zstd default in place would fail here.
+TEST_F(VideoCommandTest, OutputInheritsStorageAndCompression)
+{
+  auto lz4 = mcap_dir_opts();
+  lz4.mcap_compression = "lz4";
+  const auto input = build_image_bag(tmp_dir_, BagSpec{}, lz4);
+
+  auto args = encode_args(input, {kImageTopic});
+  args.output_path = tmp_dir_ / "out_dir";
+  ASSERT_EQ(run_video_encode(args), 0);
+  auto d = bagwiz::io::describe_bag(*args.output_path);
+  EXPECT_EQ(d.format, bagwiz::io::Format::Mcap);
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+
+  args.output_path.reset();
+  ASSERT_EQ(run_video_encode(args), 0);
+  d = bagwiz::io::describe_bag(input);
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+  EXPECT_EQ(topics_of(input).count("/cam/image_raw/video"), 1U);
+
+  // Decoding the result carries the same codec back out.
+  auto decode = decode_args(input, {"/cam/image_raw/video"});
+  decode.output_path = tmp_dir_ / "decoded.mcap";
+  ASSERT_EQ(run_video_decode(decode), 0);
+  EXPECT_EQ(
+    bagwiz::io::describe_bag(*decode.output_path).compression.codecs,
+    std::vector<std::string>{"lz4"});
 }
 
 TEST_F(VideoCommandTest, ExistingOutputNeedsOverwrite)
