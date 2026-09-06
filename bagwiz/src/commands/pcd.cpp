@@ -8,7 +8,9 @@
 
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
+#include "bagwiz/commands/pcd_compress.hpp"
 #include "bagwiz/commands/pcd_concat.hpp"
+#include "bagwiz/commands/pcd_decompress.hpp"
 #include "bagwiz/commands/pcd_undistort.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/commands/topic_types.hpp"
@@ -25,9 +27,11 @@ constexpr const char * kLogger = "bagwiz.cmd.pcd";
 }  // namespace
 
 // `bagwiz pcd` is a command group for PointCloud2 topic processing.
-//   concat    - merge multiple PointCloud2 topics into one new topic (static TF +
-//               first-topic-driven time sync)
-//   undistort - motion-deskew PointCloud2 topic(s) using external pose topic + tf_static
+//   concat      - merge multiple PointCloud2 topics into one new topic (static TF +
+//                 first-topic-driven time sync)
+//   undistort   - motion-deskew PointCloud2 topic(s) using external pose topic + tf_static
+//   compress    - Draco-compress PointCloud2 topics into CompressedPointCloud2 topics
+//   decompress  - decode CompressedPointCloud2 ("draco") topics back into PointCloud2
 class PcdCommand : public Command
 {
 public:
@@ -42,6 +46,8 @@ public:
     app.require_subcommand(1);
     configure_concat(app);
     configure_undistort(app);
+    configure_compress(app);
+    configure_decompress(app);
   }
 
   int run() override
@@ -51,6 +57,10 @@ public:
         return run_pcd_concat(concat_args_);
       case Subcommand::kUndistort:
         return run_pcd_undistort(undistort_args_);
+      case Subcommand::kCompress:
+        return run_pcd_compress(compress_args_);
+      case Subcommand::kDecompress:
+        return run_pcd_decompress(decompress_args_);
       case Subcommand::kNone:
         BAGWIZ_LOG_ERROR(kLogger, "no subcommand selected");
         return 1;
@@ -59,10 +69,12 @@ public:
   }
 
 private:
-  enum class Subcommand { kNone, kConcat, kUndistort };
+  enum class Subcommand { kNone, kConcat, kUndistort, kCompress, kDecompress };
   Subcommand selected_ = Subcommand::kNone;
   PcdConcatArgs concat_args_;
   PcdUndistortArgs undistort_args_;
+  PcdCompressArgs compress_args_;
+  PcdDecompressArgs decompress_args_;
 
   void configure_concat(CLI::App & app)
   {
@@ -203,6 +215,117 @@ private:
       "(header.stamp). Without that rewrite the output carries no marker that it was already "
       "deskewed, so a second undistort run over it would deskew it twice.");
     sub->callback([this]() { selected_ = Subcommand::kUndistort; });
+  }
+
+  void configure_compress(CLI::App & app)
+  {
+    auto * sub = app.add_subcommand(
+      "compress",
+      "Draco-compress PointCloud2 topics into CompressedPointCloud2 topics (format \"draco\"). "
+      "Each selected topic is replaced by its compressed counterpart, named '<topic>/draco' "
+      "by default.");
+    sub->add_option("-i,--input", compress_args_.input_path, "Bag path (file or directory)")
+      ->required()
+      ->check(CLI::ExistingPath);
+    set_topic_input(*sub, compress_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topics", compress_args_.topics,
+      "PointCloud2 topics to compress, each a literal name or a '*' glob (repeatable). "
+      "Default: every PointCloud2 topic in the bag.",
+      TopicSlotSpec{.allowed_types = kPointCloud2Type})
+      ->expected(-1);
+    add_topic_option(
+      *sub, "--as", compress_args_.output_topic,
+      "Name of the compressed output topic instead of '<topic>/draco'. Only valid when "
+      "exactly one topic is selected.",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral,
+        .reject_reason = "it names the new compressed topic to create"});
+    auto * lossless_flag = sub->add_flag(
+      "--lossless", compress_args_.lossless,
+      "Store attributes unquantized for a bit-exact float round-trip. Default: lossy 14-bit "
+      "quantization per attribute type. Non-dense clouds (NaN/Inf points) are only compressed "
+      "in this mode; otherwise they pass through uncompressed.");
+    auto * position_bits =
+      sub
+        ->add_option(
+          "--position-bits", compress_args_.position_bits,
+          "Quantization bits for position attributes (default: 14). Range 1-31.")
+        ->check(CLI::Range(1, 31));
+    auto * normal_bits = sub
+                           ->add_option(
+                             "--normal-bits", compress_args_.normal_bits,
+                             "Quantization bits for normal attributes (default: 14). Range 1-31.")
+                           ->check(CLI::Range(1, 31));
+    auto * color_bits = sub
+                          ->add_option(
+                            "--color-bits", compress_args_.color_bits,
+                            "Quantization bits for color attributes (default: 14). Range 1-31.")
+                          ->check(CLI::Range(1, 31));
+    auto * generic_bits = sub
+                            ->add_option(
+                              "--generic-bits", compress_args_.generic_bits,
+                              "Quantization bits for generic attributes (default: 14). Range 1-31.")
+                            ->check(CLI::Range(1, 31));
+    for (auto * bits : {position_bits, normal_bits, color_bits, generic_bits}) {
+      bits->excludes(lossless_flag);
+    }
+    sub->add_option(
+      "-o,--output", compress_args_.output_path,
+      "Output bag. Omitted => rewrite <input> in place.");
+    sub->add_flag(
+      "-f,--force", compress_args_.force,
+      "Replace the output topic if it already exists in the bag.");
+    sub->add_flag(
+      "-w,--overwrite", compress_args_.overwrite, "Overwrite an existing -o/--output path.");
+    sub
+      ->add_option(
+        "-j,--threads", compress_args_.threads,
+        "Number of worker threads for encoding (default: 0 = hardware concurrency; "
+        "1 = sync). Range 0-256; in-range values above hardware concurrency are capped.")
+      ->check(CLI::Range(0, 256));
+    sub->callback([this]() { selected_ = Subcommand::kCompress; });
+  }
+
+  void configure_decompress(CLI::App & app)
+  {
+    auto * sub = app.add_subcommand(
+      "decompress",
+      "Decode CompressedPointCloud2 topics with format \"draco\" back into PointCloud2 "
+      "topics. Each selected topic is replaced by its decompressed counterpart, named with "
+      "the trailing '/draco' stripped by default.");
+    sub->add_option("-i,--input", decompress_args_.input_path, "Bag path (file or directory)")
+      ->required()
+      ->check(CLI::ExistingPath);
+    set_topic_input(*sub, decompress_args_.input_path);
+    add_topic_option(
+      *sub, "-t,--topics", decompress_args_.topics,
+      "CompressedPointCloud2 topics to decompress, each a literal name or a '*' glob "
+      "(repeatable). Default: every CompressedPointCloud2 topic in the bag.",
+      TopicSlotSpec{.allowed_types = kCompressedPointCloud2Type})
+      ->expected(-1);
+    add_topic_option(
+      *sub, "--as", decompress_args_.output_topic,
+      "Name of the decompressed output topic instead of stripping '/draco'. Only valid when "
+      "exactly one topic is selected.",
+      TopicSlotSpec{
+        .mode = TopicSelectorMode::kLiteral,
+        .reject_reason = "it names the new decompressed topic to create"});
+    sub->add_option(
+      "-o,--output", decompress_args_.output_path,
+      "Output bag. Omitted => rewrite <input> in place.");
+    sub->add_flag(
+      "-f,--force", decompress_args_.force,
+      "Replace the output topic if it already exists in the bag.");
+    sub->add_flag(
+      "-w,--overwrite", decompress_args_.overwrite, "Overwrite an existing -o/--output path.");
+    sub
+      ->add_option(
+        "-j,--threads", decompress_args_.threads,
+        "Number of worker threads for decoding (default: 0 = hardware concurrency; "
+        "1 = sync). Range 0-256; in-range values above hardware concurrency are capped.")
+      ->check(CLI::Range(0, 256));
+    sub->callback([this]() { selected_ = Subcommand::kDecompress; });
   }
 };
 

@@ -240,6 +240,21 @@ TEST(CompletionSlotWiring, PcdConcatAndUndistort)
     slot_for(undistort_slots, "twist"), TopicSelectorMode::kLiteral,
     bagwiz::commands::kUndistortTwistTopicTypes);
   expect_slot(slot_for(undistort_slots, "pcd"), TopicSelectorMode::kGlob, pcd_types);
+
+  auto * compress = app.get_subcommand_no_throw("compress");
+  ASSERT_NE(compress, nullptr);
+  const auto compress_slots = topic_slots_of(*compress);
+  expect_slot(slot_for(compress_slots, "topics"), TopicSelectorMode::kGlob, pcd_types);
+  // --as names the new compressed topic to create, like concat's --as.
+  expect_slot(slot_for(compress_slots, "as"), TopicSelectorMode::kLiteral);
+
+  auto * decompress = app.get_subcommand_no_throw("decompress");
+  ASSERT_NE(decompress, nullptr);
+  const auto decompress_slots = topic_slots_of(*decompress);
+  expect_slot(
+    slot_for(decompress_slots, "topics"), TopicSelectorMode::kGlob,
+    bagwiz::commands::kCompressedPointCloud2Type);
+  expect_slot(slot_for(decompress_slots, "as"), TopicSelectorMode::kLiteral);
 }
 
 TEST(CompletionSlotWiring, CalibCamLidar)

@@ -37,6 +37,20 @@ find_package(bagwiz_tf REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(OpenCV REQUIRED)
+# conda-forge draco (pixi.toml): the codec behind `bagwiz pcd compress` /
+# `pcd decompress` (draco_codec.cpp). Like OpenCV it has no rosdep key, so it
+# appears only here, not in package.xml.
+find_package(draco REQUIRED)
+# Link the resolved library path, not the imported target: bagwiz_pointcloud
+# is a static library, so even a PRIVATE target link would leak draco::draco
+# into the ament export set and break downstream find_package(bagwiz_pointcloud)
+# for consumers that never find_package(draco). Same reason OpenCV below links
+# as ${OpenCV_LIBS} paths. The headers resolve through the conda env's
+# -isystem $CONDA_PREFIX/include, so no include dir is needed either.
+get_target_property(bagwiz_draco_location draco::draco IMPORTED_LOCATION_RELEASE)
+if(NOT bagwiz_draco_location)
+  get_target_property(bagwiz_draco_location draco::draco IMPORTED_LOCATION)
+endif()
 
 add_library(bagwiz_pointcloud
   src/core/calib/se3.cpp
@@ -51,8 +65,10 @@ add_library(bagwiz_pointcloud
   src/core/pointcloud/cloud_transform.cpp
   src/core/pointcloud/color_mapper.cpp
   src/core/pointcloud/color_propagation.cpp
+  src/core/pointcloud/compressed_pointcloud2.cpp
   src/core/pointcloud/concat_sync.cpp
   src/core/pointcloud/deskew.cpp
+  src/core/pointcloud/draco_codec.cpp
   src/core/pointcloud/fetcher.cpp
   src/core/pointcloud/kdtree.cpp
   src/core/pointcloud/normals.cpp
@@ -96,6 +112,9 @@ endif()
 # (overlay.cpp) and of the calib visual gyro (visual_rotation.cpp). Keep it
 # PRIVATE so it does not leak into the export set.
 target_link_libraries(bagwiz_pointcloud PRIVATE ${OpenCV_LIBS})
+# Draco backs the `pcd compress` / `pcd decompress` codec (draco_codec.cpp).
+# PRIVATE for the same reason as OpenCV.
+target_link_libraries(bagwiz_pointcloud PRIVATE ${bagwiz_draco_location})
 
 install(TARGETS bagwiz_pointcloud
   EXPORT export_${PROJECT_NAME}
@@ -137,6 +156,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_deskew_test test/core/pointcloud/deskew_test.cpp)
   target_link_libraries(bagwiz_deskew_test bagwiz_pointcloud)
+
+  ament_add_gtest(bagwiz_draco_codec_test test/core/pointcloud/draco_codec_test.cpp)
+  target_link_libraries(bagwiz_draco_codec_test bagwiz_pointcloud)
 
   ament_add_gtest(bagwiz_color_mapper_test test/core/pointcloud/color_mapper_test.cpp)
   target_link_libraries(bagwiz_color_mapper_test bagwiz_pointcloud)

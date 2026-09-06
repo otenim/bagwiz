@@ -1616,10 +1616,11 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 }
 
 // `pcd` is a command group for PointCloud2 topic processing. Its subcommands are
-// `concat` and `undistort`. At the subcommand slot (word 1) the candidates are
-// those two (or the implicit help flags for a `-` word). `-i`/`--input` names a
-// path that falls through to the shell's file completion. Past the subcommand we
-// surface each subcommand's own flags for any `-` word.
+// `concat`, `undistort`, `compress`, and `decompress`. At the subcommand slot
+// (word 1) the candidates are those four (or the implicit help flags for a `-`
+// word). `-i`/`--input` names a path that falls through to the shell's file
+// completion. Past the subcommand we surface each subcommand's own flags for
+// any `-` word.
 //
 // For `concat`, `--as` names a new topic to create — a declared
 // literal slot with a reject_reason, so try_topic_completion leaves it alone
@@ -1655,6 +1656,21 @@ std::vector<std::string> complete_cam_info(const CompletionRequest & request)
 //              --pcd <t...> [--ref <frame>] [--of <frame>] [-o <out>]
 //              [-j|--threads <N>] [-w|--overwrite] [--no-extrap]
 //              [--max-extrap-duration <dur>] [--keep-point-time]
+//
+// For `compress` and `decompress`, `-t`/`--topics` is a declared topic slot
+// (PointCloud2 topics for compress, CompressedPointCloud2 for decompress), so
+// try_topic_completion handles their values. `--as` names the topic to create
+// (a declared literal slot with a reject_reason, like concat's), so it offers
+// nothing here either. The `--*-bits` flags and `-j` take numbers, `-o` a
+// path: no value completion.
+//
+//   compress:   `pcd`(0) `compress`(1) -i|--input <bag> [-t|--topics <t...>]
+//               [--as <name>] [--lossless] [--position-bits <N>]
+//               [--normal-bits <N>] [--color-bits <N>] [--generic-bits <N>]
+//               [-o <out>] [-j|--threads <N>] [-f|--force] [-w|--overwrite]
+//   decompress: `pcd`(0) `decompress`(1) -i|--input <bag> [-t|--topics <t...>]
+//               [--as <name>] [-o <out>] [-j|--threads <N>] [-f|--force]
+//               [-w|--overwrite]
 std::vector<std::string> complete_pcd(const CompletionRequest & request)
 {
   const auto current = current_word(request);
@@ -1662,7 +1678,7 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
     if (current.starts_with("-")) {
       return matching({kCommonHelpFlags.begin(), kCommonHelpFlags.end()}, current);
     }
-    return matching({"concat", "undistort"}, current);
+    return matching({"compress", "concat", "decompress", "undistort"}, current);
   }
 
   if (request.cursor_word >= kSecondCommandArgWord && current.starts_with("-")) {
@@ -1680,6 +1696,21 @@ std::vector<std::string> complete_pcd(const CompletionRequest & request)
           {"--compression", "--compression-level", "--input", "--keep-point-time",
            "--max-extrap-duration", "--no-extrap", "--of", "--output", "--overwrite", "--pcd",
            "--pose", "--ref", "--threads", "--twist", "-i", "-j", "-o", "-w"}),
+        current);
+    }
+    if (sub == "compress") {
+      return matching(
+        with_help(
+          {"--as", "--color-bits", "--force", "--generic-bits", "--input", "--lossless",
+           "--normal-bits", "--output", "--overwrite", "--position-bits", "--threads", "--topics",
+           "-f", "-i", "-j", "-o", "-t", "-w"}),
+        current);
+    }
+    if (sub == "decompress") {
+      return matching(
+        with_help(
+          {"--as", "--force", "--input", "--output", "--overwrite", "--threads", "--topics", "-f",
+           "-i", "-j", "-o", "-t", "-w"}),
         current);
     }
   }

@@ -94,6 +94,11 @@ libsixel = "*"
 # conda's gcc excludes /usr/include, so Boost must come from the env. Consumed only
 # by the SLAM build, but cheap enough to keep in the shared base.
 libboost-devel = "*"
+# draco (conda-forge) is Google's point-cloud codec behind `bagwiz pcd compress` /
+# `pcd decompress` (bagwiz_pointcloud/src/core/pointcloud/draco_codec.cpp). Linked
+# PRIVATE into bagwiz_pointcloud so it does not leak into its export set, matching
+# GeographicLib and libav.
+draco = "*"
 
 # Activation applies to every environment: select Cyclone DDS (bagwiz depends on
 # rmw_cyclonedds_cpp; Fast DDS is the distro default since Jazzy) and source the
@@ -229,6 +234,9 @@ ros-humble-ament-cmake-gtest = "*"
 ros-humble-sensor-msgs = "*"
 ros-humble-diagnostic-msgs = "*"
 ros-humble-builtin-interfaces = "*"
+# CompressedPointCloud2 message definition, resolved at runtime by bagwiz_msg's
+# msg_definition_resolver when `pcd compress` writes a compressed topic into a bag.
+ros-humble-point-cloud-interfaces = "*"
 
 [feature.jazzy]
 channels = [{ channel = "https://prefix.dev/robostack-jazzy", priority = 1 }]
@@ -255,6 +263,9 @@ ros-jazzy-ament-cmake-gtest = "*"
 ros-jazzy-sensor-msgs = "*"
 ros-jazzy-diagnostic-msgs = "*"
 ros-jazzy-builtin-interfaces = "*"
+# CompressedPointCloud2 message definition, resolved at runtime by bagwiz_msg's
+# msg_definition_resolver when `pcd compress` writes a compressed topic into a bag.
+ros-jazzy-point-cloud-interfaces = "*"
 # Jazzy's default Eigen (5.0.x) breaks the GLIM/GTSAM source build (cascading
 # -Werror / missing-include); pin to 3.4 so `pixi run build-full` (the SLAM build)
 # works and bagwiz's SLAM translation units share one Eigen with the vendored

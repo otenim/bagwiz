@@ -2,10 +2,12 @@
 
 PointCloud2 topic processing.
 
-| Subcommand                           | What it does                                                              |
-| ------------------------------------ | ------------------------------------------------------------------------- |
-| [`concat`](#bagwiz-pcd-concat)       | Merge multiple PointCloud2 topics into one new topic.                     |
-| [`undistort`](#bagwiz-pcd-undistort) | Motion-deskew one or more PointCloud2 topics from an external pose topic. |
+| Subcommand                             | What it does                                                              |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| [`concat`](#bagwiz-pcd-concat)         | Merge multiple PointCloud2 topics into one new topic.                     |
+| [`undistort`](#bagwiz-pcd-undistort)   | Motion-deskew one or more PointCloud2 topics from an external pose topic. |
+| [`compress`](#bagwiz-pcd-compress)     | Draco-compress PointCloud2 topics into CompressedPointCloud2 topics.      |
+| [`decompress`](#bagwiz-pcd-decompress) | Decode CompressedPointCloud2 (`draco`) topics back into PointCloud2.      |
 
 ---
 
@@ -360,6 +362,125 @@ Reproducibility": it is held strictly, at any thread count.
 | `--of` → a `--pcd` topic's cloud frame is not reachable via `*/tf_static` + `<pose_topic>`                                | Fatal.                                                                                                    |
 | A cloud reaching the rewrite step is malformed (big-endian, missing/misshapen x/y/z, or an inconsistent point/row layout) | Aborts the run (a cloud that merely fails to _parse_ is copied through unchanged with a warning instead). |
 | `-o` output path already exists without `-w`/`--overwrite`                                                                | Error.                                                                                                    |
+
+---
+
+## `bagwiz pcd compress`
+
+Draco-compress `sensor_msgs/msg/PointCloud2` topics into
+[`point_cloud_interfaces/msg/CompressedPointCloud2`](https://github.com/ros-perception/point_cloud_transport)
+topics (`format: "draco"`) — the same wire format the
+`draco_point_cloud_transport` plugin uses, so the output bag plays back with
+the standard transport and round-trips with
+[`pcd decompress`](#bagwiz-pcd-decompress). Each selected topic is _replaced_
+by its compressed counterpart; every other topic is copied through unchanged,
+and message order and timestamps are preserved. The result is written with
+`-o`, or the input bag is rewritten in place when `-o` is omitted.
+
+### Usage
+
+```text
+bagwiz pcd compress -i <input> [OPTIONS]
+```
+
+### Examples
+
+```bash
+# Compress every PointCloud2 topic in the bag (default lossy, 14-bit
+# quantization), writing a new bag.
+bagwiz pcd compress -i drive.mcap -o compressed.mcap
+
+# Compress one topic losslessly, in place, under a custom topic name.
+bagwiz pcd compress -i drive.mcap -t /sensing/lidar/top/pointcloud \
+  --lossless --as /sensing/lidar/top/pointcloud/draco
+
+# Compress all lidar topics via a glob (quoted so the shell doesn't expand
+# it) with coarser position quantization.
+bagwiz pcd compress -i drive.mcap -t '/sensing/lidar/*/pointcloud' \
+  --position-bits 12 -o compressed.mcap
+```
+
+### Options
+
+| Flag                    | Description                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** Input bag (file or directory).                                                                                                                                                                                                                                                                                                             |
+| `-t`, `--topics <t...>` | PointCloud2 topics to compress — literal names or `*` globs (see [Topic selectors](topic.md#topic-selectors)). Default: every PointCloud2 topic in the bag.                                                                                                                                                                                              |
+| `--as <name>`           | Name of the compressed output topic instead of the default `<topic>/draco`. A literal name, not a glob. Only valid when exactly one topic is selected. Long-form only.                                                                                                                                                                                   |
+| `--lossless`            | Store attributes unquantized so floats round-trip bit-exactly. Default: lossy, 14-bit quantization per attribute type. Mutually exclusive with the `--*-bits` flags. Non-dense clouds (NaN/Inf points) are compressed only in this mode; in lossy mode they pass through uncompressed (see [Skip and pass-through rules](#skip-and-pass-through-rules)). |
+| `--position-bits <N>`   | Quantization bits for position attributes. Default: `14`. Range 1–31.                                                                                                                                                                                                                                                                                    |
+| `--normal-bits <N>`     | Quantization bits for normal attributes. Default: `14`. Range 1–31.                                                                                                                                                                                                                                                                                      |
+| `--color-bits <N>`      | Quantization bits for color attributes. Default: `14`. Range 1–31.                                                                                                                                                                                                                                                                                       |
+| `--generic-bits <N>`    | Quantization bits for generic attributes. Default: `14`. Range 1–31.                                                                                                                                                                                                                                                                                     |
+| `-o`, `--output <path>` | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                                                                                                                                                                                             |
+| `-f`, `--force`         | Replace the output topic if it already exists in the input bag (its old messages are dropped).                                                                                                                                                                                                                                                           |
+| `-w`, `--overwrite`     | Overwrite an existing `-o/--output` path.                                                                                                                                                                                                                                                                                                                |
+| `-j`, `--threads <N>`   | Number of worker threads for encoding. Default: `0` = `std::thread::hardware_concurrency()`; `1` forces the synchronous path. Range 0–256; in-range values above hardware concurrency are capped to it.                                                                                                                                                  |
+
+### Skip and pass-through rules
+
+A selected message that cannot be encoded does not fail the run. It is copied
+through under the **original** topic name and type (which is otherwise
+replaced and dropped), logged once per topic at WARN, and counted in the
+end-of-run summary. This applies to clouds that fail to parse as PointCloud2,
+big-endian clouds, organized clouds with row padding (`row_step` ≠ `width` ×
+`point_step`, which the point-contiguous codec cannot represent), and — in
+lossy mode — non-dense clouds, because quantizing NaN/Inf coordinates is
+undefined. Pass `--lossless` to compress non-dense clouds.
+
+### Determinism
+
+Each cloud is encoded independently from its own bytes, so the compressed
+payloads — and, via the single collector thread, the bag's message order —
+are identical at any `--threads` value.
+
+---
+
+## `bagwiz pcd decompress`
+
+Decode `point_cloud_interfaces/msg/CompressedPointCloud2` topics with
+`format: "draco"` back into `sensor_msgs/msg/PointCloud2` topics — the inverse
+of [`pcd compress`](#bagwiz-pcd-compress). Each selected topic is replaced by
+its decompressed counterpart, named by stripping the trailing `/draco` from
+the input topic name (`/points/draco` → `/points`); every other topic is
+copied through unchanged.
+
+### Usage
+
+```text
+bagwiz pcd decompress -i <input> [OPTIONS]
+```
+
+### Examples
+
+```bash
+# Decompress every CompressedPointCloud2 topic back to PointCloud2.
+bagwiz pcd decompress -i compressed.mcap -o restored.mcap
+
+# Decompress one topic under a custom name.
+bagwiz pcd decompress -i compressed.mcap -t /points/draco --as /points_raw \
+  -o restored.mcap
+```
+
+### Options
+
+| Flag                    | Description                                                                                                                                                                                                                      |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** Input bag (file or directory).                                                                                                                                                                                     |
+| `-t`, `--topics <t...>` | CompressedPointCloud2 topics to decompress — literal names or `*` globs. Default: every CompressedPointCloud2 topic in the bag. A selected topic whose name does not end in `/draco` is an error unless `--as` names the output. |
+| `--as <name>`           | Name of the decompressed output topic instead of the stripped `/draco` name. A literal name, not a glob. Only valid when exactly one topic is selected. Long-form only.                                                          |
+| `-o`, `--output <path>` | Output bag. When omitted, `<input>` is rewritten in place (atomic tmp swap).                                                                                                                                                     |
+| `-f`, `--force`         | Replace the output topic if it already exists in the input bag (its old messages are dropped).                                                                                                                                   |
+| `-w`, `--overwrite`     | Overwrite an existing `-o/--output` path.                                                                                                                                                                                        |
+| `-j`, `--threads <N>`   | Number of worker threads for decoding. Default: `0` = `std::thread::hardware_concurrency()`; `1` forces the synchronous path. Range 0–256; in-range values above hardware concurrency are capped to it.                          |
+
+### Skip and error rules
+
+A selected message whose `format` is not `"draco"`, or that does not parse as
+CompressedPointCloud2, is copied through under the original topic with a
+once-per-topic WARN — mixed-format topics survive the round trip. A Draco
+decode failure, or a decoded point count that contradicts `height*width`, is
+a hard error: the run fails rather than writing a corrupt cloud.
 
 ## Exit status
 
