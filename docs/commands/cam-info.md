@@ -80,7 +80,7 @@ bagwiz cam-info replace -i drive.mcap -t '/camera/*=shared.yaml'
 | `--yaml <yaml>`                  | Camera calibration YAML in the `camera_calibration` / `camera_info_manager` format, applied to every bare `<topic>` entry of `-t`. Required when at least one entry is bare; rejected when none is.                                                                                                                   |
 | `-t`, `--topics <t>[=<yaml>]...` | **Required.** One or more CameraInfo topic selectors to rewrite, each as `<topic>` (uses `--yaml`) or `<topic>=<yaml>` (its own file), where `<topic>` is a literal name or a `*` glob (see [Topic selectors](topic.md#topic-selectors)). Each type must be `sensor_msgs/msg/CameraInfo`. The two forms can be mixed. |
 | `--frame-id <id>`                | Override `header.frame_id` on the rewritten messages. When omitted, each message keeps its frame_id.                                                                                                                                                                                                                  |
-| `-o`, `--output <p>`             | Write the result to a new bag instead of rewriting `<input>` in place.                                                                                                                                                                                                                                                |
+| `-o`, `--output <p>`             | Write the result to a new bag instead of rewriting `<input>` in place. A `.mcap` or `.db3` extension names a single-file bag in that format; any other path a directory bag in `<input>`'s own storage format. Compression is carried over from the input (see [output bag shape](../../README.md#subcommands)).      |
 | `-w`, `--overwrite`              | Replace an existing `-o` path. Without it, an existing output path stops the run. No effect in-place.                                                                                                                                                                                                                 |
 
 ### YAML format and field mapping
@@ -151,9 +151,18 @@ One or more entries are given via `-t`/`--topics`, each as `<topic>` or
 - `<input>` doubles as the write-side target: without `-o` the bag is rewritten
   in place, mirroring `bagwiz traj join`.
 - In-place mode replaces the input atomically via a sibling temporary bag, in the
-  same storage backend and layout as the input.
-- The output bag is always written uncompressed (re-compress later with
-  [`bagwiz compress`](compress.md) if needed).
+  same storage backend, layout, and compression as the input. A bare single-file
+  `.db3.zstd` cannot be rewritten in place ("Could not detect storage format");
+  pass `-o` for those.
+- With `-o`, the output path picks the bag's shape: a `.mcap` or `.db3` extension
+  names a single-file bag in that format (converting if `<input>` is the other
+  backend), and any other path a directory bag in `<input>`'s own storage format.
+- Compression is carried over from the input and translated to the output
+  storage (an MCAP output takes the input's chunk codec, a sqlite3 directory
+  output its rosbag2 MESSAGE or FILE mode, a plain input stays plain; a
+  single-file `.db3` cannot carry compression, so a compressed input is written
+  plain there with a warning) — see
+  [output bag shape](../../README.md#subcommands).
 
 ---
 
@@ -364,10 +373,16 @@ correct, so the result is exactly `[k | 0]`.
 
 ### In-place vs `-o`
 
-- In-place mode replaces the input atomically: a bag via a sibling temporary bag,
-  a YAML via a sibling temporary file.
-- The output bag is always written uncompressed (re-compress later with
-  [`bagwiz compress`](compress.md) if needed).
+- In-place mode replaces the input atomically: a bag via a sibling temporary bag
+  (keeping its storage format, layout, and compression), a YAML via a sibling
+  temporary file. A bare single-file `.db3.zstd` cannot be rewritten in place
+  ("Could not detect storage format"); pass `-o` for those.
+- With `-o`, a bag's compression is carried over from the input and translated
+  to the output storage (an MCAP output takes the input's chunk codec, a sqlite3
+  directory output its rosbag2 MESSAGE or FILE mode, a plain input stays plain;
+  a single-file `.db3` cannot carry compression, so a compressed input is
+  written plain there with a warning) — see
+  [output bag shape](../../README.md#subcommands).
 
 ---
 

@@ -49,7 +49,7 @@ bagwiz compress -i drive_zstd/ -o drive_plain/ --mode none
 | `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag2 (directory or single-file). Must exist. Compressed inputs of every supported shape (MCAP chunk compression, MESSAGE-mode, FILE-mode `.db3.zstd` envelope) are read transparently, including a bare `.db3` lifted out of a MESSAGE-mode directory bag — its own `metadata` table carries the declaration.                       |
 | `-o`, `--output <output>` | Write the result to this new rosbag2 directory or single-file (`*.mcap` / `*.db3`) instead of rewriting `<input>` in place. SQLite3 compression (`--mode file` / `message`) requires a directory target: rosbag2 only decompresses when a `metadata.yaml` declares the mode, so a single `.db3` would read back as raw zstd frames without an error.             |
 | `--mode <M>`              | Compression mode. One of `auto`, `file`, `message`, `none`. `file`: MCAP chunk compression, or the whole-shard `.db3.zstd` envelope for SQLite3. `message`: per-message zstd frames (SQLite3 only; rejected for MCAP, where rosbag2 defines no per-message mode). `none`: decompress to plain storage. Default: `auto` — `file` for MCAP, `message` for SQLite3. |
-| `--codec <C>`             | Compression codec. One of `zstd`, `lz4`. `lz4` is valid only for MCAP chunk compression; rosbag2 defines zstd alone for SQLite3 storage. Nothing is encoded under `--mode none`, so naming a codec there is rejected. Default: `zstd`. Long-form only.                                                                                                           |
+| `--codec <C>`             | Compression codec. One of `zstd`, `lz4`. `lz4` is valid only for MCAP chunk compression; rosbag2 defines zstd alone for SQLite3 storage. Nothing is encoded under `--mode none`, so `--codec lz4` is rejected there (`--codec zstd` is the default and passes). Default: `zstd`. Long-form only.                                                                 |
 | `--level <L>`             | Encoder effort. One of `fastest`, `fast`, `default`, `slow`, `slowest`. Maps onto the codec's effort scale (for SQLite3 zstd: 1, 2, the library default, 9, 19 respectively). Default: the codec's own default. Long-form only.                                                                                                                                  |
 | `--storage <S>`           | Target storage backend. One of `mcap`, `sqlite3`. Default: inferred from the `-o` extension; otherwise inherited from the input bag's storage — the same resolution order as [`convert format`](convert.md#storage-backend-resolution). In place the input's backend is preserved, so only a value naming that same backend is accepted. Long-form only.         |
 | `-w`, `--overwrite`       | Replace the `-o` path if it already exists. Without this flag, any pre-existing entry there (file or directory) stops the run with a clear log line. No effect in-place, where `<input>` is replaced by design.                                                                                                                                                  |
@@ -101,15 +101,21 @@ input's storage backend and layout:
   `metadata.yaml` can declare the mode. Use `-o <directory>` instead.
 - An input whose backend cannot be auto-detected is rejected: there is no
   output extension to read the target storage off.
+- A bare single-file `.db3.zstd` envelope is rejected as well ("could not
+  detect storage format"): the single-file SQLite3 writer produces plain
+  storage only, so nothing could reproduce the envelope over its own path.
+  Pass `-o` for those. A FILE-mode directory bag is not affected: it rewrites
+  in place like any other bag, so `--mode none` decompresses it in place.
 
 ## Performance
 
 The re-encode streams every message through the decoded pipeline; nothing is
 chunk-copied, since copying chunks would preserve the input's compression —
-the exact thing this command changes. Both compression write paths
+the exact thing this command changes. All three compression write paths
 parallelize across `BAGWIZ_WRITE_THREADS` workers: MCAP chunk compression,
-and the whole-shard zstd envelope of SQLite3 FILE-mode, which otherwise runs
-as a single-threaded pass at close. SQLite3 FILE-mode reads best on
+the per-message zstd of SQLite3 MESSAGE mode (inserts stay in submission
+order), and the whole-shard zstd envelope of SQLite3 FILE mode, which
+otherwise runs as a single-threaded pass at close. SQLite3 FILE-mode reads best on
 machines with free temp space roughly the size of the decompressed database
 (readers expand the envelope to a temporary `.db3`).
 

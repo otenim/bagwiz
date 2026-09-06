@@ -335,6 +335,30 @@ code that is not part of the CLI itself.
   not apply to that choice, since a frame pair has no natural
   source/destination reading.
 
+- Give every subcommand that reads a bag and writes a bag the same
+  output shape, so a user learns the rule once: the layout follows
+  the `-o` path (`.mcap` / `.db3` names a single file, anything else
+  a directory), the storage format follows that extension and is
+  otherwise the input's, and the compression is carried over from the
+  input, translated to the output storage (an MCAP output takes the
+  input's chunk codec, a sqlite3 directory output the input's rosbag2
+  MESSAGE / FILE mode, a plain input stays plain; a single-file `.db3`
+  cannot carry compression and is written plain with a warning).
+  Without `-o`, an in-place rewrite preserves all three. Build a new
+  bag-to-bag command on `core::run_bag_rewrite`
+  (`bagwiz_bag/include/bagwiz/core/bag/rewrite.hpp`), which applies
+  the rule through `io::create_options_inheriting_format`,
+  `io::create_options_preserving_storage` and
+  `io::create_options_inheriting_compression`; a command that must
+  open its own writer resolves the backend itself and composes its
+  `io::CreateOptions` through `io::create_options_inheriting_compression`
+  (`convert format`). Deviate only where changing one of
+  the three is the command's purpose (`convert format --storage`,
+  `compress`, `pcd undistort --compression`), through an explicit
+  flag whose help text says so. README.md's "Subcommands" section
+  states the rule for users; keep it and each command page in step
+  with the code.
+
 - Keep every subcommand's help text simple: cover what the command
   does, its operands and options, and only the key points a user
   needs to invoke it correctly. Do not embed extended rationale,
