@@ -46,8 +46,9 @@ inline constexpr const char * kDefaultStaticTfTopic = "/tf_static";
 // replacing an existing `-o`/`--output` path, matching `bagwiz traj join`.
 //
 // When `output_path` is empty, `<input>` is rewritten in place via an atomic
-// tmp-swap that preserves its storage format and layout; when it is set,
-// `<input>` is left untouched and the result is written there.
+// tmp-swap that preserves its storage format, layout and compression; when it
+// is set, `<input>` is left untouched and the result is written there, with
+// `<input>`'s compression carried over and translated to the output storage.
 //
 // Returns the process exit code: 0 on success, 1 on any error (the YAML could not
 // be read or is invalid, a bag could not be opened, an unresolved topic/type

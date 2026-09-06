@@ -149,8 +149,8 @@ source ~/.config/fish/completions/bagwiz.fish
   `-<TAB>` also surfaces `--version`. The covered positions are:
   - `bagwiz -<TAB>` → `--help`, `--version`, `-h`
   - `bagwiz <cmd> -<TAB>` for every command (`calib`, `cam-info`, `complete`,
-    `compress`, `convert`, `du`, `ls`, `map`, `movify`, `pcd`, `stamp`, `tf`, `topic`,
-    `traj`, `trim`, `walk`).
+    `compress`, `convert`, `du`, `info`, `ls`, `map`, `movify`, `pcd`, `stamp`,
+    `tf`, `topic`, `traj`, `trim`, `video`, `walk`).
     `map`'s own flag/subcommand completion responds the same way regardless
     of `BAGWIZ_WITH_SLAM` — see the note above; only `bagwiz <TAB>` (the
     top-level list) and topic-slot values are build-gated;
@@ -160,10 +160,11 @@ source ~/.config/fish/completions/bagwiz.fish
   - `bagwiz <cmd> <subcommand> -<TAB>` for every nested subcommand
     (`cam-info replace`, `cam-info recompute-p`, `cam-info dump`,
     `convert format`, `map slam`, `map viewer`,
-    `pcd concat`, `pcd undistort`, `tf static calc`, `tf static cp`,
+    `pcd concat`, `pcd undistort`, `pcd compress`, `pcd decompress`,
+    `tf static calc`, `tf static cp`,
     `tf static drop`, `tf static dump`, `tf static join`, `tf static update`,
     `tf tree`, `topic drop`, `topic keep`,
-    `topic rename`, `traj dump`, `traj join`);
+    `topic rename`, `traj dump`, `traj join`, `video encode`, `video decode`);
     `cam-info replace -<TAB>` surfaces `--frame-id`, `--output`/`-o`,
     `--topics`/`-t`, and `-w`/`--overwrite`;
     `topic drop -<TAB>` / `topic keep -<TAB>` surface
@@ -257,6 +258,18 @@ name only — it offers plain topic names either way, typed as-is.
   - `bagwiz pcd undistort -i <input> ... --pcd <topic>...` —
     `sensor_msgs/msg/PointCloud2` topics, offered at every value of the variadic
     run
+  - `bagwiz pcd compress -i <input> ... [-t/--topics <topic>...]` —
+    `sensor_msgs/msg/PointCloud2` topics, offered at every value of the variadic
+    run
+  - `bagwiz pcd decompress -i <input> ... [-t/--topics <topic>...]` —
+    `point_cloud_interfaces/msg/CompressedPointCloud2` topics, offered at every
+    value of the variadic run
+  - `bagwiz video encode -i <input> -t/--topics <topic>...` —
+    `sensor_msgs/msg/Image` or `sensor_msgs/msg/CompressedImage` topics,
+    offered at every value of the variadic run
+  - `bagwiz video decode -i <input> -t/--topics <topic>...` —
+    `foxglove_msgs/msg/CompressedVideo` topics, offered at every value of the
+    variadic run
   - `bagwiz cam-info replace -i <input> [--yaml <yaml>] -t/--topics <topic>[=<yaml>]...` —
     `sensor_msgs/msg/CameraInfo` topics (the only type `cam-info replace`
     rewrites), offered at every value of the variadic run. Unlike the
@@ -338,6 +351,9 @@ name only — it offers plain topic names either way, typed as-is.
   - `bagwiz pcd concat -i <input> ... --frame <FRAME>` (**only** static
     `*/tf_static` topics: every cloud is transformed into `--frame` through the
     bag's static TF alone, so a frame it does not know stops the run)
+  - `bagwiz map slam -i <input> ... --frame <FRAME>` (**only** static
+    `*/tf_static` topics: the output trajectory frame is resolved through the
+    bag's static TF alone)
   - `bagwiz movify -i <input> ... --frame <FRAME>` / `--pose-of <FRAME>`
     (**only** static `*/tf_static` topics: the point-cloud panels transform
     every cloud into `--frame`, and the trajectory overlay places the body

@@ -379,7 +379,7 @@ std::string format_category_legend(bool use_color)
 //                static topic is merged; two topics giving one child different
 //                parents aborts the run.
 //   static join  The inverse of `static dump`: read that YAML and embed it into
-//                the bag as one latched TFMessage on -t (default /tf_static),
+//                the bag as one latched TFMessage on --as (default /tf_static),
 //                stamped at the bag's start time. In place, or to a new bag
 //                via -o.
 //   static update  Add or update static TF edges from --yaml: an existing child

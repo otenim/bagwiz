@@ -71,7 +71,7 @@ private:
   {
     auto * sub = app.add_subcommand(
       "encode",
-      "Encode Image / CompressedImage topics into foxglove_msgs/CompressedVideo topics (H.264 "
+      "Encode Image / CompressedImage topics into foxglove_msgs/msg/CompressedVideo topics (H.264 "
       "or H.265, one message per frame, playable in Foxglove). By default each source topic "
       "is replaced by its video topic, named <source>/video.");
     sub->add_option("-i,--input", encode_args_.input_path, "Input bag (file or directory).")
@@ -158,7 +158,7 @@ private:
   {
     auto * sub = app.add_subcommand(
       "decode",
-      "Decode foxglove_msgs/CompressedVideo topics (h264 / h265) back into image topics: "
+      "Decode foxglove_msgs/msg/CompressedVideo topics (h264 / h265) back into image topics: "
       "CompressedImage (jpeg or png) or Image (bgr8). By default each source topic is "
       "replaced by its image topic, named by removing a trailing /video, else <source>/image.");
     sub->add_option("-i,--input", decode_args_.input_path, "Input bag (file or directory).")

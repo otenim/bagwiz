@@ -29,7 +29,8 @@ constexpr const char * kLogger = "bagwiz.cmd.pcd";
 // `bagwiz pcd` is a command group for PointCloud2 topic processing.
 //   concat      - merge multiple PointCloud2 topics into one new topic (static TF +
 //                 first-topic-driven time sync)
-//   undistort   - motion-deskew PointCloud2 topic(s) using external pose topic + tf_static
+//   undistort   - motion-deskew PointCloud2 topic(s) using an external pose or twist topic +
+//                 tf_static
 //   compress    - Draco-compress PointCloud2 topics into CompressedPointCloud2 topics
 //   decompress  - decode CompressedPointCloud2 ("draco") topics back into PointCloud2
 class PcdCommand : public Command

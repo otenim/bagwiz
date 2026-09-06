@@ -338,8 +338,8 @@ on negative timestamps.
 
 A single JPEG camera shown as decoded — one `--cam` topic of
 `CompressedImage`, `--no-rectify` (or no camera info to rectify with), no
-`--resize` / `--width`, no `--cam-pcd`, no `--grid` larger than `1x1`, and no
-other panel — streams each
+`--resize` / `--width`, no `--cam-pcd` or `--pose` overlay, no `--grid`
+larger than `1x1`, and no other panel — streams each
 frame's decoded YUV planes straight to the encoder, decoding a few frames
 ahead on worker threads, instead of composing a frame through packed BGR
 and back; the run logs "streaming ... as decoded". Every other layout

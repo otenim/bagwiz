@@ -6,8 +6,11 @@ on disk, whether it carries a `metadata.yaml`, and how many topics and
 messages it holds between which times. Every value is read from the bag's own
 summaries and the file system, never from its message records, so the command
 answers in the time it takes to open the files whatever the bag's size.
-Per-topic detail belongs to [`ls`](ls.md) and [`du`](du.md). ROS 1 `*.bag`
-inputs are not supported.
+Per-topic detail belongs to [`ls`](ls.md) and [`du`](du.md). `info` does not
+validate the input's format before describing it: a ROS 1 `*.bag` file — or
+any file `info` cannot recognize — is described anyway, exiting `0` with
+`Storage`, `Compression`, `Topics`, `Messages`, `Start`, `End` and `Duration`
+all reported as unknown, rather than being rejected.
 
 ## Usage
 
@@ -36,11 +39,11 @@ bagwiz info -i capture.mcap | grep '^Messages:'
 
 ## Options
 
-| Flag                    | Description                                                                                                                                                                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>` | **Required.** ROS 2 rosbag path: a rosbag2 directory or a single-file `*.mcap` / `*.db3`. A bare `*.db3.zstd` envelope is accepted too, but only its file-level facts are reported (see "What stays unknown").                                 |
-| `-l`, `--long`          | Append one row per storage file (shard) after the summary block, with the columns `SIZE`, `MESSAGES`, `START`, `DURATION` and `PATH`. A value the shard's summary does not state prints `-`.                                                   |
-| `-b`, `--bytes`         | Print sizes as raw byte counts instead of the default human-readable units (1024-based, one decimal and a `K`/`M`/`G`/`T` suffix, e.g. `4.0K`, `1.2M`; values below 1 KiB stay raw bytes). Applies to `Size` and to the `SIZE` column of `-l`. |
+| Flag                    | Description                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>` | **Required.** Path to describe: any existing file or directory is accepted, with no check that it is actually a rosbag2 directory or a recognized single-file format. An unrecognized file — including a ROS 1 `*.bag` — is described anyway with its bag-specific fields unknown (see "What stays unknown"). |
+| `-l`, `--long`          | Append one row per storage file (shard) after the summary block, with the columns `SIZE`, `MESSAGES`, `START`, `DURATION` and `PATH`. A value the shard's summary does not state prints `-`.                                                                                                                  |
+| `-b`, `--bytes`         | Print sizes as raw byte counts instead of the default human-readable units (1024-based, one decimal and a `K`/`M`/`G`/`T` suffix, e.g. `4.0K`, `1.2M`; values below 1 KiB stay raw bytes). Applies to `Size` and to the `SIZE` column of `-l`.                                                                |
 
 ## Output
 
@@ -108,7 +111,10 @@ shard's MCAP summary; `-` where neither states them.
 ## What stays unknown
 
 `info` never reads message records, so a field the bag does not summarise is
-reported as `unknown` rather than computed:
+reported as unknown rather than computed. The literal value differs by field:
+`Topics`, `Start`, `End` and `Duration` print plain `unknown`; `Messages` and
+an unresolvable `Compression` print the longer `unknown (no summary in the
+bag)`.
 
 | Bag                                                                                                                       | Unknown fields                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |

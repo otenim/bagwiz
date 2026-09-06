@@ -49,8 +49,8 @@ int run_tf_static_join(
   }
   // Not an error: a caller may have their own reader for a differently-named
   // latched topic. But bagwiz's own static-TF readers (`tf static dump`,
-  // `tf static calc`, `tf tree -t static`, `tf static cp`) all select topics by
-  // the "tf_static" name suffix, so they would not see this one.
+  // `tf static calc`, `tf tree`'s static coloring, `tf static cp`) all select
+  // topics by the "tf_static" name suffix, so they would not see this one.
   if (!core::is_static_tf_topic(topic)) {
     BAGWIZ_LOG_WARN(
       kLogger,
