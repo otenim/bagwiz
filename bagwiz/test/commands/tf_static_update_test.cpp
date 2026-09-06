@@ -11,6 +11,7 @@
 #include "bagwiz/core/decoder/decoder.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/core/tf/tf_value_extract.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -84,7 +85,8 @@ void write_tf_message(
 void write_bag(
   const std::filesystem::path & path, std::int64_t start_ns,
   const std::vector<std::pair<std::string, std::vector<geometry_msgs::msg::TransformStamped>>> &
-    static_topics = {})
+    static_topics = {},
+  const bagwiz::io::CreateOptions & options = mcap_options())
 {
   bagwiz::io::TopicInfo clock;
   clock.name = "/clock";
@@ -95,7 +97,7 @@ void write_bag(
     std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
   const auto bytes = std::span<const std::byte>(kPayload.data(), kPayload.size());
 
-  auto writer = bagwiz::io::open_write(path, mcap_options());
+  auto writer = bagwiz::io::open_write(path, options);
   writer->declare_topic(clock);
   for (const auto & [topic, edges] : static_topics) {
     writer->declare_topic(tf_topic_info(topic));
@@ -208,6 +210,28 @@ protected:
 
   std::filesystem::path tmp_dir_;
 };
+
+// The output bag is shaped like the input: a directory -o output takes the
+// input's storage backend and carries its compression over. lz4 rather than
+// zstd, so a run that left the writer's zstd default in place would fail.
+TEST_F(TfStaticUpdateTest, OutputInheritsStorageAndCompression)
+{
+  const auto bag = tmp_dir_ / "bag.mcap";
+  const auto out = tmp_dir_ / "out_dir";
+  auto lz4 = mcap_options();
+  lz4.mcap_compression = "lz4";
+  write_bag(bag, 1'000'000'000LL, {{"/tf_static", sample_edges()}}, lz4);
+  const auto yaml = write_yaml(one_edge_yaml("drs_base_link", "oxts_link", "3.0"));
+
+  ASSERT_EQ(run_tf_static_update(bag, yaml, "/tf_static", out, /*overwrite=*/false), 0);
+
+  ASSERT_TRUE(std::filesystem::is_directory(out));
+  const auto d = bagwiz::io::describe_bag(out);
+  EXPECT_EQ(d.format, bagwiz::io::Format::Mcap);
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+  EXPECT_TRUE(read_tf_topic(out, "/tf_static").present);
+}
 
 TEST_F(TfStaticUpdateTest, AddsAnEdgeToABagWithoutStaticTf)
 {

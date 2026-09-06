@@ -11,6 +11,7 @@
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 
@@ -302,8 +303,9 @@ TEST_F(TopicDropTest, OverwriteReplacesExistingOutput)
 }
 
 // The default path (chunk pass-through) and the decoded pipeline
-// (BAGWIZ_PASSTHROUGH=off) must produce the same bag content — and only the
-// pass-through preserves the input's chunk compression.
+// (BAGWIZ_PASSTHROUGH=off) must produce the same bag content, and both must
+// leave the output with the input's chunk compression: the pass-through by
+// copying the chunks, the decoded pipeline by carrying the codec over.
 TEST_F(TopicDropTest, PassthroughMatchesPipelineAndPreservesCompression)
 {
   const auto in_path = tmp_dir_ / "input_zstd";
@@ -339,18 +341,51 @@ TEST_F(TopicDropTest, PassthroughMatchesPipelineAndPreservesCompression)
 
   // Neither output declares compression in metadata.yaml — those fields name
   // rosbag2's own compression layer, and an mcap shard that fills them stops
-  // being readable. The pass-through nonetheless kept the input's zstd chunks,
-  // which shows as a smaller shard than the decoded pipeline's uncompressed
-  // rewrite of the same messages.
+  // being readable. Both nonetheless carry the input's zstd chunks, which the
+  // chunk index records.
   for (const char * name : {"ref", "out"}) {
     const auto md = bagwiz::io::load_metadata_yaml(tmp_dir_ / name / "metadata.yaml");
     EXPECT_TRUE(md.compression_format.empty()) << name << ": " << md.compression_format;
     EXPECT_TRUE(md.compression_mode.empty()) << name << ": " << md.compression_mode;
+    const auto d = bagwiz::io::describe_bag(tmp_dir_ / name);
+    EXPECT_EQ(d.compression.mode, "chunk") << name;
+    EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"zstd"}) << name;
   }
-  const auto shard_bytes = [this](const std::string & name) {
-    return std::filesystem::file_size(tmp_dir_ / name / (name + "_0.mcap"));
-  };
-  EXPECT_LT(shard_bytes("out"), shard_bytes("ref"));
+}
+
+// In place, the input's compression survives the swap on both paths: the
+// pass-through copies the chunks, the decoded pipeline carries the codec
+// over. lz4 rather than zstd, so a run that left the writer's zstd default
+// in place would fail here.
+TEST_F(TopicDropTest, InPlaceRewritePreservesCompression)
+{
+  for (const char * passthrough : {"on", "off"}) {
+    const auto in_path = tmp_dir_ / (std::string("input_lz4_") + passthrough);
+    {
+      auto opts = mcap_dir_opts();
+      opts.mcap_compression = "lz4";
+      auto writer = bagwiz::io::open_write(in_path, opts);
+      writer->declare_topic(make_topic("/sensing/camera", "sensor_msgs/msg/Image"));
+      writer->declare_topic(make_topic("/sensing/lidar", "sensor_msgs/msg/PointCloud2"));
+      const std::vector<std::byte> big(2048, std::byte{0x42});
+      const std::span<const std::byte> big_view(big.data(), big.size());
+      writer->write("/sensing/camera", 1'000'000'000LL, big_view);
+      writer->write("/sensing/lidar", 2'000'000'000LL, big_view);
+      writer->close();
+    }
+    bagwiz::commands::TopicDropArgs args;
+    args.input_path = in_path;
+    args.topics = {"/sensing/lidar"};
+    ::setenv("BAGWIZ_PASSTHROUGH", passthrough, 1);
+    const int status = bagwiz::commands::run_topic_drop(args);
+    ::unsetenv("BAGWIZ_PASSTHROUGH");
+    ASSERT_EQ(status, 0) << passthrough;
+
+    EXPECT_EQ(collect(in_path).count("/sensing/lidar"), 0U) << passthrough;
+    const auto d = bagwiz::io::describe_bag(in_path);
+    EXPECT_EQ(d.compression.mode, "chunk") << passthrough;
+    EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"}) << passthrough;
+  }
 }
 
 // Exercises the real TopicCommand::configure_drop() — reached through the

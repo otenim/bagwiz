@@ -108,17 +108,20 @@ as video:
 ### In-place vs `-o`
 
 - Without `-o`, `<input>` is rewritten via an atomic tmp-swap that preserves
-  its storage format and layout. With `-o`, `<input>` is left untouched and
-  the result is written to that path; the output's storage follows the output
-  extension (`.mcap` / `.db3` pick a single-file backend) or, for a directory
-  output, inherits the input bag's storage backend.
-- In-place rewriting requires an uncompressed input. A directory bag whose
-  `metadata.yaml` declares `compression_mode: file` is rejected with `could
-not detect storage format of input bag`; pass an explicit `-o` output for
-  those.
-- MCAP output is written uncompressed (`compression: none`); re-compress
-  afterwards with [`bagwiz compress`](compress.md) if needed. Embedded
-  message schemas are preserved for the copied topics.
+  its storage format, layout and compression; a rosbag2 FILE-mode directory
+  bag rewrites in place like any other (its `.db3.zstd` envelope is
+  reproduced). Only a bare single-file `.db3.zstd` is rejected
+  (`could not detect storage format of input bag`); pass an explicit `-o`
+  output for those.
+- With `-o`, `<input>` is left untouched and the result is written to that
+  path, shaped by the shared [output bag shape](../../README.md#subcommands)
+  rule: a `.mcap` / `.db3` extension names a single-file bag of that backend,
+  any other path a directory bag with the input's backend, and the input's
+  compression is carried over, translated to the output storage (a plain
+  input stays plain; an MCAP output uses the input's codec as its chunk
+  compression; a single-file `.db3` cannot carry compression and is written
+  plain, with a warning).
+- Embedded message schemas are preserved for the copied topics.
 
 ---
 

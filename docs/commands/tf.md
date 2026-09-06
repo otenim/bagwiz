@@ -355,13 +355,17 @@ timeline, where a static transform is expected to already hold.
 ### Output modes
 
 - Default (no `-o`): `<dst>` is rewritten in place via an atomic tmp-swap that
-  preserves its storage format and layout. If the pass fails, `<dst>` is left
-  untouched.
+  preserves its storage format, layout and compression. If the pass fails,
+  `<dst>` is left untouched.
 - `-o <output>`: `<dst>` is left untouched and the result (`<dst>`'s messages
-  plus the copied static TF) is written to `<output>`. The storage format and
-  layout follow `<output>`: a `.mcap` or `.db3` extension picks that
-  single-file backend, and any other path produces a **directory-layout MCAP**
-  bag — a directory output does not inherit `<dst>`'s storage backend.
+  plus the copied static TF) is written to `<output>`. Layout follows
+  `<output>`: a `.mcap` or `.db3` extension names a single-file bag of that
+  backend, and any other path a rosbag2 directory bag using `<dst>`'s storage
+  backend. Compression is carried over from `<dst>` and translated to the
+  output storage (a single-file `.db3` output cannot carry it, so a compressed
+  `<dst>` is written plain there, with a warning); see
+  [output bag shape](../../README.md#subcommands) for the shared rule. `<src>`
+  has no influence on the output's shape.
 
 ### `--force` vs `-w`, `--overwrite`
 
@@ -744,12 +748,16 @@ without an `ORDER BY`) still receives it first.
 ### Output modes
 
 - Default (no `-o`): `<input>` is rewritten in place via an atomic tmp-swap that
-  preserves its storage format and layout. If the pass fails, `<input>` is left
-  untouched.
+  preserves its storage format, layout and compression. If the pass fails,
+  `<input>` is left untouched.
 - `-o <output>`: `<input>` is left untouched and the result (its messages plus the
-  embedded static TF) is written to `<output>`. The storage format and layout
-  follow `<output>`: a `.mcap` or `.db3` extension picks that single-file backend,
-  and any other path produces a **directory-layout MCAP** bag.
+  embedded static TF) is written to `<output>`. Layout follows `<output>`: a
+  `.mcap` or `.db3` extension names a single-file bag of that backend, and any
+  other path a rosbag2 directory bag using `<input>`'s storage backend.
+  Compression is carried over from `<input>` and translated to the output
+  storage (a single-file `.db3` output cannot carry it, so a compressed
+  `<input>` is written plain there, with a warning); see
+  [output bag shape](../../README.md#subcommands) for the shared rule.
 
 ### `--force` vs `-w`, `--overwrite`
 

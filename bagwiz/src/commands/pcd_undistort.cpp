@@ -547,9 +547,9 @@ int run_sync_undistort_pass(
 }
 
 // Run Pass 2 through the shared -o vs in-place rewrite dispatch, picking the
-// sync or parallel pass by thread count. Unlike the other rewrite commands,
-// pcd undistort keeps the storage default (zstd) for MCAP compression rather
-// than forcing "none" — or forwards the user's --compression choice.
+// sync or parallel pass by thread count. --compression / --compression-level
+// are forwarded as overrides; without them the dispatch carries the input's
+// compression over, like every other rewrite command.
 int dispatch_undistort_pass(
   const PcdUndistortArgs & args, const io::BagReader & topic_reader,
   const std::unordered_set<std::string> & pcd_set, const ExtrinsicMap & extrinsics,
@@ -561,7 +561,6 @@ int dispatch_undistort_pass(
   rewrite_opts.format_unknown_error =
     "pcd undistort: could not detect storage format of input bag '%s'.";
   rewrite_opts.pass_failed_error = "pcd undistort: pass failed; aborting in-place swap";
-  rewrite_opts.inherit_output_format = true;
   rewrite_opts.mcap_compression = args.compression.value_or("");
   rewrite_opts.mcap_compression_level = args.compression_level.value_or("");
   return core::run_bag_rewrite(

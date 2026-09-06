@@ -16,10 +16,10 @@
 #include <optional>
 #include <string>
 
-// The shared "-o vs in-place" dispatch every rewrite-style command
-// (topic drop/keep/rename, cam-info replace/recompute-p,
-// pcd concat/undistort, tf static cp, tf static join, traj join, compress)
-// runs after validating its arguments:
+// The shared "-o vs in-place" dispatch every rewrite-style command — topic
+// drop/keep/rename, trim, traj join, tf static cp/join/drop/update, cam-info
+// replace/recompute-p, stamp sync, pcd concat/undistort/compress/decompress,
+// video encode/decode, compress — runs after validating its arguments:
 //
 //   * with -o: guard the output path (prepare_output_path), then run the
 //     command's pass with a writer factory targeting the output path.
@@ -30,9 +30,19 @@
 //     Directory + Mcap default), and abort the swap when the pass reports
 //     failure.
 //
-// Centralising the dispatch keeps the clobber policy, the Format::Auto guard,
-// the compression overrides, and the pass-status-to-exception translation
-// identical across commands. The pass itself stays with the command.
+// Both branches give the output the same shape, which is what makes every
+// bagwiz rewrite look alike to its user: the layout follows the -o path
+// (a `.mcap` / `.db3` extension names a single file, anything else a
+// directory), the storage format follows that extension and otherwise the
+// input's, and the compression is carried over from the input, translated
+// to the output storage (io::create_options_inheriting_compression). A
+// command overrides only what it exists to change — `compress` its codec,
+// `pcd undistort --compression` likewise — through BagRewriteOptions.
+//
+// Centralising the dispatch keeps the clobber policy, the Format::Auto
+// guard, that output-shape policy, and the pass-status-to-exception
+// translation identical across commands. The pass itself stays with the
+// command.
 namespace bagwiz::core
 {
 
@@ -55,44 +65,39 @@ struct BagRewriteOptions
   // exit code, since the pass has already logged the specific error.
   const char * pass_failed_error = nullptr;
 
-  // -o mode only: compose the writer's CreateOptions via
-  // io::create_options_inheriting_format(input, output), so a directory
-  // output inherits the input's storage format while a .mcap/.db3 extension
-  // still picks a single-file backend. When false, Format::Auto /
-  // Layout::Auto is used and the factory resolves purely from the output
-  // path's extension. Ignored when output_format pins the format outright.
-  bool inherit_output_format = false;
-
   // -o mode only: pin the output's storage format outright, leaving only the
   // layout to the output path's extension. For commands that resolve the
   // target backend themselves and must not have that decision re-derived
   // here — `compress --storage` outranks both the output extension and the
   // input's format, an order create_options_inheriting_format cannot express.
-  // Format::Auto (the default) hands the choice back to
-  // inherit_output_format. Ignored in in-place mode, where the input's own
-  // storage is preserved and the command is expected to have rejected a
-  // conflicting request already.
+  // Format::Auto (the default) resolves the format from the output path's
+  // extension and otherwise inherits the input's, through
+  // io::create_options_inheriting_format. Ignored in in-place mode, where the
+  // input's own storage is preserved and the command is expected to have
+  // rejected a conflicting request already.
   io::Format output_format = io::Format::Auto;
 
-  // Overrides for the writer's mcap chunk codec ("zstd", "lz4", "none") and
-  // encoder level ("fastest", "fast", "default", "slow", "slowest"), applied
-  // in both modes; an empty string keeps the storage default for that knob.
-  // The codec default forces "none": rewrite commands disable compression so
-  // a bag that is rewritten often does not pay the (de)compression cost each
-  // time; commands that want the storage default (or a user-chosen codec)
-  // override this. These knobs govern only the decoded rewrite pipeline: the
-  // chunk pass-through never opens a writer through these options and
-  // preserves the input's chunk compression instead.
-  std::string mcap_compression = "none";
+  // Overrides for the writer's compression, applied in both modes. Empty
+  // (the default) carries the input's compression over to the output —
+  // the storage-appropriate translation io::create_options_inheriting_compression
+  // makes — so a rewrite never silently strips or adds compression. A
+  // non-empty value pins that knob instead: `compress` names the codec it
+  // was asked for, `pcd undistort --compression` forwards the user's choice.
+  //
+  // mcap_compression is the chunk codec of an mcap output ("zstd", "lz4",
+  // "none") and mcap_compression_level its encoder effort ("fastest",
+  // "fast", "default", "slow", "slowest"); the sqlite3 triple is rosbag2's
+  // mode ("none", "message", "file"), format ("none", "zstd") and the same
+  // effort names for a sqlite3 output. A target's compression counts as
+  // pinned when its codec or mode knob is non-empty; a level on its own
+  // still inherits the codec and only sets the effort (no bag records the
+  // level it was written with, so it is never inherited).
+  //
+  // These knobs govern only the decoded rewrite pipeline: the chunk
+  // pass-through never opens a writer through these options and preserves
+  // the input's chunk compression by copying the chunks themselves.
+  std::string mcap_compression;
   std::string mcap_compression_level;
-
-  // Overrides for the sqlite3 writer's rosbag2 compression triple: the mode
-  // ("none", "message", "file"), the format ("none", "zstd"), and the encoder
-  // level (the same effort names as mcap_compression_level). Applied in both
-  // modes; an empty string keeps the storage default for that knob. Unlike
-  // mcap_compression these default to empty rather than "none", because the
-  // CreateOptions default is already "no sqlite3 compression" — only a
-  // command that deliberately asks for it (`compress`) sets them.
   std::string sqlite3_compression_mode;
   std::string sqlite3_compression_format;
   std::string sqlite3_compression_level;

@@ -191,9 +191,11 @@ int run_stamp_sync(const StampSyncArgs & args)
   reader.reset();
 
   // 2. -o vs in-place dispatch, shared with the other rewrite-style commands:
-  //    -o writes a fresh bag (format/layout resolved from the output path's
-  //    extension) and leaves <input> untouched; otherwise <input> is rewritten
-  //    atomically via a sibling tmp, preserving its storage identity.
+  //    -o writes a fresh bag shaped like the input (storage format from the
+  //    output extension or else the input's, compression carried over) and
+  //    leaves <input> untouched; otherwise <input> is rewritten atomically
+  //    via a sibling tmp, preserving its storage format, layout and
+  //    compression.
   core::BagRewriteOptions rewrite_opts;
   rewrite_opts.logger = kLogger;
   rewrite_opts.format_unknown_error = "Could not detect storage format of input bag '%s'.";

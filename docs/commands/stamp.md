@@ -70,20 +70,23 @@ bagwiz stamp sync -i drive_dir/ -o synced_dir/ -w
 ### In-place vs `-o`
 
 - Without `-o`, `<input>` is rewritten via an atomic tmp-swap that preserves
-  its storage format and layout. With `-o`, `<input>` is left untouched and
-  the result is written to that path; the output's storage follows the output
-  extension (`.mcap` / `.db3` pick a single-file backend) or, for a directory
-  output, resolves from the output path.
-- In-place rewriting requires an uncompressed input. A directory bag whose
-  `metadata.yaml` declares `compression_mode: file` is rejected with `could
-not detect storage format of input bag`; pass an explicit `-o` output for
-  those. A chunk-compressed MCAP bag is not one of those: MCAP keeps its
-  compression inside the shard rather than in `metadata.yaml`, so it rewrites
-  in place like any other MCAP bag.
-- The bag is re-encoded message by message (nearly every message changes, so
-  there is no chunk pass-through), and an MCAP output is written with
-  `compression=none`; re-compress afterwards with [`bagwiz compress`](compress.md) if
-  needed.
+  its storage format, layout and compression. With `-o`, `<input>` is left
+  untouched and the result follows the shared
+  [output bag shape](../../README.md#subcommands) rule: a `.mcap` / `.db3`
+  extension names a single-file bag of that backend, any other path a
+  directory bag with the input's storage backend, and the input's
+  compression is carried over, translated to the output storage (a
+  single-file `.db3` cannot carry compression, so a compressed input is
+  written plain there with a warning).
+- A rosbag2 FILE-mode directory bag rewrites in place like any other bag (the
+  `.db3.zstd` envelope is reproduced). Only a bare single-file `.db3.zstd` is
+  refused in place, with `Could not detect storage format of input bag`;
+  pass `-o` for those.
+- The bag is re-encoded message by message on the decoded pipeline (the stamp
+  edit touches every headered message, so there is no MCAP chunk
+  pass-through); the output is encoded with the input's codec carried over —
+  an MCAP output keeps the input's chunk codec, a sqlite3 directory output
+  the input's rosbag2 MESSAGE or FILE mode.
 
 ## Exit status
 

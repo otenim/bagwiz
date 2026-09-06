@@ -8,6 +8,7 @@
 
 #include "bagwiz/core/bag/rewrite.hpp"
 
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 
@@ -64,6 +65,38 @@ void seed_bag(
   writer->declare_topic(make_topic("/input"));
   writer->write("/input", 1'000'000'000LL, payload_span());
   writer->close();
+}
+
+// Materialise a bag at `path` holding one compressible "/input" message
+// through whatever `opts` asks for, so a codec the writer was asked for
+// actually lands on the chunk (libmcap stores a chunk uncompressed when
+// compression would not pay for itself).
+void seed_compressed_bag(const std::filesystem::path & path, const bagwiz::io::CreateOptions & opts)
+{
+  const std::vector<std::byte> big(64 * 1024, std::byte{0xCD});
+  auto writer = bagwiz::io::open_write(path, opts);
+  writer->declare_topic(make_topic("/input"));
+  writer->write("/input", 1'000'000'000LL, {big.data(), big.size()});
+  writer->close();
+}
+
+bagwiz::io::CreateOptions mcap_opts(bagwiz::io::Layout layout, const std::string & codec)
+{
+  bagwiz::io::CreateOptions opts;
+  opts.format = bagwiz::io::Format::Mcap;
+  opts.layout = layout;
+  opts.mcap_compression = codec;
+  return opts;
+}
+
+bagwiz::io::CreateOptions sqlite3_dir_opts(const std::string & mode, const std::string & format)
+{
+  bagwiz::io::CreateOptions opts;
+  opts.format = bagwiz::io::Format::Sqlite3;
+  opts.layout = bagwiz::io::Layout::Directory;
+  opts.sqlite3_compression_mode = mode;
+  opts.sqlite3_compression_format = format;
+  return opts;
 }
 
 // The stand-in for a command's pass: write a fresh one-topic bag through the
@@ -141,8 +174,6 @@ protected:
     options_.logger = kLogger;
     options_.format_unknown_error = "test: could not detect storage format of input bag '%s'.";
     options_.pass_failed_error = "test: pass failed; aborting in-place swap";
-    options_.inherit_output_format = true;
-    options_.mcap_compression = "none";
   }
 
   void TearDown() override
@@ -234,20 +265,25 @@ TEST_F(RewriteTest, OutputModeDirectoryOutputInheritsInputFormat)
   EXPECT_EQ(bagwiz::io::detect_format(output), bagwiz::io::Format::Sqlite3);
 }
 
-TEST_F(RewriteTest, OutputModeDirectoryOutputWithoutInheritUsesFactoryDefault)
+TEST_F(RewriteTest, OutputModeDirectoryOutputInheritsInputFormatWithBareOptions)
 {
+  // Inheritance is not a knob a command can leave off: options carrying
+  // nothing but the mandatory messages still give a directory output the
+  // input's backend rather than the factory's Mcap default.
   const auto input = tmp_dir_ / "input_db3";
   const auto output = tmp_dir_ / "output_dir";
   seed_bag(input, bagwiz::io::Format::Sqlite3, bagwiz::io::Layout::Directory);
-  options_.inherit_output_format = false;
+  bagwiz::core::BagRewriteOptions bare;
+  bare.logger = kLogger;
+  bare.format_unknown_error = options_.format_unknown_error;
+  bare.pass_failed_error = options_.pass_failed_error;
 
-  const int status = bagwiz::core::run_bag_rewrite(
-    input, output, /*overwrite=*/false, options_, write_replacement_pass);
+  const int status =
+    bagwiz::core::run_bag_rewrite(input, output, /*overwrite=*/false, bare, write_replacement_pass);
 
   EXPECT_EQ(status, 0);
   ASSERT_TRUE(std::filesystem::is_directory(output));
-  // Auto/Auto resolves to the factory default (MCAP) regardless of the input.
-  EXPECT_EQ(bagwiz::io::detect_format(output), bagwiz::io::Format::Mcap);
+  EXPECT_EQ(bagwiz::io::detect_format(output), bagwiz::io::Format::Sqlite3);
 }
 
 TEST_F(RewriteTest, OutputModeSingleFileExtensionWinsOverInherit)
@@ -352,32 +388,24 @@ TEST_F(RewriteTest, InPlaceFormatAutoGuardRejectsNonBag)
 }
 
 // ---------------------------------------------------------------------------
-// MCAP compression wiring.
+// Compression wiring.
 //
-// Every rewrite command drives the writer through run_bag_rewrite, and all of
-// them but one take the default mcap_compression = "none" override. `pcd
-// undistort` is the sole opt-out: it clears the override (or forwards its
-// --compression flag) so the writer keeps its zstd default or the user's
-// codec. The option is easy to flip by accident and the effect is invisible
-// in a bag's topics/messages, so these tests read the produced MCAP's chunk
-// compression directly.
+// Every rewrite command drives the writer through run_bag_rewrite, and by
+// default the output carries the input's compression over, translated to
+// the output storage, so a rewrite never silently strips or adds
+// compression. A command pins a knob only to change it (`compress`,
+// `pcd undistort --compression`). The effect is invisible in a bag's
+// topics/messages, so these tests read the produced MCAP's chunk
+// compression and the sqlite3 metadata directly.
 // ---------------------------------------------------------------------------
 
-TEST(BagRewriteOptionsDefaults, McapCompressionDefaultsToNone)
+TEST(BagRewriteOptionsDefaults, CompressionDefaultsToInheritingTheInput)
 {
-  // Every rewrite command except `pcd undistort` relies on this default, so a
-  // new command that never touches the field still writes uncompressed.
-  EXPECT_EQ(bagwiz::core::BagRewriteOptions{}.mcap_compression, "none");
-  EXPECT_TRUE(bagwiz::core::BagRewriteOptions{}.mcap_compression_level.empty());
-}
-
-TEST(BagRewriteOptionsDefaults, Sqlite3CompressionAndOutputFormatDefaultToUnset)
-{
-  // Mirror image of the mcap default above: the sqlite3 triple stays empty so
-  // a command that never asks for sqlite3 compression writes plain shards,
-  // and Format::Auto leaves the output backend to inherit/extension
-  // resolution.
+  // Empty knobs mean "carry the input's compression over"; a new command
+  // that never touches them gets the shared policy for free.
   const bagwiz::core::BagRewriteOptions defaults;
+  EXPECT_TRUE(defaults.mcap_compression.empty());
+  EXPECT_TRUE(defaults.mcap_compression_level.empty());
   EXPECT_TRUE(defaults.sqlite3_compression_mode.empty());
   EXPECT_TRUE(defaults.sqlite3_compression_format.empty());
   EXPECT_TRUE(defaults.sqlite3_compression_level.empty());
@@ -441,12 +469,14 @@ TEST_F(RewriteTest, InPlaceSqlite3CompressionOverridesReachTheWriter)
   EXPECT_FALSE(tmp_leftover_in(tmp_dir_));
 }
 
-TEST_F(RewriteTest, OutputModeDisablingCompressionWritesUncompressedChunks)
+TEST_F(RewriteTest, OutputModePlainInputWritesUncompressedChunks)
 {
+  // CreateOptions' own default is zstd; inheriting from a plain input has
+  // to override it, or every rewrite of an uncompressed bag would compress.
   const auto input = tmp_dir_ / "input.mcap";
   const auto output = tmp_dir_ / "output.mcap";
   seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
-  ASSERT_EQ(options_.mcap_compression, "none");
+  ASSERT_TRUE(options_.mcap_compression.empty());
 
   ASSERT_EQ(
     bagwiz::core::run_bag_rewrite(
@@ -456,14 +486,11 @@ TEST_F(RewriteTest, OutputModeDisablingCompressionWritesUncompressedChunks)
   EXPECT_EQ(mcap_chunk_compressions(output), (std::set<std::string>{""}));
 }
 
-TEST_F(RewriteTest, OutputModeKeepingCompressionWritesZstdChunks)
+TEST_F(RewriteTest, OutputModeInheritsZstdChunks)
 {
   const auto input = tmp_dir_ / "input.mcap";
   const auto output = tmp_dir_ / "output.mcap";
-  seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
-  // The `pcd undistort` default configuration: clear the override and leave
-  // the writer's zstd default alone.
-  options_.mcap_compression = "";
+  seed_compressed_bag(input, mcap_opts(bagwiz::io::Layout::SingleFile, "zstd"));
 
   ASSERT_EQ(
     bagwiz::core::run_bag_rewrite(
@@ -473,14 +500,56 @@ TEST_F(RewriteTest, OutputModeKeepingCompressionWritesZstdChunks)
   EXPECT_EQ(mcap_chunk_compressions(output), (std::set<std::string>{"zstd"}));
 }
 
-TEST_F(RewriteTest, OutputModeCodecOverrideWritesLz4Chunks)
+TEST_F(RewriteTest, OutputModeInheritsLz4ChunksIntoADirectory)
 {
   const auto input = tmp_dir_ / "input.mcap";
-  const auto output = tmp_dir_ / "output.mcap";
-  seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
+  const auto output = tmp_dir_ / "output_dir";
+  seed_compressed_bag(input, mcap_opts(bagwiz::io::Layout::SingleFile, "lz4"));
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  ASSERT_TRUE(std::filesystem::is_directory(output));
+  EXPECT_EQ(mcap_chunk_compressions(output / "output_dir_0.mcap"), (std::set<std::string>{"lz4"}));
+}
+
+TEST_F(RewriteTest, OutputModeCodecOverrideOutranksTheInput)
+{
+  const auto input = tmp_dir_ / "input.mcap";
+  seed_compressed_bag(input, mcap_opts(bagwiz::io::Layout::SingleFile, "zstd"));
+
+  // `compress --mode none` shape: the command pins "none" on a zstd input.
+  const auto plain = tmp_dir_ / "plain.mcap";
+  options_.mcap_compression = "none";
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, plain, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+  EXPECT_EQ(mcap_chunk_compressions(plain), (std::set<std::string>{""}));
+
   // A user-chosen codec (pcd undistort --compression lz4) flows through the
   // same override; the level accompanies it.
+  const auto lz4 = tmp_dir_ / "lz4.mcap";
   options_.mcap_compression = "lz4";
+  options_.mcap_compression_level = "fastest";
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, lz4, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+  EXPECT_EQ(mcap_chunk_compressions(lz4), (std::set<std::string>{"lz4"}));
+}
+
+TEST_F(RewriteTest, OutputModeLevelAloneKeepsTheInheritedCodec)
+{
+  // pcd undistort --compression-level without --compression: the effort is
+  // the user's, the codec is still the input's. lz4 rather than zstd, so a
+  // dispatch that skipped inheritance (and left the writer's zstd default)
+  // would fail here.
+  const auto input = tmp_dir_ / "input.mcap";
+  const auto output = tmp_dir_ / "output.mcap";
+  seed_compressed_bag(input, mcap_opts(bagwiz::io::Layout::SingleFile, "lz4"));
   options_.mcap_compression_level = "fastest";
 
   ASSERT_EQ(
@@ -491,11 +560,137 @@ TEST_F(RewriteTest, OutputModeCodecOverrideWritesLz4Chunks)
   EXPECT_EQ(mcap_chunk_compressions(output), (std::set<std::string>{"lz4"}));
 }
 
-TEST_F(RewriteTest, InPlaceDisablingCompressionWritesUncompressedChunks)
+TEST_F(RewriteTest, OutputModeSqlite3MessageModeInputKeepsMessageMode)
+{
+  const auto input = tmp_dir_ / "input_dir";
+  const auto output = tmp_dir_ / "output_dir";
+  seed_compressed_bag(input, sqlite3_dir_opts("message", "zstd"));
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  EXPECT_EQ(bagwiz::io::detect_format(output), bagwiz::io::Format::Sqlite3);
+  const auto md = bagwiz::io::load_metadata_yaml(output / "metadata.yaml");
+  EXPECT_EQ(md.compression_mode, "message");
+  EXPECT_EQ(md.compression_format, "zstd");
+}
+
+TEST_F(RewriteTest, OutputModeSqlite3FileModeInputKeepsFileMode)
+{
+  const auto input = tmp_dir_ / "input_dir";
+  const auto output = tmp_dir_ / "output_dir";
+  seed_compressed_bag(input, sqlite3_dir_opts("file", "zstd"));
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  const auto md = bagwiz::io::load_metadata_yaml(output / "metadata.yaml");
+  EXPECT_EQ(md.compression_mode, "file");
+  EXPECT_EQ(md.compression_format, "zstd");
+  ASSERT_EQ(md.relative_file_paths.size(), 1u);
+  EXPECT_EQ(md.relative_file_paths.front().extension(), ".zstd");
+  EXPECT_TRUE(std::filesystem::exists(output / md.relative_file_paths.front()));
+}
+
+TEST_F(RewriteTest, OutputModeZstdMcapInputToSqlite3DirectoryBecomesMessageMode)
+{
+  // `compress --storage sqlite3`-style pinned backend, compression left to
+  // inheritance: chunk compression has no sqlite3 counterpart, so the
+  // output takes rosbag2 MESSAGE mode.
+  const auto input = tmp_dir_ / "input.mcap";
+  const auto output = tmp_dir_ / "output_dir";
+  seed_compressed_bag(input, mcap_opts(bagwiz::io::Layout::SingleFile, "zstd"));
+  options_.output_format = bagwiz::io::Format::Sqlite3;
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  const auto md = bagwiz::io::load_metadata_yaml(output / "metadata.yaml");
+  EXPECT_EQ(md.storage_identifier, "sqlite3");
+  EXPECT_EQ(md.compression_mode, "message");
+  EXPECT_EQ(md.compression_format, "zstd");
+}
+
+TEST_F(RewriteTest, OutputModeCompressedInputToSingleFileSqlite3IsWrittenPlain)
+{
+  // A bare .db3 cannot carry compression (rosbag2 reads the mode from
+  // metadata.yaml alone), so the rewrite must still succeed — and the
+  // single-file writer must not be handed a mode it refuses.
+  const auto input = tmp_dir_ / "input_dir";
+  const auto output = tmp_dir_ / "output.db3";
+  seed_compressed_bag(input, sqlite3_dir_opts("message", "zstd"));
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  ASSERT_FALSE(std::filesystem::is_directory(output));
+  EXPECT_EQ(bagwiz::io::describe_bag(output).compression.mode, "none");
+}
+
+TEST_F(RewriteTest, OutputModeSqlite3MessageModeInputToMcapBecomesZstdChunks)
+{
+  const auto input = tmp_dir_ / "input_dir";
+  const auto output = tmp_dir_ / "output.mcap";
+  seed_compressed_bag(input, sqlite3_dir_opts("message", "zstd"));
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  EXPECT_EQ(mcap_chunk_compressions(output), (std::set<std::string>{"zstd"}));
+}
+
+TEST_F(RewriteTest, InPlaceInheritsLz4Chunks)
+{
+  // lz4 rather than zstd, so a dispatch that skipped inheritance (and left
+  // the writer's zstd default) would fail here.
+  const auto input = tmp_dir_ / "input.mcap";
+  seed_compressed_bag(input, mcap_opts(bagwiz::io::Layout::SingleFile, "lz4"));
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, std::nullopt, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  // create_options_preserving_storage pins format/layout and the dispatch
+  // carries the compression over, exactly like the -o path.
+  EXPECT_EQ(mcap_chunk_compressions(input), (std::set<std::string>{"lz4"}));
+  EXPECT_FALSE(tmp_leftover_in(tmp_dir_));
+}
+
+TEST_F(RewriteTest, OutputModeUnreadableCompressionIsWrittenPlain)
+{
+  // An MCAP that was never finalized has no summary section, so its codec
+  // cannot be read without a scan. The rewrite still runs (open_read falls
+  // back to scanning) but must not guess: plain output, never compression
+  // the input may not have had.
+  const auto input = tmp_dir_ / "input.mcap";
+  const auto output = tmp_dir_ / "output.mcap";
+  seed_compressed_bag(input, mcap_opts(bagwiz::io::Layout::SingleFile, "none"));
+  std::filesystem::resize_file(input, std::filesystem::file_size(input) - 64);
+
+  ASSERT_EQ(
+    bagwiz::core::run_bag_rewrite(
+      input, output, /*overwrite=*/false, options_, write_compressible_replacement_pass),
+    0);
+
+  EXPECT_EQ(mcap_chunk_compressions(output), (std::set<std::string>{""}));
+}
+
+TEST_F(RewriteTest, InPlaceCodecOverrideOutranksTheInput)
 {
   const auto input = tmp_dir_ / "input.mcap";
-  seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
-  ASSERT_EQ(options_.mcap_compression, "none");
+  seed_compressed_bag(input, mcap_opts(bagwiz::io::Layout::SingleFile, "zstd"));
+  options_.mcap_compression = "none";
 
   ASSERT_EQ(
     bagwiz::core::run_bag_rewrite(
@@ -505,19 +700,50 @@ TEST_F(RewriteTest, InPlaceDisablingCompressionWritesUncompressedChunks)
   EXPECT_EQ(mcap_chunk_compressions(input), (std::set<std::string>{""}));
 }
 
-TEST_F(RewriteTest, InPlaceKeepingCompressionWritesZstdChunks)
+TEST_F(RewriteTest, InPlacePreservesFileModeSqlite3Directory)
 {
-  const auto input = tmp_dir_ / "input.mcap";
-  seed_bag(input, bagwiz::io::Format::Mcap, bagwiz::io::Layout::SingleFile);
-  options_.mcap_compression = "";
+  // A FILE-mode directory bag rewrites in place like any other: the
+  // directory writer reproduces the .db3.zstd envelope.
+  const auto input = tmp_dir_ / "input_dir";
+  seed_compressed_bag(input, sqlite3_dir_opts("file", "zstd"));
 
   ASSERT_EQ(
     bagwiz::core::run_bag_rewrite(
       input, std::nullopt, /*overwrite=*/false, options_, write_compressible_replacement_pass),
     0);
 
-  // create_options_preserving_storage pins format/layout but leaves
-  // mcap_compression at the CreateOptions default, so the in-place path keeps
-  // zstd exactly like the -o path.
-  EXPECT_EQ(mcap_chunk_compressions(input), (std::set<std::string>{"zstd"}));
+  const auto md = bagwiz::io::load_metadata_yaml(input / "metadata.yaml");
+  EXPECT_EQ(md.compression_mode, "file");
+  EXPECT_EQ(md.compression_format, "zstd");
+  ASSERT_EQ(md.relative_file_paths.size(), 1u);
+  EXPECT_EQ(md.relative_file_paths.front().extension(), ".zstd");
+  EXPECT_TRUE(std::filesystem::exists(input / md.relative_file_paths.front()));
+  const auto reader = bagwiz::io::open_read(input);
+  ASSERT_EQ(reader->topics().size(), 1u);
+  EXPECT_EQ(reader->topics()[0].name, "/rewritten");
+  EXPECT_FALSE(tmp_leftover_in(tmp_dir_));
+}
+
+TEST_F(RewriteTest, InPlaceRejectsABareEnvelope)
+{
+  // A standalone .db3.zstd has no directory writer to reproduce its
+  // envelope, so the in-place guard still refuses it — before the pass runs.
+  const auto dir = tmp_dir_ / "env_dir";
+  seed_compressed_bag(dir, sqlite3_dir_opts("file", "zstd"));
+  const auto input = tmp_dir_ / "bare.db3.zstd";
+  std::filesystem::copy_file(dir / "env_dir_0.db3.zstd", input);
+  const auto input_before = read_file_bytes(input);
+
+  int pass_calls = 0;
+  const int status = bagwiz::core::run_bag_rewrite(
+    input, std::nullopt, /*overwrite=*/false, options_,
+    [&](const bagwiz::io::WriterFactory & factory) {
+      ++pass_calls;
+      return write_replacement_pass(factory);
+    });
+
+  EXPECT_EQ(status, 1);
+  EXPECT_EQ(pass_calls, 0);
+  EXPECT_EQ(read_file_bytes(input), input_before);
+  EXPECT_FALSE(tmp_leftover_in(tmp_dir_));
 }

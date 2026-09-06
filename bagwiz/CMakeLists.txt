@@ -690,6 +690,18 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
   target_link_libraries(bagwiz_compress_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
 
+  # Same shape as bagwiz_compress_test for `convert format`: convert.cpp
+  # carries both run_convert_format and the ConvertCommand registrar + CLI11
+  # wiring, and shares the src-local schema-backfill declare helper.
+  ament_add_gtest(bagwiz_convert_test
+    test/commands/convert_test.cpp
+    src/commands/convert.cpp
+    src/commands/topic_declare.cpp
+    src/commands/registry.cpp)
+  target_include_directories(bagwiz_convert_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_convert_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
+
   # Same shape as bagwiz_trim_test above, mirrored for `du`: du.cpp is a
   # single TU carrying both run_du and the DuCommand registrar + CLI11
   # wiring, so the test also compiles registry.cpp (completion_test idiom),

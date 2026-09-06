@@ -11,6 +11,7 @@
 #include "CLI/CLI.hpp"
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/topic_option.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "trim_stamp.hpp"  // NOLINT(build/include_subdir) src-local shared header
@@ -534,8 +535,8 @@ TEST_F(TrimTest, KeepUnderRecvStampSuppressesTheSqlite3Pushdown)
 
 // A chunk lying entirely outside the window can still carry messages of an
 // exempt topic, so --keep must decline the chunk pass-through and take the
-// decoded pipeline — which is what the forced-pipeline reference proves here,
-// along with the compression the declined fast path no longer preserves.
+// decoded pipeline — which is what the forced-pipeline reference proves here.
+// The decoded pipeline still carries the input's compression over.
 TEST_F(TrimTest, KeepDeclinesThePassthroughAndMatchesThePipeline)
 {
   const auto in_path = tmp_dir_ / "input_zstd";
@@ -573,11 +574,11 @@ TEST_F(TrimTest, KeepDeclinesThePassthroughAndMatchesThePipeline)
     collect(tmp_dir_ / "out").at("/slow"),
     (std::vector<std::int64_t>{kT0 + kSecond / 2, kT0 + 2 * kSecond + kSecond / 2}));
 
-  // With the fast path declined, --keep leaves the same uncompressed output
-  // the decoded pipeline always writes — unlike the pass-through, which keeps
-  // the input's zstd chunks (PassthroughMatchesPipelineAndPreservesCompression).
-  // Either way the metadata's compression pair stays empty: it names rosbag2's
-  // own compression layer, not the shard's chunk codec.
+  // With the fast path declined, --keep writes the same bytes the forced
+  // decoded pipeline does, and that pipeline carries the input's zstd chunks
+  // over just like the pass-through would have. The metadata's compression
+  // pair stays empty either way: it names rosbag2's own compression layer,
+  // not the shard's chunk codec.
   const auto shard_bytes = [this](const std::string & name) {
     return std::filesystem::file_size(tmp_dir_ / name / (name + "_0.mcap"));
   };
@@ -585,6 +586,9 @@ TEST_F(TrimTest, KeepDeclinesThePassthroughAndMatchesThePipeline)
   const auto md = bagwiz::io::load_metadata_yaml(tmp_dir_ / "out" / "metadata.yaml");
   EXPECT_TRUE(md.compression_format.empty()) << md.compression_format;
   EXPECT_TRUE(md.compression_mode.empty()) << md.compression_mode;
+  const auto d = bagwiz::io::describe_bag(tmp_dir_ / "out");
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"zstd"});
 }
 
 // --keep is not a window input: exempting topics without saying what to cut is
@@ -1206,8 +1210,9 @@ TEST_F(TrimTest, Sqlite3EndExclusive)
 }
 
 // The default path (chunk pass-through) and the decoded pipeline
-// (BAGWIZ_PASSTHROUGH=off) must produce the same bag content — and only the
-// pass-through preserves the input's chunk compression.
+// (BAGWIZ_PASSTHROUGH=off) must produce the same bag content, and both must
+// leave the output with the input's chunk compression: the pass-through by
+// copying the chunks, the decoded pipeline by carrying the codec over.
 TEST_F(TrimTest, PassthroughMatchesPipelineAndPreservesCompression)
 {
   const auto in_path = tmp_dir_ / "input_zstd";
@@ -1248,18 +1253,16 @@ TEST_F(TrimTest, PassthroughMatchesPipelineAndPreservesCompression)
 
   // Neither output declares compression in metadata.yaml — those fields name
   // rosbag2's own compression layer, and an mcap shard that fills them stops
-  // being readable. The pass-through nonetheless kept the input's zstd chunks,
-  // which shows as a smaller shard than the decoded pipeline's uncompressed
-  // rewrite of the same messages.
+  // being readable. Both nonetheless carry the input's zstd chunks, which the
+  // chunk index records.
   for (const char * name : {"ref", "out"}) {
     const auto md = bagwiz::io::load_metadata_yaml(tmp_dir_ / name / "metadata.yaml");
     EXPECT_TRUE(md.compression_format.empty()) << name << ": " << md.compression_format;
     EXPECT_TRUE(md.compression_mode.empty()) << name << ": " << md.compression_mode;
+    const auto d = bagwiz::io::describe_bag(tmp_dir_ / name);
+    EXPECT_EQ(d.compression.mode, "chunk") << name;
+    EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"zstd"}) << name;
   }
-  const auto shard_bytes = [this](const std::string & name) {
-    return std::filesystem::file_size(tmp_dir_ / name / (name + "_0.mcap"));
-  };
-  EXPECT_LT(shard_bytes("out"), shard_bytes("ref"));
 }
 
 // Exercises the real TrimCommand::configure() — reached through the

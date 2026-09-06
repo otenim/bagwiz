@@ -8,6 +8,7 @@
 
 #include "bagwiz/commands/topic_rename.hpp"
 
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 
@@ -271,8 +272,9 @@ TEST_F(TopicRenameTest, OverwriteReplacesExistingOutput)
 }
 
 // The default path (chunk pass-through) and the decoded pipeline
-// (BAGWIZ_PASSTHROUGH=off) must produce the same bag content — and only the
-// pass-through preserves the input's chunk compression.
+// (BAGWIZ_PASSTHROUGH=off) must produce the same bag content, and both must
+// leave the output with the input's chunk compression: the pass-through by
+// copying the chunks, the decoded pipeline by carrying the codec over.
 TEST_F(TopicRenameTest, PassthroughMatchesPipelineAndPreservesCompression)
 {
   const auto in_path = tmp_dir_ / "input_zstd";
@@ -309,18 +311,16 @@ TEST_F(TopicRenameTest, PassthroughMatchesPipelineAndPreservesCompression)
 
   // Neither output declares compression in metadata.yaml — those fields name
   // rosbag2's own compression layer, and an mcap shard that fills them stops
-  // being readable. The pass-through nonetheless kept the input's zstd chunks,
-  // which shows as a smaller shard than the decoded pipeline's uncompressed
-  // rewrite of the same messages.
+  // being readable. Both nonetheless carry the input's zstd chunks, which the
+  // chunk index records.
   for (const char * name : {"ref", "out"}) {
     const auto md = bagwiz::io::load_metadata_yaml(tmp_dir_ / name / "metadata.yaml");
     EXPECT_TRUE(md.compression_format.empty()) << name << ": " << md.compression_format;
     EXPECT_TRUE(md.compression_mode.empty()) << name << ": " << md.compression_mode;
+    const auto d = bagwiz::io::describe_bag(tmp_dir_ / name);
+    EXPECT_EQ(d.compression.mode, "chunk") << name;
+    EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"zstd"}) << name;
   }
-  const auto shard_bytes = [this](const std::string & name) {
-    return std::filesystem::file_size(tmp_dir_ / name / (name + "_0.mcap"));
-  };
-  EXPECT_LT(shard_bytes("out"), shard_bytes("ref"));
 }
 
 }  // namespace

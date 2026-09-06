@@ -401,7 +401,6 @@ int run_video_decode(const VideoDecodeArgs & args)
   rewrite_opts.format_unknown_error =
     "video decode: could not detect storage format of input bag '%s'.";
   rewrite_opts.pass_failed_error = "video decode: pass failed; aborting in-place swap";
-  rewrite_opts.inherit_output_format = true;
   return core::run_bag_rewrite(
     args.input_path, args.output_path, args.overwrite, rewrite_opts,
     [&](const io::WriterFactory & factory) { return execute_decode_pass(args, plan, factory); });

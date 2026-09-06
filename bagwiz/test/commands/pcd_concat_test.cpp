@@ -12,6 +12,7 @@
 #include "bagwiz/commands/command.hpp"
 #include "bagwiz/commands/topic_option.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "topic_slot_test_util.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
@@ -81,9 +82,11 @@ std::vector<std::byte> serialize_cloud(std::int64_t stamp_ns, const std::vector<
 // Write /front and /rear, two messages each at 1000/1100 ms (front x=1, rear x=2),
 // plus an /other copy-through topic that is not in --pcd (one message per stamp).
 // `add_collision` also writes a /concat topic that the output would collide with.
-void write_input(const std::filesystem::path & path, bool add_collision = false)
+void write_input(
+  const std::filesystem::path & path, bool add_collision = false,
+  const bagwiz::io::CreateOptions & options = mcap_options())
 {
-  auto w = bagwiz::io::open_write(path, mcap_options());
+  auto w = bagwiz::io::open_write(path, options);
   w->declare_topic(pcd_topic_info("/front"));
   w->declare_topic(pcd_topic_info("/rear"));
   w->declare_topic(pcd_topic_info("/other"));
@@ -191,6 +194,27 @@ protected:
 };
 
 }  // namespace
+
+// The output bag is shaped like the input: a directory -o output takes the
+// input's storage backend and carries its compression over. lz4 rather than
+// zstd, so a run that left the writer's zstd default in place would fail.
+TEST_F(PcdConcatTest, OutputInheritsStorageAndCompression)
+{
+  const auto in = tmp_ / "in.mcap";
+  auto lz4 = mcap_options();
+  lz4.mcap_compression = "lz4";
+  write_input(in, /*add_collision=*/false, lz4);
+  const auto out = tmp_ / "out_dir";
+
+  ASSERT_EQ(run_pcd_concat(base_args(in, out)), 0);
+
+  ASSERT_TRUE(std::filesystem::is_directory(out));
+  const auto d = bagwiz::io::describe_bag(out);
+  EXPECT_EQ(d.format, bagwiz::io::Format::Mcap);
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+  EXPECT_TRUE(read_topic(out, "/concat").present);
+}
 
 // Reference-driven concat writes one merged message per reference (/front) message
 // in the target frame, with width = sum of the matched clouds' widths; input

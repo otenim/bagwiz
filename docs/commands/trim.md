@@ -174,10 +174,19 @@ even when pipeline latency pushed its record time outside it.
 ## In-place vs `-o`
 
 Without `-o`, `<input>` is rewritten via an atomic tmp-swap that preserves its
-storage format and layout. With `-o`, `<input>` is left untouched and the
-result is written to that path; the output's storage follows the output
-extension (`.mcap` / `.db3` pick a single-file backend) or, for a directory
-output, inherits the input bag's storage backend.
+storage format, layout, and compression. The one input trim cannot rewrite in
+place is a bare single-file `.db3.zstd` (the run stops with "could not detect
+storage format"); pass `-o` for those. With `-o`, `<input>` is left untouched
+and the result is written to that path: the output's storage follows the
+output extension (`.mcap` / `.db3` pick a single-file backend) or, for a
+directory output, inherits the input bag's storage backend, and the input's
+compression is carried over, translated to the output storage — an MCAP
+output gets chunk compression with the input's codec, a sqlite3 directory
+output a rosbag2 MESSAGE or FILE mode, and a plain input stays plain. A
+single-file `.db3` cannot carry compression, so a compressed input is written
+plain there, with a warning. This is the
+[output bag shape](../../README.md#subcommands) rule every rewriting command
+shares; the README section has the full translation table.
 
 ## Topics and schemas
 
@@ -195,10 +204,12 @@ fully inside the window are copied byte-for-byte, preserving the input's
 chunk compression; only chunks straddling a window boundary are re-encoded
 (with the same codec). When this fast path cannot apply — `--stamp header`,
 any `--keep` selection, non-MCAP storage, multi-shard inputs, and a few other
-layouts — the bag is re-encoded and the output MCAP is written with
-`compression=none`; re-compress afterwards with [`bagwiz compress`](compress.md) if needed.
-`--keep` is excluded because a chunk lying wholly outside the window can still
-carry messages of an exempt topic, so it cannot be skipped wholesale.
+layouts — the bag is re-encoded through the decoded pipeline, and the output
+still carries the input's compression, translated to the output storage (an
+MCAP output is written with the input's codec as its chunk compression); see
+[In-place vs `-o`](#in-place-vs--o). `--keep` is excluded because a chunk
+lying wholly outside the window can still carry messages of an exempt topic,
+so it cannot be skipped wholesale.
 
 ## Exit status
 

@@ -14,6 +14,7 @@
 #include "bagwiz/core/pointcloud/draco_codec.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
 
@@ -133,9 +134,10 @@ std::vector<std::byte> make_compressed_payload(const pc::PointCloud2 & cloud)
 //   /meta                 tf2_msgs/msg/TFMessage, one empty message,
 //                         interleaved between the clouds so copy-through
 //                         order preservation is non-trivial
-void write_compress_input(const std::filesystem::path & path)
+void write_compress_input(
+  const std::filesystem::path & path, const bagwiz::io::CreateOptions & options = mcap_options())
 {
-  auto w = bagwiz::io::open_write(path, mcap_options());
+  auto w = bagwiz::io::open_write(path, options);
   w->declare_topic(pcd_topic_info("/points_a"));
   w->declare_topic(pcd_topic_info("/points_b"));
   w->declare_topic(bagwiz::core::make_tf_message_topic_info("/meta"));
@@ -688,6 +690,36 @@ TEST_F(PcdCompressTest, ExistingOutputPathRequiresOverwrite)
 }
 
 // In-place mode (no -o) atomically rewrites the input bag.
+// The output bag is shaped like the input: a directory -o output takes the
+// input's storage backend and carries its chunk compression over — which is
+// unrelated to the Draco payload compression these commands apply. lz4
+// rather than zstd, so a run that left the writer's zstd default in place
+// would fail here.
+TEST_F(PcdCompressTest, OutputInheritsStorageAndCompression)
+{
+  auto lz4 = mcap_options();
+  lz4.mcap_compression = "lz4";
+  write_compress_input(in_, lz4);
+  const auto compressed = tmp_ / "compressed_dir";
+
+  auto a = compress_args(in_, compressed);
+  a.lossless = true;
+  ASSERT_EQ(run_pcd_compress(a), 0);
+  ASSERT_TRUE(std::filesystem::is_directory(compressed));
+  auto d = bagwiz::io::describe_bag(compressed);
+  EXPECT_EQ(d.format, bagwiz::io::Format::Mcap);
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+  EXPECT_TRUE(
+    has_topic(compressed, "/points_a/draco", "point_cloud_interfaces/msg/CompressedPointCloud2"));
+
+  const auto decompressed = tmp_ / "decompressed_dir";
+  ASSERT_EQ(run_pcd_decompress(decompress_args(compressed, decompressed)), 0);
+  d = bagwiz::io::describe_bag(decompressed);
+  EXPECT_EQ(d.format, bagwiz::io::Format::Mcap);
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+  EXPECT_TRUE(has_topic(decompressed, "/points_a", "sensor_msgs/msg/PointCloud2"));
+}
+
 TEST_F(PcdCompressTest, InPlaceRewrite)
 {
   write_compress_input(in_);

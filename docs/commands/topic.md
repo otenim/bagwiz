@@ -117,18 +117,27 @@ entire `/sensing` subtree.
 
 ### In-place vs `-o`
 
-- Without `-o`, `<input>` is rewritten via an atomic
-  tmp-swap that preserves its storage format and layout (the input is both
-  source and destination). With `-o`, `<input>` is left untouched and the
-  result is written to that path; the output's storage follows the output
-  extension (`.mcap` / `.db3` pick a single-file backend) or, for a directory
-  output, inherits the input bag's storage backend.
-- In-place rewriting requires an uncompressed input. A directory bag whose
-  `metadata.yaml` declares `compression_mode: file` is rejected with `could
-not detect storage format of input bag`; pass an explicit `-o` output for
-  those. A chunk-compressed MCAP bag is not one of those: MCAP keeps its
-  compression inside the shard rather than in `metadata.yaml`, so it rewrites
-  in place like any other MCAP bag.
+- Without `-o`, `<input>` is rewritten via an atomic tmp-swap that preserves
+  its storage format, layout, and compression (the input is both source and
+  destination). With `-o`, `<input>` is left untouched and the result is
+  written to that path; the output's storage follows the output extension
+  (`.mcap` / `.db3` pick a single-file backend) or, for a directory output,
+  inherits the input bag's storage backend. In both modes the input's
+  compression is carried over, translated to the output storage: an MCAP
+  output takes the input's chunk codec, a sqlite3 directory output takes the
+  input's rosbag2 MESSAGE or FILE mode (MCAP chunk compression becomes
+  MESSAGE mode), and a single-file `.db3` output is written plain with a
+  warning. See [output bag shape](../../README.md#subcommands) for the shared
+  rule.
+- A rosbag2 FILE-mode sqlite3 directory bag (`metadata.yaml` declaring
+  `compression_mode: file` over `.db3.zstd` shards) rewrites in place like any
+  other bag: the whole-file envelope is reproduced. Only a bare single-file
+  `.db3.zstd` is rejected in place, because a single-file `.db3` cannot carry
+  compression and the envelope could not be reproduced; the run stops with
+  `could not detect storage format of input bag`. Pass an explicit `-o`
+  output for those (a directory output keeps the envelope). A
+  chunk-compressed MCAP bag rewrites in place like any other MCAP bag: MCAP
+  keeps its compression inside the shard rather than in `metadata.yaml`.
 
 ### Chunk pass-through
 
@@ -138,10 +147,13 @@ not detect storage format of input bag`; pass an explicit `-o` output for
   (with the chunk's own codec); a chunk holding nothing but removed topics is
   dropped whole. A few chunks are also re-encoded for layout reasons unrelated
   to the edit (a missing or untrustworthy chunk message index). When this fast
-  path cannot apply — non-MCAP storage, multi-shard inputs, and a few other
-  layouts — the bag is re-encoded and the output MCAP is written with
-  `compression=none`; re-compress afterwards with [`bagwiz compress`](compress.md) if
-  needed.
+  path cannot apply — non-MCAP storage on either side, multi-shard inputs, and
+  a few other layouts — the bag is decoded and re-encoded message by message
+  with the input's compression carried over as described under
+  [In-place vs `-o`](#in-place-vs--o): an MCAP output keeps the input's chunk
+  codec either way (a mixed lz4/zstd input comes out as zstd throughout), and
+  what differs is only that its chunks are laid out afresh by the writer
+  instead of being copied verbatim.
 - Embedded message schemas are preserved for the surviving topics so MCAP
   outputs stay self-describing.
 - MCAP attachment and metadata records are not carried into the output. On

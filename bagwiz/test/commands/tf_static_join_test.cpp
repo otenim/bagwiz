@@ -12,7 +12,9 @@
 #include "bagwiz/core/tf/tf_message_wire.hpp"
 #include "bagwiz/core/tf/tf_transform_format.hpp"
 #include "bagwiz/core/tf/tf_value_extract.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
+#include "bagwiz/io/metadata_yaml.hpp"
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
@@ -80,7 +82,9 @@ void write_tf_message(
 
 // A bag with a single non-TF topic whose earliest message fixes the bag's start
 // time at `start_ns`.
-void write_plain_bag(const std::filesystem::path & path, std::int64_t start_ns)
+void write_plain_bag(
+  const std::filesystem::path & path, std::int64_t start_ns,
+  const bagwiz::io::CreateOptions & options = mcap_options())
 {
   bagwiz::io::TopicInfo clock;
   clock.name = "/clock";
@@ -91,7 +95,7 @@ void write_plain_bag(const std::filesystem::path & path, std::int64_t start_ns)
     std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
   const auto bytes = std::span<const std::byte>(kPayload.data(), kPayload.size());
 
-  auto writer = bagwiz::io::open_write(path, mcap_options());
+  auto writer = bagwiz::io::open_write(path, options);
   writer->declare_topic(clock);
   writer->write("/clock", start_ns, bytes);
   writer->write("/clock", start_ns + 1'000'000'000LL, bytes);
@@ -442,6 +446,54 @@ TEST_F(TfStaticJoinTest, EmbedsDisconnectedTrees)
   ASSERT_EQ(
     run_tf_static_join(bag, yaml, "/tf_static", out, /*force=*/false, /*overwrite=*/false), 0);
   EXPECT_EQ(read_tf_topic(out, "/tf_static").transforms.size(), 2U);
+}
+
+// A directory -o output takes the input's storage backend and carries its
+// compression over, through the shared rewrite dispatch: a sqlite3
+// MESSAGE-mode input stays a sqlite3 MESSAGE-mode bag instead of becoming
+// a plain MCAP directory.
+TEST_F(TfStaticJoinTest, DirectoryOutputInheritsStorageAndCompression)
+{
+  const auto bag = tmp_dir_ / "bag_dir";
+  const auto out = tmp_dir_ / "out_dir";
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Sqlite3;
+  options.layout = bagwiz::io::Layout::Directory;
+  options.sqlite3_compression_mode = "message";
+  options.sqlite3_compression_format = "zstd";
+  write_plain_bag(bag, 5'000'000'000LL, options);
+  const auto yaml = write_yaml(sample_yaml());
+
+  ASSERT_EQ(
+    run_tf_static_join(bag, yaml, "/tf_static", out, /*force=*/false, /*overwrite=*/false), 0);
+
+  ASSERT_TRUE(std::filesystem::is_directory(out));
+  EXPECT_EQ(bagwiz::io::detect_format(out), bagwiz::io::Format::Sqlite3);
+  const auto md = bagwiz::io::load_metadata_yaml(out / "metadata.yaml");
+  EXPECT_EQ(md.compression_mode, "message");
+  EXPECT_EQ(md.compression_format, "zstd");
+  const auto joined = read_tf_topic(out, "/tf_static");
+  ASSERT_TRUE(joined.present);
+  EXPECT_EQ(joined.message_count, 1);
+}
+
+// The MCAP counterpart: lz4 chunks in, lz4 chunks out (lz4 rather than
+// zstd, so a run that left the writer's zstd default in place would fail).
+TEST_F(TfStaticJoinTest, OutputCarriesTheInputsChunkCompression)
+{
+  const auto bag = tmp_dir_ / "bag.mcap";
+  const auto out = tmp_dir_ / "out.mcap";
+  auto options = mcap_options();
+  options.mcap_compression = "lz4";
+  write_plain_bag(bag, 5'000'000'000LL, options);
+  const auto yaml = write_yaml(sample_yaml());
+
+  ASSERT_EQ(
+    run_tf_static_join(bag, yaml, "/tf_static", out, /*force=*/false, /*overwrite=*/false), 0);
+
+  const auto d = bagwiz::io::describe_bag(out);
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
 }
 
 TEST_F(TfStaticJoinTest, RejectsAnInvalidConfigAndLeavesTheBagAlone)

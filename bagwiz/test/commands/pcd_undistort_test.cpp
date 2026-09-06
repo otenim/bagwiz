@@ -11,6 +11,7 @@
 #include "bagwiz/core/introspection/introspection_loader.hpp"
 #include "bagwiz/core/pointcloud/pointcloud2.hpp"
 #include "bagwiz/core/tf/tf_message_wire.hpp"
+#include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -124,9 +125,11 @@ std::vector<std::byte> serialize_cloud(
 //              with_time_field); header.stamp = t0
 //   /other     sensor_msgs/msg/PointCloud2, an unrelated topic (not in --pcd)
 //              used to check verbatim copy-through
-void write_undistort_input(const std::filesystem::path & path, bool with_time_field)
+void write_undistort_input(
+  const std::filesystem::path & path, bool with_time_field,
+  const bagwiz::io::CreateOptions & options = mcap_options())
 {
-  auto w = bagwiz::io::open_write(path, mcap_options());
+  auto w = bagwiz::io::open_write(path, options);
   w->declare_topic(bagwiz::core::make_tf_message_topic_info("/pose_tf"));
   w->declare_topic(bagwiz::core::make_tf_message_topic_info("/tf_static"));
   w->declare_topic(pcd_topic_info("/points"));
@@ -768,22 +771,23 @@ TEST_F(PcdUndistortTest, SyncAndParallelOutputsAreIdentical)
   EXPECT_EQ(read_raw_payloads(sync_out, "/other"), read_raw_payloads(par_out, "/other"));
 }
 
-// --compression selects the output's mcap chunk codec, defaulting to zstd.
-// Every codec round-trips to the same messages; the uncompressed output is
-// the one whose raw file bytes contain a deskewed payload verbatim.
+// --compression selects the output's mcap chunk codec; without it the
+// output carries the input's codec over. Every codec round-trips to the same
+// messages; the uncompressed output is the one whose raw file bytes contain a
+// deskewed payload verbatim.
 TEST_F(PcdUndistortTest, CompressionFlagSelectsOutputCodec)
 {
   write_undistort_input(in_, /*with_time_field=*/true);
 
-  ASSERT_EQ(run_pcd_undistort(base_args(in_, out_)), 0);  // default: zstd
+  ASSERT_EQ(run_pcd_undistort(base_args(in_, out_)), 0);  // default: the input's (none)
   const auto want = read_raw_payloads(out_, "/points");
   ASSERT_EQ(want.size(), 1u);
 
-  const auto none_out = tmp_ / "none.mcap";
-  auto none_args = base_args(in_, none_out);
-  none_args.compression = "none";
-  ASSERT_EQ(run_pcd_undistort(none_args), 0);
-  EXPECT_EQ(read_raw_payloads(none_out, "/points"), want);
+  const auto zstd_out = tmp_ / "zstd.mcap";
+  auto zstd_args = base_args(in_, zstd_out);
+  zstd_args.compression = "zstd";
+  ASSERT_EQ(run_pcd_undistort(zstd_args), 0);
+  EXPECT_EQ(read_raw_payloads(zstd_out, "/points"), want);
 
   const auto lz4_out = tmp_ / "lz4.mcap";
   auto lz4_args = base_args(in_, lz4_out);
@@ -792,19 +796,52 @@ TEST_F(PcdUndistortTest, CompressionFlagSelectsOutputCodec)
   EXPECT_EQ(read_raw_payloads(lz4_out, "/points"), want);
 
   const auto & needle = want.front();
-  EXPECT_TRUE(file_contains(none_out, needle));
-  EXPECT_FALSE(file_contains(out_, needle));
+  EXPECT_TRUE(file_contains(out_, needle));
+  EXPECT_FALSE(file_contains(zstd_out, needle));
   EXPECT_FALSE(file_contains(lz4_out, needle));
+  EXPECT_EQ(bagwiz::io::describe_bag(out_).compression.mode, "none");
+  EXPECT_EQ(
+    bagwiz::io::describe_bag(zstd_out).compression.codecs, std::vector<std::string>{"zstd"});
+  EXPECT_EQ(bagwiz::io::describe_bag(lz4_out).compression.codecs, std::vector<std::string>{"lz4"});
 }
 
-// --compression-level without --compression applies to the default codec
-// (zstd); the run must succeed and still deskew correctly.
-TEST_F(PcdUndistortTest, CompressionLevelAppliesToDefaultCodec)
+// Without --compression the output's codec is the input's, whatever it is:
+// an lz4 input gives an lz4 output (lz4 rather than zstd, so a run that
+// left the writer's zstd default in place would fail), and an explicit none
+// still strips it.
+TEST_F(PcdUndistortTest, DefaultCompressionIsTheInputs)
 {
-  write_undistort_input(in_, /*with_time_field=*/true);
+  auto lz4_in = mcap_options();
+  lz4_in.mcap_compression = "lz4";
+  write_undistort_input(in_, /*with_time_field=*/true, lz4_in);
+  ASSERT_EQ(bagwiz::io::describe_bag(in_).compression.mode, "chunk");
+
+  ASSERT_EQ(run_pcd_undistort(base_args(in_, out_)), 0);
+  const auto d = bagwiz::io::describe_bag(out_);
+  EXPECT_EQ(d.compression.mode, "chunk");
+  EXPECT_EQ(d.compression.codecs, std::vector<std::string>{"lz4"});
+  const auto x = read_first_point_x(out_, "/points");
+  ASSERT_TRUE(x.has_value());
+  EXPECT_NEAR(*x, 1.0f, 1e-4f);
+
+  const auto none_out = tmp_ / "none.mcap";
+  auto none_args = base_args(in_, none_out);
+  none_args.compression = "none";
+  ASSERT_EQ(run_pcd_undistort(none_args), 0);
+  EXPECT_EQ(bagwiz::io::describe_bag(none_out).compression.mode, "none");
+}
+
+// --compression-level without --compression applies to the inherited codec;
+// the run must succeed and still deskew correctly.
+TEST_F(PcdUndistortTest, CompressionLevelAppliesToInheritedCodec)
+{
+  auto lz4_in = mcap_options();
+  lz4_in.mcap_compression = "lz4";
+  write_undistort_input(in_, /*with_time_field=*/true, lz4_in);
   auto a = base_args(in_, out_);
-  a.compression_level = "fastest";
+  a.compression_level = "fast";
   ASSERT_EQ(run_pcd_undistort(a), 0);
+  EXPECT_EQ(bagwiz::io::describe_bag(out_).compression.codecs, std::vector<std::string>{"lz4"});
   const auto x = read_first_point_x(out_, "/points");
   ASSERT_TRUE(x.has_value());
   EXPECT_NEAR(*x, 1.0f, 1e-4f);

@@ -147,6 +147,37 @@ single stat rather than a full pass over the bag — or, for
 `-w` the existing path is removed only when the command is ready to write, so
 a run that fails partway leaves it intact.
 
+Every subcommand that reads a bag and writes a bag — `convert format`,
+`compress`, `topic drop`/`keep`/`rename`, `trim`, `stamp sync`, `cam-info
+replace`/`recompute-p`, `traj join`, `tf static cp`/`join`/`drop`/`update`,
+`pcd concat`/`undistort`/`compress`/`decompress`, and `video encode`/`decode`
+— also shapes its output bag by one rule:
+
+- Layout follows the `-o` path: a `.mcap` or `.db3` extension names a
+  single-file bag, any other path a rosbag2 directory.
+- Storage format follows that extension when there is one and is otherwise
+  the input's, so a file-to-directory (or directory-to-file) change never
+  switches backends by accident. `convert format --storage` and
+  `compress --storage` name the backend outright.
+- Compression is carried over from the input, translated to the output
+  storage. An MCAP output takes the input's chunk codec (zstd or lz4; a
+  sqlite3 MESSAGE- or FILE-mode input becomes zstd chunks). A sqlite3
+  directory output takes the input's rosbag2 mode (MESSAGE or FILE; MCAP
+  chunk compression becomes MESSAGE mode, and the format is always zstd). A
+  plain input stays plain. A single-file `.db3` cannot carry compression —
+  rosbag2 reads the mode from `metadata.yaml`, which only a directory bag has
+  — so a compressed input is written plain there, with a warning. No bag
+  records the encoder level it was written with, so the codec's default
+  level is used. `compress` and `pcd undistort --compression` are the flags
+  that change compression.
+
+Without `-o`, the commands that support it rewrite `<input>` in place and
+preserve all three. The single-file `.db3` exception applies there too: a
+bare `.db3` that declares MESSAGE mode in its own `metadata` row (a shard
+lifted out of a directory bag) is rewritten plain, with the same warning.
+An input whose compression cannot be read without scanning it (an MCAP with
+no summary section) is written plain, with a warning, in either mode.
+
 ## Environment variables
 
 bagwiz reads a handful of **optional** environment variables to override

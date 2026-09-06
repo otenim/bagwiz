@@ -169,7 +169,6 @@ int run_pcd_decompress(const PcdDecompressArgs & args)
   rewrite_opts.format_unknown_error =
     "pcd decompress: could not detect storage format of input bag '%s'.";
   rewrite_opts.pass_failed_error = "pcd decompress: pass failed; aborting in-place swap";
-  rewrite_opts.inherit_output_format = true;
   const int status = core::run_bag_rewrite(
     args.input_path, args.output_path, args.overwrite, rewrite_opts,
     [&](const io::WriterFactory & factory) {
