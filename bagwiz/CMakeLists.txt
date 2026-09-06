@@ -194,8 +194,11 @@ set(bagwiz_command_sources
   src/commands/joke.cpp
   src/commands/ls.cpp
   src/commands/pcd.cpp
+  src/commands/pcd_compress.cpp
+  src/commands/pcd_compress_common.cpp
   src/commands/pcd_concat.cpp
   src/commands/pcd_concat_common.cpp
+  src/commands/pcd_decompress.cpp
   src/commands/pcd_undistort.cpp
   src/commands/pcd_undistort_common.cpp
   src/commands/walk.cpp
@@ -525,12 +528,13 @@ if(BUILD_TESTING)
     bagwiz_calib_cam_lidar_test ${bagwiz_test_libs} fmt::fmt yaml-cpp
     ${geometry_msgs_TARGETS} ${sensor_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
 
-  # pcd.cpp carries the PcdCommand registrar + CLI11 wiring for both `pcd
-  # concat` and `pcd undistort` together, so proving pcd.cpp's own
-  # configure_concat() routes --pcd/--stamp-offset through add_topic_option()
+  # pcd.cpp carries the PcdCommand registrar + CLI11 wiring for all four `pcd`
+  # subcommands together, so proving pcd.cpp's own configure_concat() routes
+  # --pcd/--stamp-offset through add_topic_option()
   # (rather than a hand-mirrored copy of it) pulls in the whole sibling set:
-  # pcd_undistort.cpp + pcd_undistort_common.cpp because PcdCommand::run()'s
-  # vtable references run_pcd_undistort regardless of which subcommand a
+  # pcd_undistort.cpp + pcd_undistort_common.cpp and pcd_compress.cpp +
+  # pcd_decompress.cpp + pcd_compress_common.cpp because PcdCommand::run()'s
+  # vtable references every run_pcd_* regardless of which subcommand a
   # given test exercises, topic_option.cpp for add_topic_option()/
   # topic_slots_of(), registry.cpp for Registry::instance(), and CLI11 +
   # geometry_msgs/rmw for pcd_undistort.cpp's own type dependencies
@@ -538,8 +542,11 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_pcd_concat_command_test
     test/commands/pcd_concat_test.cpp
     src/commands/pcd.cpp
+    src/commands/pcd_compress.cpp
+    src/commands/pcd_compress_common.cpp
     src/commands/pcd_concat.cpp
     src/commands/pcd_concat_common.cpp
+    src/commands/pcd_decompress.cpp
     src/commands/pcd_undistort.cpp
     src/commands/pcd_undistort_common.cpp
     src/commands/topic_option.cpp
@@ -581,6 +588,21 @@ if(BUILD_TESTING)
   target_link_libraries(
     bagwiz_pcd_undistort_common_test ${bagwiz_test_libs} fmt::fmt
     ${geometry_msgs_TARGETS} ${nav_msgs_TARGETS} ${rmw_TARGETS} ${rmw_implementation_TARGETS})
+
+  # `pcd compress` / `pcd decompress` end-to-end: synthetic MCAP bags written
+  # with core::pointcloud::serialize_pointcloud2 /
+  # serialize_compressed_pointcloud2 drive run_pcd_compress /
+  # run_pcd_decompress. The test calls the runners directly (the
+  # pcd_undistort_command_test idiom), so it needs the two command sources
+  # plus their shared transform pass, not pcd.cpp's CLI wiring.
+  ament_add_gtest(bagwiz_pcd_compress_command_test
+    test/commands/pcd_compress_test.cpp
+    src/commands/pcd_compress.cpp
+    src/commands/pcd_compress_common.cpp
+    src/commands/pcd_decompress.cpp)
+  target_include_directories(bagwiz_pcd_compress_command_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_pcd_compress_command_test ${bagwiz_test_libs} fmt::fmt)
 
   # smoke_test touches Registry::instance() directly, so it compiles
   # registry.cpp (which otherwise lives only in the `bagwiz` executable).

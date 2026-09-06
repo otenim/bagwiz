@@ -10,8 +10,9 @@
 #define COMMANDS__WORKER_THREADS_HPP_
 
 // Shared -j/--threads resolution for commands with a parallel pass
-// (`pcd undistort`, `pcd concat`). CLI-internal: this header lives with the
-// command sources and is not installed.
+// (`pcd undistort`, `pcd concat`, `pcd compress`, `pcd decompress`).
+// CLI-internal: this header lives with the command sources and is not
+// installed.
 namespace bagwiz::commands
 {
 

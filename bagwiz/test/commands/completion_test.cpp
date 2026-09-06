@@ -1949,11 +1949,70 @@ TEST_F(CompletionTest, PcdConcatStampOffsetEmptyScopeYieldsNoCandidates)
     "");
 }
 
-// `pcd <TAB>` lists the command group's two subcommands.
-TEST(FlagCompletionTest, PcdSubcommandListsConcatAndUndistort)
+// `pcd <TAB>` lists the command group's four subcommands.
+TEST(FlagCompletionTest, PcdSubcommandListsAllFourSubcommands)
 {
   EXPECT_EQ(
-    run_completion({"bagwiz", "__complete", "2", "bagwiz", "pcd", ""}), "concat\nundistort\n");
+    run_completion({"bagwiz", "__complete", "2", "bagwiz", "pcd", ""}),
+    "compress\nconcat\ndecompress\nundistort\n");
+}
+
+// `pcd compress -` / `pcd decompress -` surface each subcommand's flags plus
+// the implicit help flags, sorted.
+TEST(FlagCompletionTest, PcdCompressDashListsCompressFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "pcd", "compress", "-"}),
+    "--as\n--color-bits\n--force\n--generic-bits\n--help\n--input\n--lossless\n--normal-bits\n"
+    "--output\n--overwrite\n--position-bits\n--threads\n--topics\n-f\n-h\n-i\n-j\n-o\n-t\n-w\n");
+}
+
+TEST(FlagCompletionTest, PcdDecompressDashListsDecompressFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "3", "bagwiz", "pcd", "decompress", "-"}),
+    "--as\n--force\n--help\n--input\n--output\n--overwrite\n--threads\n--topics\n"
+    "-f\n-h\n-i\n-j\n-o\n-t\n-w\n");
+}
+
+// `pcd compress -i <bag> -t <TAB>` completes the bag's PointCloud2 topics.
+TEST_F(CompletionTest, PcdCompressTopicsCompletePointCloud2Topics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+  write_pointcloud2_fixture(tmp_dir_ / "fixture.mcap");
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "compress", "-i", "~/fixture.mcap", "-t", ""}),
+    "/points\n");
+}
+
+// `pcd decompress -i <bag> -t <TAB>` completes only CompressedPointCloud2
+// topics.
+TEST_F(CompletionTest, PcdDecompressTopicsCompleteCompressedTopics)
+{
+  const HomeEnvGuard home_guard(tmp_dir_);
+
+  bagwiz::io::CreateOptions options;
+  options.format = bagwiz::io::Format::Mcap;
+  options.layout = bagwiz::io::Layout::SingleFile;
+  options.mcap_compression = "none";
+  constexpr std::array<std::byte, 4> kPayload{
+    std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
+  const auto bytes = std::span<const std::byte>(kPayload.data(), kPayload.size());
+  auto writer = bagwiz::io::open_write(tmp_dir_ / "fixture.mcap", options);
+  writer->declare_topic(
+    make_topic("/points/draco", "point_cloud_interfaces/msg/CompressedPointCloud2"));
+  writer->declare_topic(make_topic("/points", "sensor_msgs/msg/PointCloud2"));
+  writer->write("/points/draco", 1'000'000'000, bytes);
+  writer->write("/points", 2'000'000'000, bytes);
+  writer->close();
+
+  EXPECT_EQ(
+    run_completion(
+      {"bagwiz", "__complete", "6", "bagwiz", "pcd", "decompress", "-i", "~/fixture.mcap", "-t",
+       ""}),
+    "/points/draco\n");
 }
 
 // `pcd undistort -` surfaces undistort's flags plus the implicit help flags,

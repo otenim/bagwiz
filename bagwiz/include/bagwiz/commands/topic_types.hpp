@@ -95,7 +95,8 @@ inline constexpr std::array<std::string_view, 1> kCameraInfoType{{
 
 // Must mirror the private kPointCloud2Type constant in each of:
 // bagwiz/src/commands/pcd_undistort_common.cpp (`pcd undistort --pcd`),
-// bagwiz/src/commands/pcd_concat.cpp (`pcd concat --pcd`), and
+// bagwiz/src/commands/pcd_concat.cpp (`pcd concat --pcd`),
+// bagwiz/src/commands/pcd_compress.cpp (`pcd compress -t`), and
 // bagwiz/src/commands/map_slam.cpp (`map slam --pcd`) — plus the
 // differently-named kPointCloudType in
 // bagwiz/src/commands/movify_inputs.cpp (`movify --cam-pcd`) and
@@ -103,6 +104,17 @@ inline constexpr std::array<std::string_view, 1> kCameraInfoType{{
 // (`calib cam-lidar --pcd`).
 inline constexpr std::array<std::string_view, 1> kPointCloud2Type{{
   "sensor_msgs/msg/PointCloud2",
+}};
+
+// The compressed-cloud message `pcd compress` writes and `pcd decompress`
+// reads; mirrors kCompressedPointCloud2TypeName in
+// bagwiz_pointcloud/include/bagwiz/core/pointcloud/compressed_pointcloud2.hpp
+// (a string_view array cannot hold that const char * constant's identity, and
+// the CLI package only needs the name). Must also mirror the private
+// kCompressedType constant in bagwiz/src/commands/pcd_decompress.cpp
+// (`pcd decompress -t`).
+inline constexpr std::array<std::string_view, 1> kCompressedPointCloud2Type{{
+  "point_cloud_interfaces/msg/CompressedPointCloud2",
 }};
 
 // The topics `movify --clock` may name: any camera panel topic, any
