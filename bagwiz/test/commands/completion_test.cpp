@@ -824,6 +824,15 @@ TEST(FlagCompletionTest, LsDashListsLsFlags)
     "--help\n--input\n--long\n-h\n-i\n-l\n");
 }
 
+// `info` surfaces its `-b`/`--bytes` and `-l`/`--long` flags plus the implicit
+// help flags, sorted.
+TEST(FlagCompletionTest, InfoDashListsInfoFlags)
+{
+  EXPECT_EQ(
+    run_completion({"bagwiz", "__complete", "2", "bagwiz", "info", "-"}),
+    "--bytes\n--help\n--input\n--long\n-b\n-h\n-i\n-l\n");
+}
+
 // `trim` surfaces its window and output flags plus the implicit help flags,
 // sorted.
 TEST(FlagCompletionTest, TrimDashListsTrimFlags)

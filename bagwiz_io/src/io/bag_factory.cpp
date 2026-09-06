@@ -17,12 +17,9 @@
 #include "bagwiz/io/sqlite3_helpers.hpp"
 #include "bagwiz/io/sqlite3_reader.hpp"
 #include "bagwiz/io/sqlite3_writer.hpp"
+#include "storage_sniff.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
-#include <array>
-#include <cctype>
-#include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -36,19 +33,13 @@ namespace
 {
 constexpr const char * kLogger = "bagwiz.io";
 
-// MCAP magic prefix: 0x89, 'M', 'C', 'A', 'P', 0x30
-constexpr std::array<unsigned char, 6> kMcapMagic = {0x89, 'M', 'C', 'A', 'P', '0'};
-
-// SQLite3 header prefix (first 16 bytes are "SQLite format 3\0").
-constexpr const char * kSqliteMagic = "SQLite format 3";
-
-std::string to_lower_copy(std::string s)
-{
-  for (auto & c : s) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return s;
-}
+// The magic-byte, extension and metadata.yaml sniffers live in
+// storage_sniff.hpp, shared with describe_bag() so both classify a bag the
+// same way.
+using detail::infer_inner_format_from_zstd_extension;
+using detail::is_sqlite3_file_zstd_envelope;
+using detail::sniff_file_magic;
+using detail::to_lower_copy;
 
 // Decide what (if any) decompressor a directory bag needs based on its
 // metadata. Returns nullptr for uncompressed / chunk-compressed-MCAP bags
@@ -139,60 +130,6 @@ std::shared_ptr<MessageDecompressor> sqlite3_file_decompressor(const std::filesy
   // Reuse the directory path's decision so both layouts agree on what a
   // declaration means — including its errors for an unsupported format.
   return select_decompressor(*md, path);
-}
-
-// True when `md` describes a rosbag2 `compression_mode: FILE` whole-database
-// zstd envelope over sqlite3 storage (the `.db3.zstd` case). Case-insensitive
-// on the mode/format strings to tolerate both rosbag2's uppercase enum names
-// and bagwiz's lowercase output.
-bool is_sqlite3_file_zstd_envelope(const BagMetadata & md)
-{
-  return to_lower_copy(md.compression_mode) == "file" && md.storage_identifier == "sqlite3";
-}
-
-// Resolve the storage format hidden inside a single-file zstd envelope from
-// its extension alone, by stripping a trailing `.zstd` and re-inferring
-// (e.g. `foo.db3.zstd` -> Sqlite3, `foo.mcap.zstd` -> Mcap). Returns
-// Format::Auto when the inner extension is not recognised. Cheap and never
-// touches file contents.
-Format infer_inner_format_from_zstd_extension(const std::filesystem::path & path) noexcept
-{
-  if (to_lower_copy(path.extension().string()) != ".zstd") {
-    return Format::Auto;
-  }
-  return infer_format_from_extension(path.stem());
-}
-
-// Magic-byte sniff: opens `path`, reads up to 16 bytes, and matches the
-// MCAP / SQLite3 prefix. Returns Format::Auto on any failure (open error,
-// short read, no match) so callers can fall through to higher-level
-// diagnostics.
-Format sniff_file_magic(const std::filesystem::path & path) noexcept
-{
-  std::ifstream f(path, std::ios::binary);
-  if (!f) {
-    return Format::Auto;
-  }
-  std::array<char, 16> buf{};
-  f.read(buf.data(), buf.size());
-  const auto read = f.gcount();
-  if (read < 0) {
-    return Format::Auto;
-  }
-  const auto bytes = static_cast<std::size_t>(read);
-
-  if (bytes >= kMcapMagic.size()) {
-    if (std::memcmp(buf.data(), kMcapMagic.data(), kMcapMagic.size()) == 0) {
-      return Format::Mcap;
-    }
-  }
-  const auto sqlite_len = std::strlen(kSqliteMagic);
-  if (bytes >= sqlite_len) {
-    if (std::memcmp(buf.data(), kSqliteMagic, sqlite_len) == 0) {
-      return Format::Sqlite3;
-    }
-  }
-  return Format::Auto;
 }
 
 }  // namespace

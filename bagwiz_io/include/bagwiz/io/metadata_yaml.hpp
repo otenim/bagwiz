@@ -21,8 +21,21 @@
 namespace bagwiz::io
 {
 
+// One entry of metadata.yaml's `files:` sequence: a shard and the summary
+// rosbag2 records for it (metadata version 4 and later).
+struct BagMetadataFile
+{
+  std::filesystem::path path;  // as written; the logical name for FILE-mode bags
+  // True when starting_time + duration + message_count are all present.
+  bool has_summary = false;
+  int64_t start_ns = 0;
+  int64_t end_ns = 0;
+  int64_t message_count = 0;
+};
+
 // Minimal view of a rosbag2 metadata.yaml file, carrying just the fields
-// bagwiz needs to open a directory bag without re-scanning.
+// bagwiz needs to open a directory bag without re-scanning, plus the
+// descriptive fields `bagwiz info` reports.
 //
 // The summary fields (`has_summary` and below) let `compute_stats()` answer
 // from metadata alone without touching the underlying shards. They are only
@@ -49,6 +62,12 @@ struct BagMetadata
   // in the YAML, which the reader treats as equivalent to "NONE".
   std::string compression_mode;    // "" / "NONE" / "FILE" / "MESSAGE"
   std::string compression_format;  // "" / "zstd" / ...
+
+  // Descriptive fields, read when present and otherwise left unset. Nothing
+  // in the read path depends on them; `bagwiz info` reports them.
+  std::optional<int> version;          // the declared schema `version`
+  std::string ros_distro;              // rosbag2 iron+ `ros_distro`
+  std::vector<BagMetadataFile> files;  // `files:` entries, in order
 };
 
 // Parse `<dir>/metadata.yaml`. Throws on IO or schema errors.

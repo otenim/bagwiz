@@ -145,6 +145,43 @@ BagMetadata parse_bagfile_information(const YAML::Node & info)
     md.end_ns = *start + *duration;
   }
 
+  // Descriptive fields. `version` and `ros_distro` are scalars rosbag2 has
+  // written since metadata version 1 and version 6 respectively; `files:`
+  // repeats the summary trio per shard from version 4 on. Each is optional
+  // here: a bag missing them is still readable.
+  if (auto version = read_i64(info, "version")) {
+    md.version = static_cast<int>(*version);
+  }
+  if (auto distro = info["ros_distro"]; distro && distro.IsScalar()) {
+    md.ros_distro = distro.as<std::string>("");
+  }
+  if (files && files.IsSequence()) {
+    for (const auto & f : files) {
+      auto p = f["path"];
+      if (!p) {
+        continue;
+      }
+      BagMetadataFile entry;
+      entry.path = p.as<std::string>();
+      std::optional<int64_t> file_start;
+      std::optional<int64_t> file_duration;
+      if (auto st = f["starting_time"]; st && st.IsMap()) {
+        file_start = read_i64(st, "nanoseconds_since_epoch");
+      }
+      if (auto dur = f["duration"]; dur && dur.IsMap()) {
+        file_duration = read_i64(dur, "nanoseconds");
+      }
+      const auto file_count = read_i64(f, "message_count");
+      if (file_start && file_duration && file_count) {
+        entry.has_summary = true;
+        entry.start_ns = *file_start;
+        entry.end_ns = *file_start + *file_duration;
+        entry.message_count = *file_count;
+      }
+      md.files.push_back(std::move(entry));
+    }
+  }
+
   return md;
 }
 

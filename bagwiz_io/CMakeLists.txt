@@ -72,6 +72,7 @@ if(_mcap_types_hpp)
 endif()
 
 add_library(bagwiz_io
+  src/io/bag_describe.cpp
   src/io/bag_factory.cpp
   src/io/bag_open.cpp
   src/io/file_compressor.cpp
@@ -95,6 +96,7 @@ add_library(bagwiz_io
   src/io/sqlite3_slice_prefetch.cpp
   src/io/sqlite3_slice_schedule.cpp
   src/io/sqlite3_writer.cpp
+  src/io/storage_sniff.cpp
   src/io/topics.cpp
   src/io/writeback_window.cpp
 )
@@ -188,6 +190,15 @@ if(BUILD_TESTING)
 
   ament_add_gtest(bagwiz_metadata_computer_test test/io/metadata_computer_test.cpp)
   target_link_libraries(bagwiz_metadata_computer_test bagwiz_io)
+
+  ament_add_gtest(bagwiz_metadata_yaml_test test/io/metadata_yaml_test.cpp)
+  target_link_libraries(bagwiz_metadata_yaml_test bagwiz_io)
+
+  # describe_bag() is exercised through the public factory's fixtures; the
+  # humble-era case drops the `metadata` table through sqlite3 directly,
+  # which bagwiz_io already exports as a public dependency.
+  ament_add_gtest(bagwiz_bag_describe_test test/io/bag_describe_test.cpp)
+  target_link_libraries(bagwiz_bag_describe_test bagwiz_io)
 
   # mcap, yaml-cpp, and zstd are private deps of bagwiz_io, so tests that build
   # or inspect bag fixtures through them directly re-link them explicitly.

@@ -14,11 +14,11 @@
 #include "bagwiz/core/base/logging.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
+#include "format_units.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <fmt/core.h>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -42,27 +42,6 @@ constexpr const char * kLogger = "bagwiz.cmd.du";
 constexpr int kMinSizeWidth = 4;     // "SIZE"
 constexpr int kMinPercentWidth = 1;  // "%"
 constexpr int kMinTopicWidth = 5;    // "TOPIC"
-
-// Raw byte count, or a 1024-based human-readable rendering in the style of
-// `du -h`: values below 1 KiB stay raw bytes, everything above prints one
-// decimal and a K/M/G/T/P/E suffix ("4.0K", "1.2M").
-std::string format_size(std::uint64_t bytes, bool human)
-{
-  if (!human) {
-    return fmt::format("{}", bytes);
-  }
-  constexpr std::array<char, 6> kSuffixes{'K', 'M', 'G', 'T', 'P', 'E'};
-  double value = static_cast<double>(bytes);
-  std::size_t idx = 0;
-  while (value >= 1024.0 && idx < kSuffixes.size()) {
-    value /= 1024.0;
-    ++idx;
-  }
-  if (idx == 0) {
-    return fmt::format("{}", bytes);
-  }
-  return fmt::format("{:.1f}{}", value, kSuffixes[idx - 1]);
-}
 
 // The row's share of the reported total, one decimal with a trailing '%' in
 // every row (df(1)'s shape, not a bare number under a "%" header). A

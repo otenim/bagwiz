@@ -174,6 +174,7 @@ set(bagwiz_command_sources
   src/commands/compress.cpp
   src/commands/convert.cpp
   src/commands/du.cpp
+  src/commands/info.cpp
   src/commands/movify.cpp
   src/commands/movify_output_size.cpp
   src/commands/movify_run.cpp
@@ -679,6 +680,19 @@ if(BUILD_TESTING)
     src/commands/topic_option.cpp)
   target_include_directories(bagwiz_du_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(bagwiz_du_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
+
+  # Same shape again for `info`: info.cpp carries both run_info and the
+  # InfoCommand registrar + CLI11 wiring, so the test also compiles
+  # registry.cpp. format_units.hpp (the size / duration renderers shared with
+  # `du`) is CLI-internal, so the test adds src/commands to its include path
+  # (traj_common idiom).
+  ament_add_gtest(bagwiz_info_test
+    test/commands/info_test.cpp
+    src/commands/info.cpp
+    src/commands/registry.cpp)
+  target_include_directories(bagwiz_info_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/commands)
+  target_link_libraries(bagwiz_info_test ${bagwiz_test_libs} CLI11::CLI11 fmt::fmt)
 
   # trim_stamp.hpp (the shared header.stamp helpers `stamp sync` patches
   # through) is CLI-internal, so the test adds src/commands to its include
