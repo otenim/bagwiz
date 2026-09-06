@@ -243,9 +243,9 @@ private:
         .reject_reason = "it names the new compressed topic to create"});
     auto * lossless_flag = sub->add_flag(
       "--lossless", compress_args_.lossless,
-      "Store attributes unquantized for a bit-exact float round-trip. Default: lossy 14-bit "
-      "quantization per attribute type. Clouds containing NaN/Inf points are only compressed "
-      "in this mode; otherwise they pass through uncompressed.");
+      "Store attributes without quantization for a bit-exact float round-trip. Default: lossy "
+      "14-bit quantization per attribute type. Clouds containing NaN/Inf points are only "
+      "compressed in this mode; otherwise they pass through uncompressed.");
     auto * position_bits =
       sub
         ->add_option(

@@ -456,7 +456,7 @@ TEST_F(PcdCompressTest, OutputTopicCollisionRequiresForce)
 // A message that cannot be encoded — here a cloud whose bytes do not parse as
 // PointCloud2 — is copied through under the ORIGINAL topic (declared on first
 // occurrence) with a warning, instead of failing the run.
-TEST_F(PcdCompressTest, UnencodableMessagePassesThroughUnderOriginalTopic)
+TEST_F(PcdCompressTest, MalformedMessagePassesThroughUnderOriginalTopic)
 {
   {
     auto w = bagwiz::io::open_write(in_, mcap_options());
@@ -660,16 +660,16 @@ TEST_F(PcdCompressTest, CompressedPayloadsAreThreadCountIndependent)
   EXPECT_EQ(read_sequence(sync_out), read_sequence(par_out));
 
   // Decompression likewise.
-  const auto dsync = tmp_ / "dsync.mcap";
-  const auto dpar = tmp_ / "dpar.mcap";
-  auto d1 = decompress_args(sync_out, dsync);
+  const auto dec_sync = tmp_ / "dec_sync.mcap";
+  const auto dec_par = tmp_ / "dec_par.mcap";
+  auto d1 = decompress_args(sync_out, dec_sync);
   d1.threads = 1;
   ASSERT_EQ(run_pcd_decompress(d1), 0);
-  auto d4 = decompress_args(sync_out, dpar);
+  auto d4 = decompress_args(sync_out, dec_par);
   d4.threads = 4;
   ASSERT_EQ(run_pcd_decompress(d4), 0);
-  EXPECT_EQ(read_payloads(dsync, "/points_a"), read_payloads(dpar, "/points_a"));
-  EXPECT_EQ(read_sequence(dsync), read_sequence(dpar));
+  EXPECT_EQ(read_payloads(dec_sync, "/points_a"), read_payloads(dec_par, "/points_a"));
+  EXPECT_EQ(read_sequence(dec_sync), read_sequence(dec_par));
 }
 
 // An existing -o path stops the run unless -w/--overwrite is passed (the

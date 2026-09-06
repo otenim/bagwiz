@@ -45,8 +45,8 @@ find_package(draco REQUIRED)
 # is a static library, so even a PRIVATE target link would leak draco::draco
 # into the ament export set and break downstream find_package(bagwiz_pointcloud)
 # for consumers that never find_package(draco). Same reason OpenCV below links
-# as ${OpenCV_LIBS} paths. The headers resolve through the conda env's
-# -isystem $CONDA_PREFIX/include, so no include dir is needed either.
+# as ${OpenCV_LIBS} paths. The headers resolve through the conda env's system
+# include path ($CONDA_PREFIX/include), so no include dir is needed either.
 get_target_property(bagwiz_draco_location draco::draco IMPORTED_LOCATION_RELEASE)
 if(NOT bagwiz_draco_location)
   get_target_property(bagwiz_draco_location draco::draco IMPORTED_LOCATION)
