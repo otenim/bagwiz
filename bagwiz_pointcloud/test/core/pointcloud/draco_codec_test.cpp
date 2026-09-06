@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -202,6 +203,20 @@ TEST(DracoCodec, PackedRgbStaysExactInLossyMode)
   }
 }
 
+TEST(DracoCodec, CloudHasNonFiniteScansValuesNotTheFlag)
+{
+  // Finite data flagged is_dense=false (the real-world Seyond/Autoware case):
+  // not non-finite.
+  auto cloud = make_cloud(64);
+  cloud.is_dense = false;
+  EXPECT_FALSE(bagwiz::core::pointcloud::cloud_has_non_finite(cloud));
+
+  // A NaN in any float field (here: intensity, not just x/y/z) is caught.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  std::memcpy(cloud.data.data() + 3 * cloud.point_step + 12, &nan, 4);
+  EXPECT_TRUE(bagwiz::core::pointcloud::cloud_has_non_finite(cloud));
+}
+
 TEST(DracoCodec, EmptyCloudRoundTripsAsEmptyBuffer)
 {
   const auto cloud = make_cloud(0);
@@ -236,6 +251,24 @@ TEST(DracoCodec, RejectsRowPadding)
   cloud.data.resize(cloud.row_step * 2);
   const auto encoded = bagwiz::core::pointcloud::encode_draco(cloud, DracoEncodeConfig{});
   EXPECT_FALSE(encoded.ok());
+}
+
+TEST(DracoCodec, AcceptsStaleRowStepOnSingleRowCloud)
+{
+  // A height=1 cloud whose row_step disagrees with width * point_step (stale
+  // metadata from an upstream filter, seen in real Autoware recordings): the
+  // row stride is not layout for a single row, so the codec encodes normally.
+  // The round trip is still bit-exact (per-element copies of immutable input).
+  auto cloud = make_cloud(8);
+  cloud.row_step = 12345;  // stale
+  DracoEncodeConfig config;
+  config.lossless = true;
+  const auto encoded = bagwiz::core::pointcloud::encode_draco(cloud, config);
+  ASSERT_TRUE(encoded.ok()) << encoded.error;
+  const auto decoded =
+    bagwiz::core::pointcloud::decode_draco(*encoded.data, cloud.fields, cloud.point_step);
+  ASSERT_TRUE(decoded.ok()) << decoded.error;
+  EXPECT_EQ(*decoded.data, cloud.data);
 }
 
 TEST(DracoCodec, RejectsInvalidFieldLayoutEvenWhenEmpty)

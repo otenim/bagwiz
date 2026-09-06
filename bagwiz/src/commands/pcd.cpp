@@ -244,7 +244,7 @@ private:
     auto * lossless_flag = sub->add_flag(
       "--lossless", compress_args_.lossless,
       "Store attributes unquantized for a bit-exact float round-trip. Default: lossy 14-bit "
-      "quantization per attribute type. Non-dense clouds (NaN/Inf points) are only compressed "
+      "quantization per attribute type. Clouds containing NaN/Inf points are only compressed "
       "in this mode; otherwise they pass through uncompressed.");
     auto * position_bits =
       sub

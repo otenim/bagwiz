@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -526,27 +527,39 @@ TEST_F(PcdCompressTest, AsSameAsInputTopicIsRejected)
   EXPECT_EQ(run_pcd_compress(a), 1);
 }
 
-// A non-dense cloud (NaN/Inf points) is not compressed in the default lossy
-// mode — quantizing non-finite values is undefined — and passes through under
-// the original topic. --lossless compresses it.
-TEST_F(PcdCompressTest, NonDenseCloudPassesThroughUnlessLossless)
+// A cloud flagged is_dense=false but holding only finite values IS compressed
+// in lossy mode (real drivers/pipelines ship such clouds); only clouds with
+// actual NaN/Inf values pass through, and --lossless compresses even those.
+TEST_F(PcdCompressTest, NonFiniteCloudPassesThroughUnlessLossless)
 {
-  auto write_non_dense = [this]() {
+  auto write_cloud = [this](bool with_nan) {
     auto w = bagwiz::io::open_write(in_, mcap_options());
     w->declare_topic(pcd_topic_info("/points"));
     auto cloud = make_cloud(kT0Ns, "lidar", 16, 0.0f);
     cloud.is_dense = false;
+    if (with_nan) {
+      const float nan = std::numeric_limits<float>::quiet_NaN();
+      std::memcpy(cloud.data.data() + 8, &nan, 4);  // z of point 0
+    }
     const auto p = pc::serialize_pointcloud2(cloud);
     w->write("/points", kT0Ns, p);
     w->close();
   };
 
-  write_non_dense();
-  const auto before = read_payloads(in_, "/points");
+  // Finite despite the flag: compressed normally.
+  write_cloud(false);
   ASSERT_EQ(run_pcd_compress(compress_args(in_, out_)), 0);
-  EXPECT_TRUE(has_topic(out_, "/points", "sensor_msgs/msg/PointCloud2"));
-  EXPECT_EQ(read_payloads(out_, "/points"), before);
-  EXPECT_EQ(read_payloads(out_, "/points/draco").size(), 0u);
+  EXPECT_EQ(read_payloads(out_, "/points").size(), 0u);
+  EXPECT_EQ(read_payloads(out_, "/points/draco").size(), 1u);
+
+  // Actual NaN: passes through in lossy mode, compresses with --lossless.
+  write_cloud(true);
+  const auto nan_out = tmp_ / "nan.mcap";
+  const auto before = read_payloads(in_, "/points");
+  ASSERT_EQ(run_pcd_compress(compress_args(in_, nan_out)), 0);
+  EXPECT_TRUE(has_topic(nan_out, "/points", "sensor_msgs/msg/PointCloud2"));
+  EXPECT_EQ(read_payloads(nan_out, "/points"), before);
+  EXPECT_EQ(read_payloads(nan_out, "/points/draco").size(), 0u);
 
   const auto lossless_out = tmp_ / "lossless.mcap";
   auto a = compress_args(in_, lossless_out);

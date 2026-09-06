@@ -85,6 +85,14 @@ struct DracoDecodeResult
   std::span<const std::byte> data, const std::vector<PointField> & fields,
   std::uint32_t point_step);
 
+// True when any float32/float64 field of any point holds a NaN or Inf.
+// Quantizing a non-finite value is undefined, so a cloud with one must not go
+// through lossy encoding. The PointCloud2 is_dense flag alone is not trusted
+// for this decision: real-world drivers (e.g. Seyond) and pipelines (e.g.
+// Autoware's concatenation) ship finite clouds flagged is_dense=false, and
+// rejecting those would make lossy compression unusable on real data.
+[[nodiscard]] bool cloud_has_non_finite(const PointCloud2 & cloud);
+
 }  // namespace bagwiz::core::pointcloud
 
 #endif  // BAGWIZ__CORE__POINTCLOUD__DRACO_CODEC_HPP_

@@ -13,6 +13,7 @@
 #include <draco/metadata/geometry_metadata.h>
 #include <draco/point_cloud/point_cloud_builder.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -158,11 +159,14 @@ DracoEncodeResult encode_draco(const PointCloud2 & cloud, const DracoEncodeConfi
     return result;
   }
 
-  // Row padding is not representable: attributes are read point-contiguously
-  // with stride point_step, so a padded organized cloud would corrupt every
-  // row after the first. Reject instead of mis-encoding.
-  if (cloud.row_step != cloud.width * cloud.point_step) {
-    result.error = "row_step != width * point_step (row padding is not supported)";
+  // Inter-row padding is not representable: attributes are read
+  // point-contiguously with stride point_step, so a padded organized cloud
+  // would corrupt every row after the first. Reject instead of mis-encoding.
+  // row_step of a single-row cloud is not layout (it is often stale in real
+  // recordings), so it is not checked here; compress normalizes it to
+  // width * point_step in the stored metadata.
+  if (cloud.height > 1 && cloud.row_step != cloud.width * cloud.point_step) {
+    result.error = "row_step != width * point_step with height > 1 (row padding is not supported)";
     return result;
   }
 
@@ -314,6 +318,50 @@ DracoDecodeResult decode_draco(
   }
   result.num_points = num_points;
   return result;
+}
+
+bool cloud_has_non_finite(const PointCloud2 & cloud)
+{
+  // Walk row by row so padded organized clouds (row_step > width *
+  // point_step) are read correctly; such clouds are rejected by encode_draco
+  // anyway, but this scan runs before that rejection.
+  for (const auto & field : cloud.fields) {
+    if (field.datatype != PointFieldType::kFloat32 && field.datatype != PointFieldType::kFloat64) {
+      continue;
+    }
+    const std::size_t elem = datatype_size(field.datatype);
+    const std::size_t field_bytes = elem * field.count;
+    if (field.offset + field_bytes > cloud.point_step) {
+      return true;  // broken layout: treat as unsafe
+    }
+    for (std::uint32_t row = 0; row < cloud.height; ++row) {
+      const std::size_t row_base = static_cast<std::size_t>(row) * cloud.row_step;
+      for (std::uint32_t col = 0; col < cloud.width; ++col) {
+        const std::size_t base =
+          row_base + static_cast<std::size_t>(col) * cloud.point_step + field.offset;
+        if (base + field_bytes > cloud.data.size()) {
+          return true;
+        }
+        for (std::uint32_t c = 0; c < field.count; ++c) {
+          const std::byte * v = cloud.data.data() + base + c * elem;
+          if (field.datatype == PointFieldType::kFloat32) {
+            float f;
+            std::memcpy(&f, v, sizeof(f));
+            if (!std::isfinite(f)) {
+              return true;
+            }
+          } else {
+            double d;
+            std::memcpy(&d, v, sizeof(d));
+            if (!std::isfinite(d)) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+  return false;
 }
 
 }  // namespace bagwiz::core::pointcloud

@@ -70,9 +70,12 @@ core::pointcloud::DracoEncodeConfig make_encode_config(const PcdCompressArgs & a
 }
 
 // The per-message transform: PointCloud2 -> CompressedPointCloud2 ("draco").
-// Messages that cannot be encoded (unparseable, big-endian, or non-dense
-// under lossy quantization — quantizing NaN/Inf is undefined) pass through
-// under the original topic with a once-per-topic WARN.
+// Messages that cannot be encoded (unparseable, big-endian, or carrying actual
+// NaN/Inf values under lossy quantization — quantizing those is undefined)
+// pass through under the original topic with a once-per-topic WARN. The
+// is_dense flag alone does not decide the last case: real drivers/pipelines
+// ship finite clouds flagged is_dense=false, so the values themselves are
+// scanned and a finite cloud is compressed despite the flag.
 PcdTransformResult compress_message(
   std::span<const std::byte> payload, const core::pointcloud::DracoEncodeConfig & config)
 {
@@ -85,9 +88,9 @@ PcdTransformResult compress_message(
     return result;
   }
   const pc::PointCloud2 & cloud = *parsed.cloud;
-  if (!cloud.is_dense && !config.lossless) {
+  if (!cloud.is_dense && !config.lossless && pc::cloud_has_non_finite(cloud)) {
     result.passthrough_reason =
-      "the cloud is not dense, and lossy quantization of non-finite points is undefined "
+      "the cloud contains non-finite points, and lossy quantization of those is undefined "
       "(re-run with --lossless to compress it)";
     return result;
   }
@@ -105,7 +108,9 @@ PcdTransformResult compress_message(
   message.fields = cloud.fields;
   message.is_bigendian = cloud.is_bigendian;
   message.point_step = cloud.point_step;
-  message.row_step = cloud.row_step;
+  // The encoded form drops any stale or padded row_step (single-row clouds in
+  // real recordings often carry one); store the layout the decoder rebuilds.
+  message.row_step = cloud.width * cloud.point_step;
   message.is_dense = cloud.is_dense;
   message.format = pc::kDracoFormatName;
   message.compressed_data = std::move(*encoded.data);
