@@ -390,15 +390,6 @@ CreateOptions create_options_preserving_storage(
   opts.format = Format::Auto;
   opts.layout = Layout::Auto;
 
-  // FILE-compressed sources cannot be preserved by an in-place rewrite:
-  // bagwiz's writers emit uncompressed bags, so pinning the storage format
-  // would silently replace a `.db3.zstd` envelope with a plain `.db3`. Return
-  // Auto/Auto so the caller surfaces a "could not detect storage format"
-  // error and asks the user to pass an explicit `-o` output instead.
-  if (is_file_compressed_bag(reference_path)) {
-    return opts;
-  }
-
   const auto detected = detect_format(reference_path);
   if (detected == Format::Auto) {
     return opts;
@@ -409,6 +400,19 @@ CreateOptions create_options_preserving_storage(
   if (ec) {
     // Surface stat failure as detection failure so the caller errors
     // out rather than silently mis-pinning the layout.
+    return opts;
+  }
+
+  // A bare `.db3.zstd` envelope cannot be preserved by an in-place rewrite:
+  // the single-file sqlite3 writer produces plain storage only (FILE mode
+  // needs a directory whose metadata.yaml names the enveloped shard), so
+  // pinning Sqlite3 + SingleFile would silently replace the envelope with a
+  // plain `.db3`. Return Auto/Auto so the caller surfaces a "could not
+  // detect storage format" error and asks for an explicit `-o` output. A
+  // FILE-mode directory needs no such guard: the directory writer reproduces
+  // the envelope once create_options_inheriting_compression carries the mode
+  // over, which every rewrite does.
+  if (!is_dir && is_file_compressed_bag(reference_path)) {
     return opts;
   }
 

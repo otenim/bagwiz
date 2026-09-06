@@ -78,6 +78,7 @@ add_library(bagwiz_io
   src/io/file_compressor.cpp
   src/io/file_decompressor.cpp
   src/io/frozen_message.cpp
+  src/io/inherit_compression.cpp
   src/io/mcap_chunk_codec.cpp
   src/io/mcap_chunk_prefetch.cpp
   src/io/mcap_index_sizes.cpp
@@ -248,6 +249,19 @@ if(BUILD_TESTING)
     bagwiz_create_options_preserving_storage_test
     test/io/create_options_preserving_storage_test.cpp)
   target_link_libraries(bagwiz_create_options_preserving_storage_test bagwiz_io)
+
+  ament_add_gtest(
+    bagwiz_create_options_inheriting_compression_test
+    test/io/create_options_inheriting_compression_test.cpp)
+  target_link_libraries(bagwiz_create_options_inheriting_compression_test bagwiz_io)
+
+  # The translation table behind create_options_inheriting_compression is a
+  # src-local pure function (inherit_compression.hpp), tested cell by cell
+  # without a bag on disk.
+  ament_add_gtest(bagwiz_inherit_compression_test test/io/inherit_compression_test.cpp)
+  target_include_directories(
+    bagwiz_inherit_compression_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(bagwiz_inherit_compression_test bagwiz_io)
 
   ament_add_gtest(bagwiz_bag_open_test test/io/bag_open_test.cpp)
   target_link_libraries(bagwiz_bag_open_test bagwiz_io)

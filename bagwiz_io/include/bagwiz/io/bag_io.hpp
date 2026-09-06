@@ -400,6 +400,14 @@ CreateOptions create_options_inheriting_format(
 //   - if `reference_path`'s format can be detected via `detect_format`:
 //     returns Format::<detected> + Layout::<SingleFile|Directory>
 //     depending on whether the reference path is a directory.
+//   - a bare `.db3.zstd` (a rosbag2 FILE-mode envelope on its own): returns
+//     Format::Auto + Layout::Auto. The single-file sqlite3 writer produces
+//     plain storage only — FILE mode needs a directory whose metadata.yaml
+//     names the enveloped shard — so pinning Sqlite3 + SingleFile would
+//     silently replace the envelope with a plain `.db3`. A FILE-mode
+//     directory is preserved like any other sqlite3 directory: pair this
+//     helper with `create_options_inheriting_compression` and the directory
+//     writer reproduces the envelope.
 //   - otherwise: returns Format::Auto + Layout::Auto. The caller is
 //     expected to detect this and surface a user-facing error rather
 //     than open a writer with unresolved Auto/Auto.
@@ -408,6 +416,39 @@ CreateOptions create_options_inheriting_format(
 // and `is_directory`.
 CreateOptions create_options_preserving_storage(
   const std::filesystem::path & reference_path) noexcept;
+
+// Compose CreateOptions that carry `reference_path`'s compression over to
+// the bag `open_write(output_path, options)` would create, so that a
+// rewrite leaves its output compressed the way its input was. The
+// reference's compression is read the way `bagwiz info` reads it — from
+// metadata.yaml, a `.db3`'s `metadata` row, or an MCAP's chunk index —
+// never by scanning messages. `options` supplies the storage format and
+// layout (resolved through `resolve_write_layout`, so Auto works: pass the
+// result of `create_options_inheriting_format` for a `-o` output or of
+// `create_options_preserving_storage` for an in-place rewrite) and comes
+// back with only its compression knobs changed:
+//
+//   - MCAP output: `mcap_compression` is the input's chunk codec ("zstd" /
+//     "lz4"), "zstd" for a sqlite3 MESSAGE- or FILE-mode input (rosbag2
+//     defines only zstd there), or "none" for a plain input. No bag records
+//     its encoder level, so `mcap_compression_level` stays as passed (the
+//     codec's default when empty).
+//   - SQLite3 directory output: a compressed input becomes rosbag2
+//     compression — the same MESSAGE or FILE mode when the input is sqlite3,
+//     MESSAGE mode for an MCAP input — always in the zstd format (sqlite3
+//     storage has no lz4 mode; that translation is logged at INFO).
+//   - SQLite3 single-file output: cannot carry compression, since rosbag2
+//     reads the mode from metadata.yaml alone. A compressed input is written
+//     plain and a WARN line says so; name a directory output to keep it.
+//
+// When the reference's compression cannot be read — the path does not
+// exist, an MCAP has no summary section, a metadata.yaml does not parse —
+// the output is written plain (a rewrite must never add compression its
+// input did not have, and the CreateOptions default of zstd chunks would)
+// and a WARN line says so. Never throws.
+CreateOptions create_options_inheriting_compression(
+  const std::filesystem::path & reference_path, const std::filesystem::path & output_path,
+  CreateOptions options) noexcept;
 
 }  // namespace bagwiz::io
 

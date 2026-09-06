@@ -147,12 +147,12 @@ TEST_F(CreateOptionsPreservingStorageTest, ReturnsAutoWhenDirectoryHasNoMetadata
   EXPECT_EQ(opts.layout, bagwiz::io::Layout::Auto);
 }
 
-TEST_F(CreateOptionsPreservingStorageTest, ReturnsAutoForFileCompressedDirectory)
+TEST_F(CreateOptionsPreservingStorageTest, PreservesFileCompressedDirectory)
 {
-  // FILE-mode `.db3.zstd` envelope: bagwiz writers cannot reproduce the
-  // compression, so an in-place rewrite must not pin Sqlite3 (which would
-  // silently emit a plain `.db3`). The helper returns Auto/Auto so the
-  // caller errors out and asks for an explicit `-o`.
+  // FILE-mode `.db3.zstd` envelopes inside a directory bag: the directory
+  // writer reproduces the envelope once the compression is carried over
+  // (create_options_inheriting_compression), so the storage is pinned like
+  // any other sqlite3 directory instead of refusing the in-place rewrite.
   const auto reference = tmp_dir_ / "file_compressed_dir";
   std::filesystem::create_directory(reference);
   {
@@ -168,13 +168,17 @@ TEST_F(CreateOptionsPreservingStorageTest, ReturnsAutoForFileCompressedDirectory
 
   const auto opts = bagwiz::io::create_options_preserving_storage(reference);
 
-  EXPECT_EQ(opts.format, bagwiz::io::Format::Auto);
-  EXPECT_EQ(opts.layout, bagwiz::io::Layout::Auto);
+  EXPECT_EQ(opts.format, bagwiz::io::Format::Sqlite3);
+  EXPECT_EQ(opts.layout, bagwiz::io::Layout::Directory);
 }
 
 TEST_F(CreateOptionsPreservingStorageTest, ReturnsAutoForSingleFileZstdEnvelope)
 {
-  // A bare `.db3.zstd` single-file envelope likewise cannot be preserved.
+  // A bare `.db3.zstd` single-file envelope cannot be preserved: the
+  // single-file sqlite3 writer produces plain storage only, so pinning
+  // Sqlite3 + SingleFile would silently replace the envelope with a plain
+  // `.db3`. The helper returns Auto/Auto so the caller errors out and asks
+  // for an explicit `-o`.
   const auto reference = tmp_dir_ / "bag.db3.zstd";
   {
     std::ofstream f(reference, std::ios::binary);
