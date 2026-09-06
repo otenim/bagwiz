@@ -1474,7 +1474,7 @@ std::vector<std::string> complete_map(const CompletionRequest & request)
   return {};
 }
 
-// `du -i|--input <bag>` reports per-topic payload sizes. `-t|--topics` is a
+// `du -i|--input <bag>` reports per-topic on-disk sizes. `-t|--topics` is a
 // declared topic slot (glob, every topic in the bag), so try_topic_completion
 // handles its values before this function is reached; <input> is a path and
 // `-d`/`--depth`'s value a plain number, both falling through to the shell's

@@ -333,7 +333,7 @@ public:
       .add_option(
         "--level", args_.level,
         "Encoder effort: fastest, fast, default, slow, or slowest (default: the codec's "
-        "own default)")
+        "own default — lz4 defaults to fastest)")
       ->check(CLI::IsMember({"fastest", "fast", "default", "slow", "slowest"}));
     app
       .add_option(

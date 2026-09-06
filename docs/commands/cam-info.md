@@ -150,10 +150,13 @@ One or more entries are given via `-t`/`--topics`, each as `<topic>` or
 
 - `<input>` doubles as the write-side target: without `-o` the bag is rewritten
   in place, mirroring `bagwiz traj join`.
-- In-place mode replaces the input atomically via a sibling temporary bag, in the
-  same storage backend, layout, and compression as the input. A bare single-file
-  `.db3.zstd` cannot be rewritten in place ("Could not detect storage format");
-  pass `-o` for those.
+- In-place mode replaces the input atomically via a sibling temporary bag, in
+  the same storage backend, layout, and compression as the input. The same
+  single-file `.db3` exception as `-o` (below) applies: a bare `.db3`
+  declaring rosbag2 MESSAGE-mode compression in its own `metadata` row (a
+  shard lifted out of a directory bag) is rewritten plain in place too, with
+  a warning. A bare single-file `.db3.zstd` cannot be rewritten in place
+  ("Could not detect storage format"); pass `-o` for those.
 - With `-o`, the output path picks the bag's shape: a `.mcap` or `.db3` extension
   names a single-file bag in that format (converting if `<input>` is the other
   backend), and any other path a directory bag in `<input>`'s own storage format.
@@ -373,10 +376,14 @@ correct, so the result is exactly `[k | 0]`.
 
 ### In-place vs `-o`
 
-- In-place mode replaces the input atomically: a bag via a sibling temporary bag
-  (keeping its storage format, layout, and compression), a YAML via a sibling
-  temporary file. A bare single-file `.db3.zstd` cannot be rewritten in place
-  ("Could not detect storage format"); pass `-o` for those.
+- In-place mode replaces the input atomically: a bag via a sibling temporary
+  bag (keeping its storage format, layout, and compression), a YAML via a
+  sibling temporary file. The same single-file `.db3` exception as `-o`
+  (below) applies to the bag case: a bare `.db3` declaring rosbag2
+  MESSAGE-mode compression in its own `metadata` row (a shard lifted out of
+  a directory bag) is rewritten plain in place too, with a warning. A bare
+  single-file `.db3.zstd` cannot be rewritten in place ("Could not detect
+  storage format"); pass `-o` for those.
 - With `-o`, a bag's compression is carried over from the input and translated
   to the output storage (an MCAP output takes the input's chunk codec, a sqlite3
   directory output its rosbag2 MESSAGE or FILE mode, a plain input stays plain;

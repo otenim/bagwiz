@@ -14,13 +14,12 @@
 #include <string>
 #include <string_view>
 
-// The oversize guard shared by both `movify` leaves. `cam` composes its output
-// from a grid of cells sized by the primary topic's frames, so the resolution
-// is a product the user never types: three columns of 1080p cameras is a
-// 5760-pixel-wide output nobody asked for by name. `scan` reaches the same
-// place through explicit --width/--height. Neither is an error — a large render
-// is sometimes exactly what is wanted — so the size is reported rather than
-// rejected.
+// The oversize guard for `movify`'s composed output. The grid canvas composes
+// its cell size from the clock panel's first frame, so the resolution is a
+// product the user never typed directly: three columns of 1080p cameras is a
+// 5760-pixel-wide output nobody asked for by name. This is not an error — a
+// large render is sometimes exactly what is wanted — so the size is reported
+// rather than rejected.
 //
 // CLI-internal: this header lives with the command sources and is not
 // installed.
@@ -41,10 +40,10 @@ inline constexpr std::uint64_t kOversizeWarnPixels =
 // either dimension alone.
 //
 // `detail` says how the size arose and is folded into the parenthetical beside
-// the megapixel count; pass an empty view to omit it (`scan` has nothing to add
-// beyond the flags the user typed). `remedy` closes the message with the flags
-// that bring the size down, and differs per leaf. Both are caller-supplied
-// because only the caller knows them.
+// the megapixel count; pass an empty view to omit it (a 1x1 grid has nothing
+// to add — "1x1 grid of WxH cells" would only restate the size beside it).
+// `remedy` closes the message with the flags that bring the size down. Both
+// are caller-supplied because only the caller knows them.
 [[nodiscard]] std::optional<std::string> oversized_output_warning(
   std::uint32_t width, std::uint32_t height, std::string_view detail, std::string_view remedy);
 

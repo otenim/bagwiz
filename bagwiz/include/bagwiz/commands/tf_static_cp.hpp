@@ -24,9 +24,10 @@ namespace bagwiz::commands
 // <dst>'s start time (both the message receive-time and every header.stamp).
 //
 // When `output_path` is empty, <dst> is rewritten in place via an atomic
-// tmp-swap, preserving its storage format and layout. When it is set, <dst> is
-// left untouched and the result (<dst>'s messages plus the copied static TF) is
-// written to that path.
+// tmp-swap, preserving its storage format, layout and compression. When it is
+// set, <dst> is left untouched and the result (<dst>'s messages plus the
+// copied static TF) is written to that path, with <dst>'s compression carried
+// over and translated to the output storage.
 //
 // The two conflicts have separate permissions, matching `bagwiz traj join` and
 // `bagwiz tf static join`:

@@ -37,9 +37,10 @@ namespace bagwiz::commands
 // result is validated as a forest before anything is written.
 //
 // When `output_path` is empty, `<input>` is rewritten in place via an atomic
-// tmp-swap that preserves its storage format and layout; when it is set, `<input>`
-// is left untouched and the result is written there. `overwrite` permits replacing
-// an existing `-o`/`--output` path.
+// tmp-swap that preserves its storage format, layout and compression; when it
+// is set, `<input>` is left untouched and the result is written there, with
+// `<input>`'s compression carried over and translated to the output storage.
+// `overwrite` permits replacing an existing `-o`/`--output` path.
 //
 // Returns the process exit code: 0 on success, 1 on any error (no frame given, a
 // dropped frame is not a child in the tree, a bag could not be opened, a

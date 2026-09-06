@@ -323,7 +323,9 @@ For each cloud on a `--pcd` topic:
   `row_step` smaller than `width * point_step` (a stale value some
   concatenation pipelines leave behind when they grow the width) is not an
   error: the points are read densely packed, and the header is written
-  through as-is.
+  through as-is. A cloud declaring zero points (`width` or `height` is 0)
+  always passes through this way too, whatever its `row_step` says — there
+  is nothing to walk.
 - a cloud that reaches Pass 2 with no usable per-point time field is **not**
   an error — it is written through un-deskewed and reported with a
   `had nothing deskewed … passed through un-deskewed` warning (the upfront

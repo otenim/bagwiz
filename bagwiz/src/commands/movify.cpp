@@ -28,8 +28,10 @@ namespace bagwiz::commands
 // `bagwiz movify` renders a rosbag to video: the image topics named with
 // --cam and the point clouds named with --pcd become the panels of one grid,
 // one output frame per message of the clock topic, with point clouds
-// optionally projected onto the camera panels (--cam-pcd). Every input is a role selector — there
-// is no general topic operand, because no single topic is "the" topic of a composed video.
+// optionally projected onto the camera panels (--cam-pcd), a map panel added
+// from the --gnss track, and a --pose trajectory overlaid on the camera and
+// point-cloud panels. Every input is a role selector — there is no general
+// topic operand, because no single topic is "the" topic of a composed video.
 class MovifyCommand : public Command
 {
 public:
@@ -257,7 +259,7 @@ public:
       .add_option(
         "--range", args_.range_m,
         "BEV half-extent in meters: the bev view spans +-range on both ground axes. Default: "
-        "the 95th percentile of the first cloud's point distances from the frame origin, "
+        "the 95th percentile of the first cloud's ground distances from the frame origin, "
         "so a few far returns do not shrink the scene.")
       ->check(CLI::PositiveNumber);
     app
