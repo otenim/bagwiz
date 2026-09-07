@@ -565,7 +565,7 @@ bagwiz tf static drop -i capture.mcap --frame oxts_link -o edited.mcap
 | Flag                    | Description                                                                                                                        |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <bag>`   | **Required.** Input bag (file or directory).                                                                                       |
-| `--frame <frame>`       | Child frame whose edge and subtree are removed; repeatable. At least one is required.                                              |
+| `--frame <frame>`       | Child frame whose edge and subtree are removed; repeatable. At least one is required. Long-form only.                              |
 | `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#bagwiz-tf-static-join). |
 | `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                         |
 
@@ -833,7 +833,7 @@ bagwiz tf static update -i tmp.mcap --yaml corrected_rig.yaml
 | Flag                    | Description                                                                                                                        |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <bag>`   | **Required.** Input bag (file or directory).                                                                                       |
-| `--yaml <file>`         | **Required.** Publisher-config YAML whose edges are added or applied as updates.                                                   |
+| `--yaml <file>`         | **Required.** Publisher-config YAML whose edges are added or applied as updates. Long-form only.                                   |
 | `-t`, `--topic <name>`  | Topic newly added transforms are embedded under (default `/tf_static`), declared if absent. A literal topic name, not a glob.      |
 | `-o`, `--output <path>` | Write the result to a new bag instead of rewriting `<input>` in place. Format/layout rules match [`join`](#bagwiz-tf-static-join). |
 | `-w`, `--overwrite`     | Replace an existing `-o` path. No effect in in-place mode.                                                                         |
