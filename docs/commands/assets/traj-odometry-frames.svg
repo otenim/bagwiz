@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 170" width="720" height="170" role="img" aria-labelledby="t">
+  <title id="t">Frames of an Odometry message and the --of tracked frame</title>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,3.5 L0,7 Z" fill="#8b949e"/>
+    </marker>
+  </defs>
+  <!-- Group: one Odometry message -->
+  <rect x="14" y="16" width="442" height="138" rx="8" fill="none" stroke="#8b949e" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text x="30" y="36" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e" dominant-baseline="middle">Each Odometry message</text>
+  <!-- Node: header.frame_id -->
+  <rect x="30" y="72" width="150" height="56" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="105" y="91" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#1b2a41" text-anchor="middle" dominant-baseline="middle">header.frame_id</text>
+  <text x="105" y="110" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41" text-anchor="middle" dominant-baseline="middle">parent / reference</text>
+  <!-- Edge: pose.pose is child in header -->
+  <line x1="180" y1="100" x2="310" y2="100" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="245" y="70" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e" text-anchor="middle" dominant-baseline="middle">pose.pose:</text>
+  <text x="245" y="86" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e" text-anchor="middle" dominant-baseline="middle">child in header</text>
+  <!-- Node: child_frame_id -->
+  <rect x="310" y="72" width="130" height="56" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="375" y="91" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#1b2a41" text-anchor="middle" dominant-baseline="middle">child_frame_id</text>
+  <text x="375" y="110" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41" text-anchor="middle" dominant-baseline="middle">body</text>
+  <!-- Edge: TF tree walk from child_frame_id to the tracked frame -->
+  <line x1="440" y1="100" x2="600" y2="100" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <text x="528" y="70" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e" text-anchor="middle" dominant-baseline="middle">TF tree</text>
+  <text x="528" y="86" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e" text-anchor="middle" dominant-baseline="middle">(e.g. static edge)</text>
+  <!-- Node: the tracked frame (the "of" flag) -->
+  <rect x="600" y="72" width="110" height="56" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="655" y="91" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#1b2a41" text-anchor="middle" dominant-baseline="middle">--of</text>
+  <text x="655" y="110" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41" text-anchor="middle" dominant-baseline="middle">tracked frame</text>
+</svg>
