@@ -104,6 +104,9 @@ desktop.ini
 !.claude/skills/
 CLAUDE.local.md
 
+# Codex CLI project skills (.agents/skills/ is regenerated from .claude/skills/)
+.agents/
+
 # Antigravity
 .antigravitycli/
 
