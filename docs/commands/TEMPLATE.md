@@ -138,18 +138,19 @@ end may cover all subcommands when they share the same codes.
 ## Figures
 
 Some concepts are easier to see than to read — 3D geometry (frames, axes,
-trajectories, deskew relationships) above all. When an explanation needs
-more than a sentence or two of spatial prose, generate an SVG figure and
-embed it instead of writing the prose out:
+trajectories, deskew relationships) above all, but also how data flows
+through a command and how its pieces fit together. When an explanation
+needs more than a sentence or two of spatial or structural prose, draw an
+SVG figure and embed it instead of writing the prose out:
 
 - Commit the SVG under `docs/commands/assets/` named `<cmd>-<topic>.svg`
   and embed it with a relative link: `![<alt>](assets/<cmd>-<topic>.svg)`.
-- Write plain, hand-readable SVG: vector shapes and real `<text>` only — no
+- Draw it the way `AGENTS.md` asks for every figure in the repository:
+  plain, hand-readable SVG with vector shapes and real `<text>` only — no
   scripts, no embedded raster images — kept small and legible at the size it
-  renders on GitHub, on both light and dark backgrounds (favor `currentColor`
-  or mid-tone colors over pure black/white).
+  renders on GitHub, on both light and dark backgrounds.
 - A figure replaces the prose it explains; keep the surrounding text to a
   caption-level sentence. Do not duplicate the figure's content as text.
-- Figures remain the exception, not the rule: process and architecture
-  diagrams stay Mermaid (see `AGENTS.md`), and anything that explains well
-  in one or two sentences stays text.
+- Anything that explains well in one or two sentences stays text; a figure
+  earns its place only where a reader would otherwise have to reconstruct a
+  picture from the prose.
