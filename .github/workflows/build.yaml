@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+  # GitHub removes Actions caches that go unused for seven days. Refresh the
+  # default-branch caches twice a week so the next PR does not pay for a cold
+  # pixi environment, GLIM dependency stack, and ccache after a quiet period.
+  schedule:
+    - cron: "17 3 * * 1,5"
 
 jobs:
   pixi:
