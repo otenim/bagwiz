@@ -16,7 +16,6 @@
 #include "bagwiz/core/image/image_encoder.hpp"
 #include "bagwiz/core/video/frame_codec.hpp"
 #include "bagwiz/core/video/video_codec.hpp"
-#include "bagwiz/core/video/video_encoder.hpp"
 
 #include <map>
 #include <string>
@@ -125,14 +124,12 @@ private:
     sub
       ->add_option(
         "--preset", encode_args_.preset,
-        "Speed/quality preset, by libx264's names (ultrafast, superfast, veryfast, faster, "
-        "fast, medium, slow, slower, veryslow); libx265 takes the same names and NVENC maps "
-        "them onto its p1-p7. Default: medium.")
+        "Encoder effort: fastest, faster, default, slower, or slowest. Slower presets trade "
+        "encoding time for smaller output at the same quality target. Default: default.")
       ->check(
         CLI::IsMember(
-          std::vector<std::string>(
-            core::video::kH264Presets.begin(), core::video::kH264Presets.end())))
-      ->default_val("medium");
+          std::vector<std::string>(kVideoEncodePresets.begin(), kVideoEncodePresets.end())))
+      ->default_val("default");
     sub
       ->add_option(
         "--crf", encode_args_.crf,

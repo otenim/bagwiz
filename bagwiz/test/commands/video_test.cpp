@@ -46,6 +46,7 @@ namespace vid = bagwiz::core::video;
 using bagwiz::commands::DecodedImageFormat;
 using bagwiz::commands::default_image_topic;
 using bagwiz::commands::default_video_topic;
+using bagwiz::commands::frame_encoder_preset;
 using bagwiz::commands::run_video_decode;
 using bagwiz::commands::run_video_encode;
 using bagwiz::commands::VideoDecodeArgs;
@@ -216,7 +217,7 @@ VideoEncodeArgs encode_args(const std::filesystem::path & input, std::vector<std
   args.input_path = input;
   args.topics = std::move(topics);
   args.encoder = vid::EncoderBackend::kCpu;
-  args.preset = "ultrafast";
+  args.preset = "fastest";
   args.gop = 4;
   return args;
 }
@@ -239,6 +240,16 @@ double mean_abs_diff(std::span<const std::byte> a, std::span<const std::byte> b)
 }
 
 }  // namespace
+
+TEST(VideoEncodePresetTest, MapsFiveEffortLevelsOntoTheEncoderScale)
+{
+  EXPECT_EQ(frame_encoder_preset("fastest").value_or(""), "ultrafast");
+  EXPECT_EQ(frame_encoder_preset("faster").value_or(""), "veryfast");
+  EXPECT_EQ(frame_encoder_preset("default").value_or(""), "medium");
+  EXPECT_EQ(frame_encoder_preset("slower").value_or(""), "slower");
+  EXPECT_EQ(frame_encoder_preset("slowest").value_or(""), "veryslow");
+  EXPECT_FALSE(frame_encoder_preset("ultrafast").has_value());
+}
 
 TEST(VideoTopicNames, DefaultsAppendAndStripTheVideoSuffix)
 {
@@ -624,10 +635,10 @@ TEST(VideoCliWiring, EncodeParsesItsOptionsIntoTheArgs)
   CLI::App app{"video"};
   video_cmd->configure(app);
   const auto tmp = std::filesystem::temp_directory_path();
-  const std::vector<std::string> argv{"encode",   "-i",    tmp.string(),   "-t",    "/cam/*",
-                                      "--codec",  "h265",  "--encoder",    "cpu",   "--preset",
-                                      "veryfast", "--crf", "20",           "--gop", "12",
-                                      "-j",       "2",     "--keep-inputs"};
+  const std::vector<std::string> argv{"encode",  "-i",    tmp.string(),   "-t",    "/cam/*",
+                                      "--codec", "h265",  "--encoder",    "cpu",   "--preset",
+                                      "faster",  "--crf", "20",           "--gop", "12",
+                                      "-j",      "2",     "--keep-inputs"};
   std::vector<std::string> reversed(argv.rbegin(), argv.rend());
   EXPECT_NO_THROW(app.parse(reversed));
 
@@ -644,4 +655,11 @@ TEST(VideoCliWiring, EncodeParsesItsOptionsIntoTheArgs)
                                          "/cam",   "--format", "bmp"};
   std::vector<std::string> bad_fmt_reversed(bad_fmt.rbegin(), bad_fmt.rend());
   EXPECT_THROW(app3.parse(bad_fmt_reversed), CLI::ParseError);
+
+  CLI::App app4{"video"};
+  video_cmd->configure(app4);
+  const std::vector<std::string> bad_preset{"encode", "-i",       tmp.string(), "-t",
+                                            "/cam",   "--preset", "ultrafast"};
+  std::vector<std::string> bad_preset_reversed(bad_preset.rbegin(), bad_preset.rend());
+  EXPECT_THROW(app4.parse(bad_preset_reversed), CLI::ParseError);
 }
