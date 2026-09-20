@@ -22,7 +22,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
-#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -43,11 +42,11 @@ constexpr int kMinSizeWidth = 4;     // "SIZE"
 constexpr int kMinPercentWidth = 1;  // "%"
 constexpr int kMinTopicWidth = 5;    // "TOPIC"
 
-// The row's share of the reported total, one decimal with a trailing '%' in
-// every row (df(1)'s shape, not a bare number under a "%" header). A
-// selection that reported nothing has no total to divide by, so every share
-// there — the `total` row included — reads 0.0%: no row holds a share of
-// zero bytes, and claiming 100.0% of an empty bag would read as a finding.
+// The row's share of all topic bytes in the input bag, one decimal with a
+// trailing '%' in every row (df(1)'s shape, not a bare number under a "%"
+// header). An empty bag has no total to divide by, so every share there — the
+// `total` row included — reads 0.0%: no row holds a share of zero bytes, and
+// claiming 100.0% of an empty bag would read as a finding.
 std::string format_percent(std::uint64_t bytes, std::uint64_t total)
 {
   if (total == 0) {
@@ -88,11 +87,10 @@ int run_du(const DuArgs & args)
     return 1;
   }
 
-  // Restrict the scan when the caller selected topics. The presence check
-  // backstops the CLI's require_present slot spec (du has no presence check
-  // of its own otherwise): run_du is also called directly from tests, and a
-  // name that matches no real topic must error rather than silently report
-  // an empty listing.
+  // The presence check backstops the CLI's require_present slot spec (du has
+  // no presence check of its own otherwise): run_du is also called directly
+  // from tests, and a name that matches no real topic must error rather than
+  // silently report an empty listing.
   std::vector<std::string> selected;
   if (!args.topics.empty()) {
     for (const auto & name : args.topics) {
@@ -120,18 +118,13 @@ int run_du(const DuArgs & args)
   // compute_topic_sizes() takes that route when the bag allows it; when it
   // cannot (an MCAP without a chunk index), the full scan below stands in
   // with each message's payload size — the record's bytes, less its framing.
+  // Always size every topic: even when -t restricts the displayed rows, the
+  // percentage column uses the entire input bag as its denominator.
   std::unordered_map<std::string, std::uint64_t> sizes;
   try {
-    const auto selection =
-      args.topics.empty() ? std::span<const std::string>() : std::span<const std::string>(selected);
-    if (auto from_index = reader->compute_topic_sizes(selection)) {
+    if (auto from_index = reader->compute_topic_sizes({})) {
       sizes = std::move(*from_index);
     } else {
-      if (!args.topics.empty()) {
-        io::ReadFilter filter;
-        filter.topics = args.topics;
-        reader->set_filter(filter);
-      }
       io::RawMessage msg;
       while (reader->next(msg)) {
         sizes[msg.topic->name] += msg.payload.size();
@@ -142,13 +135,18 @@ int run_du(const DuArgs & args)
     return 1;
   }
 
+  std::uint64_t bag_total = 0;
+  for (const auto & entry : sizes) {
+    bag_total += entry.second;
+  }
+
   std::vector<Row> rows;
   rows.reserve(selected.size());
-  std::uint64_t total = 0;
+  std::uint64_t reported_total = 0;
   for (const auto & name : selected) {
     const std::uint64_t bytes = sizes.count(name) != 0 ? sizes.at(name) : 0;
     rows.push_back({name, bytes});
-    total += bytes;
+    reported_total += bytes;
   }
 
   // Fold per-topic rows into depth groups when -d was given. Depth 0 keeps
@@ -180,30 +178,32 @@ int run_du(const DuArgs & args)
   int topic_w = kMinTopicWidth;
   for (const auto & row : rows) {
     size_w = std::max(size_w, static_cast<int>(format_size(row.bytes, !args.bytes).size()));
-    pct_w = std::max(pct_w, static_cast<int>(format_percent(row.bytes, total).size()));
+    pct_w = std::max(pct_w, static_cast<int>(format_percent(row.bytes, bag_total).size()));
     topic_w = std::max(topic_w, static_cast<int>(row.topic.size()));
   }
-  size_w = std::max(size_w, static_cast<int>(format_size(total, !args.bytes).size()));
-  pct_w = std::max(pct_w, static_cast<int>(format_percent(total, total).size()));
+  size_w = std::max(size_w, static_cast<int>(format_size(reported_total, !args.bytes).size()));
+  pct_w = std::max(pct_w, static_cast<int>(format_percent(reported_total, bag_total).size()));
   topic_w = std::max(topic_w, 5);  // "total"
 
   fmt::print(stdout, "{:>{}} {:>{}} {:<{}}\n", "SIZE", size_w, "%", pct_w, "TOPIC", topic_w);
   for (const auto & row : rows) {
     fmt::print(
       stdout, "{:>{}} {:>{}} {:<{}}\n", format_size(row.bytes, !args.bytes), size_w,
-      format_percent(row.bytes, total), pct_w, row.topic, topic_w);
+      format_percent(row.bytes, bag_total), pct_w, row.topic, topic_w);
   }
   fmt::print(
-    stdout, "{:>{}} {:>{}} {:<{}}\n", format_size(total, !args.bytes), size_w,
-    format_percent(total, total), pct_w, "total", topic_w);
+    stdout, "{:>{}} {:>{}} {:<{}}\n", format_size(reported_total, !args.bytes), size_w,
+    format_percent(reported_total, bag_total), pct_w, "total", topic_w);
   return 0;
 }
 
 // `bagwiz du -i <input>` reports each topic's on-disk size, in the spirit of
-// du(1): a size column first, that size's share of the reported total next to
-// it, the topic name after that, rows sorted by size descending, and a
-// closing `total` row. Sizes print in 1024-based human-readable units by
-// default (`-b/--bytes` switches to raw byte counts, du(1)'s own `-b`), and
+// du(1): a size column first, that size's share of all topic bytes in the
+// input bag next to it, the topic name after that, rows sorted by size
+// descending, and a closing `total` row. With -t, that closing row shows both
+// the selected topics' combined size and their share of the input bag. Sizes
+// print in 1024-based human-readable units by default (`-b/--bytes` switches
+// to raw byte counts, du(1)'s own `-b`), and
 // `-d/--depth` aggregates topics by their first N name components (du(1)'s
 // `--max-depth`). The size is what the topic's messages occupy in the file,
 // so compressing a bag shrinks its report the way it shrinks the file. Where
@@ -231,7 +231,7 @@ public:
     add_topic_option(
       app, "-t,--topics", args_.topics,
       "Topic selector(s) to report. A literal topic name or a '*' glob. Repeat for several. "
-      "Omit to report every topic.",
+      "Omit to report every topic. Percentages remain relative to the entire input bag.",
       TopicSlotSpec{.require_present = true});
     app.add_flag(
       "-b,--bytes", args_.bytes,

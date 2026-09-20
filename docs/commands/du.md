@@ -2,9 +2,11 @@
 
 Report each topic's on-disk size in a single ROS 2 rosbag, in the spirit of
 du(1): one row per topic sorted by size descending, each row carrying that
-size's share of the reported total, plus a closing `total` row. Sizes print
-in 1024-based human-readable units by default (`-b` for raw byte counts).
-ROS 1 `*.bag` inputs are not supported.
+size's share of all topic data in the input bag, plus a closing `total` row.
+With `-t/--topics`, that row shows both the selected topics' combined size
+and their share of the input bag. Sizes print in 1024-based human-readable
+units by default (`-b` for raw byte counts). ROS 1 `*.bag` inputs are not
+supported.
 
 ## Usage
 
@@ -34,7 +36,7 @@ bagwiz du -i capture.mcap -d 1
 | Flag                        | Description                                                                                                                                                                                                                                                                                           |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-i`, `--input <input>`     | **Required.** ROS 2 rosbag path: a rosbag2 directory or a single-file `*.mcap` / `*.db3`. zstd-compressed `*.db3.zstd` inputs are also accepted.                                                                                                                                                      |
-| `-t`, `--topics <topic>...` | Topic selector(s) to report: a literal topic name or a `*` glob. Repeat for several. Omit to report every topic in the bag. A selector that matches no topic is an error. Selecting fewer topics also narrows the work (see Performance).                                                             |
+| `-t`, `--topics <topic>...` | Topic selector(s) to report: a literal topic name or a `*` glob. Repeat for several. Omit to report every topic in the bag. A selector that matches no topic is an error. Percentages remain relative to all topic data in the input bag.                                                             |
 | `-b`, `--bytes`             | Print sizes as raw byte counts instead of the default human-readable units (1024-based, one decimal and a `K`/`M`/`G`/`T` suffix, e.g. `4.0K`, `1.2M`; values below 1 KiB stay raw bytes).                                                                                                            |
 | `-d`, `--depth <n>`         | Aggregate topics by their first `<n>` name components, du(1) `--max-depth` style: `-d 1` groups `/sensing/lidar/points` under `/sensing`. A topic already at or above the depth keeps its full name. `-d 0` prints only the `total` row. Combines with `-t`: grouping applies to the selected topics. |
 
@@ -51,16 +53,25 @@ name), with a `total` row last:
 868.0M 100.0% total
 ```
 
+Filtering keeps the original bag as the percentage denominator, so the
+selected `total` shows how much of the input bag the selection occupies:
+
+```text
+  SIZE     % TOPIC
+100.0M 11.5% /sensing/camera
+100.0M 11.5% total
+```
+
 - `SIZE` is what the topic's messages occupy on disk, so compressing a bag
   shrinks its report the way it shrinks the file. See "What is counted" for
   exactly which bytes each storage format charges to a topic, and where the
   figure is a proportional estimate rather than an exact count.
-- `%` is the row's share of the reported `total`, to one decimal. The
-  denominator is the total actually reported, so `-t/--topics` narrows it
-  too and the selected topics still add up to `100.0%`. Rounding is per row,
-  so the column need not sum to exactly `100.0%`. A selection that reports
-  nothing has no total to divide by: every share then reads `0.0%`, the
-  `total` row included.
+- `%` is the row's share of all topic bytes in the input bag, to one decimal.
+  The denominator does not change with `-t/--topics`: the selected `total`
+  therefore states what fraction of the original bag those topics occupy.
+  Rounding is per row, so individual rows need not add up exactly to the
+  displayed `total`. An empty bag has no total to divide by, so its `total`
+  reads `0.0%`.
 - Topics declared in the bag but carrying no messages are listed with `0`.
 - Column widths are computed from the actual data, so long sizes / topic
   names do not push later columns out of alignment.
@@ -129,9 +140,9 @@ One bag shape cannot be answered this way and falls back to a full message
 scan: an MCAP carrying no chunk index — written with chunking off, or never
 finalized. The scan charges each message its payload bytes.
 
-Passing `-t/--topics` narrows the work further. The selection is pushed down
-into the storage layer, and on MCAP a chunk that holds none of the selected
-topics is not read at all.
+`-t/--topics` restricts the rows printed, but `du` still computes every
+topic's size so the percentage denominator remains the original bag's full
+topic-data total.
 
 ## Exit status
 
