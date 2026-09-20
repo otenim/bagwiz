@@ -122,17 +122,7 @@ loaded into one buffer; sample times come from the chosen `<topic>` (typically
 dynamic `/tf`). Each output row is the result of `lookupTransform(--ref, --of,
 t)` at that time: the pose of frame `--of` expressed in frame `--ref`.
 
-```mermaid
-flowchart LR
-  Ref["--ref reference frame"]
-  Of["--of tracked frame"]
-  Ref <-->|"TF chain built from the bag"| Of
-```
-
-```text
-TUM row at time t  ≍  pose of `--of`  expressed in  `--ref`
-                   (same convention as lookupTransform(--ref, --of, t))
-```
+![The reference frame --ref and the tracked frame --of, linked through a TF chain of any number of hops built from every TFMessage topic in the bag; each row is the pose of --of expressed in --ref](assets/traj-tf-frames.svg)
 
 #### Odometry (`nav_msgs/msg/Odometry`)
 
@@ -150,15 +140,7 @@ with an error.
   `base_link → tamagawa/imu_link` edge), so the row becomes the pose of the
   sensor rather than the vehicle body.
 
-```mermaid
-flowchart LR
-  subgraph odom["Each Odometry message"]
-    HF["header.frame_id parent / reference"]
-    CF["child_frame_id body"]
-  end
-  HF -->|"pose.pose is CF in HF"| CF
-  CF -.->|"TF tree (e.g. static)"| Of["--of tracked frame"]
-```
+![An Odometry message's header.frame_id (parent) and child_frame_id (body), with the pose walked on through the TF tree to the --of tracked frame](assets/traj-odometry-frames.svg)
 
 ```text
 --ref map --of tamagawa/imu_link
@@ -180,21 +162,7 @@ has an empty `header.frame_id`, the command exits with an error.
   traversal (e.g. body → sensor), use an `Odometry` topic, which carries
   `child_frame_id`, or `/tf` directly.
 
-```mermaid
-flowchart TB
-  subgraph message["Each message"]
-    H["header.frame_id"]
-    P["pose position & orientation"]
-  end
-  subgraph no_ref["No --ref"]
-    O1["TUM numbers stay in header.frame_id"]
-  end
-  subgraph with_ref["With --ref"]
-    O2["TF in bag: header.frame_id → --ref"]
-  end
-  message --> no_ref
-  message --> with_ref
-```
+![Each pose message carries header.frame_id and a pose; without --ref the TUM numbers stay in header.frame_id, with --ref the bag's TF tree re-expresses them into --ref](assets/traj-pose-frames.svg)
 
 #### Options cheat sheet
 

@@ -23,6 +23,13 @@ to keep this file itself consistent over time.
   code so that the description does not drift from the actual
   behavior. Verify claims against the implementation rather than
   relying on memory or assumptions.
+- Write every piece of prose — source comments, documentation, help
+  text, commit messages, pull request descriptions — so that it reads
+  naturally to a human. Prefer plain, flowing sentences over terse,
+  mechanical, or keyword-stuffed phrasing, and shape longer passages
+  so a reader can follow them in one pass without re-reading.
+  Accuracy still comes first, but an accurate description that is
+  hard to read has done only half its job.
 - Use bold (`**...**`) and emoji sparingly in Markdown
   (documentation, PR descriptions, commit message bodies). Reserve
   bold for genuinely critical warnings or terms that must stand out
@@ -31,17 +38,32 @@ to keep this file itself consistent over time.
   improves readability, and avoid decorative emoji in source comments,
   generated documentation, commit messages, and pull request
   descriptions.
+- When a document explains how components talk to each other — a
+  communication or data flow, a sequence of calls, a message
+  exchange — or how software modules fit together, do not rely on
+  prose alone: draw the structure as a diagram and let the text
+  explain what the picture shows. A reader takes in a flow or a
+  dependency graph from a figure far faster than from a paragraph
+  that walks through it one hop at a time. The next rule says which
+  form such a diagram takes.
 - When authoring Markdown files, write mathematical notation as LaTeX
-  (`$...$` for inline math, `$$...$$` for display math) and express
-  diagrams — process flowcharts, architecture diagrams, and similar
-  visuals — as [Mermaid](https://mermaid.js.org/) in `mermaid`-labeled
-  fenced code blocks, rather than as ASCII art or committed image
-  files. GitHub renders both natively in its Markdown, so they stay as
-  plain-text source that is easy to review and edit. Reach for a static
-  image only when a diagram genuinely cannot be expressed in Mermaid —
-  notably spatial / 3D-geometry figures in the command documentation,
-  which are committed as plain SVG under `docs/commands/assets/` (see
-  `docs/commands/TEMPLATE.md`).
+  (`$...$` for inline math, `$$...$$` for display math) and draw
+  diagrams — process flowcharts, sequence diagrams, architecture
+  diagrams, spatial / 3D-geometry figures, and similar visuals — as
+  hand-written SVG, rather than as ASCII art, Mermaid blocks, or
+  raster images. Commit each figure as its own `.svg` file under an
+  `assets/` directory beside the Markdown that embeds it
+  (`docs/commands/assets/` for the command pages, `docs/assets/` for
+  everything else) and embed it with a relative image link. SVG is
+  plain-text source that diffs and reviews like code, renders the
+  same wherever the Markdown is viewed, and gives full control over
+  layout — which an auto-laid-out Mermaid block does not. Keep every
+  figure hand-readable: vector shapes and real `<text>` only, no
+  scripts and no embedded raster images, small and legible at the
+  size GitHub renders it, on both light and dark backgrounds (favor
+  `currentColor` or mid-tone colors over pure black and white).
+  `docs/commands/TEMPLATE.md` adds the file-naming convention for the
+  command pages.
 - Never write phrases that only make sense within the context of an
   AI–developer conversation. A future contributor or user reading the
   source must be able to understand the reasoning from the code and

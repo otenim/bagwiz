@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" width="720" height="160" role="img" aria-labelledby="t">
+  <title id="t">traj dump on a TF topic: the reference frame (--ref) and the tracked frame (--of) are linked through a TF chain built from the bag; each row is the pose of --of expressed in --ref</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+      <path d="M0,0 L8,4 L0,8 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+
+  <!-- reference frame (the ref flag) -->
+  <rect x="16" y="40" width="150" height="56" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="91" y="59" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#1b2a41">--ref</text>
+  <text x="91" y="79" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41">reference frame</text>
+
+  <!-- TF chain: intermediate frames resolved from every TFMessage topic -->
+  <rect x="186" y="18" width="348" height="100" rx="8" fill="none" stroke="#8b949e" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text x="360" y="34" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e">TF chain built from every TFMessage topic in the bag</text>
+
+  <rect x="270" y="52" width="52" height="32" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="296" y="68" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#1b2a41">…</text>
+
+  <rect x="386" y="52" width="52" height="32" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="412" y="68" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#1b2a41">…</text>
+
+  <text x="360" y="102" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e">any number of hops</text>
+
+  <!-- tracked frame (the of flag) -->
+  <rect x="554" y="40" width="150" height="56" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="629" y="59" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#1b2a41">--of</text>
+  <text x="629" y="79" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41">tracked frame</text>
+
+  <!-- hops, each a TF edge in either direction -->
+  <line x1="166" y1="68" x2="270" y2="68" stroke="#8b949e" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <line x1="322" y1="68" x2="386" y2="68" stroke="#8b949e" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <line x1="438" y1="68" x2="554" y2="68" stroke="#8b949e" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+
+  <!-- what each output row is -->
+  <text x="360" y="142" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e">each row at time t: pose of <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">--of</tspan> expressed in <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">--ref</tspan>, i.e. <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">lookupTransform(--ref, --of, t)</tspan></text>
+</svg>

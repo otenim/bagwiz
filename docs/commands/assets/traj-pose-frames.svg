@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 256" width="680" height="256" role="img" aria-labelledby="t">
+  <title id="t">How traj dump resolves the frame of a pose topic, without and with --ref</title>
+  <defs>
+    <marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="8" refX="10" refY="4" orient="auto">
+      <path d="M 0 0 L 10 4 L 0 8 Z" fill="#8b949e"/>
+    </marker>
+  </defs>
+  <!-- Each message -->
+  <rect x="137" y="16" width="406" height="100" rx="8" fill="none" stroke="#8b949e" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text x="151" y="34" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e">Each message</text>
+  <rect x="149" y="52" width="160" height="44" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="229" y="74" text-anchor="middle" dominant-baseline="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#1b2a41">header.frame_id</text>
+  <rect x="321" y="52" width="210" height="44" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="426" y="74" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41">pose (position &amp; orientation)</text>
+  <!-- Fan-out to the two outcomes -->
+  <line x1="340" y1="116" x2="171" y2="180" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="340" y1="116" x2="509" y2="180" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- Outcome without a reference frame -->
+  <rect x="16" y="180" width="310" height="60" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="171" y="199" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41">No <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">--ref</tspan></text>
+  <text x="171" y="221" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41">TUM numbers stay in <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">header.frame_id</tspan></text>
+  <!-- Outcome with a reference frame -->
+  <rect x="354" y="180" width="310" height="60" rx="6" fill="#dbe6f3" stroke="#6b8cba" stroke-width="1.5"/>
+  <text x="509" y="199" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41">With <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">--ref</tspan></text>
+  <text x="509" y="221" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#1b2a41">TF in bag: <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">header.frame_id</tspan> → <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">--ref</tspan></text>
+</svg>
