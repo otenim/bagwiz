@@ -11,9 +11,11 @@
 
 #include "bagwiz/core/video/frame_codec.hpp"
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bagwiz::commands
@@ -22,6 +24,16 @@ namespace bagwiz::commands
 // The suffix appended to a source topic to name its video topic when --as
 // is not given: /cam/image_raw -> /cam/image_raw/video.
 inline constexpr const char * kVideoTopicSuffix = "/video";
+
+// Every user-facing encoder effort accepted by `video encode --preset`.
+inline constexpr std::array<std::string_view, 5> kVideoEncodePresets{
+  {"fastest", "faster", "default", "slower", "slowest"}};
+
+// The libx264/libx265 preset behind a user-facing effort. The choices span
+// the underlying scale while keeping the encoder's current medium default.
+// NVENC maps these names onto its own p1 (fastest) .. p7 (slowest) scale.
+[[nodiscard]] std::optional<std::string_view> frame_encoder_preset(
+  std::string_view preset) noexcept;
 
 struct VideoEncodeArgs
 {
@@ -37,7 +49,7 @@ struct VideoEncodeArgs
   bool keep_inputs = false;                                        // --keep-inputs
   core::video::VideoCodec codec = core::video::VideoCodec::kH264;  // --codec
   core::video::EncoderBackend encoder = core::video::EncoderBackend::kAuto;  // --encoder
-  std::string preset = "medium";                                             // --preset
+  std::string preset = "default";                                            // --preset
   std::optional<int> crf;                                                    // --crf
   int gop = 30;                                                              // --gop
   std::optional<int> threads;                                                // -j,--threads
