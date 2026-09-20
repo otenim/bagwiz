@@ -8,6 +8,8 @@
 
 #include "bagwiz/commands/compress.hpp"
 
+#include "CLI/CLI.hpp"
+#include "bagwiz/commands/command.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 
@@ -152,6 +154,16 @@ bagwiz::commands::CompressArgs make_inplace_args(const std::filesystem::path & i
   bagwiz::commands::CompressArgs args;
   args.input_path = input;
   return args;
+}
+
+bagwiz::commands::Command * find_compress_command()
+{
+  for (const auto & command : bagwiz::commands::Registry::instance().all()) {
+    if (command->name() == "compress") {
+      return command.get();
+    }
+  }
+  return nullptr;
 }
 
 // A directory-layout, uncompressed sqlite3 copy of the MCAP fixture, for the
@@ -549,6 +561,49 @@ TEST_F(CompressTest, ExplicitStorageOverridesExtensionInference)
   ASSERT_EQ(bagwiz::commands::run_compress(args), 0);
   const auto md = bagwiz::io::load_metadata_yaml(out_path / "metadata.yaml");
   EXPECT_EQ(md.storage_identifier, "mcap");
+}
+
+TEST_F(CompressTest, ShortDecompressFlagIsEquivalentToModeNone)
+{
+  const auto in_path = build_input(tmp_dir_);
+  const auto compressed = tmp_dir_ / "compressed";
+  const auto plain = tmp_dir_ / "plain";
+
+  ASSERT_EQ(bagwiz::commands::run_compress(make_args(in_path, compressed)), 0);
+
+  auto * command = find_compress_command();
+  ASSERT_NE(command, nullptr);
+  CLI::App app{"compress"};
+  command->configure(app);
+
+  const std::vector<std::string> args{"bagwiz", "-i",           compressed.string(),
+                                      "-o",     plain.string(), "-d"};
+  std::vector<const char *> argv;
+  argv.reserve(args.size());
+  for (const auto & arg : args) {
+    argv.push_back(arg.c_str());
+  }
+  ASSERT_NO_THROW(app.parse(static_cast<int>(argv.size()), argv.data()));
+  ASSERT_EQ(command->run(), 0);
+
+  EXPECT_GT(mcap_shard_bytes(plain), mcap_shard_bytes(compressed));
+  expect_fixture_intact(plain);
+
+  // A shorthand with a fixed meaning must not silently lose to a conflicting
+  // explicit mode based on argument order.
+  CLI::App conflicting_app{"compress"};
+  command->configure(conflicting_app);
+  const std::vector<std::string> conflicting_args{
+    "bagwiz", "-i",  compressed.string(), "-o", (tmp_dir_ / "conflict").string(), "-d",
+    "--mode", "file"};
+  std::vector<const char *> conflicting_argv;
+  conflicting_argv.reserve(conflicting_args.size());
+  for (const auto & arg : conflicting_args) {
+    conflicting_argv.push_back(arg.c_str());
+  }
+  EXPECT_THROW(
+    conflicting_app.parse(static_cast<int>(conflicting_argv.size()), conflicting_argv.data()),
+    CLI::ParseError);
 }
 
 }  // namespace

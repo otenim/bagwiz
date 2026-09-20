@@ -748,7 +748,7 @@ std::vector<std::string> complete_complete_command(const CompletionRequest & req
 // `--storage` complete their enumerated values.
 //
 //   compress: `compress`(0) -i|--input <bag> [-o|--output <bag>]
-//             [--mode auto|file|message|none] [--codec zstd|lz4]
+//             [-d | --mode auto|file|message|none] [--codec zstd|lz4]
 //             [--level fastest|fast|default|slow|slowest]
 //             [--storage mcap|sqlite3] [-w|--overwrite]
 std::vector<std::string> complete_compress(const CompletionRequest & request)
@@ -757,8 +757,8 @@ std::vector<std::string> complete_compress(const CompletionRequest & request)
   if (current.starts_with("-")) {
     return matching(
       with_help(
-        {"--codec", "--input", "--level", "--mode", "--output", "--overwrite", "--storage", "-i",
-         "-o", "-w"}),
+        {"--codec", "--input", "--level", "--mode", "--output", "--overwrite", "--storage", "-d",
+         "-i", "-o", "-w"}),
       current);
   }
 
