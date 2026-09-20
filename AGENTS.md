@@ -23,6 +23,13 @@ to keep this file itself consistent over time.
   code so that the description does not drift from the actual
   behavior. Verify claims against the implementation rather than
   relying on memory or assumptions.
+- Write every piece of prose — source comments, documentation, help
+  text, commit messages, pull request descriptions — so that it reads
+  naturally to a human. Prefer plain, flowing sentences over terse,
+  mechanical, or keyword-stuffed phrasing, and shape longer passages
+  so a reader can follow them in one pass without re-reading.
+  Accuracy still comes first, but an accurate description that is
+  hard to read has done only half its job.
 - Use bold (`**...**`) and emoji sparingly in Markdown
   (documentation, PR descriptions, commit message bodies). Reserve
   bold for genuinely critical warnings or terms that must stand out
