@@ -249,16 +249,17 @@ TEST_F(DuTest, DepthAggregatesFilteredTopics)
   int exit_code = -1;
   const auto out = run_captured(args, exit_code);
 
-  // The total covers only the selected topics.
+  // The size total covers only the selected topics, while its percentage is
+  // relative to every topic in the input bag (3584 / 3588 bytes).
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE      % TOPIC\n"
-    "3.5K 100.0% /sensing\n"
-    "3.5K 100.0% total\n");
+    "SIZE     % TOPIC\n"
+    "3.5K 99.9% /sensing\n"
+    "3.5K 99.9% total\n");
 }
 
-TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
+TEST_F(DuTest, TopicFilterNarrowsRowsAndReportsShareOfInputBag)
 {
   const auto in_path = build_input(tmp_dir_);
 
@@ -272,9 +273,9 @@ TEST_F(DuTest, TopicFilterNarrowsRowsAndTotal)
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
-    "SIZE      % TOPIC\n"
-    "1.5K 100.0% /sensing/camera/image\n"
-    "1.5K 100.0% total\n");
+    "SIZE     % TOPIC\n"
+    "1.5K 42.8% /sensing/camera/image\n"
+    "1.5K 42.8% total\n");
 }
 
 TEST_F(DuTest, TopicFilterKeepsZeroMessageTopic)
@@ -288,8 +289,8 @@ TEST_F(DuTest, TopicFilterKeepsZeroMessageTopic)
   int exit_code = -1;
   const auto out = run_captured(args, exit_code);
 
-  // Nothing was reported, so there is no total to take a share of: every
-  // percentage reads 0.0%, the `total` row included.
+  // The selected topic contributes no bytes to the non-empty input bag, so
+  // both its row and the selected total read 0.0%.
   EXPECT_EQ(exit_code, 0);
   EXPECT_EQ(
     out,
