@@ -38,13 +38,22 @@ to keep this file itself consistent over time.
   improves readability, and avoid decorative emoji in source comments,
   generated documentation, commit messages, and pull request
   descriptions.
+- When a document explains how components talk to each other — a
+  communication or data flow, a sequence of calls, a message
+  exchange — or how software modules fit together, do not rely on
+  prose alone: draw the structure as a diagram and let the text
+  explain what the picture shows. A reader takes in a flow or a
+  dependency graph from a figure far faster than from a paragraph
+  that walks through it one hop at a time. The next rule says which
+  form such a diagram takes.
 - When authoring Markdown files, write mathematical notation as LaTeX
   (`$...$` for inline math, `$$...$$` for display math) and express
-  diagrams — process flowcharts, architecture diagrams, and similar
-  visuals — as [Mermaid](https://mermaid.js.org/) in `mermaid`-labeled
-  fenced code blocks, rather than as ASCII art or committed image
-  files. GitHub renders both natively in its Markdown, so they stay as
-  plain-text source that is easy to review and edit. Reach for a static
+  diagrams — process flowcharts, sequence diagrams, architecture
+  diagrams, and similar visuals — as
+  [Mermaid](https://mermaid.js.org/) in `mermaid`-labeled fenced code
+  blocks, rather than as ASCII art or committed image files. GitHub
+  renders both natively in its Markdown, so they stay as plain-text
+  source that is easy to review and edit. Reach for a static
   image only when a diagram genuinely cannot be expressed in Mermaid —
   notably spatial / 3D-geometry figures in the command documentation,
   which are committed as plain SVG under `docs/commands/assets/` (see
