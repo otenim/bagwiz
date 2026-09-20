@@ -3,7 +3,8 @@
 Compress or decompress a rosbag by re-encoding it. MCAP outputs use chunk
 compression (zstd or lz4); SQLite3 directory outputs use rosbag2's
 MESSAGE-mode (per-message zstd) or FILE-mode (whole-shard `.db3.zstd`
-envelope). `--mode none` reverses any of these back to plain storage.
+envelope). `-d` (or its long form, `--mode none`) reverses any of these back
+to plain storage.
 Messages are re-encoded wholesale; no topic selection or time windowing is
 applied.
 
@@ -14,7 +15,7 @@ layout — only its compression changes.
 ## Usage
 
 ```text
-bagwiz compress -i <input> [-o <output>] [OPTIONS]
+bagwiz compress -i <input> [-o <output>] [-d | --mode <M>] [OPTIONS]
 ```
 
 ## Examples
@@ -26,8 +27,8 @@ bagwiz compress -i drive_dir/ -o drive_zstd/
 # Same thing in place: no -o, so drive_dir/ is replaced by its compressed self.
 bagwiz compress -i drive_dir/
 
-# Decompress in place.
-bagwiz compress -i drive_dir/ --mode none
+# Decompress in place (`-d` is shorthand for `--mode none`).
+bagwiz compress -i drive_dir/ -d
 
 # Compress with lz4 chunks instead (MCAP only), at the fastest effort.
 bagwiz compress -i drive_dir/ -o drive_lz4/ --codec lz4 --level fastest
@@ -38,21 +39,22 @@ bagwiz compress -i drive_sqlite/ -o drive_msg/ --storage sqlite3
 # Wrap a SQLite3 bag's shard in a whole-database .db3.zstd envelope.
 bagwiz compress -i drive_sqlite/ -o drive_file/ --storage sqlite3 --mode file
 
-# Decompress: back to plain, uncompressed storage (either backend).
-bagwiz compress -i drive_zstd/ -o drive_plain/ --mode none
+# Decompress to a new plain, uncompressed bag (either backend).
+bagwiz compress -i drive_zstd/ -o drive_plain/ -d
 ```
 
 ## Options
 
-| Flag                      | Description                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag2 (directory or single-file). Must exist. Compressed inputs of every supported shape (MCAP chunk compression, MESSAGE-mode, FILE-mode `.db3.zstd` envelope) are read transparently, including a bare `.db3` lifted out of a MESSAGE-mode directory bag — its own `metadata` table carries the declaration.                                       |
-| `-o`, `--output <output>` | Write the result to this new rosbag2 directory or single-file (`*.mcap` / `*.db3`) instead of rewriting `<input>` in place. SQLite3 compression (`--mode file` / `message`) requires a directory target: rosbag2 only decompresses when a `metadata.yaml` declares the mode, so a single `.db3` would read back as raw zstd frames without an error.                             |
-| `--mode <M>`              | Compression mode. One of `auto`, `file`, `message`, `none`. `file`: MCAP chunk compression, or the whole-shard `.db3.zstd` envelope for SQLite3. `message`: per-message zstd frames (SQLite3 only; rejected for MCAP, where rosbag2 defines no per-message mode). `none`: decompress to plain storage. Default: `auto` — `file` for MCAP, `message` for SQLite3. Long-form only. |
-| `--codec <C>`             | Compression codec. One of `zstd`, `lz4`. `lz4` is valid only for MCAP chunk compression; rosbag2 defines zstd alone for SQLite3 storage. Nothing is encoded under `--mode none`, so `--codec lz4` is rejected there (`--codec zstd` is the default and passes). Default: `zstd`. Long-form only.                                                                                 |
-| `--level <L>`             | Encoder effort. One of `fastest`, `fast`, `default`, `slow`, `slowest`. Maps onto the codec's effort scale (for SQLite3 zstd: 1, 2, the library default, 9, 19 respectively). Default: the codec's own default, except `--codec lz4`, whose unset level picks `fastest` rather than lz4's own markedly slower, larger-output default. Long-form only.                            |
-| `--storage <S>`           | Target storage backend. One of `mcap`, `sqlite3`. Default: inferred from the `-o` extension; otherwise inherited from the input bag's storage — the same resolution order as [`convert format`](convert.md#storage-backend-resolution). In place the input's backend is preserved, so only a value naming that same backend is accepted. Long-form only.                         |
-| `-w`, `--overwrite`       | Replace the `-o` path if it already exists. Without this flag, any pre-existing entry there (file or directory) stops the run with a clear log line. No effect in-place, where `<input>` is replaced by design.                                                                                                                                                                  |
+| Flag                      | Description                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`, `--input <input>`   | **Required.** Input ROS 2 rosbag2 (directory or single-file). Must exist. Compressed inputs of every supported shape (MCAP chunk compression, MESSAGE-mode, FILE-mode `.db3.zstd` envelope) are read transparently, including a bare `.db3` lifted out of a MESSAGE-mode directory bag — its own `metadata` table carries the declaration.                                                                     |
+| `-o`, `--output <output>` | Write the result to this new rosbag2 directory or single-file (`*.mcap` / `*.db3`) instead of rewriting `<input>` in place. SQLite3 compression (`--mode file` / `message`) requires a directory target: rosbag2 only decompresses when a `metadata.yaml` declares the mode, so a single `.db3` would read back as raw zstd frames without an error.                                                           |
+| `-d`                      | Decompress to plain storage. Equivalent to `--mode none`; cannot be combined with `--mode`.                                                                                                                                                                                                                                                                                                                    |
+| `--mode <M>`              | Compression mode. One of `auto`, `file`, `message`, `none`. `file`: MCAP chunk compression, or the whole-shard `.db3.zstd` envelope for SQLite3. `message`: per-message zstd frames (SQLite3 only; rejected for MCAP, where rosbag2 defines no per-message mode). `none`: decompress to plain storage. Default: `auto` — `file` for MCAP, `message` for SQLite3. Cannot be combined with `-d`. Long-form only. |
+| `--codec <C>`             | Compression codec. One of `zstd`, `lz4`. `lz4` is valid only for MCAP chunk compression; rosbag2 defines zstd alone for SQLite3 storage. Nothing is encoded under `--mode none`, so `--codec lz4` is rejected there (`--codec zstd` is the default and passes). Default: `zstd`. Long-form only.                                                                                                               |
+| `--level <L>`             | Encoder effort. One of `fastest`, `fast`, `default`, `slow`, `slowest`. Maps onto the codec's effort scale (for SQLite3 zstd: 1, 2, the library default, 9, 19 respectively). Default: the codec's own default, except `--codec lz4`, whose unset level picks `fastest` rather than lz4's own markedly slower, larger-output default. Long-form only.                                                          |
+| `--storage <S>`           | Target storage backend. One of `mcap`, `sqlite3`. Default: inferred from the `-o` extension; otherwise inherited from the input bag's storage — the same resolution order as [`convert format`](convert.md#storage-backend-resolution). In place the input's backend is preserved, so only a value naming that same backend is accepted. Long-form only.                                                       |
+| `-w`, `--overwrite`       | Replace the `-o` path if it already exists. Without this flag, any pre-existing entry there (file or directory) stops the run with a clear log line. No effect in-place, where `<input>` is replaced by design.                                                                                                                                                                                                |
 
 ## Compression modes
 

@@ -293,7 +293,7 @@ int run_compress(const CompressArgs & args)
 // `bagwiz compress` re-encodes a rosbag with a different compression setup:
 // MCAP chunk compression (zstd/lz4) for MCAP outputs, rosbag2 MESSAGE-mode
 // (per-message zstd) or FILE-mode (.db3.zstd envelope) for SQLite3 directory
-// outputs, and `--mode none` to decompress back to plain storage. With -o the
+// outputs, and `-d` / `--mode none` to decompress back to plain storage. With -o the
 // result lands in a new bag; without it <input> is rewritten in place,
 // keeping its storage backend and layout.
 class CompressCommand : public Command
@@ -314,14 +314,17 @@ public:
       "-o,--output", args_.output_path,
       "Write the result to this new bag (file or directory) instead of rewriting <input> "
       "in place.");
+    auto * mode_opt = app.add_option(
+      "--mode", args_.mode,
+      "Compression mode: 'file' (MCAP chunk compression, or the whole-shard .db3.zstd "
+      "envelope for sqlite3), 'message' (per-message zstd, sqlite3 only), 'none' "
+      "(decompress), or 'auto' (file for mcap, message for sqlite3)");
+    mode_opt->check(CLI::IsMember({"auto", "file", "message", "none"}))->capture_default_str();
     app
-      .add_option(
-        "--mode", args_.mode,
-        "Compression mode: 'file' (MCAP chunk compression, or the whole-shard .db3.zstd "
-        "envelope for sqlite3), 'message' (per-message zstd, sqlite3 only), 'none' "
-        "(decompress), or 'auto' (file for mcap, message for sqlite3)")
-      ->check(CLI::IsMember({"auto", "file", "message", "none"}))
-      ->capture_default_str();
+      .add_flag_callback(
+        "-d", [this]() { args_.mode = "none"; },
+        "Decompress to plain storage (equivalent to --mode none)")
+      ->excludes(mode_opt);
     app
       .add_option(
         "--codec", args_.codec,
