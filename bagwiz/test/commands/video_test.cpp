@@ -18,6 +18,7 @@
 #include "bagwiz/core/image/raw_image.hpp"
 #include "bagwiz/core/video/annexb.hpp"
 #include "bagwiz/core/video/video_codec.hpp"
+#include "bagwiz/core/video/video_encoder.hpp"
 #include "bagwiz/io/bag_describe.hpp"
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/bag_open.hpp"
@@ -34,6 +35,7 @@
 #include <map>
 #include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -46,7 +48,6 @@ namespace vid = bagwiz::core::video;
 using bagwiz::commands::DecodedImageFormat;
 using bagwiz::commands::default_image_topic;
 using bagwiz::commands::default_video_topic;
-using bagwiz::commands::frame_encoder_preset;
 using bagwiz::commands::run_video_decode;
 using bagwiz::commands::run_video_encode;
 using bagwiz::commands::VideoDecodeArgs;
@@ -217,9 +218,38 @@ VideoEncodeArgs encode_args(const std::filesystem::path & input, std::vector<std
   args.input_path = input;
   args.topics = std::move(topics);
   args.encoder = vid::EncoderBackend::kCpu;
-  args.preset = "fastest";
+  args.preset = "ultrafast";
   args.gop = 4;
   return args;
+}
+
+// The registered `video` command, whose configure() wires the real CLI11
+// options the parse tests below exercise.
+bagwiz::commands::Command * video_command()
+{
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "video") {
+      return cmd.get();
+    }
+  }
+  return nullptr;
+}
+
+// Parse `video encode -i <tmp> -t /cam --preset <name>` against a fresh
+// CLI11 app, so each name is judged by the option's own validator.
+void parse_encode_preset(bagwiz::commands::Command & video_cmd, std::string_view preset)
+{
+  CLI::App app{"video"};
+  video_cmd.configure(app);
+  const std::vector<std::string> argv{"encode",
+                                      "-i",
+                                      std::filesystem::temp_directory_path().string(),
+                                      "-t",
+                                      "/cam",
+                                      "--preset",
+                                      std::string(preset)};
+  std::vector<std::string> reversed(argv.rbegin(), argv.rend());
+  app.parse(reversed);
 }
 
 VideoDecodeArgs decode_args(const std::filesystem::path & input, std::vector<std::string> topics)
@@ -241,14 +271,31 @@ double mean_abs_diff(std::span<const std::byte> a, std::span<const std::byte> b)
 
 }  // namespace
 
-TEST(VideoEncodePresetTest, MapsFiveEffortLevelsOntoTheEncoderScale)
+// `--preset` takes libx264's own names, the same nine `movify --preset`
+// accepts, so one vocabulary serves both encoders (NVENC maps them onto its
+// p1..p7 inside the library). The default is libx264's medium.
+TEST(VideoEncodePresetTest, AcceptsEveryLibx264PresetNameAndDefaultsToMedium)
 {
-  EXPECT_EQ(frame_encoder_preset("fastest").value_or(""), "ultrafast");
-  EXPECT_EQ(frame_encoder_preset("faster").value_or(""), "veryfast");
-  EXPECT_EQ(frame_encoder_preset("default").value_or(""), "medium");
-  EXPECT_EQ(frame_encoder_preset("slower").value_or(""), "slower");
-  EXPECT_EQ(frame_encoder_preset("slowest").value_or(""), "veryslow");
-  EXPECT_FALSE(frame_encoder_preset("ultrafast").has_value());
+  auto * video_cmd = video_command();
+  ASSERT_NE(video_cmd, nullptr);
+  for (const std::string_view name : bagwiz::core::video::kH264Presets) {
+    EXPECT_NO_THROW(parse_encode_preset(*video_cmd, name)) << name;
+  }
+
+  CLI::App app{"video"};
+  video_cmd->configure(app);
+  EXPECT_EQ(app.get_subcommand("encode")->get_option("--preset")->get_default_str(), "medium");
+}
+
+// The effort aliases the option once took (fastest .. slowest) are not part
+// of that vocabulary, so they are refused like any other unknown name.
+TEST(VideoEncodePresetTest, RefusesTheFormerEffortAliases)
+{
+  auto * video_cmd = video_command();
+  ASSERT_NE(video_cmd, nullptr);
+  for (const char * alias : {"fastest", "default", "slowest"}) {
+    EXPECT_THROW(parse_encode_preset(*video_cmd, alias), CLI::ParseError) << alias;
+  }
 }
 
 TEST(VideoTopicNames, DefaultsAppendAndStripTheVideoSuffix)
@@ -659,7 +706,7 @@ TEST(VideoCliWiring, EncodeParsesItsOptionsIntoTheArgs)
   CLI::App app4{"video"};
   video_cmd->configure(app4);
   const std::vector<std::string> bad_preset{"encode", "-i",       tmp.string(), "-t",
-                                            "/cam",   "--preset", "ultrafast"};
+                                            "/cam",   "--preset", "fastest"};
   std::vector<std::string> bad_preset_reversed(bad_preset.rbegin(), bad_preset.rend());
   EXPECT_THROW(app4.parse(bad_preset_reversed), CLI::ParseError);
 }
