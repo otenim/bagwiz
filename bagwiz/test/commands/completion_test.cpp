@@ -3220,7 +3220,7 @@ TEST(FlagCompletionTest, VideoEncodeValueFlagsListChoices)
     "auto\ncpu\nnvenc\n");
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "video", "encode", "--preset"}),
-    "default\nfaster\nfastest\nslower\nslowest\n");
+    "fast\nfaster\nmedium\nslow\nslower\nsuperfast\nultrafast\nveryfast\nveryslow\n");
   // A number-valued flag offers nothing.
   EXPECT_EQ(
     run_completion({"bagwiz", "__complete", "4", "bagwiz", "video", "encode", "--crf"}), "");

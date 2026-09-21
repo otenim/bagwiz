@@ -39,26 +39,6 @@
 namespace bagwiz::commands
 {
 
-std::optional<std::string_view> frame_encoder_preset(std::string_view preset) noexcept
-{
-  if (preset == "fastest") {
-    return "ultrafast";
-  }
-  if (preset == "faster") {
-    return "veryfast";
-  }
-  if (preset == "default") {
-    return "medium";
-  }
-  if (preset == "slower") {
-    return "slower";
-  }
-  if (preset == "slowest") {
-    return "veryslow";
-  }
-  return std::nullopt;
-}
-
 namespace
 {
 
@@ -184,14 +164,10 @@ private:
       }
       return {};
     }
-    const auto preset = frame_encoder_preset(args_.preset);
-    if (!preset.has_value()) {
-      return "unknown encoder preset '" + args_.preset + "'";
-    }
     vid::FrameEncoderOptions options;
     options.codec = args_.codec;
     options.backend = args_.encoder;
-    options.preset = *preset;
+    options.preset = args_.preset;
     options.crf = args_.crf.value_or(-1);
     options.gop = args_.gop;
     options.threads = args_.threads.value_or(0);

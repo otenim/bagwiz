@@ -1898,7 +1898,10 @@ std::vector<std::string> complete_video(const CompletionRequest & request)
       return matching({"auto", "cpu", "nvenc"}, current);
     }
     if (previous == "--preset") {
-      return matching({"default", "faster", "fastest", "slower", "slowest"}, current);
+      return matching(
+        {"fast", "faster", "medium", "slow", "slower", "superfast", "ultrafast", "veryfast",
+         "veryslow"},
+        current);
     }
   }
   if (sub == "decode" && previous == "--format") {
