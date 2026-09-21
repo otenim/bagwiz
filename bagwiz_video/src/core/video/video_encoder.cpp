@@ -160,6 +160,14 @@ struct VideoEncoder::Impl
       if (ret < 0) {
         return "encoder receive_packet failed: " + av_err(ret);
       }
+      // Every packet is one frame, one tick of the codec time base (seconds
+      // per frame). The muxer takes a sample's length from the packet
+      // duration, and the last sample has no successor to infer it from: left
+      // at zero, the mp4 track ends one frame early and its edit list cuts
+      // the final frame, so a player never shows it.
+      if (pkt->duration <= 0) {
+        pkt->duration = 1;
+      }
       av_packet_rescale_ts(pkt, codec->time_base, stream->time_base);
       pkt->stream_index = stream->index;
       ret = av_interleaved_write_frame(fmt, pkt);
@@ -410,7 +418,9 @@ VideoProbe probe_video(const std::filesystem::path & path)
   AVPacket * pkt = av_packet_alloc();
   if (pkt != nullptr) {
     while (av_read_frame(fmt, pkt) >= 0) {
-      if (pkt->stream_index == vs) {
+      // A packet the container's edit list excludes comes back flagged for
+      // discard; a player drops it, so it does not count as a frame.
+      if (pkt->stream_index == vs && (pkt->flags & AV_PKT_FLAG_DISCARD) == 0) {
         ++count;
       }
       av_packet_unref(pkt);
