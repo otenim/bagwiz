@@ -9,6 +9,8 @@
 #ifndef IO__MCAP_CHUNK_CODEC_HPP_
 #define IO__MCAP_CHUNK_CODEC_HPP_
 
+#include <mcap/types.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -39,9 +41,17 @@ struct DecodedChunk
 // Never throws; failures land in `error` with `records` cleared.
 DecodedChunk decompress_chunk_record(std::span<const std::byte> record);
 
+// The encoder level a chunk codec runs at when no level was named: the one
+// rule the mcap writer and the pass-through's re-encode share, so a rewrite
+// never mixes two levels of one codec in a bag. mcap maps lz4 +
+// CompressionLevel::Default onto LZ4-HC, which measures several times slower
+// than zstd's default for a larger output — the opposite of what choosing
+// lz4 means — so lz4 gets its fast mode; every other codec gets Default.
+mcap::CompressionLevel unset_compression_level(mcap::Compression codec);
+
 // Compress a records blob with `compression` ("" / "none" returns a verbatim
-// copy; "zstd" and "lz4" compress). Throws std::runtime_error on an unknown
-// codec name or a compressor failure.
+// copy; "zstd" and "lz4" compress at unset_compression_level()). Throws
+// std::runtime_error on an unknown codec name or a compressor failure.
 std::vector<std::byte> compress_chunk_records(
   std::span<const std::byte> records, std::string_view compression);
 

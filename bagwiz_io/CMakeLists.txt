@@ -177,6 +177,14 @@ if(BUILD_TESTING)
   ament_add_gtest(bagwiz_mcap_passthrough_test test/io/mcap_passthrough_test.cpp)
   target_link_libraries(bagwiz_mcap_passthrough_test bagwiz_io ${mcap_vendor_TARGETS})
 
+  # The chunk codec is a src-local detail; the test drives its re-encode
+  # through the header and compares the bytes against mcap's own chunk
+  # writers at known levels.
+  ament_add_gtest(bagwiz_mcap_chunk_codec_test test/io/mcap_chunk_codec_test.cpp)
+  target_include_directories(
+    bagwiz_mcap_chunk_codec_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(bagwiz_mcap_chunk_codec_test bagwiz_io ${mcap_vendor_TARGETS})
+
   ament_add_gtest(bagwiz_mcap_parallel_write_test test/io/mcap_parallel_write_test.cpp)
   target_link_libraries(bagwiz_mcap_parallel_write_test bagwiz_io ${mcap_vendor_TARGETS})
 
