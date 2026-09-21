@@ -122,7 +122,9 @@ struct VideoProbe
 {
   std::uint32_t width = 0;
   std::uint32_t height = 0;
-  std::int64_t frame_count = 0;  // video packets counted from the container
+  // Video packets a player decodes: counted from the container, minus any
+  // its edit list flags for discard.
+  std::int64_t frame_count = 0;
   double duration_s = 0.0;
   std::string codec;
   bool has_b_frames = false;

@@ -124,6 +124,41 @@ TEST_F(VideoEncoderTest, EncodesH264Mp4WhenLibx264Available)
   EXPECT_FALSE(probe.has_b_frames);
 }
 
+// Every frame handed to the encoder comes back out of the container as a
+// playable frame, and the file spans all of them. The mp4 muxer takes the
+// last sample's length from the packet durations; a stream that carries none
+// ends one frame early, with an edit list that cuts the last sample so a
+// player never shows it.
+TEST_F(VideoEncoderTest, KeepsTheLastFrameOfAnH264ClipWhenLibx264Available)
+{
+  constexpr std::uint32_t kW = 32;
+  constexpr std::uint32_t kH = 16;
+  constexpr int kFrames = 8;
+  constexpr int kFps = 10;
+  const auto out = tmp_dir_ / "clip.mp4";
+
+  VideoEncoderOptions options;
+  options.backend = H264Backend::kX264;
+  options.preset = "ultrafast";
+  auto opened = open_video_encoder(out, kW, kH, kFps, 1, options);
+  if (!opened.ok()) {
+    GTEST_SKIP() << "libx264 unavailable: " << opened.error;
+  }
+  for (int i = 0; i < kFrames; ++i) {
+    const auto px = solid_bgr(kW, kH, static_cast<std::uint8_t>(i * 30));
+    const auto err = opened.encoder->write_frame(
+      {px.data(), px.size()}, static_cast<std::size_t>(kW) * 3, SourcePixelFormat::kBgr8);
+    ASSERT_TRUE(err.empty()) << "frame " << i << ": " << err;
+  }
+  ASSERT_TRUE(opened.encoder->finish().empty());
+  opened.encoder.reset();
+
+  const auto probe = probe_video(out);
+  ASSERT_TRUE(probe.ok()) << probe.error;
+  EXPECT_EQ(probe.frame_count, kFrames);
+  EXPECT_NEAR(probe.duration_s, static_cast<double>(kFrames) / kFps, 1e-3);
+}
+
 TEST_F(VideoEncoderTest, RejectsAnUnknownH264Preset)
 {
   VideoEncoderOptions options;
