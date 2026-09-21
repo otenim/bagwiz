@@ -89,6 +89,12 @@ struct VideoEncoderOptions
   // write_frame() input to that range, so frames handed over as decoded
   // JPEG planes (write_yuv420) and converted frames share one range.
   bool full_range = false;
+  // Constant-quality target, kFrameCrfMin..kFrameCrfMax: libx264's crf, which
+  // NVENC takes as its cq level. 23 is libx264's own default.
+  int crf = 23;
+  // Keyframe interval in frames, at least 1. 12 keeps seeking snappy on a
+  // viewing clip; the per-frame `video encode` stream defaults to 30.
+  int gop = 12;
 };
 
 // Outcome of open_video_encoder(). On success `encoder` is non-null, `error`
@@ -125,6 +131,8 @@ struct VideoProbe
   // Video packets a player decodes: counted from the container, minus any
   // its edit list flags for discard.
   std::int64_t frame_count = 0;
+  // Those of them the container flags as keyframes.
+  std::int64_t keyframe_count = 0;
   double duration_s = 0.0;
   std::string codec;
   bool has_b_frames = false;

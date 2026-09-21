@@ -16,6 +16,7 @@
 #include <span>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace
@@ -58,6 +59,23 @@ std::vector<std::byte> solid_bgr(std::uint32_t w, std::uint32_t h, std::uint8_t 
     px[i] = std::byte{b};         // B
     px[i + 1] = std::byte{0x40};  // G
     px[i + 2] = std::byte{0x80};  // R
+  }
+  return px;
+}
+
+// A diagonal gradient shifted per frame: textured enough that the quality
+// target visibly changes the encoded size, unlike a flat color.
+std::vector<std::byte> gradient_bgr(std::uint32_t w, std::uint32_t h, int frame_index)
+{
+  std::vector<std::byte> px(static_cast<std::size_t>(w) * h * 3);
+  for (std::uint32_t y = 0; y < h; ++y) {
+    for (std::uint32_t x = 0; x < w; ++x) {
+      const std::size_t base = (static_cast<std::size_t>(y) * w + x) * 3;
+      const unsigned shift = static_cast<unsigned>(frame_index) * 7U;
+      px[base] = static_cast<std::byte>((x * 255U / w + shift) & 0xFFU);
+      px[base + 1] = static_cast<std::byte>((y * 255U / h + shift) & 0xFFU);
+      px[base + 2] = static_cast<std::byte>(((x + y) * 9U + shift) & 0xFFU);
+    }
   }
   return px;
 }
@@ -166,6 +184,93 @@ TEST_F(VideoEncoderTest, RejectsAnUnknownH264Preset)
   const auto opened = open_video_encoder(tmp_dir_ / "clip.mp4", 16, 16, 10, 1, options);
   EXPECT_FALSE(opened.ok());
   EXPECT_EQ(opened.error, "unknown H.264 preset 'warp'");
+}
+
+// The H.264 quality target and keyframe interval are checked before the
+// encoder opens, with the bounds `video encode` applies to the same knobs.
+TEST_F(VideoEncoderTest, RejectsACrfOutsideTheEncoderRange)
+{
+  for (const int crf : {-1, 52}) {
+    VideoEncoderOptions options;
+    options.crf = crf;
+    const auto opened = open_video_encoder(tmp_dir_ / "clip.mp4", 16, 16, 10, 1, options);
+    EXPECT_FALSE(opened.ok()) << "crf " << crf;
+    EXPECT_EQ(opened.error, "crf " + std::to_string(crf) + " is outside 0..51");
+  }
+}
+
+TEST_F(VideoEncoderTest, RejectsAGopBelowOneFrame)
+{
+  VideoEncoderOptions options;
+  options.gop = 0;
+  const auto opened = open_video_encoder(tmp_dir_ / "clip.mp4", 16, 16, 10, 1, options);
+  EXPECT_FALSE(opened.ok());
+  EXPECT_EQ(opened.error, "gop must be at least 1 frame");
+}
+
+// With scenecut off, libx264 places a keyframe exactly every `gop` frames, so
+// the probe counts them back from the container's packet flags.
+TEST_F(VideoEncoderTest, GopSetsTheKeyframeIntervalWhenLibx264Available)
+{
+  constexpr std::uint32_t kW = 32;
+  constexpr std::uint32_t kH = 16;
+  constexpr int kFrames = 8;
+  for (const auto & [gop, expected_keyframes] : {std::pair{1, 8}, std::pair{4, 2}}) {
+    const auto out = tmp_dir_ / ("gop" + std::to_string(gop) + ".mp4");
+    VideoEncoderOptions options;
+    options.backend = H264Backend::kX264;
+    options.preset = "ultrafast";
+    options.gop = gop;
+    auto opened = open_video_encoder(out, kW, kH, 10, 1, options);
+    if (!opened.ok()) {
+      GTEST_SKIP() << "libx264 unavailable: " << opened.error;
+    }
+    for (int i = 0; i < kFrames; ++i) {
+      const auto px = solid_bgr(kW, kH, static_cast<std::uint8_t>(i * 30));
+      const auto err = opened.encoder->write_frame(
+        {px.data(), px.size()}, static_cast<std::size_t>(kW) * 3, SourcePixelFormat::kBgr8);
+      ASSERT_TRUE(err.empty()) << "frame " << i << ": " << err;
+    }
+    ASSERT_TRUE(opened.encoder->finish().empty());
+    opened.encoder.reset();
+
+    const auto probe = probe_video(out);
+    ASSERT_TRUE(probe.ok()) << probe.error;
+    EXPECT_EQ(probe.frame_count, kFrames) << "gop " << gop;
+    EXPECT_EQ(probe.keyframe_count, expected_keyframes) << "gop " << gop;
+  }
+}
+
+// crf is the constant-quality target: a lower value spends more bytes on the
+// same textured frames.
+TEST_F(VideoEncoderTest, LowerCrfProducesLargerOutputWhenLibx264Available)
+{
+  constexpr std::uint32_t kW = 64;
+  constexpr std::uint32_t kH = 32;
+  constexpr int kFrames = 6;
+  std::uintmax_t size_at_crf10 = 0;
+  std::uintmax_t size_at_crf40 = 0;
+  for (const int crf : {10, 40}) {
+    const auto out = tmp_dir_ / ("crf" + std::to_string(crf) + ".mp4");
+    VideoEncoderOptions options;
+    options.backend = H264Backend::kX264;
+    options.preset = "ultrafast";
+    options.crf = crf;
+    auto opened = open_video_encoder(out, kW, kH, 10, 1, options);
+    if (!opened.ok()) {
+      GTEST_SKIP() << "libx264 unavailable: " << opened.error;
+    }
+    for (int i = 0; i < kFrames; ++i) {
+      const auto px = gradient_bgr(kW, kH, i);
+      const auto err = opened.encoder->write_frame(
+        {px.data(), px.size()}, static_cast<std::size_t>(kW) * 3, SourcePixelFormat::kBgr8);
+      ASSERT_TRUE(err.empty()) << "frame " << i << ": " << err;
+    }
+    ASSERT_TRUE(opened.encoder->finish().empty());
+    opened.encoder.reset();
+    (crf == 10 ? size_at_crf10 : size_at_crf40) = std::filesystem::file_size(out);
+  }
+  EXPECT_GT(size_at_crf10, size_at_crf40);
 }
 
 TEST_F(VideoEncoderTest, MjpegIgnoresTheH264Options)

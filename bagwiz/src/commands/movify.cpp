@@ -15,6 +15,7 @@
 #include "bagwiz/core/pointcloud/cloud_view.hpp"
 #include "bagwiz/core/pointcloud/color_scheme.hpp"
 #include "bagwiz/core/pointcloud/property.hpp"
+#include "bagwiz/core/video/frame_codec.hpp"
 #include "movify_map_tiles.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <map>
@@ -124,6 +125,21 @@ public:
           std::vector<std::string>(
             core::video::kH264Presets.begin(), core::video::kH264Presets.end())))
       ->default_val("medium");
+    app
+      .add_option(
+        "--crf", args_.crf,
+        "H.264 constant-quality target, 0 (best) to 51 (smallest); NVENC uses it as its "
+        "constant-quality level. .avi (MJPEG) ignores it. Default: 23.")
+      ->check(CLI::Range(core::video::kFrameCrfMin, core::video::kFrameCrfMax))
+      ->default_val(23);
+    app
+      .add_option(
+        "--gop", args_.gop,
+        "H.264 keyframe interval in frames: every --gop-th frame is a keyframe a player can "
+        "start or seek from. Smaller seeks faster and costs bytes. .avi (MJPEG) ignores it. "
+        "Default: 12.")
+      ->check(CLI::PositiveNumber)
+      ->default_val(12);
     add_topic_option(
       app, "--clock", args_.clock,
       "Topic whose messages define the output frames: each message becomes one frame, its "

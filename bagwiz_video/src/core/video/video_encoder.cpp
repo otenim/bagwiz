@@ -8,6 +8,7 @@
 
 #include "bagwiz/core/video/video_encoder.hpp"
 
+#include "bagwiz/core/video/frame_codec.hpp"
 #include "libav_support.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 extern "C" {
@@ -90,16 +91,17 @@ void set_h264_options(
 {
   codec->max_b_frames = 0;
   av_dict_set(opts, "bf", "0", 0);
+  const std::string quality = std::to_string(options.crf);
   if (detail::is_nvenc_encoder(encoder_name)) {
-    // Constant-quality VBR at the quality libx264's crf 23 lands near; the
+    // Constant-quality VBR at the crf-style level the caller asked for; the
     // bitrate is left unset so the quality target drives the rate.
     av_dict_set(opts, "preset", detail::nvenc_preset_for(options.preset), 0);
     av_dict_set(opts, "rc", "vbr", 0);
-    av_dict_set(opts, "cq", "23", 0);
+    av_dict_set(opts, "cq", quality.c_str(), 0);
     return;
   }
   av_dict_set(opts, "preset", options.preset.c_str(), 0);
-  av_dict_set(opts, "crf", "23", 0);
+  av_dict_set(opts, "crf", quality.c_str(), 0);
   // Also disable scenecut: with B-frames off and a short GOP, libx264 tends
   // to mark every frame as an I-frame, blowing up the file size for no gain.
   av_dict_set(opts, "sc_threshold", "0", 0);
@@ -263,6 +265,16 @@ OpenVideoEncoderResult open_video_encoder(
     result.error = "unknown H.264 preset '" + options.preset + "'";
     return result;
   }
+  if (
+    choice->id == AV_CODEC_ID_H264 && (options.crf < kFrameCrfMin || options.crf > kFrameCrfMax)) {
+    result.error = "crf " + std::to_string(options.crf) + " is outside " +
+                   std::to_string(kFrameCrfMin) + ".." + std::to_string(kFrameCrfMax);
+    return result;
+  }
+  if (choice->id == AV_CODEC_ID_H264 && options.gop < 1) {
+    result.error = "gop must be at least 1 frame";
+    return result;
+  }
 
   auto im = std::make_unique<VideoEncoder::Impl>();
   const int frame_w = static_cast<int>(width);
@@ -296,7 +308,7 @@ OpenVideoEncoderResult open_video_encoder(
     im->codec->pix_fmt = choice->pix_fmt;
     im->codec->time_base = AVRational{fps_den, fps_num};  // seconds per frame
     im->codec->framerate = AVRational{fps_num, fps_den};
-    im->codec->gop_size = 12;
+    im->codec->gop_size = options.gop;
     if (choice->jpeg_range || options.full_range) {
       im->codec->color_range = AVCOL_RANGE_JPEG;
     }
@@ -415,6 +427,7 @@ VideoProbe probe_video(const std::filesystem::path & path)
   probe.has_b_frames = st->codecpar->video_delay > 0;
 
   std::int64_t count = 0;
+  std::int64_t keyframes = 0;
   AVPacket * pkt = av_packet_alloc();
   if (pkt != nullptr) {
     while (av_read_frame(fmt, pkt) >= 0) {
@@ -422,12 +435,16 @@ VideoProbe probe_video(const std::filesystem::path & path)
       // discard; a player drops it, so it does not count as a frame.
       if (pkt->stream_index == vs && (pkt->flags & AV_PKT_FLAG_DISCARD) == 0) {
         ++count;
+        if ((pkt->flags & AV_PKT_FLAG_KEY) != 0) {
+          ++keyframes;
+        }
       }
       av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
   }
   probe.frame_count = count;
+  probe.keyframe_count = keyframes;
 
   if (st->duration != AV_NOPTS_VALUE && st->duration > 0) {
     probe.duration_s = static_cast<double>(st->duration) * av_q2d(st->time_base);

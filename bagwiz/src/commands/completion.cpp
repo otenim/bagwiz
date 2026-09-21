@@ -1282,7 +1282,8 @@ std::vector<std::string> complete_video_cam_pair_value(
 // here (see completion_defers_to_command). Here we surface the command's flags
 // for any `-` word, the enum choices for `--field`, `--scheme`, `--view`,
 // `--encoder`, and `--preset`, and the bag's static-TF frame ids for
-// `--frame` and `--pose-of`.
+// `--frame` and `--pose-of`. `--crf` and `--gop` take numbers, so they get
+// no value completion.
 //
 //   `movify`(0) -i|--input <bag> [--cam <image_topic>...] [--pcd <pcd_topic>...]
 //   [--gnss <navsatfix_topic>] -o|--output <path>
@@ -1293,7 +1294,7 @@ std::vector<std::string> complete_video_cam_pair_value(
 //   [--alpha <a>] [--view <3d|bev>...] [--frame <f>]
 //   [--range <m>] [--elev <deg>] [--azim <deg>] [--dist <m>] [--map-range <m>]
 //   [--map-tiles <url-template|none>]
-//   [--encoder <auto|x264|nvenc>] [--preset <name>]
+//   [--encoder <auto|x264|nvenc>] [--preset <name>] [--crf <N>] [--gop <N>]
 //   [--pose <pose_topic>] [--pose-of <frame>] [--pose-window <s>] [--pose-width <m>]
 //   [-w|--overwrite]
 std::vector<std::string> complete_movify(const CompletionRequest & request)
@@ -1302,12 +1303,13 @@ std::vector<std::string> complete_movify(const CompletionRequest & request)
   if (current.starts_with("-")) {
     return matching(
       with_help(
-        {"--alpha",      "--azim",       "--cam",         "--cam-info",  "--cam-pcd",    "--clock",
-         "--dist",       "--elev",       "--encoder",     "--field",     "--frame",      "--gnss",
-         "--grid",       "--input",      "--map-range",   "--map-tiles", "--max",        "--min",
-         "--no-rectify", "--output",     "--overwrite",   "--pcd",       "--point-size", "--pose",
-         "--pose-of",    "--pose-width", "--pose-window", "--preset",    "--range",      "--resize",
-         "--scheme",     "--view",       "--width",       "-i",          "-o",           "-w"}),
+        {"--alpha",      "--azim",   "--cam",        "--cam-info",   "--cam-pcd",     "--clock",
+         "--crf",        "--dist",   "--elev",       "--encoder",    "--field",       "--frame",
+         "--gnss",       "--gop",    "--grid",       "--input",      "--map-range",   "--map-tiles",
+         "--max",        "--min",    "--no-rectify", "--output",     "--overwrite",   "--pcd",
+         "--point-size", "--pose",   "--pose-of",    "--pose-width", "--pose-window", "--preset",
+         "--range",      "--resize", "--scheme",     "--view",       "--width",       "-i",
+         "-o",           "-w"}),
       current);
   }
 
