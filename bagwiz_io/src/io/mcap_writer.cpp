@@ -12,6 +12,7 @@
 #include "bagwiz/io/bag_io.hpp"
 #include "bagwiz/io/metadata_yaml.hpp"
 #include "env_tuning.hpp"                  // NOLINT(build/include_subdir) src-local shared header
+#include "mcap_chunk_codec.hpp"            // NOLINT(build/include_subdir) src-local shared header
 #include "mcap_parallel_chunk_writer.hpp"  // NOLINT(build/include_subdir) src-local shared header
 
 #include <mcap/writer.hpp>
@@ -64,13 +65,10 @@ mcap::Compression parse_compression(std::string_view name)
 mcap::CompressionLevel parse_compression_level(std::string_view name, mcap::Compression codec)
 {
   if (name.empty()) {
-    // Codec-appropriate default. mcap maps lz4 + CompressionLevel::Default
-    // onto LZ4-HC, which measures several times slower than zstd's default
-    // for a larger output — the opposite of what choosing lz4 means — so an
-    // unset level selects lz4's fast mode instead. An explicit "default"
-    // still forces CompressionLevel::Default for any codec.
-    return codec == mcap::Compression::Lz4 ? mcap::CompressionLevel::Fastest
-                                           : mcap::CompressionLevel::Default;
+    // The codec-appropriate level, shared with the pass-through's re-encode
+    // (see unset_compression_level for why lz4 gets its fast mode). An
+    // explicit "default" still forces CompressionLevel::Default for any codec.
+    return unset_compression_level(codec);
   }
   if (name == "default") {
     return mcap::CompressionLevel::Default;

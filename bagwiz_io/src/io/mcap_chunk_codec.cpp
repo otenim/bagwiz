@@ -120,6 +120,12 @@ DecodedChunk decompress_chunk_record(std::span<const std::byte> record)
   return out;
 }
 
+mcap::CompressionLevel unset_compression_level(mcap::Compression codec)
+{
+  return codec == mcap::Compression::Lz4 ? mcap::CompressionLevel::Fastest
+                                         : mcap::CompressionLevel::Default;
+}
+
 std::vector<std::byte> compress_chunk_records(
   std::span<const std::byte> records, std::string_view compression)
 {
@@ -133,9 +139,11 @@ std::vector<std::byte> compress_chunk_records(
   const std::uint64_t buffer_hint = records.empty() ? 1 : records.size();
   std::unique_ptr<mcap::IChunkWriter> writer;
   if (compression == "zstd") {
-    writer = std::make_unique<mcap::ZStdWriter>(mcap::CompressionLevel::Default, buffer_hint);
+    writer = std::make_unique<mcap::ZStdWriter>(
+      unset_compression_level(mcap::Compression::Zstd), buffer_hint);
   } else if (compression == "lz4") {
-    writer = std::make_unique<mcap::LZ4Writer>(mcap::CompressionLevel::Default, buffer_hint);
+    writer = std::make_unique<mcap::LZ4Writer>(
+      unset_compression_level(mcap::Compression::Lz4), buffer_hint);
   } else {
     throw std::runtime_error("unsupported chunk compression: " + std::string(compression));
   }
