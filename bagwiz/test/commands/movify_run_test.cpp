@@ -1946,6 +1946,51 @@ TEST(MovifyCliWiring, SchemeDefaultsToJet)
   EXPECT_EQ(MovifyArgs{}.colorscheme, ColorScheme::kJet);
 }
 
+// --crf and --gop reach the H.264 encoder with the bounds `video encode`
+// applies to the same knobs; the defaults are movify's historical 23 / 12,
+// pinned on both the option and MovifyArgs like the other defaults above.
+TEST(MovifyCliWiring, CrfAndGopTakeVideoEncodeRangesAndKeepMovifyDefaults)
+{
+  bagwiz::commands::Command * movify_cmd = nullptr;
+  for (const auto & cmd : bagwiz::commands::Registry::instance().all()) {
+    if (cmd->name() == "movify") {
+      movify_cmd = cmd.get();
+    }
+  }
+  ASSERT_NE(movify_cmd, nullptr);
+
+  CLI::App app{"movify"};
+  movify_cmd->configure(app);
+  const auto * crf = app.get_option_no_throw("--crf");
+  ASSERT_NE(crf, nullptr);
+  EXPECT_EQ(crf->get_default_str(), "23");
+  const auto * gop = app.get_option_no_throw("--gop");
+  ASSERT_NE(gop, nullptr);
+  EXPECT_EQ(gop->get_default_str(), "12");
+  EXPECT_EQ(MovifyArgs{}.crf, 23);
+  EXPECT_EQ(MovifyArgs{}.gop, 12);
+
+  const auto tmp = std::filesystem::temp_directory_path();
+  const std::vector<std::string> base{"-i",    tmp.string(), "-o", (tmp / "out.mp4").string(),
+                                      "--cam", "/cam"};
+  auto with = [&base](std::initializer_list<const char *> extra) {
+    std::vector<std::string> argv = base;
+    argv.insert(argv.end(), extra.begin(), extra.end());
+    return std::vector<std::string>(argv.rbegin(), argv.rend());  // CLI11 parses reversed
+  };
+  EXPECT_NO_THROW(app.parse(with({"--crf", "20", "--gop", "5"})));
+  EXPECT_EQ(app.get_option("--crf")->as<int>(), 20);
+  EXPECT_EQ(app.get_option("--gop")->as<int>(), 5);
+
+  for (const auto & bad :
+       {std::pair{"--crf", "52"}, std::pair{"--crf", "-1"}, std::pair{"--gop", "0"}}) {
+    CLI::App rejecting{"movify"};
+    movify_cmd->configure(rejecting);
+    EXPECT_THROW(rejecting.parse(with({bad.first, bad.second})), CLI::ParseError)
+      << bad.first << ' ' << bad.second;
+  }
+}
+
 // The CLI draws the map from OpenStreetMap unless --map-tiles says
 // otherwise, while MovifyArgs itself defaults to no tiles, so a direct
 // caller (these tests) never touches the network.

@@ -83,8 +83,12 @@ int run_movify(const MovifyArgs & args)
     return 1;
   }
 
-  VideoFrameEncoder encoder(
-    tmp_path, scan.fps, core::video::VideoEncoderOptions{args.encoder, args.preset});
+  core::video::VideoEncoderOptions encoder_options;
+  encoder_options.backend = args.encoder;
+  encoder_options.preset = args.preset;
+  encoder_options.crf = args.crf;
+  encoder_options.gop = args.gop;
+  VideoFrameEncoder encoder(tmp_path, scan.fps, encoder_options);
 
   // One JPEG camera shown as decoded skips the composed canvas: its frames'
   // planes go to the encoder as they decode, several frames ahead.

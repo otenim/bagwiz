@@ -55,6 +55,10 @@ struct MovifyArgs
   // ignores both.
   core::video::H264Backend encoder = core::video::H264Backend::kAuto;
   std::string preset = "medium";
+  // The H.264 constant-quality target (0 best .. 51 smallest) and keyframe
+  // interval in frames; .avi (MJPEG) ignores both.
+  int crf = 23;
+  int gop = 12;
   // The topic whose messages define the output frames — one frame per
   // message, its message rate as the frame rate, and its panel's render size
   // as the grid's cell size. Must be one of cam_topics, pcd_topics or
