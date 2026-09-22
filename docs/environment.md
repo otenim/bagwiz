@@ -2,11 +2,13 @@
 
 bagwiz reads a small set of **optional** environment variables to override its
 defaults. None are required for normal use — every one has a sensible default,
-and leaving them all unset gives the standard behavior. They fall into six
+and leaving them all unset gives the standard behavior. They fall into seven
 groups:
 
 - [Runtime behavior](#runtime-behavior) — knobs read by the `bagwiz` binary
 - [Color output](#color-output) — ANSI color control
+- [Session and scratch space](#session-and-scratch-space) — the remote-session
+  and temporary-directory conventions the binary honors
 - [Message package resolution](#message-package-resolution) — overlays for
   non-standard message types
 - [Launcher and install](#launcher-and-install) — the `bagwiz` wrapper,
@@ -17,11 +19,12 @@ groups:
 
 Every variable bagwiz itself defines carries a `BAGWIZ_` prefix, so anything in
 your environment under that prefix belongs to this project. The unprefixed
-variables listed below (`NO_COLOR`, `RCUTILS_COLORIZED_OUTPUT`, `HOME`,
-`XDG_*`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH`) are names published by other
-ecosystems that bagwiz honors rather than defines; they keep their conventional
-spelling deliberately. See AGENTS.md, "Documentation, Comment & Help
-Consistency", for the naming rule itself.
+variables listed below (`NO_COLOR`, `RCUTILS_COLORIZED_OUTPUT`,
+`SSH_CONNECTION`, `SSH_TTY`, `TMPDIR`, `HOME`, `XDG_*`, `AMENT_PREFIX_PATH`,
+`LD_LIBRARY_PATH`) are names published by other ecosystems that bagwiz honors
+rather than defines; they keep their conventional spelling deliberately. See
+AGENTS.md, "Documentation, Comment & Help Consistency", for the naming rule
+itself.
 
 Diagnostic log lines and progress bars go to **stderr**; command data goes to
 **stdout**, so `bagwiz … | tool` stays clean regardless of these settings.
@@ -66,6 +69,17 @@ BAGWIZ_PROFILE=1 bagwiz convert format -i capture.mcap -o out.mcap
 
 Color is also omitted automatically when the relevant stream is not a terminal
 (e.g. piped to a file), the same visual effect as `NO_COLOR`.
+
+## Session and scratch space
+
+Two more conventions the `bagwiz` binary honors: the variables sshd sets for a
+remote session, and the temporary-directory variable the C++ runtime consults.
+Neither is a bagwiz setting, so neither carries the `BAGWIZ_` prefix.
+
+| Variable                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Scope                                 | Source                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------- |
+| `SSH_CONNECTION`, `SSH_TTY` | Set by sshd for a remote session. When either is non-empty and `BAGWIZ_WALK_PREVIEW_TRANSFER` is `auto` (or unset), the image preview hands each frame to a Kitty-protocol terminal as PNG rather than packed RGB, trading encoding time for roughly half the bytes on the wire. A local session, where neither is set, sends packed RGB. Set `BAGWIZ_WALK_PREVIEW_TRANSFER` explicitly when this detection misses a slow link (mosh, a container).           | `walk` image preview                  | `bagwiz_tui/src/core/tui/image/terminal_image_caps.cpp` |
+| `TMPDIR`                    | Where a FILE-mode `.db3.zstd` shard is expanded before it can be read: bagwiz asks the C++ runtime for its temporary directory (`TMPDIR`, then `TMP`, `TEMP`, `TEMPDIR`, else `/tmp`) and writes the decompressed shard there under a process-unique name. Reading such a bag therefore needs free scratch space for one whole decompressed shard; the file is removed as soon as that read finishes. Point `TMPDIR` at a larger volume when `/tmp` is small. | commands that read FILE-mode db3 bags | `bagwiz_io/src/io/file_decompressor.cpp`                |
 
 ## Message package resolution
 
